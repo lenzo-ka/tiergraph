@@ -14,49 +14,15 @@ permissions:
   contents: read
 
 jobs:
-  static:
-    name: lint / format / types / gates
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[lint]"
-      - run: make lint format-check types tracked-clean documented
-
-  test:
-    name: test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[test]"
-      - run: make test
-
-  determinism:
-    name: determinism (seed ${{ matrix.seed }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        seed: ["0", "12345", "999"]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[test]"
-      - run: make determinism-seed HASH_SEED=${{ matrix.seed }}
+      # make check builds its own environment, so CI runs the same path as a
+      # developer rather than a parallel one that can drift.
+      - run: make check
