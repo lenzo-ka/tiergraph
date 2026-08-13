@@ -23,7 +23,9 @@ dependencies = []
 # Split so each CI job installs only what it needs.
 test = ["pytest>=8.0", "pytest-cov>=5.0"]
 lint = ["ruff>=0.16", "mypy>=1.11"]
-dev = ["tiergraph[test,lint]"]
+# Development only, never a runtime dependency: pydantic's core is compiled, and
+# the shipped package stays pure Python.
+dev = ["tiergraph[test,lint]", "pydantic>=2.9"]
 
 [project.scripts]
 tiergraph = "tiergraph.cli:main"
