@@ -1,1 +1,13 @@
 untracked/
+
+__pycache__/
+*.py[cod]
+.coverage
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+.venv/
