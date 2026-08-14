@@ -16,6 +16,7 @@ from tests.conformance.action import (
 from tests.test_fold import declaration
 from tiergraph.action import (
     ActionDeclaration,
+    ActionEquivalenceError,
     DistributionWitness,
     ReactDeclaration,
     ReactMode,
@@ -98,6 +99,24 @@ MARK = ActionDeclaration[object, object](
 ADD = ActionDeclaration[object, object](
     "coordinate-sum", add_values, associative=True, idempotent=False, commutative=True
 )
+SCALE = ActionDeclaration[object, object](
+    "gain-scale",
+    lambda carrier, values: (
+        cast(int, carrier) * _product(tuple(cast(int, value) for value in values))
+    ),
+    associative=True,
+    idempotent=False,
+    commutative=True,
+    semimodule=GAIN_MODULE,
+)
+
+
+def _product(values: tuple[int, ...]) -> int:
+    """Multiply action values, with the empty action as identity."""
+    result = 1
+    for value in values:
+        result *= value
+    return result
 
 
 def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
@@ -119,10 +138,16 @@ def test_action_laws() -> None:
 
 
 def test_semimodule_laws_are_conditional_on_the_claim() -> None:
-    """Mixing is checked as a semimodule while an ordered chain makes no claim."""
-    assert MIX.semimodule is not None
-    SemimoduleLawSuite(MIX.semimodule).check_laws()
+    """A matching claimed action is checked while an ordered chain makes no claim."""
+    assert SCALE.semimodule is not None
+    SemimoduleLawSuite(SCALE).check_laws()
     assert CHAIN.semimodule is None
+
+
+def test_semimodule_claim_is_bound_to_its_action() -> None:
+    """A valid detached module cannot launder an unrelated ordered action."""
+    with pytest.raises(AssertionError):
+        SemimoduleLawSuite(replace(CHAIN, semimodule=GAIN_MODULE)).check_laws()
 
 
 @pytest.mark.parametrize(
@@ -195,16 +220,63 @@ def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
     )
     witness = DistributionWitness("bound-paths")
     with pytest.raises(
-        AssertionError, match=r"bound-paths.*one-for-one.*transactional.*square-sum"
+        ActionEquivalenceError,
+        match=r"bound-paths.*one-for-one.*transactional.*square-sum.*!=",
     ):
         ReactDeclaration(
-            "bad-stream",
+            "bad-per-item",
             declaration(),
             coordinates,
             nonlinear,
             mode=ReactMode.ONE_FOR_ONE,
             distribution=witness,
         ).run(0)
+
+
+def test_equivalence_refusal_is_carrier_dependent_and_names_results() -> None:
+    """Certification accepts and refuses concrete carriers at execution time."""
+
+    def carrier_sensitive(carrier: object, values: tuple[object, ...]) -> object:
+        total = sum(cast(int, value) for value in values)
+        multiplier = 2 if len(values) == 1 and cast(int, carrier) >= 100 else 1
+        return cast(int, carrier) + multiplier * total
+
+    action = replace(ADD, name="carrier-sensitive", apply=carrier_sensitive)
+    react = ReactDeclaration(
+        "carrier-bound",
+        declaration(),
+        coordinates,
+        action,
+        mode=ReactMode.ONE_FOR_ONE,
+        distribution=DistributionWitness("per-run"),
+    )
+    assert react.run(50)["result"] == 70
+    with pytest.raises(
+        ActionEquivalenceError,
+        match=r"carrier-bound.*carrier-sensitive.*240 != 220",
+    ):
+        react.run(200)
+
+
+def test_equivalence_certification_controls_batch_computation() -> None:
+    """Only an opted-in one-for-one run also invokes the complete batch."""
+    lengths: list[int] = []
+
+    def measured(carrier: object, values: tuple[object, ...]) -> object:
+        lengths.append(len(values))
+        return add_values(carrier, values)
+
+    action = replace(ADD, name="measured-sum", apply=measured)
+    base = ReactDeclaration(
+        "measured", declaration(), coordinates, action, mode=ReactMode.ONE_FOR_ONE
+    )
+    assert base.run(0)["result"] == 20
+    assert lengths == [1, 1, 1]
+
+    lengths.clear()
+    certified = replace(base, distribution=DistributionWitness("measured-equivalence"))
+    assert certified.run(0)["result"] == 20
+    assert lengths == [3, 1, 1, 1]
 
 
 def test_action_law_suite_exposes_broken_mode_equivalence() -> None:
@@ -225,15 +297,17 @@ def test_action_law_suite_exposes_broken_mode_equivalence() -> None:
         ActionLawSuite(broken, (0, 10)).check_one_for_one_equivalence()
 
 
-def test_one_for_one_requires_distribution_and_forbids_normalization() -> None:
-    """Streaming declarations require the executable condition, not weaker flags."""
+def test_one_for_one_certification_is_optional_and_normalization_is_forbidden() -> None:
+    """Per-recognition execution need not double-compute, but cannot normalize."""
     fold = declaration()
-    with pytest.raises(ValueError, match=r"one-for-one.*no distribution witness"):
-        ReactDeclaration("stream", fold, coordinates, MIX, mode=ReactMode.ONE_FOR_ONE)
+    accepted = ReactDeclaration(
+        "per-item", fold, coordinates, MIX, mode=ReactMode.ONE_FOR_ONE
+    ).run({})
+    assert accepted["result"] == {0: 1, 8: 1, 12: 1}
     witness = DistributionWitness("bound-paths")
     with pytest.raises(ValueError, match=r"one-for-one.*cannot normalize"):
         ReactDeclaration(
-            "stream-normalized",
+            "per-item-normalized",
             fold,
             coordinates,
             replace(MIX, idempotent=True),
@@ -284,6 +358,19 @@ def test_collapse_refuses_counting_and_accepts_idempotent_action() -> None:
     assert accepted["result"] == {"0": 1, "4": 1, "8": 1, "12": 1}
 
 
+def test_collapse_accepts_noncommutative_idempotent_action() -> None:
+    """Collapse requires associativity and idempotence, not commutativity."""
+    action = replace(CHAIN, idempotent=True)
+    accepted = ReactDeclaration(
+        "chain-collapse",
+        declaration("tie"),
+        coordinates,
+        action,
+        YieldNormalization(collapse=True),
+    ).run([])
+    assert accepted["result"] == [0, 4, 8, 12]
+
+
 def test_action_result_must_be_strict_json() -> None:
     """A public carrier result names its action when it cannot be serialized."""
     bad = replace(MIX, name="opaque", apply=lambda carrier, values: {Decimal("1")})
@@ -331,10 +418,10 @@ def test_distribution_witness_has_no_caller_supplied_coordinate_bridge(
 
 
 def test_one_for_one_executes_each_structurally_ordered_coordinate() -> None:
-    """A distributing action is admitted and streams each ordered coordinate."""
+    """A distributing action receives each structurally ordered coordinate."""
     witness = DistributionWitness("bound-paths")
     result = ReactDeclaration(
-        "stream",
+        "per-item",
         declaration(),
         coordinates,
         MARK,

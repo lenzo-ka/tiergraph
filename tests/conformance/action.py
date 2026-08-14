@@ -8,10 +8,8 @@ from dataclasses import dataclass, replace
 
 from tiergraph.action import (
     ActionDeclaration,
-    DistributionWitness,
     ReactDeclaration,
     ReactMode,
-    Semimodule,
 )
 
 
@@ -38,27 +36,31 @@ class ActionLawSuite:
         assert encode(left) == encode(right)
 
     def check_one_for_one_equivalence(self) -> None:
-        """Require every supplied carrier to agree in streaming and batch modes."""
+        """Require every supplied carrier to agree in per-item and batch modes."""
         for carrier in self.carriers:
             declaration = self.react(carrier)
             transactional = declaration.run(carrier)
             one_for_one = replace(
                 declaration,
                 mode=ReactMode.ONE_FOR_ONE,
-                distribution=DistributionWitness("mode-equivalence"),
+                distribution=None,
             ).run(carrier)
-            assert one_for_one["result"] == transactional["result"]
+            assert one_for_one["result"] == transactional["result"], (
+                f"react {declaration.name!r} one-for-one result differs from "
+                f"transactional result for action {declaration.action.name!r}"
+            )
 
 
 @dataclass(frozen=True)
 class SemimoduleLawSuite:
-    """Check sampled semiring, commutative-module, and semimodule axioms."""
+    """Check a claimed semimodule's axioms and its bound action."""
 
-    structure: Semimodule[object, object]
+    action: ActionDeclaration[object, object]
 
     def check_laws(self) -> None:
         """Check sampled additive structures and scalar compatibility."""
-        law = self.structure
+        law = self.action.semimodule
+        assert law is not None, f"action {self.action.name!r} makes no semimodule claim"
         assert law.module_add(law.module_zero, law.module_zero) == law.module_zero
         assert law.scale(law.scalar_one, law.module_zero) == law.module_zero
         for value in law.module_samples:
@@ -80,6 +82,19 @@ class SemimoduleLawSuite:
             assert law.scalar_multiply(scalar, law.scalar_zero) == law.scalar_zero
             assert law.scalar_multiply(law.scalar_zero, scalar) == law.scalar_zero
             assert law.scale(scalar, law.module_zero) == law.module_zero
+            for value in law.module_samples:
+                expected = law.scale(scalar, value)
+                try:
+                    actual = self.action.apply(value, (scalar,))
+                except Exception as error:
+                    raise AssertionError(
+                        f"action {self.action.name!r} does not implement its "
+                        f"semimodule scale for {scalar!r}, {value!r}"
+                    ) from error
+                assert actual == expected, (
+                    f"action {self.action.name!r} does not implement its semimodule "
+                    f"scale for {scalar!r}, {value!r}: {actual!r} != {expected!r}"
+                )
             for left_scalar in law.scalar_samples:
                 assert law.scalar_add(scalar, left_scalar) == law.scalar_add(
                     left_scalar, scalar
