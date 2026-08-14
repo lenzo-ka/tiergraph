@@ -1,5 +1,14 @@
 """tiergraph: ordered tiers, declared relations, and typed values."""
 
+from tiergraph.action import (
+    ActionDeclaration,
+    DistributionWitness,
+    ReactDeclaration,
+    ReactMode,
+    Semimodule,
+    WitnessCoordinate,
+    YieldNormalization,
+)
 from tiergraph.clock import ClockProfile, anchored_position
 from tiergraph.core import (
     AttributeDeclaration,
@@ -70,6 +79,7 @@ from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 __version__ = "0.0.0"
 
 __all__ = [
+    "ActionDeclaration",
     "AddItem",
     "AsBuilt",
     "AttachValue",
@@ -88,6 +98,7 @@ __all__ = [
     "DeclareNamespace",
     "DeclareRelation",
     "DeclareTier",
+    "DistributionWitness",
     "DurableItemRef",
     "DurablePositionRef",
     "ExecutionError",
@@ -113,11 +124,14 @@ __all__ = [
     "PromoteItem",
     "PromotePosition",
     "QualifiedName",
+    "ReactDeclaration",
+    "ReactMode",
     "Relate",
     "RelationEndpointKind",
     "RelationInstance",
     "Repeat",
     "SimpleRelationDeclaration",
+    "Semimodule",
     "TiePolicy",
     "Tier",
     "TierDeclaration",
@@ -127,6 +141,8 @@ __all__ = [
     "Walk",
     "WalkDirection",
     "WalkResult",
+    "WitnessCoordinate",
+    "YieldNormalization",
     "FORMAT_VERSION",
     "dump_bytes",
     "dumps",
