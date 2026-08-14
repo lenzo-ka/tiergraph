@@ -216,7 +216,105 @@ class BipartiteRelationDeclaration:
         }
 
 
-type RelationDeclaration = SimpleRelationDeclaration | BipartiteRelationDeclaration
+@dataclass(frozen=True, slots=True)
+class RelationSideDeclaration:
+    """Constrain one explicitly ordered side of a polyadic relation."""
+
+    endpoint_kinds: tuple[RelationEndpointKind, ...]
+    tiers: tuple[QualifiedName, ...] | None = None
+    minimum: int = 1
+    maximum: int | None = None
+    allow_empty: bool = False
+
+    def __post_init__(self) -> None:
+        """Refuse ambiguous sets and incoherent integral arity bounds."""
+        if not self.endpoint_kinds:
+            raise ValueError("relation side endpoint kinds must not be empty")
+        if len(set(self.endpoint_kinds)) != len(self.endpoint_kinds):
+            raise ValueError("relation side endpoint kinds must be unique")
+        if self.tiers is not None and len(set(self.tiers)) != len(self.tiers):
+            raise ValueError("relation side tiers must be unique")
+        _require_integral_bound(self.minimum, "relation side minimum")
+        if self.maximum is not None:
+            _require_integral_bound(self.maximum, "relation side maximum")
+        if self.maximum is not None and self.maximum < self.minimum:
+            raise ValueError("relation side maximum must not be less than minimum")
+        _require_boolean(self.allow_empty, "relation side allow-empty promise")
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the side contract without inventing order for its allowed sets."""
+        return {
+            "endpoint_kinds": [kind.value for kind in self.endpoint_kinds],
+            "tiers": []
+            if self.tiers is None
+            else [tier.to_data() for tier in self.tiers],
+            "minimum": self.minimum,
+            "maximum": -1 if self.maximum is None else self.maximum,
+            "allow_empty": self.allow_empty,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PolyadicRelationDeclaration:
+    """Declare ordered endpoint sequences and general incidence constraints.
+
+    ``unique_sources`` makes each source occur in at most one instance.
+    ``distinct_targets`` forbids repeated candidates within an instance.
+    ``targets_subset_of`` requires each instance's targets to be members of the
+    named relation's targets for the same source.  These are the structural
+    contracts commonly called containment, choice, and selection membership;
+    their domain names do not belong in the kernel.
+
+    Empty sources or targets are admitted only by that side's ``allow_empty``.
+    An empty side contributes no edges to acyclicity, no parent assignments to
+    ``single_parent``, and no source keys to source uniqueness or subset checks.
+    Its arity bounds are deliberately bypassed: emptiness is an explicit case,
+    not an accidental consequence of a zero minimum.
+    """
+
+    name: QualifiedName
+    sources: RelationSideDeclaration
+    targets: RelationSideDeclaration
+    unique_sources: bool = False
+    distinct_targets: bool = False
+    single_parent: bool = False
+    acyclic: bool = False
+    targets_subset_of: QualifiedName | None = None
+    attributes: tuple[AttributeValue, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require every structural promise to be an actual JSON boolean."""
+        for value, subject in (
+            (self.unique_sources, "unique-sources promise"),
+            (self.distinct_targets, "distinct-targets promise"),
+            (self.single_parent, "single-parent promise"),
+            (self.acyclic, "acyclic promise"),
+        ):
+            _require_boolean(value, subject)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the declaration as JSON-serializable data."""
+        return {
+            "kind": "polyadic",
+            "name": self.name.to_data(),
+            "sources": self.sources.to_data(),
+            "targets": self.targets.to_data(),
+            "unique_sources": self.unique_sources,
+            "distinct_targets": self.distinct_targets,
+            "single_parent": self.single_parent,
+            "acyclic": self.acyclic,
+            "targets_subset_of": []
+            if self.targets_subset_of is None
+            else [self.targets_subset_of.to_data()],
+            "attributes": _attributes_data(self.attributes),
+        }
+
+
+type RelationDeclaration = (
+    SimpleRelationDeclaration
+    | BipartiteRelationDeclaration
+    | PolyadicRelationDeclaration
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +472,32 @@ class RelationInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class PolyadicRelationInstance:
+    """Link two declared, ordered endpoint sequences."""
+
+    declaration: QualifiedName
+    sources: tuple[RelationEndpointRef, ...]
+    targets: tuple[RelationEndpointRef, ...]
+    durable_id: str | None = None
+    attributes: tuple[AttributeValue, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require a usable durable identifier when one is carried."""
+        if self.durable_id is not None:
+            _require_name(self.durable_id, "relation instance durable id")
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the ordered sides as JSON-serializable arrays."""
+        return {
+            "declaration": self.declaration.to_data(),
+            "sources": [endpoint.to_data() for endpoint in self.sources],
+            "targets": [endpoint.to_data() for endpoint in self.targets],
+            "durable_id": self.durable_id,
+            "attributes": _attributes_data(self.attributes),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Graph:
     """Hold a validated immutable graph and derive order and empty boundaries.
 
@@ -389,6 +513,7 @@ class Graph:
     attribute_declarations: tuple[AttributeDeclaration, ...] = ()
     position_values: tuple[Position, ...] = ()
     attributes: tuple[AttributeValue, ...] = ()
+    polyadic_relations: tuple[PolyadicRelationInstance, ...] = ()
     _tiers_by_name: dict[QualifiedName, Tier] = field(
         init=False, repr=False, compare=False
     )
@@ -458,6 +583,19 @@ class Graph:
                 if isinstance(declaration, BipartiteRelationDeclaration)
                 for endpoint_type in (declaration.left_type, declaration.right_type)
             ),
+            *(
+                tier
+                for declaration in self.relation_declarations
+                if isinstance(declaration, PolyadicRelationDeclaration)
+                for side in (declaration.sources, declaration.targets)
+                for tier in (() if side.tiers is None else side.tiers)
+            ),
+            *(
+                declaration.targets_subset_of
+                for declaration in self.relation_declarations
+                if isinstance(declaration, PolyadicRelationDeclaration)
+                and declaration.targets_subset_of is not None
+            ),
             *(declaration.name for declaration in self.attribute_declarations),
         ]
         for name in qualified_names:
@@ -488,6 +626,11 @@ class Graph:
             for index, relation in enumerate(self.relations)
             if relation.durable_id is not None
         )
+        durable_ids.extend(
+            (relation.durable_id, f"polyadic relation instance {index}")
+            for index, relation in enumerate(self.polyadic_relations)
+            if relation.durable_id is not None
+        )
         _validate_attributes(self.attributes, AttributeDomain.DOCUMENT, attributes)
         for tier in self.tiers:
             _validate_attributes(tier.attributes, AttributeDomain.TIER, attributes)
@@ -503,6 +646,11 @@ class Graph:
             name: declaration
             for name, declaration in declarations.items()
             if isinstance(declaration, BipartiteRelationDeclaration)
+        }
+        polyadic = {
+            name: declaration
+            for name, declaration in declarations.items()
+            if isinstance(declaration, PolyadicRelationDeclaration)
         }
         for index, relation in enumerate(self.relations):
             _validate_attributes(
@@ -534,6 +682,25 @@ class Graph:
                 types_by_tier,
                 items_by_id,
             )
+        for index, polyadic_relation in enumerate(self.polyadic_relations):
+            _validate_attributes(
+                polyadic_relation.attributes,
+                AttributeDomain.RELATION_INSTANCE,
+                attributes,
+            )
+            polyadic_declaration = polyadic.get(polyadic_relation.declaration)
+            if polyadic_declaration is None:
+                raise ValueError(
+                    f"polyadic relation instance {index} names {str(polyadic_relation.declaration)!r}; "
+                    "a polyadic relation declaration is required"
+                )
+            _validate_polyadic_instance(
+                index,
+                polyadic_relation,
+                polyadic_declaration,
+                tiers_by_name,
+                items_by_id,
+            )
         positioned_values: list[tuple[PositionRef, Position]] = []
         for position in self.position_values:
             coordinate = _resolve_position_reference(
@@ -552,6 +719,9 @@ class Graph:
         _require_unique_durable_ids(durable_ids)
         _validate_relation_invariants(
             self.relations, bipartite, tiers_by_name, items_by_id
+        )
+        _validate_polyadic_invariants(
+            self.polyadic_relations, polyadic, tiers_by_name, items_by_id
         )
         object.__setattr__(self, "_tiers_by_name", tiers_by_name)
         object.__setattr__(self, "_types_by_tier", types_by_tier)
@@ -688,6 +858,7 @@ class Graph:
             self.attribute_declarations,
             self.position_values if position_values is None else position_values,
             self.attributes,
+            self.polyadic_relations,
         )
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -698,7 +869,10 @@ class Graph:
             "relation_declarations": [
                 declaration.to_data() for declaration in self.relation_declarations
             ],
-            "relations": [relation.to_data() for relation in self.relations],
+            "relations": [
+                relation.to_data()
+                for relation in (*self.relations, *self.polyadic_relations)
+            ],
             "attribute_declarations": [
                 declaration.to_data() for declaration in self.attribute_declarations
             ],
@@ -914,6 +1088,11 @@ def _require_integral_index(index: object, subject: str, offender: object) -> No
         raise ValueError(f"{subject} {offender!r} has non-integral index {index!r}")
 
 
+def _require_integral_bound(value: object, subject: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{subject} {value!r} must be a nonnegative integer")
+
+
 def _require_boolean(value: object, subject: str) -> None:
     if not isinstance(value, bool):
         raise ValueError(f"{subject} {value!r} must be boolean")
@@ -1014,6 +1193,151 @@ def _validate_relation_invariants(
                 parents[right] = (index, left)
         if declaration.acyclic:
             _require_acyclic(name, resolved)
+
+
+def _validate_polyadic_instance(
+    index: int,
+    relation: PolyadicRelationInstance,
+    declaration: PolyadicRelationDeclaration,
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
+) -> None:
+    for label, endpoints, side in (
+        ("source", relation.sources, declaration.sources),
+        ("target", relation.targets, declaration.targets),
+    ):
+        if not endpoints:
+            if not side.allow_empty:
+                raise ValueError(f"relation instance {index} has an empty {label} side")
+            continue
+        if len(endpoints) < side.minimum or (
+            side.maximum is not None and len(endpoints) > side.maximum
+        ):
+            raise ValueError(
+                f"relation instance {index} {label} arity {len(endpoints)} is outside "
+                f"declared bounds {side.minimum}..{side.maximum}"
+            )
+        for endpoint_index, endpoint in enumerate(endpoints):
+            subject = f"relation instance {index} {label} endpoint {endpoint_index}"
+            kind = (
+                RelationEndpointKind.ITEM
+                if isinstance(endpoint, ItemRef)
+                else RelationEndpointKind.BOUNDARY
+            )
+            if kind not in side.endpoint_kinds:
+                raise ValueError(
+                    f"{subject} {endpoint.to_data()!r} has kind {kind.value!r}; "
+                    "kind is not allowed by the declaration"
+                )
+            if isinstance(endpoint, ItemRef):
+                _validate_reference(endpoint, subject, tiers)
+                tier = endpoint.tier
+            else:
+                tier = _boundary_anchor_tier(endpoint, subject, tiers, items_by_id)
+            if side.tiers is not None and tier not in side.tiers:
+                raise ValueError(
+                    f"{subject} {endpoint.to_data()!r} belongs to tier {str(tier)!r}; "
+                    "tier is not allowed by the declaration"
+                )
+
+
+def _validate_polyadic_invariants(
+    relations: tuple[PolyadicRelationInstance, ...],
+    declarations: dict[QualifiedName, PolyadicRelationDeclaration],
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
+) -> None:
+    grouped: dict[QualifiedName, list[tuple[int, PolyadicRelationInstance]]] = {
+        name: [] for name in declarations
+    }
+    for index, relation in enumerate(relations):
+        grouped[relation.declaration].append((index, relation))
+    by_source: dict[
+        tuple[QualifiedName, ItemRef | PositionRef],
+        tuple[int, PolyadicRelationInstance],
+    ] = {}
+    for name, declaration in declarations.items():
+        resolved_edges: list[
+            tuple[int, RelationInstance, ItemRef | PositionRef, ItemRef | PositionRef]
+        ] = []
+        for index, relation in grouped[name]:
+            resolved_sources = tuple(
+                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                for endpoint in relation.sources
+            )
+            resolved_targets = tuple(
+                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                for endpoint in relation.targets
+            )
+            if declaration.distinct_targets and len(set(resolved_targets)) != len(
+                resolved_targets
+            ):
+                raise ValueError(
+                    f"relation instance {index} has duplicate declared-distinct targets"
+                )
+            for source in resolved_sources:
+                key = (name, source)
+                previous = by_source.get(key)
+                if declaration.unique_sources and previous is not None:
+                    raise ValueError(
+                        f"relation instance {index} repeats source {source.to_data()!r} in "
+                        f"unique-source relation {str(name)!r}; first used by relation instance {previous[0]}"
+                    )
+                by_source[key] = (index, relation)
+            for source in resolved_sources:
+                for target in resolved_targets:
+                    resolved_edges.append(
+                        (
+                            index,
+                            RelationInstance(
+                                name, relation.sources[0], relation.targets[0]
+                            ),
+                            source,
+                            target,
+                        )
+                    )
+        if declaration.single_parent:
+            parents: dict[ItemRef | PositionRef, tuple[int, ItemRef | PositionRef]] = {}
+            for index, _edge, source, target in resolved_edges:
+                poly_previous = parents.get(target)
+                if poly_previous is not None and poly_previous[1] != source:
+                    raise ValueError(
+                        f"relation instance {index} gives {target.to_data()!r} a second parent "
+                        f"in {str(name)!r}; first parent is relation instance {poly_previous[0]}"
+                    )
+                parents[target] = (index, source)
+        if declaration.acyclic:
+            _require_acyclic(name, resolved_edges)
+    for name, declaration in declarations.items():
+        if declaration.targets_subset_of is None:
+            continue
+        if declaration.targets_subset_of not in declarations:
+            raise ValueError(
+                f"polyadic relation {str(name)!r} targets-subset-of names undeclared "
+                f"polyadic relation {str(declaration.targets_subset_of)!r}"
+            )
+        for index, relation in grouped[name]:
+            for source_ref in relation.sources:
+                source = _resolve_relation_endpoint(source_ref, tiers, items_by_id)
+                owner = by_source.get((declaration.targets_subset_of, source))
+                if owner is None:
+                    raise ValueError(
+                        f"relation instance {index} source {source.to_data()!r} has no "
+                        f"{str(declaration.targets_subset_of)!r} membership relation"
+                    )
+                allowed = {
+                    _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                    for endpoint in owner[1].targets
+                }
+                if any(
+                    _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                    not in allowed
+                    for endpoint in relation.targets
+                ):
+                    raise ValueError(
+                        f"relation instance {index} has a target outside "
+                        f"{str(declaration.targets_subset_of)!r} membership"
+                    )
 
 
 def _resolve_relation_endpoint(
