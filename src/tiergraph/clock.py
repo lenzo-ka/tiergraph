@@ -117,9 +117,12 @@ class ClockProfile:
         for relation in self.graph.relations:
             if relation.declaration != self.binding_relation:
                 continue
-            # The kernel enforces anchored references for boundary endpoints.
-            assert isinstance(relation.left, DurablePositionRef)
-            assert isinstance(relation.right, DurablePositionRef)
+            # Repeat the kernel boundary invariant because optimized Python
+            # must refuse malformed runtime objects just as normal Python does.
+            if not isinstance(relation.left, DurablePositionRef):
+                raise ValueError("clock binding left endpoint is not a boundary")
+            if not isinstance(relation.right, DurablePositionRef):
+                raise ValueError("clock binding right endpoint is not a boundary")
             source = self.graph.resolve_position(relation.left)
             target = self.graph.resolve_position(relation.right)
             if target.tier != self.clock_tier:
