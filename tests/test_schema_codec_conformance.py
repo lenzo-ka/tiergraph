@@ -18,10 +18,15 @@ from tiergraph.wire import to_data
 
 
 def test_declaration_derived_schema_codec_acceptance() -> None:
-    """Every constructed near-miss has equal schema and codec acceptance."""
+    """Every near-miss follows declared schema, validator, and codec acceptance."""
     drifts = undeclared_drifts(conformance_probes(_seeds(), DOCUMENT))
     assert not drifts, [
-        (drift.probe.id, drift.schema_accepts, drift.codec_diagnostic)
+        (
+            drift.probe.id,
+            drift.schema_accepts,
+            drift.codec_diagnostic,
+            drift.validation_diagnostic,
+        )
         for drift in drifts
     ]
 
@@ -112,11 +117,48 @@ def test_declared_divergence_is_data_not_harness_logic(
         "DECLARED_DIVERGENCES",
         (
             DeclaredDivergence(
-                "test addition", r":wrong-type-float$", "machine-readable policy"
+                "test addition",
+                r":wrong-type-float$",
+                "machine-readable policy",
+                validation_accepts=False,
             ),
         ),
     )
     assert not undeclared_drifts((float_probe,))
+
+
+def test_harness_finds_validation_error_false_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validator-only rejection is reported without changing another path."""
+    probe = next(
+        probe
+        for probe in conformance_probes(_seeds(), DOCUMENT)
+        if probe.id.endswith(".attributes[0].lexical:empty")
+    )
+    monkeypatch.setattr(
+        harness_module,
+        "validation_errors",
+        lambda document, format_version: ["injected rejection"],
+    )
+    assert undeclared_drifts((probe,))[0].validation_diagnostic == "injected rejection"
+
+
+def test_harness_finds_validation_error_false_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validator-only acceptance is reported without changing another path."""
+    probe = next(
+        probe
+        for probe in conformance_probes(_seeds(), DOCUMENT)
+        if probe.id.endswith(".format_version:empty")
+    )
+    monkeypatch.setattr(
+        harness_module,
+        "validation_errors",
+        lambda document, format_version: [],
+    )
+    assert undeclared_drifts((probe,))[0].validation_diagnostic == "accepted"
 
 
 def test_harness_rediscovers_missing_nonempty_facets() -> None:

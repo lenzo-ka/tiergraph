@@ -9,10 +9,11 @@ value below), zero-fraction numbers, and valid and invalid edges of each declare
 lexical pattern.  A newly added field is populated from its declaration, then
 mutated, so field coverage does not require a hand-written case.
 
-Both the generated Draft 2020-12 schema and `wire.loads` receive each document.
-Opposite acceptance is drift in either direction.  Any exception raised by the
-codec other than its public `ValueError` refusal is also drift.  Intentional
-schema-accepted/codec-refused families are data in
+The generated Draft 2020-12 schema, `schema.validation_errors`, and `wire.loads`
+receive each document. Opposite acceptance is drift in any direction. Any
+exception raised by `validation_errors`, or by the codec other than its public
+`ValueError` refusal, is also drift. Intentional schema-accepted, codec-refused
+families and the structural validator's expected decisions are data in
 `tests/conformance/declared_schema_codec_divergences.py`; adding one does not
 change the harness.
 
@@ -30,7 +31,7 @@ seconds.  The construction and diagnostic ordering use declaration order and
 explicit sorting, never set iteration order.
 
 The checked claim is therefore: for every declaration-derived mutation around
-the accepted witnesses, schema and codec acceptance agree except for a named
-machine-readable divergence.  It is not a proof that schema validation is
-sufficient for codec acceptance for arbitrary graphs, nor a proof of all
-graph-wide semantic invariants.
+the accepted witnesses, schema, structural Python validation, and codec
+acceptance agree except for a named machine-readable divergence. It is not a
+proof that schema validation is sufficient for codec acceptance for arbitrary
+graphs, nor a proof of all graph-wide semantic invariants.

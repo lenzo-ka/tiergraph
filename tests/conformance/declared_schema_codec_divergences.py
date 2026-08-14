@@ -1,8 +1,9 @@
-"""The complete machine-readable schema/codec divergence policy.
+"""The complete machine-readable acceptance-path divergence policy.
 
-Entries describe constraints intentionally enforced by graph construction but not
-by JSON Schema.  Adding a declared exception only changes this policy; the probe
-constructor and comparison harness do not contain exception branches.
+Entries describe constraints intentionally enforced by the codec but not by JSON
+Schema, plus the structural validator's expected decision. Adding a declared
+exception only changes this policy; the probe constructor and comparison harness
+do not contain exception branches.
 """
 
 from __future__ import annotations
@@ -13,11 +14,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class DeclaredDivergence:
-    """Allow one documented family of schema-accepted, codec-refused probes."""
+    """Describe one documented schema-accepted, codec-refused probe family."""
 
     name: str
     probe_pattern: str
     reason: str
+    validation_accepts: bool = True
 
     def matches(self, probe_id: str) -> bool:
         """Return whether a deterministic probe identity belongs to this family."""
@@ -29,6 +31,7 @@ DECLARED_DIVERGENCES = (
         "integral JSON spelling",
         r":wrong-type-float$",
         "JSON Schema integer includes zero-fraction numbers; the codec requires int",
+        validation_accepts=False,
     ),
     DeclaredDivergence(
         "attribute declaration consistency",
