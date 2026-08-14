@@ -68,6 +68,7 @@ from tiergraph.machine import (
     Repeat,
     execute,
 )
+from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
 from tiergraph.selection import (
     AttributeSelector,
     BoundariesSelector,
@@ -129,9 +130,11 @@ __all__ = [
     "Node",
     "NodeKind",
     "NodeSet",
+    "OrderedRootsProfile",
     "Position",
     "PositionRef",
     "PhysicalTiming",
+    "PersistedChoiceProfile",
     "PolyadicRelationDeclaration",
     "PolyadicRelationInstance",
     "Program",
