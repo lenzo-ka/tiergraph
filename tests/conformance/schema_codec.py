@@ -20,6 +20,7 @@ from tiergraph.schema import (
     ShapeKind,
     json_schema,
     json_schema_for,
+    validation_errors,
 )
 from tiergraph.wire import FORMAT_VERSION, loads
 
@@ -47,37 +48,68 @@ class Probe:
 
 @dataclass(frozen=True, slots=True)
 class Drift:
-    """Record an undeclared acceptance disagreement."""
+    """Record an undeclared disagreement among structural acceptance paths."""
 
     probe: Probe
     schema_accepts: bool
     codec_diagnostic: str
+    validation_diagnostic: str
 
 
 def undeclared_drifts(probes: tuple[Probe, ...]) -> tuple[Drift, ...]:
-    """Compare both acceptance paths and subtract only policy-listed divergence."""
+    """Compare all acceptance paths and subtract only policy-listed divergence."""
     validator = Draft202012Validator(json_schema(FORMAT_VERSION))
     result: list[Drift] = []
     for probe in probes:
         schema_accepts = validator.is_valid(probe.document)
+        try:
+            validation_diagnostic = "; ".join(
+                validation_errors(probe.document, FORMAT_VERSION)
+            )
+        except Exception as error:
+            validation_accepts = False
+            validation_diagnostic = f"{type(error).__name__}: {error}"
+            result.append(
+                Drift(
+                    probe,
+                    schema_accepts,
+                    "not run",
+                    validation_diagnostic,
+                )
+            )
+            continue
+        else:
+            validation_accepts = not validation_diagnostic
+            if validation_accepts:
+                validation_diagnostic = "accepted"
         try:
             loads(encoded(probe.document))
         except Exception as error:
             codec_accepts = False
             diagnostic = f"{type(error).__name__}: {error}"
             if not isinstance(error, ValueError):
-                result.append(Drift(probe, schema_accepts, diagnostic))
+                result.append(
+                    Drift(probe, schema_accepts, diagnostic, validation_diagnostic)
+                )
                 continue
         else:
             codec_accepts = True
             diagnostic = "accepted"
-        if schema_accepts == codec_accepts:
+        if schema_accepts == codec_accepts == validation_accepts:
             continue
-        declared = schema_accepts and any(
-            divergence.matches(probe.id) for divergence in DECLARED_DIVERGENCES
+        declared = (
+            schema_accepts
+            and not codec_accepts
+            and any(
+                divergence.matches(probe.id)
+                and validation_accepts is divergence.validation_accepts
+                for divergence in DECLARED_DIVERGENCES
+            )
         )
         if not declared:
-            result.append(Drift(probe, schema_accepts, diagnostic))
+            result.append(
+                Drift(probe, schema_accepts, diagnostic, validation_diagnostic)
+            )
     return tuple(result)
 
 
