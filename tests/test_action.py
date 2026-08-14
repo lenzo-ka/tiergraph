@@ -100,21 +100,6 @@ ADD = ActionDeclaration[object, object](
 )
 
 
-def path_coordinates(value: object) -> tuple[object, ...]:
-    """Map a sampled path-semiring value to its witness labels as integers."""
-    return tuple(
-        POSITIONS[label]
-        for path in cast(tuple[Decimal, tuple[tuple[str, ...], ...]], value)[1]
-        for label in path
-    )
-
-
-PATH_SAMPLES: tuple[object, ...] = (
-    (Decimal(1), (("start",),)),
-    (Decimal(1), (("bed",),)),
-)
-
-
 def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
     """Build the action-law declaration independently of its carrier value."""
     del carrier
@@ -128,7 +113,9 @@ def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
 
 def test_action_laws() -> None:
     """Recognition stays carrier-independent across unrelated action carriers."""
-    ActionLawSuite(transactional, ({}, {99: 7})).check_carrier_substitution()
+    suite = ActionLawSuite(transactional, ({}, {99: 7}))
+    suite.check_carrier_substitution()
+    suite.check_one_for_one_equivalence()
 
 
 def test_semimodule_laws_are_conditional_on_the_claim() -> None:
@@ -185,8 +172,20 @@ def test_normalization_mismatch_is_refused_at_declaration(
         )
 
 
+def test_unique_requires_commutativity_and_names_the_action() -> None:
+    """Global duplicate removal refuses an order-sensitive idempotent action."""
+    with pytest.raises(ValueError, match=r"uniquing.*commutative.*effect-chain"):
+        ReactDeclaration(
+            "bad-unique-order",
+            declaration("tie"),
+            coordinates,
+            replace(CHAIN, idempotent=True),
+            YieldNormalization(unique=True),
+        )
+
+
 def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
-    """An unrelated identity claim cannot admit a non-distributing action."""
+    """The actual yield exposes a non-distributing action on its executed run."""
     nonlinear = replace(
         ADD,
         name="square-sum",
@@ -194,8 +193,10 @@ def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
             cast(int, carrier) + sum(cast(int, value) for value in values) ** 2
         ),
     )
-    witness = DistributionWitness("bound-paths", PATH_SAMPLES, 0, path_coordinates)
-    with pytest.raises(ValueError, match=r"bound-paths.*bound action"):
+    witness = DistributionWitness("bound-paths")
+    with pytest.raises(
+        AssertionError, match=r"bound-paths.*one-for-one.*transactional.*square-sum"
+    ):
         ReactDeclaration(
             "bad-stream",
             declaration(),
@@ -203,7 +204,25 @@ def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
             nonlinear,
             mode=ReactMode.ONE_FOR_ONE,
             distribution=witness,
-        )
+        ).run(0)
+
+
+def test_action_law_suite_exposes_broken_mode_equivalence() -> None:
+    """The reusable equivalence law fails for a nonlinear action."""
+    nonlinear = replace(
+        ADD,
+        name="square-sum-law",
+        apply=lambda carrier, values: (
+            cast(int, carrier) + sum(cast(int, value) for value in values) ** 2
+        ),
+    )
+
+    def broken(carrier: object) -> ReactDeclaration[object, object, object]:
+        del carrier
+        return ReactDeclaration("broken-law", declaration(), coordinates, nonlinear)
+
+    with pytest.raises(AssertionError, match=r"one-for-one.*transactional"):
+        ActionLawSuite(broken, (0, 10)).check_one_for_one_equivalence()
 
 
 def test_one_for_one_requires_distribution_and_forbids_normalization() -> None:
@@ -211,7 +230,7 @@ def test_one_for_one_requires_distribution_and_forbids_normalization() -> None:
     fold = declaration()
     with pytest.raises(ValueError, match=r"one-for-one.*no distribution witness"):
         ReactDeclaration("stream", fold, coordinates, MIX, mode=ReactMode.ONE_FOR_ONE)
-    witness = DistributionWitness("bound-paths", PATH_SAMPLES, 0, path_coordinates)
+    witness = DistributionWitness("bound-paths")
     with pytest.raises(ValueError, match=r"one-for-one.*cannot normalize"):
         ReactDeclaration(
             "stream-normalized",
@@ -292,23 +311,28 @@ def test_normalization_operations_execute_on_hostile_yield() -> None:
     ) == (1, 1, 2, 2)
 
 
-def test_declaration_names_and_distribution_samples_are_required() -> None:
-    """Empty diagnostics and vacuous homomorphism witnesses are refused."""
+def test_declaration_and_distribution_names_are_required() -> None:
+    """Empty declaration and certificate diagnostics are refused."""
     with pytest.raises(ValueError, match="action name"):
         replace(MIX, name="")
     with pytest.raises(ValueError, match="react name"):
         replace(transactional({}), name="")
     with pytest.raises(ValueError, match="witness name"):
-        DistributionWitness("", (1,), 0, lambda value: (value,))
-    with pytest.raises(ValueError, match="has no samples"):
-        DistributionWitness("empty", (), 0, lambda value: (value,))
+        DistributionWitness("")
+
+
+@pytest.mark.parametrize("bridge", [lambda value: (), lambda value: (0,)])
+def test_distribution_witness_has_no_caller_supplied_coordinate_bridge(
+    bridge: object,
+) -> None:
+    """Vacuous and constant legacy bridges cannot enter a certificate."""
+    with pytest.raises(TypeError, match="positional"):
+        DistributionWitness("launder", (1, 2), 0, bridge)  # type: ignore[call-arg]
 
 
 def test_one_for_one_executes_each_structurally_ordered_coordinate() -> None:
     """A distributing action is admitted and streams each ordered coordinate."""
-    witness: DistributionWitness[object, object] = DistributionWitness(
-        "bound-paths", PATH_SAMPLES, {}, path_coordinates
-    )
+    witness = DistributionWitness("bound-paths")
     result = ReactDeclaration(
         "stream",
         declaration(),
