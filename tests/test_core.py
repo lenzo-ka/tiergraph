@@ -21,11 +21,14 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -81,6 +84,68 @@ def test_kernel_law(law: object) -> None:
     """Run each reusable law against the reference constructor."""
     assert callable(law)
     law()
+
+
+def test_every_attribute_carrier_canonicalizes_by_qualified_name() -> None:
+    """Nested constructors remove presentation order from all attribute tuples."""
+    first = AttributeValue(name("a"), XsdType.STRING, "first")
+    second = AttributeValue(name("z"), XsdType.STRING, "second")
+    supplied = (second, first)
+    expected = (first, second)
+    tier_name = name("tier")
+    item_ref = ItemRef(tier_name, 0)
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier_name,))
+
+    assert Item(attributes=supplied).attributes == expected
+    assert (
+        Tier(TierDeclaration(tier_name, "Tier"), attributes=supplied).attributes
+        == expected
+    )
+    assert Position(PositionRef(tier_name, 0), supplied).attributes == expected
+    assert (
+        SimpleRelationDeclaration(
+            name("simple"), tier_name, name("type"), supplied
+        ).attributes
+        == expected
+    )
+    assert (
+        BipartiteRelationDeclaration(
+            name("binary"), name("left"), name("right"), attributes=supplied
+        ).attributes
+        == expected
+    )
+    assert (
+        PolyadicRelationDeclaration(
+            name("polyadic"), side, side, attributes=supplied
+        ).attributes
+        == expected
+    )
+    assert (
+        RelationInstance(
+            name("binary"), item_ref, item_ref, attributes=supplied
+        ).attributes
+        == expected
+    )
+    assert (
+        PolyadicRelationInstance(
+            name("polyadic"), (item_ref,), (item_ref,), attributes=supplied
+        ).attributes
+        == expected
+    )
+
+
+def test_relation_side_allowed_sets_have_canonical_order() -> None:
+    """Allowed endpoint kinds and tiers compare independently of supply order."""
+    left = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM, RelationEndpointKind.BOUNDARY),
+        (name("z"), name("a")),
+    )
+    right = RelationSideDeclaration(
+        (RelationEndpointKind.BOUNDARY, RelationEndpointKind.ITEM),
+        (name("a"), name("z")),
+    )
+    assert left == right
+    assert left.to_data() == right.to_data()
 
 
 @given(st.lists(st.integers(min_value=0, max_value=8), min_size=1, max_size=6))
