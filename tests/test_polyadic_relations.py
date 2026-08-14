@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 
 from tiergraph import (
+    FORMAT_VERSION,
     AttachValue,
     AttributeDeclaration,
     AttributeDomain,
@@ -381,17 +382,17 @@ def test_wire_refuses_plural_subset_names_and_non_array_side() -> None:
     declared["targets_subset_of"] = [MEMBERS.to_data(), SELECTS.to_data()]
     import json
 
-    document = json.dumps({"format_version": "4", "graph": data})
+    document = json.dumps({"format_version": FORMAT_VERSION, "graph": data})
     with pytest.raises(ValueError, match=r"targets_subset_of must contain at most one"):
         loads(document)
     declared["targets_subset_of"] = []
     declared["sources"] = []
     with pytest.raises(ValueError, match=r"sources must be an object"):
-        loads(json.dumps({"format_version": "4", "graph": data}))
+        loads(json.dumps({"format_version": FORMAT_VERSION, "graph": data}))
     declared["sources"] = declaration().sources.to_data()
     declared["sources"]["endpoint_kinds"] = {}
     with pytest.raises(ValueError, match=r"endpoint_kinds must be an array"):
-        loads(json.dumps({"format_version": "4", "graph": data}))
+        loads(json.dumps({"format_version": FORMAT_VERSION, "graph": data}))
 
 
 def test_machine_attaches_a_declared_value_to_polyadic_declaration() -> None:

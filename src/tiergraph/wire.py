@@ -50,10 +50,11 @@ from tiergraph.schema import (
 )
 
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
-# artifact. Version 4 added declared ordered polyadic relation incidence. The strict
-# artifact policy refuses older documents rather than guessing how their binary
-# relation carrier should project onto the wider language.
-FORMAT_VERSION = "4"
+# artifact. Version 5 closes the arity-maximum schema surface so only -1, the
+# unbounded sentinel, or a nonnegative bound can reach the codec. The strict
+# artifact policy refuses older documents rather than interpreting an invalid
+# negative bound differently across validators.
+FORMAT_VERSION = "5"
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
