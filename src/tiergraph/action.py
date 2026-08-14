@@ -45,7 +45,7 @@ class ActionFunction(Protocol[ReadCarrier, WriteResult]):
 
 
 class ReactMode(Enum):
-    """Choose interleaved or complete-yield recognize-act execution."""
+    """Choose per-recognition or complete-batch action application."""
 
     ONE_FOR_ONE = "one-for-one"
     TRANSACTIONAL = "transactional"
@@ -105,6 +105,10 @@ class DistributionWitness:
             raise ValueError("distribution witness name '' must not be empty")
 
 
+class ActionEquivalenceError(ValueError):
+    """Refuse caller data for which certified action modes disagree."""
+
+
 @dataclass(frozen=True, slots=True)
 class Semimodule[Scalar, Module]:
     """Supply operations and samples for an explicit, opt-in semimodule claim.
@@ -149,7 +153,15 @@ class ActionDeclaration[Carrier, Result]:
 
 @dataclass(frozen=True, slots=True)
 class ReactDeclaration[Value, Carrier, Result]:
-    """Bind recognition, yield, normalization, action, and react mode."""
+    """Bind recognition, yield, normalization, action, and react mode.
+
+    One-for-one first materializes and structurally orders the complete yield,
+    then calls the action separately for each recognition. It therefore costs
+    more calls and no less memory than transactional mode. Supplying a
+    ``distribution`` additionally computes the transactional result and checks
+    equivalence for that run. Without one, the caller gives up that executable
+    equivalence check and avoids computing both modes.
+    """
 
     name: str
     fold: FoldDeclaration[Value]
@@ -195,14 +207,13 @@ class ReactDeclaration[Value, Carrier, Result]:
                 raise ValueError(
                     f"react {self.name!r} one-for-one mode cannot normalize a complete yield"
                 )
-            if self.distribution is None:
-                raise ValueError(
-                    f"react {self.name!r} one-for-one action "
-                    f"{self.action.name!r} has no distribution witness"
-                )
 
     def run(self, carrier: Carrier) -> dict[str, object]:
-        """Recognize and apply, certifying one-for-one against the batch result."""
+        """Recognize and apply, optionally certifying equivalence for this run.
+
+        Equivalence depends on the caller's carrier, so it is checked here and
+        cannot in general be decided when the declaration is constructed.
+        """
         recognition = self.fold.run()
         coordinates = self._coordinates(recognition)
         if self.mode is ReactMode.TRANSACTIONAL:
@@ -211,20 +222,22 @@ class ReactDeclaration[Value, Carrier, Result]:
                 carrier, tuple(item.value for item in normalized)
             )
         else:
-            distribution = cast(DistributionWitness, self.distribution)
             ordered = tuple(sorted(coordinates, key=lambda item: item.position))
-            transactional = self.action.apply(
-                carrier, tuple(item.value for item in ordered)
-            )
+            transactional: Result | None = None
+            if self.distribution is not None:
+                transactional = self.action.apply(
+                    carrier, tuple(item.value for item in ordered)
+                )
             current = carrier
             for coordinate in ordered:
                 current = cast(Carrier, self.action.apply(current, (coordinate.value,)))
             result = cast(Result, current)
-            if result != transactional:
-                raise AssertionError(
-                    f"distribution witness {distribution.name!r} fails: "
+            if self.distribution is not None and result != transactional:
+                raise ActionEquivalenceError(
+                    f"distribution witness {self.distribution.name!r} refuses "
                     f"react {self.name!r} one-for-one result differs from "
-                    f"transactional result for action {self.action.name!r}"
+                    f"transactional result for action {self.action.name!r}: "
+                    f"{result!r} != {transactional!r}"
                 )
         _require_json(result, f"action {self.action.name!r} result")
         return {
