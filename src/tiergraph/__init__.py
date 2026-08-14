@@ -22,6 +22,19 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.selection import (
+    AttributeSelector,
+    BoundariesSelector,
+    BoundarySelector,
+    ItemSelector,
+    ItemsSelector,
+    Node,
+    NodeKind,
+    NodeSet,
+    TierSelector,
+    TypeSelector,
+    select,
+)
 
 __version__ = "0.0.0"
 
@@ -29,14 +42,22 @@ __all__ = [
     "AttributeDeclaration",
     "AttributeDomain",
     "AttributeValue",
+    "AttributeSelector",
     "BipartiteRelationDeclaration",
     "BoundarySide",
+    "BoundariesSelector",
+    "BoundarySelector",
     "DurableItemRef",
     "DurablePositionRef",
     "Graph",
     "Item",
+    "ItemsSelector",
+    "ItemSelector",
     "ItemRef",
     "NamespaceDeclaration",
+    "Node",
+    "NodeKind",
+    "NodeSet",
     "Position",
     "PositionRef",
     "QualifiedName",
@@ -45,6 +66,9 @@ __all__ = [
     "SimpleRelationDeclaration",
     "Tier",
     "TierDeclaration",
+    "TierSelector",
+    "TypeSelector",
     "XsdType",
     "__version__",
+    "select",
 ]
