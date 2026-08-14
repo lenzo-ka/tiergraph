@@ -1,5 +1,6 @@
 """tiergraph: ordered tiers, declared relations, and typed values."""
 
+from tiergraph.clock import ClockProfile, anchored_position
 from tiergraph.core import (
     AttributeDeclaration,
     AttributeDomain,
@@ -82,6 +83,7 @@ __all__ = [
     "BoundarySelector",
     "BoundarySide",
     "ChildCombination",
+    "ClockProfile",
     "DeclareAttribute",
     "DeclareNamespace",
     "DeclareRelation",
@@ -131,6 +133,7 @@ __all__ = [
     "loads",
     "to_data",
     "execute",
+    "anchored_position",
     "select",
     "__version__",
 ]
