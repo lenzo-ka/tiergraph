@@ -656,6 +656,7 @@
           "type": "array"
         },
         "maximum": {
+          "minimum": -1,
           "type": "integer"
         },
         "minimum": {
@@ -861,13 +862,13 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-4.json",
+  "$id": "https://tiergraph.org/schema/format-5.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, durable-id, position, and relation names; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty position attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "4"
+      "const": "5"
     },
     "graph": {
       "additionalProperties": false,
