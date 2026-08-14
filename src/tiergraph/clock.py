@@ -170,11 +170,11 @@ class ClockProfile:
             self.clock_position(PositionRef(tier, len(member.items))),
         )
 
-    def duration(self, tier: QualifiedName, index: int) -> Decimal:
-        """Derive one item's continuous duration from its bound clock span."""
+    def duration(self, tier: QualifiedName, index: int) -> tuple[int, Decimal]:
+        """Return ``(tick span, ticks per unit)`` without rounding their ratio."""
         start = self.clock_position(PositionRef(tier, index))
         end = self.clock_position(PositionRef(tier, index + 1))
-        return Decimal(end - start) / self._rate
+        return end - start, self._rate
 
 
 def anchored_position(graph: Graph, position: PositionRef) -> DurablePositionRef:
