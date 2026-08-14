@@ -1,0 +1,359 @@
+"""Canonical JSON serialization and parsing for primitive graphs."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from typing import cast
+
+from tiergraph.core import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValue,
+    BipartiteRelationDeclaration,
+    BoundarySide,
+    DurableItemRef,
+    DurablePositionRef,
+    Graph,
+    Item,
+    ItemRef,
+    JsonValue,
+    NamespaceDeclaration,
+    Position,
+    PositionRef,
+    QualifiedName,
+    RelationDeclaration,
+    RelationEndpointKind,
+    RelationEndpointRef,
+    RelationInstance,
+    SimpleRelationDeclaration,
+    Tier,
+    TierDeclaration,
+    XsdType,
+)
+
+FORMAT_VERSION = "1"
+
+
+def to_data(graph: Graph) -> dict[str, JsonValue]:
+    """Return the versioned primitive document as strict JSON data."""
+    return {"format_version": FORMAT_VERSION, "graph": graph.to_data()}
+
+
+def dumps(graph: Graph) -> str:
+    """Return the sole canonical JSON spelling, including its final newline."""
+    return (
+        json.dumps(
+            to_data(graph),
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def dump_bytes(graph: Graph) -> bytes:
+    """Encode the canonical document as UTF-8 bytes."""
+    return dumps(graph).encode("utf-8")
+
+
+def loads(document: str | bytes) -> Graph:
+    """Parse one primitive document and validate it through graph construction."""
+    try:
+        value = json.loads(document)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"parse JSON failed: {error.msg}") from error
+    except UnicodeDecodeError as error:
+        raise ValueError(f"parse UTF-8 failed: {error.reason}") from error
+    root = _object(value, "document")
+    _keys(root, {"format_version", "graph"}, "document")
+    version = _string(root["format_version"], "format_version")
+    if version != FORMAT_VERSION:
+        raise ValueError(
+            f"format_version {version!r} is unsupported; expected {FORMAT_VERSION!r}"
+        )
+    return _graph(_object(root["graph"], "graph"))
+
+
+def _graph(data: dict[str, object]) -> Graph:
+    fields = {
+        "namespaces",
+        "tiers",
+        "relation_declarations",
+        "relations",
+        "attribute_declarations",
+        "position_values",
+        "attributes",
+    }
+    _keys(data, fields, "graph")
+    return Graph(
+        tuple(
+            NamespaceDeclaration(
+                _string(entry["prefix"], f"namespaces[{index}].prefix"),
+                _string(entry["namespace"], f"namespaces[{index}].namespace"),
+            )
+            for index, entry in enumerate(
+                _objects(data["namespaces"], "namespaces", {"prefix", "namespace"})
+            )
+        ),
+        tuple(
+            _tier(entry, index)
+            for index, entry in enumerate(
+                _objects(data["tiers"], "tiers", {"declaration", "items", "attributes"})
+            )
+        ),
+        tuple(
+            _relation_declaration(entry, index)
+            for index, entry in enumerate(
+                _object_list(data["relation_declarations"], "relation_declarations")
+            )
+        ),
+        tuple(
+            _relation(entry, index)
+            for index, entry in enumerate(
+                _objects(
+                    data["relations"],
+                    "relations",
+                    {"declaration", "left", "right", "durable_id", "attributes"},
+                )
+            )
+        ),
+        tuple(
+            _attribute_declaration(entry, index)
+            for index, entry in enumerate(
+                _objects(
+                    data["attribute_declarations"],
+                    "attribute_declarations",
+                    {"name", "domain", "value_type"},
+                )
+            )
+        ),
+        tuple(
+            _position(entry, index)
+            for index, entry in enumerate(
+                _objects(
+                    data["position_values"],
+                    "position_values",
+                    {"reference", "attributes"},
+                )
+            )
+        ),
+        _attributes(data["attributes"], "attributes"),
+    )
+
+
+def _tier(data: dict[str, object], index: int) -> Tier:
+    path = f"tiers[{index}]"
+    declaration = _named_object(
+        data["declaration"], f"{path}.declaration", {"name", "long_name"}
+    )
+    return Tier(
+        TierDeclaration(
+            _name(declaration["name"], f"{path}.declaration.name"),
+            _string(declaration["long_name"], f"{path}.declaration.long_name"),
+        ),
+        tuple(
+            _item(item, item_index, path)
+            for item_index, item in enumerate(
+                _objects(data["items"], f"{path}.items", {"durable_id", "attributes"})
+            )
+        ),
+        _attributes(data["attributes"], f"{path}.attributes"),
+    )
+
+
+def _item(data: dict[str, object], index: int, tier_path: str) -> Item:
+    path = f"{tier_path}.items[{index}]"
+    durable = data["durable_id"]
+    if durable is not None:
+        durable = _string(durable, f"{path}.durable_id")
+    return Item(durable, _attributes(data["attributes"], f"{path}.attributes"))
+
+
+def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclaration:
+    path = f"relation_declarations[{index}]"
+    kind = _string(data.get("kind"), f"{path}.kind")
+    common = {"kind", "name", "attributes"}
+    if kind == "simple":
+        _keys(data, common | {"tier", "item_type"}, path)
+        return SimpleRelationDeclaration(
+            _name(data["name"], f"{path}.name"),
+            _name(data["tier"], f"{path}.tier"),
+            _name(data["item_type"], f"{path}.item_type"),
+            _attributes(data["attributes"], f"{path}.attributes"),
+        )
+    if kind == "bipartite":
+        _keys(
+            data,
+            common
+            | {
+                "left_type",
+                "right_type",
+                "left_endpoint",
+                "right_endpoint",
+                "single_parent",
+                "acyclic",
+            },
+            path,
+        )
+        return BipartiteRelationDeclaration(
+            _name(data["name"], f"{path}.name"),
+            _name(data["left_type"], f"{path}.left_type"),
+            _name(data["right_type"], f"{path}.right_type"),
+            _enum(RelationEndpointKind, data["left_endpoint"], f"{path}.left_endpoint"),
+            _enum(
+                RelationEndpointKind, data["right_endpoint"], f"{path}.right_endpoint"
+            ),
+            _boolean(data["single_parent"], f"{path}.single_parent"),
+            _boolean(data["acyclic"], f"{path}.acyclic"),
+            _attributes(data["attributes"], f"{path}.attributes"),
+        )
+    raise ValueError(f"{path}.kind {kind!r} is unsupported")
+
+
+def _relation(data: dict[str, object], index: int) -> RelationInstance:
+    path = f"relations[{index}]"
+    durable = data["durable_id"]
+    if durable is not None:
+        durable = _string(durable, f"{path}.durable_id")
+    return RelationInstance(
+        _name(data["declaration"], f"{path}.declaration"),
+        _endpoint(data["left"], f"{path}.left"),
+        _endpoint(data["right"], f"{path}.right"),
+        durable,
+        _attributes(data["attributes"], f"{path}.attributes"),
+    )
+
+
+def _endpoint(value: object, path: str) -> RelationEndpointRef:
+    data = _object(value, path)
+    if "anchor" in data:
+        return _durable_position(data, path)
+    _keys(data, {"tier", "index"}, path)
+    return ItemRef(
+        _name(data["tier"], f"{path}.tier"), _integer(data["index"], f"{path}.index")
+    )
+
+
+def _position(data: dict[str, object], index: int) -> Position:
+    path = f"position_values[{index}]"
+    reference_data = _object(data["reference"], f"{path}.reference")
+    reference: PositionRef | DurablePositionRef
+    if "anchor" in reference_data:
+        reference = _durable_position(reference_data, f"{path}.reference")
+    else:
+        _keys(reference_data, {"tier", "index"}, f"{path}.reference")
+        reference = PositionRef(
+            _name(reference_data["tier"], f"{path}.reference.tier"),
+            _integer(reference_data["index"], f"{path}.reference.index"),
+        )
+    return Position(reference, _attributes(data["attributes"], f"{path}.attributes"))
+
+
+def _durable_position(data: dict[str, object], path: str) -> DurablePositionRef:
+    _keys(data, {"anchor", "side"}, path)
+    anchor = _object(data["anchor"], f"{path}.anchor")
+    kind = _string(anchor.get("kind"), f"{path}.anchor.kind")
+    if kind == "item":
+        _keys(anchor, {"kind", "durable_id"}, f"{path}.anchor")
+        target: DurableItemRef | QualifiedName = DurableItemRef(
+            _string(anchor["durable_id"], f"{path}.anchor.durable_id")
+        )
+    elif kind == "tier":
+        _keys(anchor, {"kind", "tier"}, f"{path}.anchor")
+        target = _name(anchor["tier"], f"{path}.anchor.tier")
+    else:
+        raise ValueError(f"{path}.anchor.kind {kind!r} is unsupported")
+    return DurablePositionRef(target, _enum(BoundarySide, data["side"], f"{path}.side"))
+
+
+def _attribute_declaration(data: dict[str, object], index: int) -> AttributeDeclaration:
+    path = f"attribute_declarations[{index}]"
+    return AttributeDeclaration(
+        _name(data["name"], f"{path}.name"),
+        _enum(AttributeDomain, data["domain"], f"{path}.domain"),
+        _enum(XsdType, data["value_type"], f"{path}.value_type"),
+    )
+
+
+def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
+    return tuple(
+        AttributeValue(
+            _name(data["name"], f"{path}[{index}].name"),
+            _enum(XsdType, data["value_type"], f"{path}[{index}].value_type"),
+            _string(data["lexical"], f"{path}[{index}].lexical"),
+        )
+        for index, data in enumerate(
+            _objects(value, path, {"name", "value_type", "lexical"})
+        )
+    )
+
+
+def _name(value: object, path: str) -> QualifiedName:
+    data = _named_object(value, path, {"namespace", "local_name"})
+    return QualifiedName(
+        _string(data["namespace"], f"{path}.namespace"),
+        _string(data["local_name"], f"{path}.local_name"),
+    )
+
+
+def _named_object(value: object, path: str, keys: set[str]) -> dict[str, object]:
+    data = _object(value, path)
+    _keys(data, keys, path)
+    return data
+
+
+def _object(value: object, path: str) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{path} must be an object")
+    return cast(dict[str, object], value)
+
+
+def _object_list(value: object, path: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array")
+    return [_object(entry, f"{path}[{index}]") for index, entry in enumerate(value)]
+
+
+def _objects(value: object, path: str, keys: set[str]) -> list[dict[str, object]]:
+    result = _object_list(value, path)
+    for index, data in enumerate(result):
+        _keys(data, keys, f"{path}[{index}]")
+    return result
+
+
+def _keys(data: dict[str, object], expected: set[str], path: str) -> None:
+    missing = expected - data.keys()
+    extra = data.keys() - expected
+    if missing:
+        raise ValueError(f"{path} is missing field {min(missing)!r}")
+    if extra:
+        raise ValueError(f"{path} has unknown field {min(extra)!r}")
+
+
+def _string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a string")
+    return value
+
+
+def _integer(value: object, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{path} must be an integer")
+    return value
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{path} must be a boolean")
+    return value
+
+
+def _enum[E](enum_type: Callable[[str], E], value: object, path: str) -> E:
+    spelling = _string(value, path)
+    try:
+        return enum_type(spelling)
+    except ValueError as error:
+        raise ValueError(f"{path} has unsupported value {spelling!r}") from error
