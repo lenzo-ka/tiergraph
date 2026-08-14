@@ -24,6 +24,7 @@ from tiergraph.core import (
 )
 from tiergraph.machine import (
     MACHINE_VERSION,
+    MAX_REPEAT_COUNT,
     AddItem,
     AsBuilt,
     AttachValue,
@@ -63,6 +64,7 @@ __all__ = [
     "ItemRef",
     "NamespaceDeclaration",
     "MACHINE_VERSION",
+    "MAX_REPEAT_COUNT",
     "Position",
     "PositionRef",
     "Program",

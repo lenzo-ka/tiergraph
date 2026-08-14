@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Protocol, Self
+from typing import Self, cast
 
 from tiergraph.core import (
     AttributeDeclaration,
@@ -31,20 +31,11 @@ from tiergraph.core import (
 )
 
 MACHINE_VERSION = "1"
+MAX_REPEAT_COUNT = 10_000
 
 
 class ExecutionError(ValueError):
     """Name the opcode that could not make its checked state transition."""
-
-
-class PrimitiveOpcode(Protocol):
-    """A checked state transition in the consume-tier language fragment."""
-
-    def apply(self, graph: Graph) -> Graph:
-        """Return the next validated graph or refuse the transition."""
-
-    def to_data(self) -> dict[str, JsonValue]:
-        """Return a JSON-serializable description for diagnostics."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +298,10 @@ class Repeat:
             raise ValueError(
                 f"repeat count {self.count!r} must be a nonnegative integer"
             )
+        if self.count > MAX_REPEAT_COUNT:
+            raise ValueError(
+                f"repeat count {self.count!r} exceeds limit {MAX_REPEAT_COUNT}"
+            )
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the procedural opcode as JSON data."""
@@ -317,7 +312,30 @@ class Repeat:
         }
 
 
+type PrimitiveOpcode = (
+    DeclareNamespace
+    | DeclareTier
+    | DeclareRelation
+    | DeclareAttribute
+    | AddItem
+    | PromoteItem
+    | PromotePosition
+    | Relate
+    | AttachValue
+)
 type Opcode = PrimitiveOpcode | Repeat
+
+_PRIMITIVE_OPCODE_TYPES = (
+    DeclareNamespace,
+    DeclareTier,
+    DeclareRelation,
+    DeclareAttribute,
+    AddItem,
+    PromoteItem,
+    PromotePosition,
+    Relate,
+    AttachValue,
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -389,34 +407,66 @@ class AsBuilt:
         return hash(self.fingerprint())
 
 
-def execute(opcodes: Iterable[PrimitiveOpcode]) -> Graph:
+def execute(opcodes: Iterable[object]) -> Graph:
     """Execute primitives in order and name the first refused opcode."""
     graph = Graph((), (), ())
     for index, opcode in enumerate(opcodes):
         try:
-            graph = opcode.apply(graph)
-        except (TypeError, ValueError) as error:
+            if type(opcode) not in _PRIMITIVE_OPCODE_TYPES:
+                raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
+            result = cast(PrimitiveOpcode, opcode).apply(graph)
+            if not isinstance(result, Graph):
+                raise TypeError(
+                    f"opcode returned {type(result).__name__!r}, expected Graph"
+                )
+            graph = _validate_graph(result)
+        except Exception as error:
             raise ExecutionError(
-                f"opcode {index} {opcode.to_data()!r} refused: {error}"
+                f"opcode {index} {_opcode_data(opcode)!r} refused: {error}"
             ) from error
     return graph
 
 
 def _flatten(opcodes: tuple[Opcode, ...]) -> tuple[PrimitiveOpcode, ...]:
     flattened: list[PrimitiveOpcode] = []
-    stack: list[tuple[tuple[Opcode, ...], int]] = [(opcodes, 0)]
+    stack: list[tuple[tuple[object, ...], int]] = [(opcodes, 0)]
     while stack:
         block, index = stack.pop()
         if index == len(block):
             continue
         opcode = block[index]
         stack.append((block, index + 1))
-        if isinstance(opcode, Repeat):
+        if type(opcode) is Repeat:
             for _ in range(opcode.count):
                 stack.append((opcode.body, 0))
         else:
-            flattened.append(opcode)
+            flattened.append(cast(PrimitiveOpcode, opcode))
     return tuple(flattened)
+
+
+def _opcode_data(opcode: object) -> object:
+    if type(opcode) in _PRIMITIVE_OPCODE_TYPES:
+        try:
+            return cast(PrimitiveOpcode, opcode).to_data()
+        except Exception as error:
+            return {
+                "opcode": "unserializable",
+                "type": type(opcode).__name__,
+                "reason": str(error),
+            }
+    return {"opcode": "unrecognized", "type": type(opcode).__name__}
+
+
+def _validate_graph(graph: Graph) -> Graph:
+    return Graph(
+        graph.namespaces,
+        graph.tiers,
+        graph.relation_declarations,
+        graph.relations,
+        graph.attribute_declarations,
+        graph.position_values,
+        graph.attributes,
+    )
 
 
 def _replace(

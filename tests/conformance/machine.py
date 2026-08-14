@@ -11,21 +11,28 @@ import pytest
 from tiergraph import (
     AddItem,
     AsBuilt,
+    AttachValue,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundarySide,
     DeclareAttribute,
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    DurableItemRef,
+    DurablePositionRef,
     ExecutionError,
     ItemRef,
     NamespaceDeclaration,
+    PositionRef,
     Program,
     PromoteItem,
+    PromotePosition,
     QualifiedName,
     Relate,
+    RelationEndpointKind,
     RelationInstance,
     Repeat,
     SimpleRelationDeclaration,
@@ -117,9 +124,43 @@ class MachineLawSuite:
             self.name("link"), self.name("event"), self.name("event")
         )
         base = (*self.declarations(), AddItem(tier))
+        item_value = AttributeValue(self.name("label"), XsdType.STRING, "x")
+        tier_value = AttributeValue(self.name("tier-label"), XsdType.STRING, "x")
+        integer_value = AttributeValue(self.name("label"), XsdType.INTEGER, "1")
+        guarded = BipartiteRelationDeclaration(
+            self.name("guarded"),
+            self.name("event"),
+            self.name("event"),
+            single_parent=True,
+            acyclic=True,
+        )
         return (
             (
-                "duplicate declaration",
+                "duplicate namespace prefix",
+                self.build(
+                    (
+                        *self.declarations(),
+                        DeclareNamespace(
+                            NamespaceDeclaration("m", "urn:machine-other")
+                        ),
+                    )
+                ),
+                "duplicate namespace prefix",
+            ),
+            (
+                "duplicate namespace URI",
+                self.build(
+                    (
+                        *self.declarations(),
+                        DeclareNamespace(
+                            NamespaceDeclaration("other", "urn:machine-test")
+                        ),
+                    )
+                ),
+                "duplicate namespace URI",
+            ),
+            (
+                "duplicate tier declaration",
                 self.build((*base, DeclareTier(TierDeclaration(tier, "Again")))),
                 "duplicate tier",
             ),
@@ -139,6 +180,87 @@ class MachineLawSuite:
                     )
                 ),
                 "duplicate durable id",
+            ),
+            (
+                "durable id reused across kinds",
+                self.build(
+                    (
+                        *base,
+                        PromoteItem(ItemRef(tier, 0), "same"),
+                        DeclareRelation(link),
+                        Relate(
+                            RelationInstance(
+                                link.name,
+                                ItemRef(tier, 0),
+                                ItemRef(tier, 0),
+                                "same",
+                            )
+                        ),
+                    )
+                ),
+                "duplicate durable id",
+            ),
+            (
+                "relation declaration undeclared namespace",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            BipartiteRelationDeclaration(
+                                QualifiedName("urn:missing", "link"),
+                                self.name("event"),
+                                self.name("event"),
+                            )
+                        ),
+                    )
+                ),
+                "uses undeclared namespace",
+            ),
+            (
+                "simple relation undeclared tier",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            SimpleRelationDeclaration(
+                                self.name("missing-members"),
+                                other,
+                                self.name("event"),
+                            )
+                        ),
+                    )
+                ),
+                "names undeclared tier",
+            ),
+            (
+                "multiple simple relations",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            SimpleRelationDeclaration(
+                                self.name("other-members"),
+                                tier,
+                                self.name("event"),
+                            )
+                        ),
+                    )
+                ),
+                "multiple simple relations",
+            ),
+            (
+                "duplicate relation declaration",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            SimpleRelationDeclaration(
+                                self.name("members"), tier, self.name("event")
+                            )
+                        ),
+                    )
+                ),
+                "duplicate relation declaration",
             ),
             (
                 "undeclared relation",
@@ -175,6 +297,176 @@ class MachineLawSuite:
                     )
                 ),
                 "left endpoint",
+            ),
+            (
+                "wrong endpoint kind",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            BipartiteRelationDeclaration(
+                                self.name("boundary-link"),
+                                self.name("event"),
+                                self.name("event"),
+                                right_endpoint=RelationEndpointKind.BOUNDARY,
+                            )
+                        ),
+                        Relate(
+                            RelationInstance(
+                                self.name("boundary-link"),
+                                ItemRef(tier, 0),
+                                ItemRef(tier, 0),
+                            )
+                        ),
+                    )
+                ),
+                "declaration requires a boundary",
+            ),
+            (
+                "missing boundary anchor",
+                self.build(
+                    (
+                        *base,
+                        DeclareRelation(
+                            BipartiteRelationDeclaration(
+                                self.name("boundary-link"),
+                                self.name("event"),
+                                self.name("event"),
+                                right_endpoint=RelationEndpointKind.BOUNDARY,
+                            )
+                        ),
+                        Relate(
+                            RelationInstance(
+                                self.name("boundary-link"),
+                                ItemRef(tier, 0),
+                                DurablePositionRef(
+                                    DurableItemRef("missing"), BoundarySide.BEFORE
+                                ),
+                            )
+                        ),
+                    )
+                ),
+                "names missing anchor item",
+            ),
+            (
+                "single parent",
+                self.build(
+                    (
+                        *self.declarations(),
+                        AddItem(tier),
+                        AddItem(tier),
+                        AddItem(tier),
+                        DeclareRelation(guarded),
+                        Relate(
+                            RelationInstance(
+                                guarded.name, ItemRef(tier, 0), ItemRef(tier, 2)
+                            )
+                        ),
+                        Relate(
+                            RelationInstance(
+                                guarded.name, ItemRef(tier, 1), ItemRef(tier, 2)
+                            )
+                        ),
+                    )
+                ),
+                "a second parent",
+            ),
+            (
+                "acyclic",
+                self.build(
+                    (
+                        *self.declarations(),
+                        AddItem(tier),
+                        AddItem(tier),
+                        DeclareRelation(guarded),
+                        Relate(
+                            RelationInstance(
+                                guarded.name, ItemRef(tier, 0), ItemRef(tier, 1)
+                            )
+                        ),
+                        Relate(
+                            RelationInstance(
+                                guarded.name, ItemRef(tier, 1), ItemRef(tier, 0)
+                            )
+                        ),
+                    )
+                ),
+                "closes a cycle",
+            ),
+            (
+                "duplicate attribute declaration",
+                self.build(
+                    (
+                        *base,
+                        DeclareAttribute(
+                            AttributeDeclaration(
+                                self.name("label"),
+                                AttributeDomain.ITEM,
+                                XsdType.STRING,
+                            )
+                        ),
+                    )
+                ),
+                "duplicate attribute declaration",
+            ),
+            (
+                "undeclared attribute",
+                self.build(
+                    (
+                        *base,
+                        AttachValue(
+                            AttributeDomain.ITEM,
+                            ItemRef(tier, 0),
+                            AttributeValue(self.name("missing"), XsdType.STRING, "x"),
+                        ),
+                    )
+                ),
+                "is undeclared",
+            ),
+            (
+                "attribute domain",
+                self.build(
+                    (
+                        *base,
+                        DeclareAttribute(
+                            AttributeDeclaration(
+                                self.name("tier-label"),
+                                AttributeDomain.TIER,
+                                XsdType.STRING,
+                            )
+                        ),
+                        AttachValue(AttributeDomain.ITEM, ItemRef(tier, 0), tier_value),
+                    )
+                ),
+                "cannot occur on 'item'",
+            ),
+            (
+                "attribute type",
+                self.build(
+                    (
+                        *base,
+                        AttachValue(
+                            AttributeDomain.ITEM, ItemRef(tier, 0), integer_value
+                        ),
+                    )
+                ),
+                "value has type 'integer'",
+            ),
+            (
+                "duplicate attribute value",
+                self.build(
+                    (
+                        *base,
+                        AttachValue(AttributeDomain.ITEM, ItemRef(tier, 0), item_value),
+                        AttachValue(AttributeDomain.ITEM, ItemRef(tier, 0), item_value),
+                    )
+                ),
+                "duplicate attribute value",
+            ),
+            (
+                "position promotion",
+                self.build((*base, PromotePosition(PositionRef(tier, 2), "position"))),
+                "is outside tier",
             ),
         )
 

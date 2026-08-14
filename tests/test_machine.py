@@ -12,6 +12,7 @@ import pytest
 from tests.conformance.machine import MachineLawSuite
 from tiergraph import (
     MACHINE_VERSION,
+    MAX_REPEAT_COUNT,
     AddItem,
     AsBuilt,
     AttachValue,
@@ -25,8 +26,11 @@ from tiergraph import (
     DeclareTier,
     DurableItemRef,
     DurablePositionRef,
+    ExecutionError,
     Graph,
+    Item,
     ItemRef,
+    NamespaceDeclaration,
     PositionRef,
     Program,
     PromoteItem,
@@ -36,6 +40,7 @@ from tiergraph import (
     RelationInstance,
     Repeat,
     SimpleRelationDeclaration,
+    Tier,
     TierDeclaration,
     XsdType,
 )
@@ -58,7 +63,6 @@ LAWS = MachineLawSuite(build_program)
         LAWS.check_procedures_lower_identically,
         LAWS.check_deep_procedure_terminates,
         LAWS.check_refusal_names_opcode,
-        LAWS.check_invalidity_classes,
         LAWS.check_fingerprint_ignores_source_procedure,
         LAWS.check_attach_value,
     ],
@@ -70,12 +74,97 @@ def test_machine_law(law: object) -> None:
     law()
 
 
+@pytest.mark.parametrize(
+    ("label", "program", "reason"),
+    LAWS.invalidity_cases(),
+    ids=[case[0] for case in LAWS.invalidity_cases()],
+)
+def test_kernel_invalidity_class_is_independently_pinned(
+    label: str, program: Program, reason: str
+) -> None:
+    """Each near-valid program names only its independently selected kernel guard."""
+    Program(program.opcodes[:-1]).unroll()
+    with pytest.raises(ExecutionError, match=reason) as caught:
+        program.unroll()
+    assert "opcode " in str(caught.value), label
+
+
 def test_repeat_refuses_non_finite_expansion() -> None:
     """The procedure constructor rejects counts that cannot prove termination."""
     with pytest.raises(ValueError, match="repeat count -1"):
         Repeat(-1, ())
     with pytest.raises(ValueError, match="repeat count True"):
         Repeat(True, ())
+    with pytest.raises(
+        ValueError,
+        match=f"repeat count {MAX_REPEAT_COUNT + 1} exceeds limit {MAX_REPEAT_COUNT}",
+    ):
+        Repeat(MAX_REPEAT_COUNT + 1, ())
+
+
+def test_unrecognized_opcode_is_an_indexed_execution_refusal() -> None:
+    """Lowering refuses values outside the closed opcode classes at their trace index."""
+    with pytest.raises(
+        ExecutionError,
+        match="opcode 0 .*unrecognized.*object.*unrecognized opcode type",
+    ):
+        Program((object(),)).unroll()  # type: ignore[arg-type]
+
+
+def test_opcode_subclass_is_not_a_member_of_the_closed_set() -> None:
+    """Runtime membership is exact and cannot be acquired by overriding a primitive."""
+
+    class Forged(AddItem):
+        def apply(self, graph: Graph) -> Graph:
+            return graph
+
+    with pytest.raises(ExecutionError, match="opcode 0 .*unrecognized.*Forged"):
+        Program((Forged(LAWS.name("events")),)).unroll()
+
+
+def test_execution_revalidates_each_returned_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hostile implementation cannot advance execution with corrupted graph state."""
+    tier = Tier(TierDeclaration(LAWS.name("events"), "Events"), (Item(),))
+    bad = Graph((NamespaceDeclaration("m", "urn:machine-test"),), (tier,), ())
+    object.__setattr__(bad, "tiers", (tier, tier))
+
+    def forged_apply(_opcode: DeclareTier, _graph: Graph) -> Graph:
+        return bad
+
+    monkeypatch.setattr(DeclareTier, "apply", forged_apply)
+    with pytest.raises(ExecutionError, match="opcode 0 .*duplicate tier"):
+        Program((DeclareTier(tier.declaration),)).unroll()
+
+
+def test_execution_refuses_a_non_graph_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recognized primitive must return graph state before execution can advance."""
+
+    def forged_apply(_opcode: AddItem, _graph: Graph) -> object:
+        return object()
+
+    monkeypatch.setattr(AddItem, "apply", forged_apply)
+    with pytest.raises(
+        ExecutionError, match="opcode 0 .*returned 'object', expected Graph"
+    ):
+        Program((AddItem(LAWS.name("events")),)).unroll()
+
+
+def test_diagnostic_serialization_failure_stays_indexed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken opcode description cannot escape the indexed refusal boundary."""
+
+    def broken_data(_opcode: AddItem) -> dict[str, object]:
+        raise RuntimeError("broken description")
+
+    monkeypatch.setattr(AddItem, "to_data", broken_data)
+    with pytest.raises(
+        ExecutionError,
+        match="opcode 0 .*unserializable.*broken description.*not declared",
+    ):
+        Program((AddItem(LAWS.name("missing")),)).unroll()
 
 
 def test_machine_version_is_independent_public_data() -> None:
