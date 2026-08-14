@@ -286,13 +286,19 @@ def json_schema_for(
         "title": "tiergraph primitive document",
         "description": (
             "Structural validation is necessary but not sufficient for codec "
-            "acceptance. The codec additionally enforces referential integrity, "
-            "unique names, endpoint typing, single_parent and acyclic promises, "
-            "and that structural indices use an integral JSON spelling. JSON "
-            "Schema considers a number such as 1.0 an integer, while the codec "
-            "deliberately refuses it. Older format versions are refused rather "
-            "than migrated because migration requires an explicit, loss-aware "
-            "conversion outside the primitive codec."
+            "acceptance. Codec-only checks include, but are not limited to, "
+            "referential integrity; unique declaration, tier, item, durable-id, "
+            "position, and relation names; one namespace prefix per URI; one "
+            "simple relation per tier; relation-instance references to bipartite "
+            "declarations; endpoint typing; non-empty position attributes; and "
+            "single_parent and acyclic promises. The codec also requires structural "
+            "indices to use an integral JSON spelling: JSON Schema considers a "
+            "number such as 1.0 an integer, while the codec deliberately refuses "
+            "it. This list is illustrative rather than exhaustive; JSON Schema is "
+            "the structural contract and codec acceptance remains authoritative. "
+            "Older format versions are refused rather than migrated because "
+            "migration requires an explicit, loss-aware conversion outside the "
+            "primitive codec."
         ),
         **root,
         "$defs": definitions,
