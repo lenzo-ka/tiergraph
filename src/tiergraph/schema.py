@@ -49,6 +49,7 @@ class Shape:
 STRING = Shape(ShapeKind.STRING)
 INTEGER = Shape(ShapeKind.INTEGER)
 NON_NEGATIVE_INTEGER = Shape(ShapeKind.INTEGER, minimum=0)
+ARITY_MAXIMUM = Shape(ShapeKind.INTEGER, minimum=-1)
 BOOLEAN = Shape(ShapeKind.BOOLEAN)
 NULLABLE_STRING = Shape(ShapeKind.NULLABLE_STRING)
 NULLABLE_NON_EMPTY_STRING = Shape(ShapeKind.NULLABLE_STRING, min_length=1)
@@ -151,7 +152,8 @@ DECLARATIONS: dict[str, Shape] = {
         ),
         _field("tiers", _array(QUALIFIED_NAME)),
         _field("minimum", NON_NEGATIVE_INTEGER),
-        _field("maximum", INTEGER),
+        # -1 is the sole wire sentinel for an unbounded side.
+        _field("maximum", ARITY_MAXIMUM),
         _field("allow_empty", BOOLEAN),
     ),
     "polyadic_relation": _object(

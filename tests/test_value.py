@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 
@@ -114,6 +115,22 @@ def test_codec_and_schema_accept_and_refuse_same_new_surface() -> None:
     with pytest.raises(ValueError, match=r"relations\[0\].targets must be an array"):
         loads(json.dumps(bad))
 
+    bad_bound = to_data(graph)
+    bound_graph = bad_bound["graph"]
+    assert isinstance(bound_graph, dict)
+    declarations = bound_graph["relation_declarations"]
+    assert isinstance(declarations, list)
+    declaration = declarations[0]
+    assert isinstance(declaration, dict)
+    targets = declaration["targets"]
+    assert isinstance(targets, dict)
+    targets["maximum"] = -2
+    assert validation_errors(bad_bound, FORMAT_VERSION) == [
+        "document.graph.relation_declarations[0].targets.maximum must be at least -1"
+    ]
+    with pytest.raises(ValueError, match=r"maximum -2 must be a nonnegative integer"):
+        loads(json.dumps(bad_bound))
+
 
 def test_nonfinite_double_and_non_string_key_name_the_offender() -> None:
     """Near-valid JSON neighbours distinguish supported recursive values."""
@@ -131,7 +148,9 @@ def test_missing_kind_names_the_node() -> None:
     tier = graph.tiers[0]
     item = tier.items[0]
     changed_item = Item(item.durable_id, item.attributes[1:])
-    changed = replace(graph, tiers=(Tier(tier.declaration, (changed_item,)),))
+    changed = replace(
+        graph, tiers=(Tier(tier.declaration, (changed_item,)), *graph.tiers[1:])
+    )
     with pytest.raises(ValueError, match=r"JSON value node .*unsupported kind None"):
         rebound(changed, profile).value(root)
 
@@ -146,6 +165,66 @@ def test_profile_role_declarations_name_missing_or_wrong_roles() -> None:
         replace(profile, member_relation=absent)
     with pytest.raises(ValueError, match="JSON kind role .* must be an item string"):
         replace(profile, kind_attribute=absent)
+    with pytest.raises(ValueError, match="membership tier .* is not declared"):
+        replace(profile, occurrence_tier=absent)
+    with pytest.raises(ValueError, match="membership-value relation must have"):
+        replace(profile, value_relation=absent)
+
+
+def test_profile_refuses_noncanonical_membership_shapes() -> None:
+    """Every occurrence has one owner edge and exactly one value edge."""
+    graph, profile, root = json_value_graph(["kept"])
+    member = next(
+        item
+        for item in graph.polyadic_relations
+        if item.declaration == profile.member_relation
+    )
+    value = next(
+        item
+        for item in graph.polyadic_relations
+        if item.declaration == profile.value_relation
+    )
+
+    def refused(relations: tuple[PolyadicRelationInstance, ...], message: str) -> None:
+        changed = replace(graph)
+        object.__setattr__(changed, "polyadic_relations", relations)
+        with pytest.raises(ValueError, match=message):
+            rebound(changed, profile)
+
+    refused((replace(member, sources=()), value), "noncanonical source arity")
+    refused((member, member, value), "multiple member relations")
+    refused((member, replace(value, targets=())), "noncanonical arity")
+    refused((member, value, value), "has multiple values")
+
+    second_owner = replace(member, sources=(value.targets[0],))
+    refused((member, second_owner, value), "owned by multiple containers")
+
+    missing_value = replace(graph, polyadic_relations=(member,))
+    with pytest.raises(ValueError, match="membership .* has no value"):
+        rebound(missing_value, profile)
+
+    orphan_value = replace(graph, polyadic_relations=(value,))
+    with pytest.raises(ValueError, match="membership .* has no container"):
+        rebound(orphan_value, profile)
+
+    graph_two, profile_two, _ = json_value_graph(["x", "y"])
+    value_relations = [
+        item
+        for item in graph_two.polyadic_relations
+        if item.declaration == profile_two.value_relation
+    ]
+    aliased_value = replace(value_relations[1], targets=value_relations[0].targets)
+    changed_two = replace(graph_two)
+    object.__setattr__(
+        changed_two,
+        "polyadic_relations",
+        tuple(
+            aliased_value if item is value_relations[1] else item
+            for item in graph_two.polyadic_relations
+        ),
+    )
+    with pytest.raises(ValueError, match="alias a value target"):
+        rebound(changed_two, profile_two)
 
 
 def test_root_and_recursive_member_refusals_name_coordinates() -> None:
@@ -156,8 +235,17 @@ def test_root_and_recursive_member_refusals_name_coordinates() -> None:
         profile.value(ItemRef(other, 0))
     with pytest.raises(ValueError, match="does not exist"):
         profile.value(ItemRef(root.tier, 9))
-    relation = graph.polyadic_relations[0]
-    recursive = replace(graph, polyadic_relations=(replace(relation, targets=(root,)),))
+    # Give the empty array a membership whose value is the array itself.
+    occurrence = ItemRef(profile.occurrence_tier, 0)
+    occurrence_tier = graph.tiers[1]
+    recursive = replace(
+        graph,
+        tiers=(graph.tiers[0], replace(occurrence_tier, items=(Item(),))),
+        polyadic_relations=(
+            PolyadicRelationInstance(profile.member_relation, (root,), (occurrence,)),
+            PolyadicRelationInstance(profile.value_relation, (occurrence,), (root,)),
+        ),
+    )
     with pytest.raises(ValueError, match="is recursive"):
         rebound(recursive, profile).value(root)
 
@@ -176,12 +264,17 @@ def test_payload_and_container_shape_refusals_name_nodes() -> None:
                 tier,
                 items=(replace(item, attributes=(bad_kind, *item.attributes[1:])),),
             ),
+            *graph.tiers[1:],
         ),
     )
     with pytest.raises(ValueError, match="unsupported kind 'record'"):
         rebound(changed, profile).value(root)
     missing_payload = replace(
-        graph, tiers=(replace(tier, items=(replace(item, attributes=(kind,)),)),)
+        graph,
+        tiers=(
+            replace(tier, items=(replace(item, attributes=(kind,)),)),
+            *graph.tiers[1:],
+        ),
     )
     with pytest.raises(ValueError, match="kind 'string' requires"):
         rebound(missing_payload, profile).value(root)
@@ -196,32 +289,57 @@ def test_member_key_rules_and_numeric_leaves() -> None:
     """Array/object key discipline and both numeric scalar branches are explicit."""
     graph, profile, root = json_value_graph([7])
     assert profile.value(root) == [7]
-    tier = graph.tiers[0]
-    child = tier.items[1]
+    occurrence_tier = graph.tiers[1]
+    occurrence = occurrence_tier.items[0]
     keyed = replace(
-        child,
+        occurrence,
         attributes=(
-            *child.attributes,
+            *occurrence.attributes,
             AttributeValue(profile.key_attribute, XsdType.STRING, "wrong"),
         ),
     )
-    changed = replace(graph, tiers=(replace(tier, items=(tier.items[0], keyed)),))
-    with pytest.raises(ValueError, match="array member .* has an object key"):
+    changed = replace(
+        graph, tiers=(graph.tiers[0], replace(occurrence_tier, items=(keyed,)))
+    )
+    with pytest.raises(ValueError, match="array membership .* has an object key"):
         rebound(changed, profile).value(root)
 
+    scalar_graph, scalar_profile, scalar_root = json_value_graph("root")
+    scalar_tier = scalar_graph.tiers[0]
+    scalar = scalar_tier.items[0]
+    keyed_scalar = replace(
+        scalar,
+        attributes=(
+            *scalar.attributes,
+            AttributeValue(scalar_profile.key_attribute, XsdType.STRING, "orphan"),
+        ),
+    )
+    keyed_scalar_graph = replace(
+        scalar_graph,
+        tiers=(replace(scalar_tier, items=(keyed_scalar,)), *scalar_graph.tiers[1:]),
+    )
+    with pytest.raises(ValueError, match="value node .* carries an object-member key"):
+        rebound(keyed_scalar_graph, scalar_profile).value(scalar_root)
+
     object_graph, object_profile, object_root = json_value_graph({"b": 2, "a": 1})
-    relation = object_graph.polyadic_relations[-1]
+    relation = next(
+        item
+        for item in object_graph.polyadic_relations
+        if item.declaration == object_profile.member_relation
+    )
     reversed_graph = replace(
         object_graph,
-        polyadic_relations=(
-            *object_graph.polyadic_relations[:-1],
-            replace(relation, targets=tuple(reversed(relation.targets))),
+        polyadic_relations=tuple(
+            replace(item, targets=tuple(reversed(item.targets)))
+            if item is relation
+            else item
+            for item in object_graph.polyadic_relations
         ),
     )
     with pytest.raises(ValueError, match="has noncanonical keys"):
         rebound(reversed_graph, object_profile).value(object_root)
-    object_tier = object_graph.tiers[0]
-    first = object_tier.items[1]
+    object_tier = object_graph.tiers[1]
+    first = object_tier.items[0]
     without_key = replace(
         first,
         attributes=tuple(
@@ -233,13 +351,14 @@ def test_member_key_rules_and_numeric_leaves() -> None:
     missing_key = replace(
         object_graph,
         tiers=(
+            object_graph.tiers[0],
             replace(
                 object_tier,
-                items=(object_tier.items[0], without_key, *object_tier.items[2:]),
+                items=(without_key, *object_tier.items[1:]),
             ),
         ),
     )
-    with pytest.raises(ValueError, match="object member .* has no key"):
+    with pytest.raises(ValueError, match="object membership .* has no key"):
         rebound(missing_key, object_profile).value(object_root)
 
     double_graph, double_profile, double_root = json_value_graph(1.0)
@@ -257,16 +376,45 @@ def test_member_key_rules_and_numeric_leaves() -> None:
                     ),
                 ),
             ),
+            *double_graph.tiers[1:],
         ),
     )
     with pytest.raises(ValueError, match="JSON double node .* is not finite"):
         rebound(infinite_graph, double_profile).value(double_root)
 
 
-def test_unsupported_python_value_names_type() -> None:
-    """A tuple is near recursive JSON but is not silently treated as an array."""
-    with pytest.raises(ValueError, match="unsupported type tuple"):
-        json_value_graph(("value",))  # type: ignore[arg-type]
+def test_frozen_json_carriers_are_accepted() -> None:
+    """Immutable array and object carriers are the ordinary frozen input shape."""
+    tuple_graph, tuple_profile, tuple_root = json_value_graph(("value",))  # type: ignore[arg-type]
+    assert tuple_profile.value(tuple_root) == ["value"]
+    mapping_graph, mapping_profile, mapping_root = json_value_graph(
+        MappingProxyType({"a": 1})  # type: ignore[arg-type]
+    )
+    assert mapping_profile.value(mapping_root) == {"a": 1}
+    with pytest.raises(ValueError, match="unsupported type set"):
+        json_value_graph({"not-json"})  # type: ignore[arg-type]
+
+
+def test_aliased_membership_occurrence_is_refused_and_neighbour_passes() -> None:
+    """One occurrence cannot stand for two written JSON array positions."""
+    graph, profile, root = json_value_graph(("x", "y"))  # type: ignore[arg-type]
+    assert profile.value(root) == ["x", "y"]
+    relation = next(
+        item
+        for item in graph.polyadic_relations
+        if item.declaration == profile.member_relation
+    )
+    aliased = replace(relation, targets=(relation.targets[0], relation.targets[0]))
+    # Exercise profile validation independently of Graph's matching kernel promise.
+    object.__setattr__(
+        graph,
+        "polyadic_relations",
+        tuple(
+            aliased if item is relation else item for item in graph.polyadic_relations
+        ),
+    )
+    with pytest.raises(ValueError, match="aliases a membership target"):
+        rebound(graph, profile)
 
 
 def test_profile_ignores_other_relations() -> None:
