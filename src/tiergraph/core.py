@@ -375,7 +375,12 @@ class RelationInstance:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
-    """Hold a validated immutable graph and derive order and empty boundaries."""
+    """Hold a validated immutable graph and derive order and empty boundaries.
+
+    Declaration collections are canonicalized because their supply order has no
+    graph meaning.  Tiers, tier items, and relation instances remain ordered:
+    relation instances may represent a meaningful sequence of children or links.
+    """
 
     namespaces: tuple[NamespaceDeclaration, ...]
     tiers: tuple[Tier, ...]
@@ -397,6 +402,21 @@ class Graph:
 
     def __post_init__(self) -> None:
         """Validate the graph, requiring one prefix per URI for canonical documents."""
+        object.__setattr__(
+            self,
+            "namespaces",
+            tuple(sorted(self.namespaces, key=lambda item: item.namespace)),
+        )
+        object.__setattr__(
+            self,
+            "relation_declarations",
+            tuple(sorted(self.relation_declarations, key=lambda item: item.name)),
+        )
+        object.__setattr__(
+            self,
+            "attribute_declarations",
+            tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
+        )
         namespaces = _unique_by_name(
             ((binding.prefix, binding) for binding in self.namespaces),
             "namespace prefix",
@@ -671,7 +691,7 @@ class Graph:
         )
 
     def to_data(self) -> dict[str, JsonValue]:
-        """Return graph content in declaration order as JSON-serializable data."""
+        """Return graph content in canonical declaration order as JSON data."""
         return {
             "namespaces": [binding.to_data() for binding in self.namespaces],
             "tiers": [tier.to_data() for tier in self.tiers],
