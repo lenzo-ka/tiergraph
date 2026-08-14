@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 
@@ -66,9 +67,11 @@ class KernelLawSuite:
     def check_boundaries(self) -> None:
         """Every tier owns one more boundary than it has items."""
         graph = self.typed_graph()
-        assert [
-            position.reference.index for position in graph.positions(self.name("phon"))
-        ] == [
+        references = tuple(
+            position.reference for position in graph.positions(self.name("phon"))
+        )
+        assert all(isinstance(reference, PositionRef) for reference in references)
+        assert [cast(PositionRef, reference).index for reference in references] == [
             0,
             1,
             2,

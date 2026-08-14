@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from typing import cast
 
 import pytest
 
@@ -179,10 +180,10 @@ class ExternalReferenceFixture:
         for relation in graph.relations:
             if relation.declaration != USES:
                 continue
-            selection = selection_tier.items[relation.right.index]
+            selection = selection_tier.items[cast(ItemRef, relation.right).index]
             source_id = _lexical(selection, SOURCE_REFERENCE)
             source = graph.resolve_item(DurableItemRef(source_id))
-            placement = placement_tier.items[relation.left.index]
+            placement = placement_tier.items[cast(ItemRef, relation.left).index]
             answers.append(
                 (
                     source_id,
@@ -254,7 +255,7 @@ def test_item_selection_accepts_ordinary_attributes_and_relation_endpoints() -> 
     assert tuple(
         edge.declaration
         for edge in graph.relations
-        if edge.right.tier == SELECTION_TIER
+        if cast(ItemRef, edge.right).tier == SELECTION_TIER
     ) == (
         USES,
         USES,

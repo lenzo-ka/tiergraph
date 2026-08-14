@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 import pytest
 
@@ -112,7 +112,7 @@ class PackedAlternationSuite:
         """Index outgoing arcs without changing their declared order."""
         result: dict[int, list[RelationInstance]] = {}
         for arc in self.arcs():
-            result.setdefault(arc.left.index, []).append(arc)
+            result.setdefault(cast(ItemRef, arc.left).index, []).append(arc)
         return {node: tuple(arcs) for node, arcs in result.items()}
 
     def enumerate_paths(self, output_cap: int) -> tuple[tuple[str, ...], ...]:
@@ -131,7 +131,7 @@ class PackedAlternationSuite:
                 return
             for arc in outgoing:
                 assert arc.durable_id is not None
-                visit(arc.right.index, (*path, arc.durable_id))
+                visit(cast(ItemRef, arc.right).index, (*path, arc.durable_id))
 
         visit(0, ())
         return tuple(complete)
@@ -155,7 +155,8 @@ class PackedAlternationSuite:
                 result = semiring.add(
                     result,
                     semiring.multiply(
-                        arc_values[arc.durable_id], value(arc.right.index)
+                        arc_values[arc.durable_id],
+                        value(cast(ItemRef, arc.right).index),
                     ),
                 )
             memo[node] = result
@@ -177,10 +178,10 @@ class PackedAlternationSuite:
         node = 0
         for identity in path:
             arc = available[identity]
-            if arc.left.index != node:
+            if cast(ItemRef, arc.left).index != node:
                 raise ValueError(f"arc {identity!r} does not continue path at {node}")
             score = semiring.multiply(score, arc_values[identity])
-            node = arc.right.index
+            node = cast(ItemRef, arc.right).index
         if self.successors().get(node):
             raise ValueError(f"path stops before terminal state {node}")
         return score
@@ -211,7 +212,7 @@ class PackedAlternationSuite:
             for _arrival in arrivals[node]:
                 for arc in outgoing:
                     assert arc.durable_id is not None
-                    target = arc.right.index
+                    target = cast(ItemRef, arc.right).index
                     arrivals[target].append(
                         semiring.multiply(aggregate, arc_values[arc.durable_id])
                     )
@@ -233,7 +234,7 @@ class PackedAlternationSuite:
         successors: dict[int, list[RelationInstance]] = defaultdict(list)
         for arc in self.arcs():
             endpoint_visits += 2
-            successors[arc.left.index].append(arc)
+            successors[cast(ItemRef, arc.left).index].append(arc)
         memo: dict[int, int] = {}
 
         def value(node: int) -> int:
@@ -242,7 +243,7 @@ class PackedAlternationSuite:
             outgoing = successors.get(node, ())
             result = 1 if not outgoing else 0
             for arc in outgoing:
-                result += value(arc.right.index)
+                result += value(cast(ItemRef, arc.right).index)
             memo[node] = result
             return result
 

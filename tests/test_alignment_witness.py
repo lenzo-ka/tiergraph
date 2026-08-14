@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 
@@ -85,7 +86,9 @@ class EndpointVisits:
 
     def relation(self, relation: RelationInstance) -> tuple[ItemRef, ItemRef]:
         """Traverse both endpoints of one relation instance."""
-        return self.examine(relation.left), self.examine(relation.right)
+        return self.examine(cast(ItemRef, relation.left)), self.examine(
+            cast(ItemRef, relation.right)
+        )
 
 
 def recover(
@@ -140,7 +143,11 @@ def test_page_sized_oracle_recovers_every_weight_in_derived_order() -> None:
     graph = fixture()
     assert recover(graph) == ORACLE
     assert tuple(
-        (relation.left.index, relation.right.index) for relation in graph.relations
+        (
+            cast(ItemRef, relation.left).index,
+            cast(ItemRef, relation.right).index,
+        )
+        for relation in graph.relations
     ) != tuple((left, right) for left, right, _weight in ORACLE)
     assert len({(left, right) for left, right, _weight in recover(graph)}) == len(
         graph.relations
@@ -321,13 +328,14 @@ def endpoint_weights(relations: tuple[RelationInstance, ...]) -> dict[ItemRef, s
     assigned: dict[ItemRef, str] = {}
     for relation in relations:
         lexical = relation.attributes[0].lexical
-        previous = assigned.get(relation.left)
+        left = cast(ItemRef, relation.left)
+        previous = assigned.get(left)
         if previous is not None and previous != lexical:
             raise ValueError(
                 f"source endpoint {relation.left.to_data()!r} needs both "
                 f"weights {previous!r} and {lexical!r}"
             )
-        assigned[relation.left] = lexical
+        assigned[left] = lexical
     return assigned
 
 
@@ -335,7 +343,9 @@ def test_endpoint_held_weight_cannot_represent_distinct_link_weights() -> None:
     """One source with two gains forces a collision unless the source is duplicated."""
     graph = fixture()
     source_zero_links = tuple(
-        relation for relation in graph.relations if relation.left.index == 0
+        relation
+        for relation in graph.relations
+        if cast(ItemRef, relation.left).index == 0
     )
     with pytest.raises(
         ValueError, match=r"source endpoint.*needs both weights '0.5' and '1.0'"
