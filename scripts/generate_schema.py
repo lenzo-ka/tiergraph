@@ -53,7 +53,7 @@ def committed_stamp() -> object:
 
 
 def refuse_unversioned_shape_change(baseline: object, current: object) -> None:
-    """Refuse a declaration or artifact change without a codec version move."""
+    """Guard declaration and artifact digests, not codec acceptance semantics."""
     if not isinstance(baseline, dict) or not isinstance(current, dict):
         raise ValueError("schema stamp must be an object")
     changed = any(
@@ -61,7 +61,11 @@ def refuse_unversioned_shape_change(baseline: object, current: object) -> None:
         for field in ("shape_sha256", "schema_sha256")
     )
     if changed and baseline.get("format_version") == current.get("format_version"):
-        raise ValueError("wire schema or shape changed without moving FORMAT_VERSION")
+        raise ValueError(
+            "schema declaration or generated artifact changed without moving "
+            "FORMAT_VERSION; codec semantics are not checked and require a manual "
+            "FORMAT_VERSION decision"
+        )
 
 
 def main(argv: list[str] | None = None, baseline: object | None = None) -> int:

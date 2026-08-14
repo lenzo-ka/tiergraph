@@ -99,7 +99,8 @@ def test_shape_or_artifact_change_requires_format_version_change() -> None:
     for digest in ("shape_sha256", "schema_sha256"):
         altered = {**prior, digest: "edited"}
         with pytest.raises(
-            ValueError, match="schema or shape changed without moving FORMAT_VERSION"
+            ValueError,
+            match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
         ):
             refuse_unversioned_shape_change(prior, altered)
         altered["format_version"] = str(int(FORMAT_VERSION) - 1)
@@ -146,7 +147,8 @@ def test_generator_weakening_is_caught_by_artifact_digest(
     assert hashlib.sha256(weakened).hexdigest() != baseline["schema_sha256"]
     assert schema_module.shape_hash() == baseline["shape_sha256"]
     with pytest.raises(
-        ValueError, match="schema or shape changed without moving FORMAT_VERSION"
+        ValueError,
+        match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
     ):
         refuse_unversioned_shape_change(baseline, json.loads(stamp_bytes(weakened)))
 
@@ -167,7 +169,8 @@ def test_check_refuses_honestly_regenerated_unversioned_shape(
         schema_path.write_bytes(schema_bytes)
         stamp_path.write_bytes(stamp_bytes(schema_bytes))
         with pytest.raises(
-            SystemExit, match="schema or shape changed without moving FORMAT_VERSION"
+            SystemExit,
+            match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
         ):
             generate_main(["--check"], baseline)
     finally:
