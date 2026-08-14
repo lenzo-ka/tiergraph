@@ -1,5 +1,7 @@
 VENV ?= .venv
-PYTHON := $(VENV)/bin/python
+# Pin development to the supported floor so newer-only features cannot slip in.
+PYTHON ?= python3.12
+VENV_PYTHON := $(VENV)/bin/python
 
 .PHONY: venv lint format-check types test determinism-seed determinism tracked-clean documented check
 
@@ -9,27 +11,27 @@ PYTHON := $(VENV)/bin/python
 venv: $(VENV)/bin/python
 
 $(VENV)/bin/python:
-	@python -m venv $(VENV)
+	@$(PYTHON) -m venv $(VENV)
 	@$(VENV)/bin/pip install --quiet --upgrade pip
 	@$(VENV)/bin/pip install --quiet -e ".[dev]"
 
 lint:
-	@$(PYTHON) -m ruff check .
+	@$(VENV_PYTHON) -m ruff check .
 
 format-check:
-	@$(PYTHON) -m ruff format --check .
+	@$(VENV_PYTHON) -m ruff format --check .
 
 types:
-	@$(PYTHON) -m mypy
+	@$(VENV_PYTHON) -m mypy
 
 test:
-	@$(PYTHON) -m pytest --cov=tiergraph --cov-report=term-missing
+	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov-report=term-missing
 
 # Separate processes: interpreter hash state is fixed at startup and cannot be
 # changed honestly inside one run.
 determinism-seed:
 	@test -n "$(HASH_SEED)" || (echo "HASH_SEED is required" >&2; exit 2)
-	@PYTHONHASHSEED=$(HASH_SEED) $(PYTHON) -m pytest
+	@PYTHONHASHSEED=$(HASH_SEED) $(VENV_PYTHON) -m pytest
 
 determinism:
 	@for seed in 0 12345 999; do \
@@ -37,9 +39,9 @@ determinism:
 	done
 
 tracked-clean:
-	@$(PYTHON) scripts/check_tracked_clean.py
+	@$(VENV_PYTHON) scripts/check_tracked_clean.py
 
 documented:
-	@$(PYTHON) scripts/check_documented.py
+	@$(VENV_PYTHON) scripts/check_documented.py
 
 check: venv lint format-check types test determinism tracked-clean documented

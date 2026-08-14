@@ -9,10 +9,9 @@ description = "Ordered tiers, declared relations, and an algebra over them"
 readme = "README.md"
 authors = [{name = "Kevin Lenzo"}]
 license = "BSD-2-Clause"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
@@ -56,7 +55,7 @@ exclude_also = ["if __name__ == .__main__.:"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -64,7 +63,6 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 files = ["src", "tests"]
-
