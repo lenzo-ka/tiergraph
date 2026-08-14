@@ -178,7 +178,7 @@ def graph_data(document: dict[str, object]) -> dict[str, object]:
 def test_read_edit_write_changes_only_declared_value_line() -> None:
     """Editing one value in an externally serialized document changes only its line."""
     external_document = {
-        "format_version": "1",
+        "format_version": "2",
         "graph": rich_graph().to_data(),
     }
     before = (
@@ -321,8 +321,8 @@ def test_wire_shape_guards_name_their_paths() -> None:
     cases: list[tuple[dict[str, object], str]] = []
 
     wrong_version = mutable_document()
-    wrong_version["format_version"] = "2"
-    cases.append((wrong_version, "format_version '2' is unsupported"))
+    wrong_version["format_version"] = "3"
+    cases.append((wrong_version, "format_version '3' is unsupported"))
 
     missing = mutable_document()
     del missing["format_version"]

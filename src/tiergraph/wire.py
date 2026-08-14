@@ -31,9 +31,22 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
-from tiergraph.schema import DOCUMENT, GRAPH, object_fields
+from tiergraph.schema import (
+    DECLARATIONS,
+    DOCUMENT,
+    DURABLE_POSITION,
+    GRAPH,
+    ITEM,
+    ITEM_REFERENCE,
+    QUALIFIED_NAME,
+    TIER,
+    TIER_DECLARATION,
+    array_item,
+    field_shape,
+    object_fields,
+)
 
-FORMAT_VERSION = "1"
+FORMAT_VERSION = "2"
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
@@ -87,13 +100,17 @@ def _graph(data: dict[str, object]) -> Graph:
                 _string(entry["namespace"], f"namespaces[{index}].namespace"),
             )
             for index, entry in enumerate(
-                _objects(data["namespaces"], "namespaces", {"prefix", "namespace"})
+                _objects(
+                    data["namespaces"],
+                    "namespaces",
+                    object_fields(array_item(field_shape(GRAPH, "namespaces"))),
+                )
             )
         ),
         tuple(
             _tier(entry, index)
             for index, entry in enumerate(
-                _objects(data["tiers"], "tiers", {"declaration", "items", "attributes"})
+                _objects(data["tiers"], "tiers", object_fields(TIER))
             )
         ),
         tuple(
@@ -108,7 +125,7 @@ def _graph(data: dict[str, object]) -> Graph:
                 _objects(
                     data["relations"],
                     "relations",
-                    {"declaration", "left", "right", "durable_id", "attributes"},
+                    object_fields(array_item(field_shape(GRAPH, "relations"))),
                 )
             )
         ),
@@ -118,7 +135,9 @@ def _graph(data: dict[str, object]) -> Graph:
                 _objects(
                     data["attribute_declarations"],
                     "attribute_declarations",
-                    {"name", "domain", "value_type"},
+                    object_fields(
+                        array_item(field_shape(GRAPH, "attribute_declarations"))
+                    ),
                 )
             )
         ),
@@ -128,7 +147,7 @@ def _graph(data: dict[str, object]) -> Graph:
                 _objects(
                     data["position_values"],
                     "position_values",
-                    {"reference", "attributes"},
+                    object_fields(array_item(field_shape(GRAPH, "position_values"))),
                 )
             )
         ),
@@ -139,7 +158,7 @@ def _graph(data: dict[str, object]) -> Graph:
 def _tier(data: dict[str, object], index: int) -> Tier:
     path = f"tiers[{index}]"
     declaration = _named_object(
-        data["declaration"], f"{path}.declaration", {"name", "long_name"}
+        data["declaration"], f"{path}.declaration", object_fields(TIER_DECLARATION)
     )
     return Tier(
         TierDeclaration(
@@ -149,7 +168,7 @@ def _tier(data: dict[str, object], index: int) -> Tier:
         tuple(
             _item(item, item_index, path)
             for item_index, item in enumerate(
-                _objects(data["items"], f"{path}.items", {"durable_id", "attributes"})
+                _objects(data["items"], f"{path}.items", object_fields(ITEM))
             )
         ),
         _attributes(data["attributes"], f"{path}.attributes"),
@@ -167,9 +186,8 @@ def _item(data: dict[str, object], index: int, tier_path: str) -> Item:
 def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclaration:
     path = f"relation_declarations[{index}]"
     kind = _string(data.get("kind"), f"{path}.kind")
-    common = {"kind", "name", "attributes"}
     if kind == "simple":
-        _keys(data, common | {"tier", "item_type"}, path)
+        _keys(data, object_fields(DECLARATIONS["simple_relation"]), path)
         return SimpleRelationDeclaration(
             _name(data["name"], f"{path}.name"),
             _name(data["tier"], f"{path}.tier"),
@@ -179,15 +197,7 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
     if kind == "bipartite":
         _keys(
             data,
-            common
-            | {
-                "left_type",
-                "right_type",
-                "left_endpoint",
-                "right_endpoint",
-                "single_parent",
-                "acyclic",
-            },
+            object_fields(DECLARATIONS["bipartite_relation"]),
             path,
         )
         return BipartiteRelationDeclaration(
@@ -223,7 +233,7 @@ def _endpoint(value: object, path: str) -> RelationEndpointRef:
     data = _object(value, path)
     if "anchor" in data:
         return _durable_position(data, path)
-    _keys(data, {"tier", "index"}, path)
+    _keys(data, object_fields(ITEM_REFERENCE), path)
     return ItemRef(
         _name(data["tier"], f"{path}.tier"), _integer(data["index"], f"{path}.index")
     )
@@ -236,7 +246,7 @@ def _position(data: dict[str, object], index: int) -> Position:
     if "anchor" in reference_data:
         reference = _durable_position(reference_data, f"{path}.reference")
     else:
-        _keys(reference_data, {"tier", "index"}, f"{path}.reference")
+        _keys(reference_data, object_fields(ITEM_REFERENCE), f"{path}.reference")
         reference = PositionRef(
             _name(reference_data["tier"], f"{path}.reference.tier"),
             _integer(reference_data["index"], f"{path}.reference.index"),
@@ -245,16 +255,16 @@ def _position(data: dict[str, object], index: int) -> Position:
 
 
 def _durable_position(data: dict[str, object], path: str) -> DurablePositionRef:
-    _keys(data, {"anchor", "side"}, path)
+    _keys(data, object_fields(DURABLE_POSITION), path)
     anchor = _object(data["anchor"], f"{path}.anchor")
     kind = _string(anchor.get("kind"), f"{path}.anchor.kind")
     if kind == "item":
-        _keys(anchor, {"kind", "durable_id"}, f"{path}.anchor")
+        _keys(anchor, object_fields(DECLARATIONS["item_anchor"]), f"{path}.anchor")
         target: DurableItemRef | QualifiedName = DurableItemRef(
             _string(anchor["durable_id"], f"{path}.anchor.durable_id")
         )
     elif kind == "tier":
-        _keys(anchor, {"kind", "tier"}, f"{path}.anchor")
+        _keys(anchor, object_fields(DECLARATIONS["tier_anchor"]), f"{path}.anchor")
         target = _name(anchor["tier"], f"{path}.anchor.tier")
     else:
         raise ValueError(f"{path}.anchor.kind {kind!r} is unsupported")
@@ -278,13 +288,17 @@ def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
             _string(data["lexical"], f"{path}[{index}].lexical"),
         )
         for index, data in enumerate(
-            _objects(value, path, {"name", "value_type", "lexical"})
+            _objects(
+                value,
+                path,
+                object_fields(DECLARATIONS["string_attribute_value"]),
+            )
         )
     )
 
 
 def _name(value: object, path: str) -> QualifiedName:
-    data = _named_object(value, path, {"namespace", "local_name"})
+    data = _named_object(value, path, object_fields(QUALIFIED_NAME))
     return QualifiedName(
         _string(data["namespace"], f"{path}.namespace"),
         _string(data["local_name"], f"{path}.local_name"),
