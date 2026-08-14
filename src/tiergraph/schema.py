@@ -144,10 +144,52 @@ DECLARATIONS: dict[str, Shape] = {
         _field("acyclic", BOOLEAN),
         _field("attributes", ATTRIBUTES),
     ),
+    "relation_side": _object(
+        _field(
+            "endpoint_kinds",
+            _array(Shape(ShapeKind.STRING, values=("item", "boundary"))),
+        ),
+        _field("tiers", _array(QUALIFIED_NAME)),
+        _field("minimum", NON_NEGATIVE_INTEGER),
+        _field("maximum", INTEGER),
+        _field("allow_empty", BOOLEAN),
+    ),
+    "polyadic_relation": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("polyadic",))),
+        _field("name", QUALIFIED_NAME),
+        _field("sources", _reference("relation_side")),
+        _field("targets", _reference("relation_side")),
+        _field("unique_sources", BOOLEAN),
+        _field("distinct_targets", BOOLEAN),
+        _field("single_parent", BOOLEAN),
+        _field("acyclic", BOOLEAN),
+        _field("targets_subset_of", _array(QUALIFIED_NAME)),
+        _field("attributes", ATTRIBUTES),
+    ),
 }
 
-RELATION_DECLARATION = _reference("simple_relation", "bipartite_relation")
+RELATION_DECLARATION = _reference(
+    "simple_relation", "bipartite_relation", "polyadic_relation"
+)
 ENDPOINT = _reference("item_reference", "durable_position")
+DECLARATIONS.update(
+    {
+        "binary_relation_instance": _object(
+            _field("declaration", QUALIFIED_NAME),
+            _field("left", ENDPOINT),
+            _field("right", ENDPOINT),
+            _field("durable_id", NULLABLE_NON_EMPTY_STRING),
+            _field("attributes", ATTRIBUTES),
+        ),
+        "polyadic_relation_instance": _object(
+            _field("declaration", QUALIFIED_NAME),
+            _field("sources", _array(ENDPOINT)),
+            _field("targets", _array(ENDPOINT)),
+            _field("durable_id", NULLABLE_NON_EMPTY_STRING),
+            _field("attributes", ATTRIBUTES),
+        ),
+    }
+)
 TIER_DECLARATION = _object(
     _field("name", QUALIFIED_NAME), _field("long_name", NON_EMPTY_STRING)
 )
@@ -173,15 +215,7 @@ GRAPH = _object(
     _field("relation_declarations", _array(RELATION_DECLARATION)),
     _field(
         "relations",
-        _array(
-            _object(
-                _field("declaration", QUALIFIED_NAME),
-                _field("left", ENDPOINT),
-                _field("right", ENDPOINT),
-                _field("durable_id", NULLABLE_NON_EMPTY_STRING),
-                _field("attributes", ATTRIBUTES),
-            )
-        ),
+        _array(_reference("binary_relation_instance", "polyadic_relation_instance")),
     ),
     _field(
         "attribute_declarations",

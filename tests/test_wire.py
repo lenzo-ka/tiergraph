@@ -22,11 +22,14 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -171,9 +174,44 @@ def mutable_document() -> dict[str, object]:
     return cast(dict[str, object], deepcopy(to_data(rich_graph())))
 
 
+def polyadic_document() -> dict[str, object]:
+    """Return JSON-shaped fixture data containing one polyadic instance."""
+    original = rich_graph()
+    placements = name("placements")
+    notes = name("notes")
+    declaration = PolyadicRelationDeclaration(
+        name("groups"),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), (placements,), 1),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), (notes,), 1),
+    )
+    relation = PolyadicRelationInstance(
+        declaration.name,
+        (ItemRef(placements, 0),),
+        (ItemRef(notes, 0),),
+        "group-1",
+    )
+    extended = Graph(
+        original.namespaces,
+        original.tiers,
+        (*original.relation_declarations, declaration),
+        original.relations,
+        original.attribute_declarations,
+        original.position_values,
+        original.attributes,
+        (relation,),
+    )
+    return cast(dict[str, object], deepcopy(to_data(extended)))
+
+
 def graph_data(document: dict[str, object]) -> dict[str, object]:
     """Return the graph object from fixture data."""
     return cast(dict[str, object], document["graph"])
+
+
+def test_polyadic_relation_durable_id_round_trips() -> None:
+    """The guarded polyadic carrier retains a present durable identifier."""
+    decoded = loads(json.dumps(polyadic_document()))
+    assert decoded.polyadic_relations[0].durable_id == "group-1"
 
 
 def test_read_edit_write_changes_only_declared_value_line() -> None:
@@ -322,8 +360,9 @@ def test_wire_shape_guards_name_their_paths() -> None:
     cases: list[tuple[dict[str, object], str]] = []
 
     wrong_version = mutable_document()
-    wrong_version["format_version"] = "4"
-    cases.append((wrong_version, "format_version '4' is unsupported"))
+    wrong = str(int(FORMAT_VERSION) + 1)
+    wrong_version["format_version"] = wrong
+    cases.append((wrong_version, rf"format_version '{wrong}' is unsupported"))
 
     missing = mutable_document()
     del missing["format_version"]
@@ -390,3 +429,30 @@ def test_wire_shape_guards_name_their_paths() -> None:
 
     for document, match in cases:
         LAWS.check_refusal(match, document)
+
+
+@pytest.mark.parametrize(
+    ("document", "index"), [(mutable_document, 0), (polyadic_document, 1)]
+)
+def test_relation_instance_refuses_unknown_field(document: object, index: int) -> None:
+    """Both relation carriers refuse fields outside their published shape."""
+    assert callable(document)
+    value = document()
+    relations = cast(list[dict[str, object]], graph_data(value)["relations"])
+    relations[-1]["bogus"] = 1
+    LAWS.check_refusal(rf"relations\[{index}\] has unknown field 'bogus'", value)
+
+
+@pytest.mark.parametrize(
+    ("document", "index", "required"),
+    [(mutable_document, 0, "right"), (polyadic_document, 1, "targets")],
+)
+def test_relation_instance_refuses_missing_field(
+    document: object, index: int, required: str
+) -> None:
+    """Both relation carriers name a missing required instance field."""
+    assert callable(document)
+    value = document()
+    relations = cast(list[dict[str, object]], graph_data(value)["relations"])
+    del relations[-1][required]
+    LAWS.check_refusal(rf"relations\[{index}\] is missing field '{required}'", value)

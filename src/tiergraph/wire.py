@@ -19,6 +19,8 @@ from tiergraph.core import (
     ItemRef,
     JsonValue,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
@@ -26,6 +28,7 @@ from tiergraph.core import (
     RelationEndpointKind,
     RelationEndpointRef,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -47,11 +50,10 @@ from tiergraph.schema import (
 )
 
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
-# artifact. Version 3 corrected that artifact to expose the codec's pre-existing
-# refusal of empty names; it did not change the accepted graph language. The strict
-# artifact policy nevertheless refuses format-2 documents, and future artifact-only
-# corrections likewise require a predictable version move.
-FORMAT_VERSION = "3"
+# artifact. Version 4 added declared ordered polyadic relation incidence. The strict
+# artifact policy refuses older documents rather than guessing how their binary
+# relation carrier should project onto the wider language.
+FORMAT_VERSION = "4"
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
@@ -102,6 +104,10 @@ def loads(document: str | bytes) -> Graph:
 
 def _graph(data: dict[str, object]) -> Graph:
     _keys(data, object_fields(GRAPH), "graph")
+    decoded_relations = tuple(
+        _relation(entry, index)
+        for index, entry in enumerate(_object_list(data["relations"], "relations"))
+    )
     return Graph(
         tuple(
             NamespaceDeclaration(
@@ -129,14 +135,9 @@ def _graph(data: dict[str, object]) -> Graph:
             )
         ),
         tuple(
-            _relation(entry, index)
-            for index, entry in enumerate(
-                _objects(
-                    data["relations"],
-                    "relations",
-                    object_fields(array_item(field_shape(GRAPH, "relations"))),
-                )
-            )
+            relation
+            for relation in decoded_relations
+            if isinstance(relation, RelationInstance)
         ),
         tuple(
             _attribute_declaration(entry, index)
@@ -161,6 +162,11 @@ def _graph(data: dict[str, object]) -> Graph:
             )
         ),
         _attributes(data["attributes"], "attributes"),
+        tuple(
+            relation
+            for relation in decoded_relations
+            if isinstance(relation, PolyadicRelationInstance)
+        ),
     )
 
 
@@ -221,11 +227,73 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
             _boolean(data["acyclic"], f"{path}.acyclic"),
             _attributes(data["attributes"], f"{path}.attributes"),
         )
+    if kind == "polyadic":
+        _keys(data, object_fields(DECLARATIONS["polyadic_relation"]), path)
+        subset = _array(data["targets_subset_of"], f"{path}.targets_subset_of")
+        if len(subset) > 1:
+            raise ValueError(f"{path}.targets_subset_of must contain at most one name")
+        return PolyadicRelationDeclaration(
+            _name(data["name"], f"{path}.name"),
+            _relation_side(data["sources"], f"{path}.sources"),
+            _relation_side(data["targets"], f"{path}.targets"),
+            _boolean(data["unique_sources"], f"{path}.unique_sources"),
+            _boolean(data["distinct_targets"], f"{path}.distinct_targets"),
+            _boolean(data["single_parent"], f"{path}.single_parent"),
+            _boolean(data["acyclic"], f"{path}.acyclic"),
+            None if not subset else _name(subset[0], f"{path}.targets_subset_of[0]"),
+            _attributes(data["attributes"], f"{path}.attributes"),
+        )
     raise ValueError(f"{path}.kind {kind!r} is unsupported")
 
 
-def _relation(data: dict[str, object], index: int) -> RelationInstance:
+def _relation_side(value: object, path: str) -> RelationSideDeclaration:
+    data = _named_object(value, path, object_fields(DECLARATIONS["relation_side"]))
+    kinds = _array(data["endpoint_kinds"], f"{path}.endpoint_kinds")
+    tiers = _array(data["tiers"], f"{path}.tiers")
+    maximum = _integer(data["maximum"], f"{path}.maximum")
+    return RelationSideDeclaration(
+        tuple(
+            _enum(RelationEndpointKind, item, f"{path}.endpoint_kinds[{index}]")
+            for index, item in enumerate(kinds)
+        ),
+        None
+        if not tiers
+        else tuple(
+            _name(item, f"{path}.tiers[{index}]") for index, item in enumerate(tiers)
+        ),
+        _integer(data["minimum"], f"{path}.minimum"),
+        None if maximum == -1 else maximum,
+        _boolean(data["allow_empty"], f"{path}.allow_empty"),
+    )
+
+
+def _relation(
+    data: dict[str, object], index: int
+) -> RelationInstance | PolyadicRelationInstance:
     path = f"relations[{index}]"
+    if "sources" in data:
+        _keys(data, object_fields(DECLARATIONS["polyadic_relation_instance"]), path)
+        durable = data["durable_id"]
+        if durable is not None:
+            durable = _string(durable, f"{path}.durable_id")
+        return PolyadicRelationInstance(
+            _name(data["declaration"], f"{path}.declaration"),
+            tuple(
+                _endpoint(item, f"{path}.sources[{item_index}]")
+                for item_index, item in enumerate(
+                    _array(data["sources"], f"{path}.sources")
+                )
+            ),
+            tuple(
+                _endpoint(item, f"{path}.targets[{item_index}]")
+                for item_index, item in enumerate(
+                    _array(data["targets"], f"{path}.targets")
+                )
+            ),
+            durable,
+            _attributes(data["attributes"], f"{path}.attributes"),
+        )
+    _keys(data, object_fields(DECLARATIONS["binary_relation_instance"]), path)
     durable = data["durable_id"]
     if durable is not None:
         durable = _string(durable, f"{path}.durable_id")
@@ -330,6 +398,12 @@ def _object_list(value: object, path: str) -> list[dict[str, object]]:
     if not isinstance(value, list):
         raise ValueError(f"{path} must be an array")
     return [_object(entry, f"{path}[{index}]") for index, entry in enumerate(value)]
+
+
+def _array(value: object, path: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array")
+    return value
 
 
 def _objects(value: object, path: str, keys: set[str]) -> list[dict[str, object]]:
