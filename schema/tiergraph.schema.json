@@ -45,9 +45,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -61,9 +63,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -84,9 +88,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -124,9 +130,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -161,9 +169,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -198,9 +208,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -262,9 +274,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -319,9 +333,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -367,9 +383,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -389,9 +407,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -405,9 +425,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -437,9 +459,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -476,9 +500,11 @@
           "additionalProperties": false,
           "properties": {
             "local_name": {
+              "minLength": 1,
               "type": "string"
             },
             "namespace": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -496,12 +522,13 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-2.json",
+  "$id": "https://tiergraph.org/schema/format-3.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "description": "Structural validation is necessary but not sufficient for codec acceptance. The codec additionally enforces referential integrity, unique names, endpoint typing, single_parent and acyclic promises, and that structural indices use an integral JSON spelling. JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "2"
+      "const": "3"
     },
     "graph": {
       "additionalProperties": false,
@@ -525,9 +552,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "local_name": {
+                    "minLength": 1,
                     "type": "string"
                   },
                   "namespace": {
+                    "minLength": 1,
                     "type": "string"
                   }
                 },
@@ -584,9 +613,11 @@
             "additionalProperties": false,
             "properties": {
               "namespace": {
+                "minLength": 1,
                 "type": "string"
               },
               "prefix": {
+                "minLength": 1,
                 "type": "string"
               }
             },
@@ -686,9 +717,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "local_name": {
+                    "minLength": 1,
                     "type": "string"
                   },
                   "namespace": {
+                    "minLength": 1,
                     "type": "string"
                   }
                 },
@@ -771,15 +804,18 @@
                 "additionalProperties": false,
                 "properties": {
                   "long_name": {
+                    "minLength": 1,
                     "type": "string"
                   },
                   "name": {
                     "additionalProperties": false,
                     "properties": {
                       "local_name": {
+                        "minLength": 1,
                         "type": "string"
                       },
                       "namespace": {
+                        "minLength": 1,
                         "type": "string"
                       }
                     },

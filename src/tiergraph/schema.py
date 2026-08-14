@@ -71,7 +71,10 @@ def _reference(*variants: str) -> Shape:
     return Shape(ShapeKind.REFERENCE, variants=variants)
 
 
-QUALIFIED_NAME = _object(_field("namespace", STRING), _field("local_name", STRING))
+QUALIFIED_NAME = _object(
+    _field("namespace", NON_EMPTY_STRING),
+    _field("local_name", NON_EMPTY_STRING),
+)
 _COLLAPSED = r"[ \t\r\n]*"
 _LEXICAL_PATTERNS = {
     "boolean": rf"^{_COLLAPSED}(?:true|false|1|0){_COLLAPSED}$",
@@ -145,7 +148,9 @@ DECLARATIONS: dict[str, Shape] = {
 
 RELATION_DECLARATION = _reference("simple_relation", "bipartite_relation")
 ENDPOINT = _reference("item_reference", "durable_position")
-TIER_DECLARATION = _object(_field("name", QUALIFIED_NAME), _field("long_name", STRING))
+TIER_DECLARATION = _object(
+    _field("name", QUALIFIED_NAME), _field("long_name", NON_EMPTY_STRING)
+)
 ITEM = _object(
     _field("durable_id", NULLABLE_NON_EMPTY_STRING), _field("attributes", ATTRIBUTES)
 )
@@ -157,7 +162,12 @@ TIER = _object(
 GRAPH = _object(
     _field(
         "namespaces",
-        _array(_object(_field("prefix", STRING), _field("namespace", STRING))),
+        _array(
+            _object(
+                _field("prefix", NON_EMPTY_STRING),
+                _field("namespace", NON_EMPTY_STRING),
+            )
+        ),
     ),
     _field("tiers", _array(TIER)),
     _field("relation_declarations", _array(RELATION_DECLARATION)),
@@ -274,6 +284,16 @@ def json_schema_for(
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": f"https://tiergraph.org/schema/format-{format_version}.json",
         "title": "tiergraph primitive document",
+        "description": (
+            "Structural validation is necessary but not sufficient for codec "
+            "acceptance. The codec additionally enforces referential integrity, "
+            "unique names, endpoint typing, single_parent and acyclic promises, "
+            "and that structural indices use an integral JSON spelling. JSON "
+            "Schema considers a number such as 1.0 an integer, while the codec "
+            "deliberately refuses it. Older format versions are refused rather "
+            "than migrated because migration requires an explicit, loss-aware "
+            "conversion outside the primitive codec."
+        ),
         **root,
         "$defs": definitions,
     }
@@ -301,7 +321,13 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
         ]
         if any(not errors for errors in alternatives):
             return []
-        return [alternatives[0][0]]
+        best_index = max(
+            range(len(shape.variants)),
+            key=lambda index: _shape_match_score(
+                value, DECLARATIONS[shape.variants[index]]
+            ),
+        )
+        return [alternatives[best_index][0]]
     if shape.kind is ShapeKind.OBJECT:
         if not isinstance(value, dict) or not all(
             isinstance(key, str) for key in value
@@ -361,6 +387,21 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
     ):
         return [f"{path} must be at least {shape.minimum}"]
     return []
+
+
+def _shape_match_score(value: object, shape: Shape) -> int:
+    """Score how specifically a value matches a union alternative."""
+    if shape.kind is not ShapeKind.OBJECT or not isinstance(value, dict):
+        return 0
+    score = sum(field.name in value for field in shape.fields)
+    score += sum(
+        field.shape.kind is ShapeKind.STRING
+        and bool(field.shape.values)
+        and value[field.name] in field.shape.values
+        for field in shape.fields
+        if field.name in value
+    )
+    return score
 
 
 def _shape_data(shape: Shape) -> dict[str, JsonValue]:

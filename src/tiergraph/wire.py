@@ -46,7 +46,7 @@ from tiergraph.schema import (
     object_fields,
 )
 
-FORMAT_VERSION = "2"
+FORMAT_VERSION = "3"
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
@@ -74,7 +74,11 @@ def dump_bytes(graph: Graph) -> bytes:
 
 
 def loads(document: str | bytes) -> Graph:
-    """Parse one primitive document and validate it through graph construction."""
+    """Parse the current format without implicitly migrating older documents.
+
+    Migration is refused because choosing a loss-aware conversion belongs in an
+    explicit version-to-version tool, not in the primitive codec.
+    """
     try:
         value = json.loads(document)
     except json.JSONDecodeError as error:
