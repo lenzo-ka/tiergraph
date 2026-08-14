@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import ROUND_UP, Decimal, Inexact, localcontext
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, Inexact, localcontext
 from typing import cast
 
 import pytest
@@ -491,6 +491,33 @@ def advanced_profile(graph: Graph, rate: QualifiedName | None = None) -> ClockPr
     )
 
 
+def with_stored_timing(
+    graph: Graph,
+    tier_name: QualifiedName,
+    index: int,
+    start: str,
+    duration: str,
+) -> Graph:
+    """Replace one event's stored physical timing without changing its structure."""
+    tiers = list(graph.tiers)
+    tier_index = next(
+        offset
+        for offset, tier in enumerate(tiers)
+        if tier.declaration.name == tier_name
+    )
+    tier = tiers[tier_index]
+    items = list(tier.items)
+    items[index] = replace(
+        items[index],
+        attributes=(
+            AttributeValue(START, XsdType.DECIMAL, start),
+            AttributeValue(DURATION, XsdType.DECIMAL, duration),
+        ),
+    )
+    tiers[tier_index] = replace(tier, items=tuple(items))
+    return replace(graph, tiers=tuple(tiers))
+
+
 def test_repeated_ipakit_points_have_ordered_refined_spans() -> None:
     """Two point occurrences at tick one retain distinct gap endpoints for DOT."""
     profile = advanced_profile(ipakit_shape())
@@ -659,6 +686,74 @@ def test_stored_timing_value_refusals_and_exact_agreement() -> None:
         Decimal("0.1"), Decimal("0.1"), "s"
     )
     assert advanced_profile(graph).timing(SEGMENT, 0) is None
+
+
+@pytest.mark.parametrize("precision", (3, 12, 28, 40))
+def test_timing_and_exact_agreement_ignore_decimal_context(precision: int) -> None:
+    """Every stored and derived timing decision is independent of Decimal context."""
+    graph = ipakit_shape(rate="8")
+    graph = with_stored_timing(graph, SEGMENT, 1, "0.125", "0.125")
+    graph = with_stored_timing(graph, ALTERNATE, 0, "0.125", "0.125")
+    with localcontext() as context:
+        context.prec = precision
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        profile = advanced_profile(graph, RATE)
+        derived = profile.timing(SEGMENT, 0)
+        stored = profile.timing(SEGMENT, 1)
+    assert derived == PhysicalTiming(Decimal("0.125"), Decimal("0"), "s")
+    assert stored == PhysicalTiming(Decimal("0.125"), Decimal("0.125"), "s")
+
+
+@pytest.mark.parametrize("precision", (3, 12, 28, 40))
+def test_inexact_stored_and_derived_timing_refuse_in_every_context(
+    precision: int,
+) -> None:
+    """A finite approximation cannot masquerade as the exact ratio one seventh."""
+    rounded = "0.1428571428571428571428571429"
+    graph = ipakit_shape(rate="7")
+    graph = with_stored_timing(graph, SEGMENT, 1, rounded, rounded)
+    graph = with_stored_timing(graph, ALTERNATE, 0, rounded, rounded)
+    with localcontext() as context:
+        context.prec = precision
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = False
+        with pytest.raises(ValueError, match="stored timing contradicts clock"):
+            advanced_profile(graph, RATE)
+
+        derived_only = ClockProfile(fixture("7"), CLOCK, BINDING, RATE, UNIT)
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            derived_only.timing(SEGMENT, 0)
+
+
+def test_low_precision_cannot_accept_two_disagreeing_timing_sources() -> None:
+    """A rounded match is not exact agreement with the clock-derived ratio."""
+    graph = ipakit_shape(rate="7")
+    graph = with_stored_timing(graph, SEGMENT, 1, "0.14", "0.14")
+    graph = with_stored_timing(graph, ALTERNATE, 0, "0.14", "0.14")
+    with localcontext() as context:
+        context.prec = 2
+        context.rounding = ROUND_DOWN
+        with pytest.raises(ValueError, match="stored timing contradicts clock"):
+            advanced_profile(graph, RATE)
+
+
+def test_timing_is_silent_for_untimed_tiers_regardless_of_rate() -> None:
+    """An untimed tier has no physical timing under either calibration mode."""
+    assert advanced_profile(ipakit_shape()).timing(SYNTAX, 0) is None
+    graph = ipakit_shape(rate="8")
+    graph = with_stored_timing(graph, SEGMENT, 1, "0.125", "0.125")
+    graph = with_stored_timing(graph, ALTERNATE, 0, "0.125", "0.125")
+    assert advanced_profile(graph, RATE).timing(SYNTAX, 0) is None
+
+
+def test_untimed_structural_queries_name_the_tier_opt_out() -> None:
+    """Structural queries identify an explicit untimed-tier refusal."""
+    profile = advanced_profile(ipakit_shape())
+    with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
+        profile.refined_position(PositionRef(SYNTAX, 0))
+    with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
+        profile.structural_span(SYNTAX, 0)
 
 
 def test_refined_coordinate_values_remain_nonnegative_integral_structure() -> None:

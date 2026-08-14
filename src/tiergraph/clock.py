@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+from math import gcd
 
 from tiergraph.core import (
     AttributeDomain,
@@ -40,7 +41,12 @@ class ClockPosition:
 
 @dataclass(frozen=True, slots=True)
 class PhysicalTiming:
-    """Carry an exact start and duration in the profile's declared unit."""
+    """Carry exact decimal values stamped with the profile's declared unit.
+
+    The unit is carried, not dimensionally enforced: this profile validates its
+    declaration and stamps stored values with it, but a stored decimal has no
+    independent unit metadata against which the declaration could be checked.
+    """
 
     start: Decimal
     duration: Decimal
@@ -62,6 +68,10 @@ class ClockProfile:
     agree exactly; disagreement is refused with the offending item named.
     Without a rate, independently stored event timings admit non-uniform data
     and different timings for events sharing one structural span.
+
+    The unit is declared, non-empty, string-typed, and carried on returned
+    timings.  It is not dimensionally enforced because stored decimal values
+    have no independent unit annotation within this single-document profile.
 
     The profile remains silent on physical time for bound events with neither a
     rate nor stored timing, and on all events of explicitly untimed tiers.  It
@@ -313,15 +323,12 @@ class ClockProfile:
                 if rate is not None:
                     left = bindings[PositionRef(reference.tier, index)]
                     right = bindings[PositionRef(reference.tier, index + 1)]
-                    derived = PhysicalTiming(
-                        Decimal(clock_positions[left].tick) / rate,
-                        Decimal(
-                            clock_positions[right].tick - clock_positions[left].tick
-                        )
-                        / rate,
-                        unit,
-                    )
-                    if timing != derived:
+                    start_tick = clock_positions[left].tick
+                    tick_span = clock_positions[right].tick - clock_positions[left].tick
+                    if not (
+                        _decimal_times_rate_equals(start, rate, start_tick)
+                        and _decimal_times_rate_equals(duration, rate, tick_span)
+                    ):
                         raise ValueError(
                             f"item {reference.to_data()!r} stored timing contradicts clock"
                         )
@@ -353,6 +360,8 @@ class ClockProfile:
 
     def refined_position(self, position: PositionRef) -> ClockPosition:
         """Return the coarse tick and ordered gap bound to one tier position."""
+        if position.tier in self._untimed_tiers:
+            raise ValueError(f"tier {str(position.tier)!r} is untimed")
         return self._clock_positions[self.clock_position(position)]
 
     def extent(self, tier: QualifiedName) -> tuple[ClockPosition, ClockPosition]:
@@ -380,7 +389,17 @@ class ClockProfile:
         )
 
     def timing(self, tier: QualifiedName, index: int) -> PhysicalTiming | None:
-        """Return stored timing first, otherwise exact rate-derived timing."""
+        """Return stored timing or exactly representable coarse-tick timing.
+
+        Rate-derived physical timing uses only coarse ticks.  Ordered gaps are
+        structural, so a real gap-only span derives zero physical duration.
+        When a tick/rate ratio has no finite Decimal representation, this method
+        refuses it; :meth:`duration` retains the exact ratio in all cases.
+        Explicitly untimed tiers consistently return ``None`` with or without a
+        document rate.
+        """
+        if tier in self._untimed_tiers:
+            return None
         reference = ItemRef(tier, index)
         stored = self._timings.get(reference)
         if stored is not None:
@@ -389,8 +408,8 @@ class ClockProfile:
             return None
         start, end = self.structural_span(tier, index)
         return PhysicalTiming(
-            Decimal(start.tick) / self._rate,
-            Decimal(end.tick - start.tick) / self._rate,
+            _exact_decimal_ratio(start.tick, self._rate),
+            _exact_decimal_ratio(end.tick - start.tick, self._rate),
             self._unit,
         )
 
@@ -400,6 +419,45 @@ class ClockProfile:
             raise ValueError("clock has no uniform rate")
         start, end = self.structural_span(tier, index)
         return end.tick - start.tick, self._rate
+
+
+def _decimal_times_rate_equals(value: Decimal, rate: Decimal, tick: int) -> bool:
+    """Compare ``value * rate`` with an integer using exact integer products."""
+    value_numerator, value_denominator = value.as_integer_ratio()
+    rate_numerator, rate_denominator = rate.as_integer_ratio()
+    return (
+        value_numerator * rate_numerator == tick * value_denominator * rate_denominator
+    )
+
+
+def _exact_decimal_ratio(tick: int, rate: Decimal) -> Decimal:
+    """Return ``tick / rate`` only when its decimal expansion terminates."""
+    rate_numerator, rate_denominator = rate.as_integer_ratio()
+    numerator = tick * rate_denominator
+    denominator = rate_numerator
+    common = gcd(abs(numerator), denominator)
+    numerator //= common
+    denominator //= common
+
+    twos = 0
+    while denominator % 2 == 0:
+        denominator //= 2
+        twos += 1
+    fives = 0
+    while denominator % 5 == 0:
+        denominator //= 5
+        fives += 1
+    if denominator != 1:
+        raise ValueError(
+            f"coarse-tick ratio ({tick}, {rate!r}) cannot be represented exactly "
+            "as Decimal; use duration()"
+        )
+
+    scale = max(twos, fives)
+    coefficient = numerator * 2 ** (scale - twos) * 5 ** (scale - fives)
+    sign = int(coefficient < 0)
+    digits = tuple(int(digit) for digit in str(abs(coefficient)))
+    return Decimal((sign, digits, -scale))
 
 
 def anchored_position(graph: Graph, position: PositionRef) -> DurablePositionRef:
