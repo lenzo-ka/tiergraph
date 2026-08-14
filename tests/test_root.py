@@ -309,6 +309,23 @@ def test_choice_default_must_be_singleton_and_member_of_candidates() -> None:
     with pytest.raises(ValueError, match="persisted-default relation.*exactly one"):
         PersistedChoiceProfile(malformed, ALTERNATIVES, DEFAULT)
 
+    contradictory = replace(
+        default_declaration,
+        targets=replace(default_declaration.targets, allow_empty=True),
+    )
+    malformed = replace(
+        graph,
+        relation_declarations=tuple(
+            contradictory if item.name == DEFAULT else item
+            for item in graph.relation_declarations
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"persisted-default relation '.*default'.*must not allow empty",
+    ):
+        PersistedChoiceProfile(malformed, ALTERNATIVES, DEFAULT)
+
     default = graph.polyadic_relations[-1]
     with pytest.raises(ValueError, match="target outside.*alternatives.*membership"):
         replace(

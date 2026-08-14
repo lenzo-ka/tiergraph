@@ -49,6 +49,13 @@ class OrderedRootsProfile:
     relations determine root membership: every item on an admitted root tier
     with no incoming dependency incidence is a root. Stored order adds
     information, but stored membership may not contradict that derived set.
+
+    Reconciliation considers exactly the caller-supplied
+    ``dependency_relations``. It checks that stored roots equal the roots
+    inferred over that enumerated set, but is silent about dependencies omitted
+    from it; enumeration is not enforcement. If the set is empty, every item in
+    the admitted domain is inferred as a root, so a curated ordered subset is
+    refused.
     """
 
     graph: Graph
@@ -164,10 +171,14 @@ class PersistedChoiceProfile:
                 f"persisted-default relation {str(self.default_relation)!r} requires "
                 "source uniqueness and distinct targets"
             )
-        if default.targets.minimum != 1 or default.targets.maximum != 1:
+        if (
+            default.targets.allow_empty
+            or default.targets.minimum != 1
+            or default.targets.maximum != 1
+        ):
             raise ValueError(
                 f"persisted-default relation {str(self.default_relation)!r} requires "
-                "exactly one target"
+                "exactly one target and must not allow empty targets"
             )
         if default.targets_subset_of != self.alternatives_relation:
             raise ValueError(
