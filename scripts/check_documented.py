@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PACKAGE = ROOT / "src" / "tiergraph"
+PACKAGES = (ROOT / "src" / "tiergraph", ROOT / "src" / "tiergraph_dot")
 
 
 def undocumented(path: Path) -> list[str]:
@@ -29,7 +29,10 @@ def undocumented(path: Path) -> list[str]:
 def main() -> int:
     """Check the shipped package. Returns the process exit status."""
     missing = [
-        name for path in sorted(PACKAGE.rglob("*.py")) for name in undocumented(path)
+        name
+        for package in PACKAGES
+        for path in sorted(package.rglob("*.py"))
+        for name in undocumented(path)
     ]
     if not missing:
         return 0

@@ -42,7 +42,7 @@ Repository = "https://github.com/lenzo-ka/tiergraph"
 path = "src/tiergraph/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tiergraph"]
+packages = ["src/tiergraph", "src/tiergraph_dot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -50,7 +50,7 @@ addopts = "-q"
 
 [tool.coverage.run]
 branch = true
-source = ["tiergraph"]
+source = ["tiergraph", "tiergraph_dot"]
 
 [tool.coverage.report]
 # Ratchets upward, never down.
