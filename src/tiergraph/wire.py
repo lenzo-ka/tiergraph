@@ -46,6 +46,11 @@ from tiergraph.schema import (
     object_fields,
 )
 
+# FORMAT_VERSION is gate-bound to both the declared schema shape and its published
+# artifact. Version 3 corrected that artifact to expose the codec's pre-existing
+# refusal of empty names; it did not change the accepted graph language. The strict
+# artifact policy nevertheless refuses format-2 documents, and future artifact-only
+# corrections likewise require a predictable version move.
 FORMAT_VERSION = "3"
 
 
