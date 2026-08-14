@@ -27,7 +27,9 @@ class ClockProfile:
     adjacent positions.  Bindings must be total, single-valued, and monotone;
     equality expresses a zero-duration item.  The first and last bindings give
     the tier extent, so a tier may start after the clock origin or stop before
-    the clock end.
+    the clock end.  That partial extent is accepted without a gap item or an
+    error.  Conversely, every position of every non-clock tier must be bound;
+    legitimately untimed tiers are outside this profile and are refused.
 
     There is no unoccupied extent after a tier's last item: its last position
     is both the item's end and the tier sink.  Trailing silence therefore needs
@@ -35,8 +37,17 @@ class ClockProfile:
     have the same derived duration; different durations for that span are not
     expressible.
 
-    Tick duration is ``1 / rate`` in the rate's declared continuous unit.  No
-    duration, offset, or event time is stored by this profile.
+    The clock assumes uniform real-time ticks: every tick represents the exact
+    ratio ``1 / rate``.  Non-uniform sampling is inexpressible.  The rate is
+    only "ticks per unit"; the profile does not identify that unit as seconds
+    or any other physical measure.
+
+    No duration, offset, or event time is stored or read by this profile.  A
+    caller may store a continuous attribute elsewhere in the graph, but this
+    profile neither forbids nor checks it, even when it contradicts the ratio
+    derived here.  These partial-extent, out-of-band-continuous-value,
+    uniform-tick, unspecified-unit, and fully-timed-tier boundaries are
+    certified silences of the profile.
     """
 
     graph: Graph
