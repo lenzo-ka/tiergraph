@@ -33,3 +33,9 @@ Empty tiers are omitted unless `include_empty_tiers=True`. A relation endpoint
 on an omitted empty tier is refused and names that endpoint; enabling empty
 tiers renders it. A clock profile for a different graph is also refused rather
 than producing partial output.
+
+Ordered roots and persisted default choices are profile roles over ordered
+polyadic relations. `OrderedRootsProfile` reconciles stored root membership with
+roots inferred from declared dependency relations while preserving stored target
+order. `PersistedChoiceProfile` requires a source-unique, distinct candidate
+relation and a source-unique singleton subset relation for an optional default.
