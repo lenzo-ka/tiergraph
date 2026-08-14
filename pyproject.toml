@@ -28,8 +28,12 @@ test = [
 ]
 lint = ["ruff>=0.16", "mypy>=1.11"]
 # Development only, never a runtime dependency: pydantic's core is compiled, and
-# the shipped package stays pure Python.
-dev = ["tiergraph[test,lint]", "pydantic>=2.9"]
+# the shipped package stays pure Python. hatchling is the build backend, which pip
+# resolves into an isolated build environment; naming it here as well puts it in the
+# development environment so a wheel can be built and inspected without a network
+# fetch. That matters because the distribution ships two import packages, and
+# whether both reach a wheel correctly is otherwise only inferred.
+dev = ["tiergraph[test,lint]", "pydantic>=2.9", "hatchling>=1.27"]
 
 [project.scripts]
 tiergraph = "tiergraph.cli:main"
@@ -42,7 +46,7 @@ Repository = "https://github.com/lenzo-ka/tiergraph"
 path = "src/tiergraph/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tiergraph"]
+packages = ["src/tiergraph", "src/tiergraph_dot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -50,7 +54,7 @@ addopts = "-q"
 
 [tool.coverage.run]
 branch = true
-source = ["tiergraph"]
+source = ["tiergraph", "tiergraph_dot"]
 
 [tool.coverage.report]
 # Ratchets upward, never down.
