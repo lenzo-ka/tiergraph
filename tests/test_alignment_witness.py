@@ -270,9 +270,13 @@ def reified_account(graph: Graph) -> ReifiedAccount:
             tuple(Item() for _ in direct),
         ),
     )
+    membership_declarations = tuple(
+        declaration
+        for declaration in graph.relation_declarations
+        if declaration.name in (SOURCES, PLACEMENTS)
+    )
     declarations = (
-        graph.relation_declarations[0],
-        graph.relation_declarations[1],
+        *membership_declarations,
         SimpleRelationDeclaration(link_members, link_tier, link_type),
         BipartiteRelationDeclaration(source_to_link, SOURCE_TYPE, link_type),
         BipartiteRelationDeclaration(link_to_placement, link_type, PLACEMENT_TYPE),
