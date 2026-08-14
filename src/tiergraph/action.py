@@ -57,8 +57,9 @@ class YieldNormalization:
 
     ``collapse`` removes adjacent equal values in structural order and requires
     an associative, idempotent action. ``unique`` keeps only the structurally
-    first occurrence of every JSON value and requires idempotence. ``reorder``
-    sorts by canonical JSON value and requires commutativity.
+    first occurrence of every JSON value and requires idempotence and
+    commutativity. ``reorder`` sorts by canonical JSON value and requires
+    commutativity.
     """
 
     collapse: bool = False
@@ -85,47 +86,23 @@ class YieldNormalization:
 
 
 @dataclass(frozen=True, slots=True)
-class DistributionWitness[Source, Carrier]:
-    """Sample a fold-to-action homomorphism required by one-for-one react.
+class DistributionWitness:
+    """Opt in to executable one-for-one equivalence certification.
 
-    The react declaration supplies both certified operations: its fold's
-    semiring addition and its action's ``apply``. ``coordinates`` is only the
-    bridge from sampled fold values to action values, so a witness cannot
-    certify unrelated caller-supplied operations.
+    The witness supplies no operations, coordinate bridge, samples, or carrier.
+    On every run, react extracts coordinates once with its declared
+    ``yield_coordinates`` and requires its bound action to produce the same
+    result when applied one coordinate at a time and as one complete batch.
+    This certifies the concrete recognition and carrier being executed; it does
+    not prove equivalence for runs that have not been executed.
     """
 
     name: str
-    samples: tuple[Source, ...]
-    carrier: Carrier
-    coordinates: Callable[[Source], tuple[object, ...]]
 
     def __post_init__(self) -> None:
-        """Refuse a nameless or vacuous witness before it can be bound."""
+        """Refuse a nameless certificate before it can be bound."""
         if not self.name:
             raise ValueError("distribution witness name '' must not be empty")
-        if not self.samples:
-            raise ValueError(f"distribution witness {self.name!r} has no samples")
-
-    def check(
-        self,
-        source_add: Callable[[Source, Source], Source],
-        action: ActionFunction[Carrier, Carrier],
-    ) -> None:
-        """Check that the bound action maps fold addition to successive action."""
-        for left in self.samples:
-            for right in self.samples:
-                mapped_sum = action(
-                    self.carrier, self.coordinates(source_add(left, right))
-                )
-                sum_mapped = action(
-                    action(self.carrier, self.coordinates(left)),
-                    self.coordinates(right),
-                )
-                if mapped_sum != sum_mapped:
-                    raise ValueError(
-                        f"distribution witness {self.name!r} fails for "
-                        f"{left!r} and {right!r} with the bound action"
-                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +157,7 @@ class ReactDeclaration[Value, Carrier, Result]:
     action: ActionDeclaration[Carrier, Result]
     normalization: YieldNormalization = YieldNormalization()
     mode: ReactMode = ReactMode.TRANSACTIONAL
-    distribution: DistributionWitness[Value, Carrier] | None = None
+    distribution: DistributionWitness | None = None
 
     def __post_init__(self) -> None:
         """Refuse action-policy mismatches before recognition can run."""
@@ -197,11 +174,17 @@ class ReactDeclaration[Value, Carrier, Result]:
                     f"react {self.name!r} collapse requires idempotent action "
                     f"{self.action.name!r}"
                 )
-        if self.normalization.unique and not self.action.idempotent:
-            raise ValueError(
-                f"react {self.name!r} uniquing requires idempotent action "
-                f"{self.action.name!r}"
-            )
+        if self.normalization.unique:
+            if not self.action.idempotent:
+                raise ValueError(
+                    f"react {self.name!r} uniquing requires idempotent action "
+                    f"{self.action.name!r}"
+                )
+            if not self.action.commutative:
+                raise ValueError(
+                    f"react {self.name!r} uniquing requires commutative action "
+                    f"{self.action.name!r}"
+                )
         if self.normalization.reorder and not self.action.commutative:
             raise ValueError(
                 f"react {self.name!r} reordering requires commutative action "
@@ -217,13 +200,9 @@ class ReactDeclaration[Value, Carrier, Result]:
                     f"react {self.name!r} one-for-one action "
                     f"{self.action.name!r} has no distribution witness"
                 )
-            self.distribution.check(
-                self.fold.semiring.add,
-                cast(ActionFunction[Carrier, Carrier], self.action.apply),
-            )
 
     def run(self, carrier: Carrier) -> dict[str, object]:
-        """Recognize and apply the declared action without inspecting its carrier."""
+        """Recognize and apply, certifying one-for-one against the batch result."""
         recognition = self.fold.run()
         coordinates = self._coordinates(recognition)
         if self.mode is ReactMode.TRANSACTIONAL:
@@ -232,10 +211,21 @@ class ReactDeclaration[Value, Carrier, Result]:
                 carrier, tuple(item.value for item in normalized)
             )
         else:
+            distribution = cast(DistributionWitness, self.distribution)
+            ordered = tuple(sorted(coordinates, key=lambda item: item.position))
+            transactional = self.action.apply(
+                carrier, tuple(item.value for item in ordered)
+            )
             current = carrier
-            for coordinate in sorted(coordinates, key=lambda item: item.position):
+            for coordinate in ordered:
                 current = cast(Carrier, self.action.apply(current, (coordinate.value,)))
             result = cast(Result, current)
+            if result != transactional:
+                raise AssertionError(
+                    f"distribution witness {distribution.name!r} fails: "
+                    f"react {self.name!r} one-for-one result differs from "
+                    f"transactional result for action {self.action.name!r}"
+                )
         _require_json(result, f"action {self.action.name!r} result")
         return {
             "recognition": recognition.to_data(self.fold.semiring),

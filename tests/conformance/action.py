@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from tiergraph.action import ActionDeclaration, ReactDeclaration, Semimodule
+from tiergraph.action import (
+    ActionDeclaration,
+    DistributionWitness,
+    ReactDeclaration,
+    ReactMode,
+    Semimodule,
+)
 
 
 @dataclass(frozen=True)
@@ -31,18 +37,33 @@ class ActionLawSuite:
 
         assert encode(left) == encode(right)
 
+    def check_one_for_one_equivalence(self) -> None:
+        """Require every supplied carrier to agree in streaming and batch modes."""
+        for carrier in self.carriers:
+            declaration = self.react(carrier)
+            transactional = declaration.run(carrier)
+            one_for_one = replace(
+                declaration,
+                mode=ReactMode.ONE_FOR_ONE,
+                distribution=DistributionWitness("mode-equivalence"),
+            ).run(carrier)
+            assert one_for_one["result"] == transactional["result"]
+
 
 @dataclass(frozen=True)
 class SemimoduleLawSuite:
-    """Execute the laws carried only by an explicit semimodule claim."""
+    """Check sampled semiring, commutative-module, and semimodule axioms."""
 
     structure: Semimodule[object, object]
 
     def check_laws(self) -> None:
         """Check sampled additive structures and scalar compatibility."""
         law = self.structure
+        assert law.module_add(law.module_zero, law.module_zero) == law.module_zero
+        assert law.scale(law.scalar_one, law.module_zero) == law.module_zero
         for value in law.module_samples:
             assert law.module_add(value, law.module_zero) == value
+            assert law.module_add(law.module_zero, value) == value
             assert law.scale(law.scalar_one, value) == value
             assert law.scale(law.scalar_zero, value) == law.module_zero
             for left in law.module_samples:
@@ -52,7 +73,17 @@ class SemimoduleLawSuite:
                         law.module_add(value, left), right
                     ) == law.module_add(value, law.module_add(left, right))
         for scalar in law.scalar_samples:
+            assert law.scalar_add(scalar, law.scalar_zero) == scalar
+            assert law.scalar_add(law.scalar_zero, scalar) == scalar
+            assert law.scalar_multiply(scalar, law.scalar_one) == scalar
+            assert law.scalar_multiply(law.scalar_one, scalar) == scalar
+            assert law.scalar_multiply(scalar, law.scalar_zero) == law.scalar_zero
+            assert law.scalar_multiply(law.scalar_zero, scalar) == law.scalar_zero
+            assert law.scale(scalar, law.module_zero) == law.module_zero
             for left_scalar in law.scalar_samples:
+                assert law.scalar_add(scalar, left_scalar) == law.scalar_add(
+                    left_scalar, scalar
+                )
                 for right_scalar in law.scalar_samples:
                     assert law.scalar_add(
                         law.scalar_add(scalar, left_scalar), right_scalar
@@ -63,6 +94,18 @@ class SemimoduleLawSuite:
                         law.scalar_multiply(scalar, left_scalar), right_scalar
                     ) == law.scalar_multiply(
                         scalar, law.scalar_multiply(left_scalar, right_scalar)
+                    )
+                    assert law.scalar_multiply(
+                        scalar, law.scalar_add(left_scalar, right_scalar)
+                    ) == law.scalar_add(
+                        law.scalar_multiply(scalar, left_scalar),
+                        law.scalar_multiply(scalar, right_scalar),
+                    )
+                    assert law.scalar_multiply(
+                        law.scalar_add(left_scalar, right_scalar), scalar
+                    ) == law.scalar_add(
+                        law.scalar_multiply(left_scalar, scalar),
+                        law.scalar_multiply(right_scalar, scalar),
                     )
         for scalar in law.scalar_samples:
             for left in law.module_samples:
