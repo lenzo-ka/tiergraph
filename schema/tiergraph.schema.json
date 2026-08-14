@@ -1,0 +1,910 @@
+{
+  "$defs": {
+    "bipartite_relation": {
+      "additionalProperties": false,
+      "properties": {
+        "acyclic": {
+          "type": "boolean"
+        },
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "bipartite"
+          ],
+          "type": "string"
+        },
+        "left_endpoint": {
+          "enum": [
+            "item",
+            "boundary"
+          ],
+          "type": "string"
+        },
+        "left_type": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "right_endpoint": {
+          "enum": [
+            "item",
+            "boundary"
+          ],
+          "type": "string"
+        },
+        "right_type": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "single_parent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "left_type",
+        "right_type",
+        "left_endpoint",
+        "right_endpoint",
+        "single_parent",
+        "acyclic",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "boolean_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*(?:true|false|1|0)[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "boolean"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "decimal_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "decimal"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "double_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*(?:NaN|[+-]?INF|[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?))[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "double"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "durable_position": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item_anchor"
+            },
+            {
+              "$ref": "#/$defs/tier_anchor"
+            }
+          ]
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor",
+        "side"
+      ],
+      "type": "object"
+    },
+    "integer_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*[+-]?[0-9]+[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "integer"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "item_anchor": {
+      "additionalProperties": false,
+      "properties": {
+        "durable_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "item"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durable_id"
+      ],
+      "type": "object"
+    },
+    "item_reference": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tier": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tier",
+        "index"
+      ],
+      "type": "object"
+    },
+    "simple_relation": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "item_type": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "simple"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "tier": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "tier",
+        "item_type",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "string_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "string"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "tier_anchor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "tier"
+          ],
+          "type": "string"
+        },
+        "tier": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "tier"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://tiergraph.org/schema/format-3.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, durable-id, position, and relation names; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty position attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
+  "properties": {
+    "format_version": {
+      "const": "3"
+    },
+    "graph": {
+      "additionalProperties": false,
+      "properties": {
+        "attribute_declarations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "domain": {
+                "enum": [
+                  "item",
+                  "tier",
+                  "relation_declaration",
+                  "relation_instance",
+                  "position",
+                  "document"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "additionalProperties": false,
+                "properties": {
+                  "local_name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "namespace",
+                  "local_name"
+                ],
+                "type": "object"
+              },
+              "value_type": {
+                "enum": [
+                  "string",
+                  "boolean",
+                  "integer",
+                  "decimal",
+                  "double"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "domain",
+              "value_type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "namespaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "namespace": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "prefix": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "prefix",
+              "namespace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "position_values": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attributes": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "reference": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/item_reference"
+                  },
+                  {
+                    "$ref": "#/$defs/durable_position"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "reference",
+              "attributes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "relation_declarations": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/simple_relation"
+              },
+              {
+                "$ref": "#/$defs/bipartite_relation"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "relations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attributes": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "declaration": {
+                "additionalProperties": false,
+                "properties": {
+                  "local_name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "namespace",
+                  "local_name"
+                ],
+                "type": "object"
+              },
+              "durable_id": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "left": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/item_reference"
+                  },
+                  {
+                    "$ref": "#/$defs/durable_position"
+                  }
+                ]
+              },
+              "right": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/item_reference"
+                  },
+                  {
+                    "$ref": "#/$defs/durable_position"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "declaration",
+              "left",
+              "right",
+              "durable_id",
+              "attributes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tiers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attributes": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "declaration": {
+                "additionalProperties": false,
+                "properties": {
+                  "long_name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "local_name": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "namespace",
+                      "local_name"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "name",
+                  "long_name"
+                ],
+                "type": "object"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attributes": {
+                      "items": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/string_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/boolean_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/integer_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/decimal_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/double_attribute_value"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "durable_id": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "durable_id",
+                    "attributes"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "declaration",
+              "items",
+              "attributes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "namespaces",
+        "tiers",
+        "relation_declarations",
+        "relations",
+        "attribute_declarations",
+        "position_values",
+        "attributes"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "format_version",
+    "graph"
+  ],
+  "title": "tiergraph primitive document",
+  "type": "object"
+}
