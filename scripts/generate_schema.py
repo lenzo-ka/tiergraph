@@ -37,23 +37,31 @@ def stamp_bytes(schema_bytes: bytes) -> bytes:
 
 def committed_stamp() -> object:
     """Read the comparison baseline from the current commit, not regenerated files."""
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{STAMP_PATH.as_posix()}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(result.stdout)
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{STAMP_PATH.as_posix()}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError("committed schema stamp is unavailable") from error
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("committed schema stamp is not valid JSON") from error
 
 
 def refuse_unversioned_shape_change(baseline: object, current: object) -> None:
-    """Refuse a declaration change whose version did not move from committed state."""
+    """Refuse a declaration or artifact change without a codec version move."""
     if not isinstance(baseline, dict) or not isinstance(current, dict):
         raise ValueError("schema stamp must be an object")
-    if baseline.get("shape_sha256") != current.get("shape_sha256") and baseline.get(
-        "format_version"
-    ) == current.get("format_version"):
-        raise ValueError("wire shape changed without moving FORMAT_VERSION")
+    changed = any(
+        baseline.get(field) != current.get(field)
+        for field in ("shape_sha256", "schema_sha256")
+    )
+    if changed and baseline.get("format_version") == current.get("format_version"):
+        raise ValueError("wire schema or shape changed without moving FORMAT_VERSION")
 
 
 def main(argv: list[str] | None = None, baseline: object | None = None) -> int:
