@@ -410,6 +410,22 @@ class MachineLawSuite:
                 "duplicate attribute declaration",
             ),
             (
+                "attribute declaration undeclared namespace",
+                self.build(
+                    (
+                        *base,
+                        DeclareAttribute(
+                            AttributeDeclaration(
+                                QualifiedName("urn:missing", "label"),
+                                AttributeDomain.ITEM,
+                                XsdType.STRING,
+                            )
+                        ),
+                    )
+                ),
+                "uses undeclared namespace",
+            ),
+            (
                 "undeclared attribute",
                 self.build(
                     (
