@@ -22,6 +22,16 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.fold import (
+    AttributeValuation,
+    ChildCombination,
+    FoldCost,
+    FoldDeclaration,
+    FoldHomomorphism,
+    FoldResult,
+    FoldTransition,
+    TiePolicy,
+)
 from tiergraph.machine import (
     MACHINE_VERSION,
     MAX_REPEAT_COUNT,
@@ -53,6 +63,7 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
+from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
 
@@ -63,11 +74,13 @@ __all__ = [
     "AttributeDeclaration",
     "AttributeDomain",
     "AttributeSelector",
+    "AttributeValuation",
     "AttributeValue",
     "BipartiteRelationDeclaration",
     "BoundariesSelector",
     "BoundarySelector",
     "BoundarySide",
+    "ChildCombination",
     "DeclareAttribute",
     "DeclareNamespace",
     "DeclareRelation",
@@ -75,6 +88,11 @@ __all__ = [
     "DurableItemRef",
     "DurablePositionRef",
     "ExecutionError",
+    "FoldCost",
+    "FoldDeclaration",
+    "FoldHomomorphism",
+    "FoldResult",
+    "FoldTransition",
     "Graph",
     "Item",
     "ItemRef",
@@ -97,11 +115,17 @@ __all__ = [
     "RelationInstance",
     "Repeat",
     "SimpleRelationDeclaration",
+    "TiePolicy",
     "Tier",
     "TierDeclaration",
     "TierSelector",
     "TypeSelector",
     "XsdType",
+    "FORMAT_VERSION",
+    "dump_bytes",
+    "dumps",
+    "loads",
+    "to_data",
     "execute",
     "select",
     "__version__",
