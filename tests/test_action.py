@@ -233,6 +233,20 @@ def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
         ).run(0)
 
 
+def test_distribution_witness_refuses_transactional_mode_at_construction() -> None:
+    """A supplied witness cannot be silently inert in the default mode."""
+    with pytest.raises(
+        ValueError, match=r"react 'default-mode'.*one-for-one.*'transactional'"
+    ):
+        ReactDeclaration(
+            "default-mode",
+            declaration(),
+            coordinates,
+            ADD,
+            distribution=DistributionWitness("bound-paths"),
+        )
+
+
 def test_equivalence_refusal_is_carrier_dependent_and_names_results() -> None:
     """Certification accepts and refuses concrete carriers at execution time."""
 

@@ -90,11 +90,11 @@ class DistributionWitness:
     """Opt in to executable one-for-one equivalence certification.
 
     The witness supplies no operations, coordinate bridge, samples, or carrier.
-    On every run, react extracts coordinates once with its declared
-    ``yield_coordinates`` and requires its bound action to produce the same
-    result when applied one coordinate at a time and as one complete batch.
-    This certifies the concrete recognition and carrier being executed; it does
-    not prove equivalence for runs that have not been executed.
+    On every one-for-one run, react extracts coordinates once with its declared
+    ``yield_coordinates`` and requires its bound action to produce the same result
+    when applied one coordinate at a time and as one complete batch. This
+    certifies the concrete recognition and carrier being executed; it does not
+    prove equivalence for runs that have not been executed.
     """
 
     name: str
@@ -157,10 +157,12 @@ class ReactDeclaration[Value, Carrier, Result]:
 
     One-for-one first materializes and structurally orders the complete yield,
     then calls the action separately for each recognition. It therefore costs
-    more calls and no less memory than transactional mode. Supplying a
-    ``distribution`` additionally computes the transactional result and checks
-    equivalence for that run. Without one, the caller gives up that executable
-    equivalence check and avoids computing both modes.
+    more calls and no less memory than transactional mode. In one-for-one mode,
+    supplying a ``distribution`` additionally computes the transactional result
+    and checks equivalence for that run. Without one, the caller gives up that
+    executable equivalence check and avoids computing both modes. Distribution
+    witnesses are refused in transactional mode, where equivalence is not a live
+    property.
     """
 
     name: str
@@ -175,6 +177,11 @@ class ReactDeclaration[Value, Carrier, Result]:
         """Refuse action-policy mismatches before recognition can run."""
         if not self.name:
             raise ValueError("react name '' must not be empty")
+        if self.distribution is not None and self.mode is not ReactMode.ONE_FOR_ONE:
+            raise ValueError(
+                f"react {self.name!r} distribution witness requires one-for-one "
+                f"mode, got {self.mode.value!r}"
+            )
         if self.normalization.collapse:
             if not self.action.associative:
                 raise ValueError(
