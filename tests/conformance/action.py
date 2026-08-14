@@ -17,7 +17,7 @@ class ActionLawSuite:
     carriers: tuple[object, object]
 
     def check_carrier_substitution(self) -> None:
-        """Unrelated carriers leave the serialized recognition byte-identical."""
+        """Recognition is carrier-independent because only action reads carriers."""
         left = self.react(self.carriers[0]).run(self.carriers[0])
         right = self.react(self.carriers[1]).run(self.carriers[1])
 
@@ -39,12 +39,31 @@ class SemimoduleLawSuite:
     structure: Semimodule[object, object]
 
     def check_laws(self) -> None:
-        """Check module and scalar compatibility over declared samples."""
+        """Check sampled additive structures and scalar compatibility."""
         law = self.structure
         for value in law.module_samples:
             assert law.module_add(value, law.module_zero) == value
             assert law.scale(law.scalar_one, value) == value
             assert law.scale(law.scalar_zero, value) == law.module_zero
+            for left in law.module_samples:
+                assert law.module_add(value, left) == law.module_add(left, value)
+                for right in law.module_samples:
+                    assert law.module_add(
+                        law.module_add(value, left), right
+                    ) == law.module_add(value, law.module_add(left, right))
+        for scalar in law.scalar_samples:
+            for left_scalar in law.scalar_samples:
+                for right_scalar in law.scalar_samples:
+                    assert law.scalar_add(
+                        law.scalar_add(scalar, left_scalar), right_scalar
+                    ) == law.scalar_add(
+                        scalar, law.scalar_add(left_scalar, right_scalar)
+                    )
+                    assert law.scalar_multiply(
+                        law.scalar_multiply(scalar, left_scalar), right_scalar
+                    ) == law.scalar_multiply(
+                        scalar, law.scalar_multiply(left_scalar, right_scalar)
+                    )
         for scalar in law.scalar_samples:
             for left in law.module_samples:
                 for right in law.module_samples:

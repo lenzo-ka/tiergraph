@@ -60,6 +60,11 @@ def mark(carrier: object, values: tuple[object, ...]) -> object:
     return {key: marked[key] for key in sorted(marked)}
 
 
+def add_values(carrier: object, values: tuple[object, ...]) -> object:
+    """Add integer action values to an integer carrier."""
+    return cast(int, carrier) + sum(cast(int, value) for value in values)
+
+
 GAIN_MODULE = Semimodule[object, object](
     0,
     1,
@@ -90,6 +95,24 @@ MARK = ActionDeclaration[object, object](
     idempotent=True,
     commutative=True,
 )
+ADD = ActionDeclaration[object, object](
+    "coordinate-sum", add_values, associative=True, idempotent=False, commutative=True
+)
+
+
+def path_coordinates(value: object) -> tuple[object, ...]:
+    """Map a sampled path-semiring value to its witness labels as integers."""
+    return tuple(
+        POSITIONS[label]
+        for path in cast(tuple[Decimal, tuple[tuple[str, ...], ...]], value)[1]
+        for label in path
+    )
+
+
+PATH_SAMPLES: tuple[object, ...] = (
+    (Decimal(1), (("start",),)),
+    (Decimal(1), (("bed",),)),
+)
 
 
 def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
@@ -104,7 +127,7 @@ def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
 
 
 def test_action_laws() -> None:
-    """Run the reusable carrier-substitution law on unrelated carriers."""
+    """Recognition stays carrier-independent across unrelated action carriers."""
     ActionLawSuite(transactional, ({}, {99: 7})).check_carrier_substitution()
 
 
@@ -134,7 +157,12 @@ def test_action_tolerance_claims(suite: ActionToleranceLawSuite) -> None:
     [
         (
             YieldNormalization(collapse=True),
-            replace(MIX, associative=False),
+            replace(MARK, associative=False),
+            "collapse",
+        ),
+        (
+            YieldNormalization(collapse=True),
+            MIX,
             "collapse",
         ),
         (YieldNormalization(unique=True), MIX, "uniquing"),
@@ -157,15 +185,24 @@ def test_normalization_mismatch_is_refused_at_declaration(
         )
 
 
-def test_distribution_witness_executes_the_claim() -> None:
-    """A near-homomorphism fails on unequal samples at declaration time."""
-    with pytest.raises(ValueError, match=r"bad-stream.*2 and 2"):
-        DistributionWitness(
+def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
+    """An unrelated identity claim cannot admit a non-distributing action."""
+    nonlinear = replace(
+        ADD,
+        name="square-sum",
+        apply=lambda carrier, values: (
+            cast(int, carrier) + sum(cast(int, value) for value in values) ** 2
+        ),
+    )
+    witness = DistributionWitness("bound-paths", PATH_SAMPLES, 0, path_coordinates)
+    with pytest.raises(ValueError, match=r"bound-paths.*bound action"):
+        ReactDeclaration(
             "bad-stream",
-            (2, 3),
-            lambda left, right: left + right,
-            lambda value: value * value,
-            lambda left, right: left + right,
+            declaration(),
+            coordinates,
+            nonlinear,
+            mode=ReactMode.ONE_FOR_ONE,
+            distribution=witness,
         )
 
 
@@ -174,13 +211,7 @@ def test_one_for_one_requires_distribution_and_forbids_normalization() -> None:
     fold = declaration()
     with pytest.raises(ValueError, match=r"one-for-one.*no distribution witness"):
         ReactDeclaration("stream", fold, coordinates, MIX, mode=ReactMode.ONE_FOR_ONE)
-    witness = DistributionWitness[object, object](
-        "identity",
-        (0, 2, 3),
-        lambda left, right: cast(int, left) + cast(int, right),
-        lambda value: value,
-        lambda left, right: cast(int, left) + cast(int, right),
-    )
+    witness = DistributionWitness("bound-paths", PATH_SAMPLES, 0, path_coordinates)
     with pytest.raises(ValueError, match=r"one-for-one.*cannot normalize"):
         ReactDeclaration(
             "stream-normalized",
@@ -212,6 +243,26 @@ def test_page_sized_tie_exposes_double_counting_before_action() -> None:
         YieldNormalization(unique=True),
     ).run({})
     assert unique["result"] == {"0": 1, "4": 1, "8": 1, "12": 1}
+
+
+def test_collapse_refuses_counting_and_accepts_idempotent_action() -> None:
+    """Adjacent duplicate removal is gated by its result-preserving property."""
+    with pytest.raises(ValueError, match=r"collapse.*idempotent.*gain-mix"):
+        ReactDeclaration(
+            "bad-collapse",
+            declaration("tie"),
+            coordinates,
+            MIX,
+            YieldNormalization(collapse=True),
+        )
+    accepted = ReactDeclaration(
+        "mark-collapse",
+        declaration("tie"),
+        coordinates,
+        MARK,
+        YieldNormalization(collapse=True),
+    ).run({})
+    assert accepted["result"] == {"0": 1, "4": 1, "8": 1, "12": 1}
 
 
 def test_action_result_must_be_strict_json() -> None:
@@ -248,31 +299,25 @@ def test_declaration_names_and_distribution_samples_are_required() -> None:
     with pytest.raises(ValueError, match="react name"):
         replace(transactional({}), name="")
     with pytest.raises(ValueError, match="witness name"):
-        DistributionWitness(
-            "", (1,), lambda a, b: a + b, lambda a: a, lambda a, b: a + b
-        )
+        DistributionWitness("", (1,), 0, lambda value: (value,))
     with pytest.raises(ValueError, match="has no samples"):
-        DistributionWitness("empty", (), lambda a, b: a, lambda a: a, lambda a, b: a)
+        DistributionWitness("empty", (), 0, lambda value: (value,))
 
 
 def test_one_for_one_executes_each_structurally_ordered_coordinate() -> None:
-    """Streaming acts once per coordinate after its distribution square passes."""
-    witness = DistributionWitness[object, object](
-        "identity",
-        (0, 1),
-        lambda left, right: cast(int, left) + cast(int, right),
-        lambda value: value,
-        lambda left, right: cast(int, left) + cast(int, right),
+    """A distributing action is admitted and streams each ordered coordinate."""
+    witness: DistributionWitness[object, object] = DistributionWitness(
+        "bound-paths", PATH_SAMPLES, {}, path_coordinates
     )
     result = ReactDeclaration(
         "stream",
         declaration(),
         coordinates,
-        CHAIN,
+        MARK,
         mode=ReactMode.ONE_FOR_ONE,
         distribution=witness,
-    ).run([])
-    assert result["result"] == [0, 8, 12]
+    ).run({})
+    assert result["result"] == {"0": 1, "8": 1, "12": 1}
 
 
 def test_missing_witness_and_opaque_coordinate_are_named() -> None:

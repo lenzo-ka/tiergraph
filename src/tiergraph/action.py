@@ -18,7 +18,6 @@ WriteResult = TypeVar("WriteResult", covariant=True)
 Scalar = TypeVar("Scalar")
 Module = TypeVar("Module")
 Source = TypeVar("Source")
-Target = TypeVar("Target")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +53,13 @@ class ReactMode(Enum):
 
 @dataclass(frozen=True, slots=True)
 class YieldNormalization:
-    """Declare complete-yield transformations requested before action."""
+    """Declare action-preserving complete-yield transformations.
+
+    ``collapse`` removes adjacent equal values in structural order and requires
+    an associative, idempotent action. ``unique`` keeps only the structurally
+    first occurrence of every JSON value and requires idempotence. ``reorder``
+    sorts by canonical JSON value and requires commutativity.
+    """
 
     collapse: bool = False
     unique: bool = False
@@ -80,35 +85,56 @@ class YieldNormalization:
 
 
 @dataclass(frozen=True, slots=True)
-class DistributionWitness[Source, Target]:
-    """Execute the homomorphism condition required by one-for-one react."""
+class DistributionWitness[Source, Carrier]:
+    """Sample a fold-to-action homomorphism required by one-for-one react.
+
+    The react declaration supplies both certified operations: its fold's
+    semiring addition and its action's ``apply``. ``coordinates`` is only the
+    bridge from sampled fold values to action values, so a witness cannot
+    certify unrelated caller-supplied operations.
+    """
 
     name: str
     samples: tuple[Source, ...]
-    source_add: Callable[[Source, Source], Source]
-    mapping: Callable[[Source], Target]
-    target_add: Callable[[Target, Target], Target]
+    carrier: Carrier
+    coordinates: Callable[[Source], tuple[object, ...]]
 
     def __post_init__(self) -> None:
-        """Refuse an empty or non-distributing witness and name it."""
+        """Refuse a nameless or vacuous witness before it can be bound."""
         if not self.name:
             raise ValueError("distribution witness name '' must not be empty")
         if not self.samples:
             raise ValueError(f"distribution witness {self.name!r} has no samples")
+
+    def check(
+        self,
+        source_add: Callable[[Source, Source], Source],
+        action: ActionFunction[Carrier, Carrier],
+    ) -> None:
+        """Check that the bound action maps fold addition to successive action."""
         for left in self.samples:
             for right in self.samples:
-                mapped_sum = self.mapping(self.source_add(left, right))
-                sum_mapped = self.target_add(self.mapping(left), self.mapping(right))
+                mapped_sum = action(
+                    self.carrier, self.coordinates(source_add(left, right))
+                )
+                sum_mapped = action(
+                    action(self.carrier, self.coordinates(left)),
+                    self.coordinates(right),
+                )
                 if mapped_sum != sum_mapped:
                     raise ValueError(
                         f"distribution witness {self.name!r} fails for "
-                        f"{left!r} and {right!r}"
+                        f"{left!r} and {right!r} with the bound action"
                     )
 
 
 @dataclass(frozen=True, slots=True)
 class Semimodule[Scalar, Module]:
-    """Supply the operations and samples for an optional semimodule claim."""
+    """Supply operations and samples for an explicit, opt-in semimodule claim.
+
+    Merely declaring an action does not claim or check these laws; callers that
+    provide this optional structure must execute a semimodule law suite.
+    """
 
     scalar_zero: Scalar
     scalar_one: Scalar
@@ -123,7 +149,13 @@ class Semimodule[Scalar, Module]:
 
 @dataclass(frozen=True, slots=True)
 class ActionDeclaration[Carrier, Result]:
-    """Declare an action's executable behavior and normalization tolerances."""
+    """Declare executable behavior and trusted normalization tolerances.
+
+    ``associative``, ``idempotent``, and ``commutative`` are self-attested at
+    declaration time. React uses them as normalization gates but does not prove
+    them; callers can separately execute ``ActionToleranceLawSuite``. The
+    optional semimodule claim is likewise not automatically enforced.
+    """
 
     name: str
     apply: ActionFunction[Carrier, Result]
@@ -148,17 +180,23 @@ class ReactDeclaration[Value, Carrier, Result]:
     action: ActionDeclaration[Carrier, Result]
     normalization: YieldNormalization = YieldNormalization()
     mode: ReactMode = ReactMode.TRANSACTIONAL
-    distribution: DistributionWitness[object, object] | None = None
+    distribution: DistributionWitness[Value, Carrier] | None = None
 
     def __post_init__(self) -> None:
         """Refuse action-policy mismatches before recognition can run."""
         if not self.name:
             raise ValueError("react name '' must not be empty")
-        if self.normalization.collapse and not self.action.associative:
-            raise ValueError(
-                f"react {self.name!r} collapse requires associative action "
-                f"{self.action.name!r}"
-            )
+        if self.normalization.collapse:
+            if not self.action.associative:
+                raise ValueError(
+                    f"react {self.name!r} collapse requires associative action "
+                    f"{self.action.name!r}"
+                )
+            if not self.action.idempotent:
+                raise ValueError(
+                    f"react {self.name!r} collapse requires idempotent action "
+                    f"{self.action.name!r}"
+                )
         if self.normalization.unique and not self.action.idempotent:
             raise ValueError(
                 f"react {self.name!r} uniquing requires idempotent action "
@@ -179,6 +217,10 @@ class ReactDeclaration[Value, Carrier, Result]:
                     f"react {self.name!r} one-for-one action "
                     f"{self.action.name!r} has no distribution witness"
                 )
+            self.distribution.check(
+                self.fold.semiring.add,
+                cast(ActionFunction[Carrier, Carrier], self.action.apply),
+            )
 
     def run(self, carrier: Carrier) -> dict[str, object]:
         """Recognize and apply the declared action without inspecting its carrier."""
