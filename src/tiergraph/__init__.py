@@ -53,6 +53,7 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
+from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
 
@@ -102,6 +103,11 @@ __all__ = [
     "TierSelector",
     "TypeSelector",
     "XsdType",
+    "FORMAT_VERSION",
+    "dump_bytes",
+    "dumps",
+    "loads",
+    "to_data",
     "execute",
     "select",
     "__version__",
