@@ -22,6 +22,7 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
 
@@ -46,5 +47,10 @@ __all__ = [
     "Tier",
     "TierDeclaration",
     "XsdType",
+    "FORMAT_VERSION",
+    "dump_bytes",
+    "dumps",
+    "loads",
+    "to_data",
     "__version__",
 ]
