@@ -22,6 +22,13 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.fold import (
+    AttributeValuation,
+    FoldCost,
+    FoldDeclaration,
+    FoldHomomorphism,
+    FoldResult,
+)
 
 __version__ = "0.0.0"
 
@@ -29,11 +36,16 @@ __all__ = [
     "AttributeDeclaration",
     "AttributeDomain",
     "AttributeValue",
+    "AttributeValuation",
     "BipartiteRelationDeclaration",
     "BoundarySide",
     "DurableItemRef",
     "DurablePositionRef",
     "Graph",
+    "FoldCost",
+    "FoldDeclaration",
+    "FoldHomomorphism",
+    "FoldResult",
     "Item",
     "ItemRef",
     "NamespaceDeclaration",
