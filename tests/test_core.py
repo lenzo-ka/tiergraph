@@ -107,6 +107,79 @@ def test_canonical_order_is_derived(lengths: list[int]) -> None:
     )
 
 
+def test_namespace_declaration_supply_order_is_canonicalized() -> None:
+    """Namespace declaration order is absent from equality and public data."""
+    first = NamespaceDeclaration("z", "urn:z")
+    second = NamespaceDeclaration("a", "urn:a")
+    forward = Graph((first, second), (), ())
+    reverse = Graph((second, first), (), ())
+    assert forward == reverse
+    assert forward.to_data() == reverse.to_data()
+    assert forward.namespaces == (second, first)
+
+
+def test_relation_declaration_supply_order_is_canonicalized() -> None:
+    """Relation declaration order is absent from equality and public data."""
+    first = BipartiteRelationDeclaration(name("z"), name("left"), name("right"))
+    second = BipartiteRelationDeclaration(name("a"), name("left"), name("right"))
+    forward = Graph(NAMESPACES, (), (first, second))
+    reverse = Graph(NAMESPACES, (), (second, first))
+    assert forward == reverse
+    assert forward.to_data() == reverse.to_data()
+    assert forward.relation_declarations == (second, first)
+
+
+def test_attribute_declaration_supply_order_is_canonicalized() -> None:
+    """Attribute declaration order is absent from equality and public data."""
+    first = AttributeDeclaration(name("z"), AttributeDomain.DOCUMENT, XsdType.STRING)
+    second = AttributeDeclaration(name("a"), AttributeDomain.DOCUMENT, XsdType.STRING)
+    forward = Graph(NAMESPACES, (), (), attribute_declarations=(first, second))
+    reverse = Graph(NAMESPACES, (), (), attribute_declarations=(second, first))
+    assert forward == reverse
+    assert forward.to_data() == reverse.to_data()
+    assert forward.attribute_declarations == (second, first)
+
+
+def test_tier_order_remains_observable() -> None:
+    """Canonicalizing declarations does not erase tier declaration order."""
+    first_tier = Tier(TierDeclaration(name("a"), "A"))
+    second_tier = Tier(TierDeclaration(name("b"), "B"))
+    tier_reversed = Graph(NAMESPACES, (second_tier, first_tier), ())
+    original = Graph(NAMESPACES, (first_tier, second_tier), ())
+    assert original != tier_reversed
+    assert original.to_data() != tier_reversed.to_data()
+
+
+def test_item_order_within_a_tier_remains_observable() -> None:
+    """Canonicalizing declarations does not erase a tier's item sequence."""
+    tier = Tier(TierDeclaration(name("tier"), "Tier"), (Item("one"), Item("two")))
+    original = Graph(NAMESPACES, (tier,), ())
+    item_reversed = Graph(
+        NAMESPACES, (Tier(tier.declaration, tuple(reversed(tier.items))),), ()
+    )
+    assert original != item_reversed
+    assert original.to_data() != item_reversed.to_data()
+
+
+def test_relation_instance_order_remains_observable() -> None:
+    """Relation instances retain a potentially meaningful child or link sequence."""
+    tier_name = name("tier")
+    item_type = name("item")
+    tier = Tier(TierDeclaration(tier_name, "Tier"), (Item(), Item()))
+    members = SimpleRelationDeclaration(name("members"), tier_name, item_type)
+    links = BipartiteRelationDeclaration(name("links"), item_type, item_type)
+    forward_link = RelationInstance(
+        links.name, ItemRef(tier_name, 0), ItemRef(tier_name, 1)
+    )
+    reverse_link = RelationInstance(
+        links.name, ItemRef(tier_name, 1), ItemRef(tier_name, 0)
+    )
+    forward = Graph(NAMESPACES, (tier,), (members, links), (forward_link, reverse_link))
+    reverse = Graph(NAMESPACES, (tier,), (members, links), (reverse_link, forward_link))
+    assert forward != reverse
+    assert forward.to_data() != reverse.to_data()
+
+
 @pytest.mark.parametrize(
     ("value_type", "spellings", "canonical"),
     [
