@@ -9,7 +9,12 @@ from tiergraph.action import (
     WitnessCoordinate,
     YieldNormalization,
 )
-from tiergraph.clock import ClockProfile, anchored_position
+from tiergraph.clock import (
+    ClockPosition,
+    ClockProfile,
+    PhysicalTiming,
+    anchored_position,
+)
 from tiergraph.core import (
     AttributeDeclaration,
     AttributeDomain,
@@ -94,6 +99,7 @@ __all__ = [
     "BoundarySide",
     "ChildCombination",
     "ClockProfile",
+    "ClockPosition",
     "DeclareAttribute",
     "DeclareNamespace",
     "DeclareRelation",
@@ -120,6 +126,7 @@ __all__ = [
     "NodeSet",
     "Position",
     "PositionRef",
+    "PhysicalTiming",
     "Program",
     "PromoteItem",
     "PromotePosition",
