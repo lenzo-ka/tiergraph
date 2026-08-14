@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal, Inexact, ROUND_UP, localcontext
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
 from typing import cast
 
 import pytest
@@ -14,6 +14,7 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     ClockProfile,
+    DurableItemRef,
     DurablePositionRef,
     Graph,
     Item,
@@ -159,6 +160,27 @@ def test_unrelated_boundary_relations_do_not_enter_the_binding() -> None:
         ),
     )
     assert ClockProfile(graph, CLOCK, BINDING, RATE).extent(SEGMENT) == (1, 3)
+
+
+def test_runtime_boundary_invariant_refuses_malformed_endpoints() -> None:
+    """Boundary bindings refuse corruption even when assertions are disabled."""
+    graph = fixture()
+    invalid_left = replace(
+        graph.relations[0],
+        left=DurableItemRef("segment-0"),  # type: ignore[arg-type]
+    )
+    object.__setattr__(graph, "relations", (invalid_left, *graph.relations[1:]))
+    with pytest.raises(ValueError, match="left endpoint is not a boundary"):
+        ClockProfile(graph, CLOCK, BINDING, RATE)
+
+    graph = fixture()
+    invalid_right = replace(
+        graph.relations[0],
+        right=DurableItemRef("clock-0"),  # type: ignore[arg-type]
+    )
+    object.__setattr__(graph, "relations", (invalid_right, *graph.relations[1:]))
+    with pytest.raises(ValueError, match="right endpoint is not a boundary"):
+        ClockProfile(graph, CLOCK, BINDING, RATE)
 
 
 def test_profile_refusals_name_incomplete_or_contradictory_bindings() -> None:
