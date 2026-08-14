@@ -986,7 +986,9 @@ def _attributes_data(attributes: tuple[AttributeValue, ...]) -> list[JsonValue]:
 
 class _AttributeCarrier(Protocol):
     @property
-    def attributes(self) -> tuple[AttributeValue, ...]: ...
+    def attributes(self) -> tuple[AttributeValue, ...]:
+        """Return the carrier's attribute values, in canonical name order."""
+        ...
 
 
 def _canonicalize_attributes(value: _AttributeCarrier) -> None:
