@@ -330,6 +330,46 @@ def _replace_path(document: object, path: tuple[str | int, ...], value: object) 
         cast(list[object], target)[final] = value
 
 
+def _string_paths(
+    value: object, path: tuple[str | int, ...] = ()
+) -> list[tuple[str | int, ...]]:
+    """Enumerate realized string leaves from data, independently of the schema."""
+    if isinstance(value, str):
+        return [path]
+    if isinstance(value, dict):
+        return [
+            found
+            for key, child in value.items()
+            for found in _string_paths(child, (*path, key))
+        ]
+    if isinstance(value, list):
+        return [
+            found
+            for index, child in enumerate(value)
+            for found in _string_paths(child, (*path, index))
+        ]
+    return []
+
+
+def test_every_realized_string_leaf_has_matching_empty_string_acceptance() -> None:
+    """Schema and codec agree when every realized string is emptied in turn."""
+    valid = cast(dict[str, object], json.loads(dumps(rich_graph())))
+    paths = _string_paths(valid)
+    assert paths
+    validator = Draft202012Validator(json_schema(FORMAT_VERSION))
+    for path in paths:
+        document = cast(dict[str, object], json.loads(json.dumps(valid)))
+        _replace_path(document, path, "")
+        schema_accepts = validator.is_valid(document)
+        try:
+            loads(json.dumps(document))
+        except ValueError:
+            codec_accepts = False
+        else:
+            codec_accepts = True
+        assert schema_accepts == codec_accepts, path
+
+
 def test_all_declared_nonempty_facets_match_codec_acceptance() -> None:
     """Every realized non-empty string facet rejects through schema and codec."""
     valid = cast(dict[str, object], json.loads(dumps(rich_graph())))
