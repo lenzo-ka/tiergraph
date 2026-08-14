@@ -322,8 +322,9 @@ def test_wire_shape_guards_name_their_paths() -> None:
     cases: list[tuple[dict[str, object], str]] = []
 
     wrong_version = mutable_document()
-    wrong_version["format_version"] = "4"
-    cases.append((wrong_version, "format_version '4' is unsupported"))
+    wrong = str(int(FORMAT_VERSION) + 1)
+    wrong_version["format_version"] = wrong
+    cases.append((wrong_version, rf"format_version '{wrong}' is unsupported"))
 
     missing = mutable_document()
     del missing["format_version"]

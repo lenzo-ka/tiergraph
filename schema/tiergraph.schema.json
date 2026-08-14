@@ -1,5 +1,89 @@
 {
   "$defs": {
+    "binary_relation_instance": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "declaration": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "durable_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "left": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item_reference"
+            },
+            {
+              "$ref": "#/$defs/durable_position"
+            }
+          ]
+        },
+        "right": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item_reference"
+            },
+            {
+              "$ref": "#/$defs/durable_position"
+            }
+          ]
+        }
+      },
+      "required": [
+        "declaration",
+        "left",
+        "right",
+        "durable_id",
+        "attributes"
+      ],
+      "type": "object"
+    },
     "bipartite_relation": {
       "additionalProperties": false,
       "properties": {
@@ -354,6 +438,261 @@
       ],
       "type": "object"
     },
+    "polyadic_relation": {
+      "additionalProperties": false,
+      "properties": {
+        "acyclic": {
+          "type": "boolean"
+        },
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "distinct_targets": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "polyadic"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "single_parent": {
+          "type": "boolean"
+        },
+        "sources": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/relation_side"
+            }
+          ]
+        },
+        "targets": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/relation_side"
+            }
+          ]
+        },
+        "targets_subset_of": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "local_name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "namespace",
+              "local_name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "unique_sources": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "sources",
+        "targets",
+        "unique_sources",
+        "distinct_targets",
+        "single_parent",
+        "acyclic",
+        "targets_subset_of",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "polyadic_relation_instance": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "declaration": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "durable_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sources": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/item_reference"
+              },
+              {
+                "$ref": "#/$defs/durable_position"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/item_reference"
+              },
+              {
+                "$ref": "#/$defs/durable_position"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "declaration",
+        "sources",
+        "targets",
+        "durable_id",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "relation_side": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_empty": {
+          "type": "boolean"
+        },
+        "endpoint_kinds": {
+          "items": {
+            "enum": [
+              "item",
+              "boundary"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "maximum": {
+          "type": "integer"
+        },
+        "minimum": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tiers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "local_name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "namespace",
+              "local_name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "endpoint_kinds",
+        "tiers",
+        "minimum",
+        "maximum",
+        "allow_empty"
+      ],
+      "type": "object"
+    },
     "simple_relation": {
       "additionalProperties": false,
       "properties": {
@@ -522,13 +861,13 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-3.json",
+  "$id": "https://tiergraph.org/schema/format-4.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, durable-id, position, and relation names; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty position attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "3"
+      "const": "4"
     },
     "graph": {
       "additionalProperties": false,
@@ -682,6 +1021,9 @@
               },
               {
                 "$ref": "#/$defs/bipartite_relation"
+              },
+              {
+                "$ref": "#/$defs/polyadic_relation"
               }
             ]
           },
@@ -689,88 +1031,14 @@
         },
         "relations": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "attributes": {
-                "items": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/$defs/string_attribute_value"
-                    },
-                    {
-                      "$ref": "#/$defs/boolean_attribute_value"
-                    },
-                    {
-                      "$ref": "#/$defs/integer_attribute_value"
-                    },
-                    {
-                      "$ref": "#/$defs/decimal_attribute_value"
-                    },
-                    {
-                      "$ref": "#/$defs/double_attribute_value"
-                    }
-                  ]
-                },
-                "type": "array"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/binary_relation_instance"
               },
-              "declaration": {
-                "additionalProperties": false,
-                "properties": {
-                  "local_name": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "namespace": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "namespace",
-                  "local_name"
-                ],
-                "type": "object"
-              },
-              "durable_id": {
-                "anyOf": [
-                  {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "left": {
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/item_reference"
-                  },
-                  {
-                    "$ref": "#/$defs/durable_position"
-                  }
-                ]
-              },
-              "right": {
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/item_reference"
-                  },
-                  {
-                    "$ref": "#/$defs/durable_position"
-                  }
-                ]
+              {
+                "$ref": "#/$defs/polyadic_relation_instance"
               }
-            },
-            "required": [
-              "declaration",
-              "left",
-              "right",
-              "durable_id",
-              "attributes"
-            ],
-            "type": "object"
+            ]
           },
           "type": "array"
         },
