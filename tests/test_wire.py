@@ -36,6 +36,7 @@ from tiergraph import (
 )
 
 NS = "urn:wire-test"
+META_NS = "urn:wire-meta"
 
 
 def name(local: str) -> QualifiedName:
@@ -43,7 +44,7 @@ def name(local: str) -> QualifiedName:
     return QualifiedName(NS, local)
 
 
-def rich_graph() -> Graph:
+def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     """Build a graph where incidental wire changes affect visible structure."""
     gain = AttributeDeclaration(name("gain"), AttributeDomain.ITEM, XsdType.DECIMAL)
     label = AttributeDeclaration(
@@ -60,26 +61,91 @@ def rich_graph() -> Graph:
         name("event"),
         right_endpoint=RelationEndpointKind.BOUNDARY,
     )
-    tier = Tier(
+    value_spellings: tuple[tuple[str, str], ...] = (
+        ("lead", "01.00"),
+        ("bed", "0.5"),
+    )
+    if reverse_unordered:
+        value_spellings = tuple(reversed(value_spellings))
+    item_values = {
+        durable_id: AttributeValue(gain.name, XsdType.DECIMAL, lexical)
+        for durable_id, lexical in value_spellings
+    }
+    placements_tier = Tier(
         TierDeclaration(placements, "Placements"),
         (
-            Item("lead", (AttributeValue(gain.name, XsdType.DECIMAL, "01.00"),)),
-            Item("bed", (AttributeValue(gain.name, XsdType.DECIMAL, "0.5"),)),
+            Item("lead", (item_values["lead"],)),
+            Item("bed", (item_values["bed"],)),
         ),
     )
+    notes = name("notes")
+    notes_tier = Tier(
+        TierDeclaration(notes, "Notes"),
+        (Item("intro"), Item("outro")),
+    )
     boundary = DurablePositionRef(DurableItemRef("bed"), BoundarySide.BEFORE)
+    namespaces: tuple[NamespaceDeclaration, ...] = (
+        NamespaceDeclaration("w", NS),
+        NamespaceDeclaration("meta", META_NS),
+    )
+    relation_declarations: tuple[
+        SimpleRelationDeclaration | BipartiteRelationDeclaration, ...
+    ] = (members, cues)
+    attribute_declarations: tuple[AttributeDeclaration, ...] = (gain, label, marker)
+    if reverse_unordered:
+        namespaces = tuple(reversed(namespaces))
+        relation_declarations = tuple(reversed(relation_declarations))
+        attribute_declarations = tuple(reversed(attribute_declarations))
     return Graph(
-        (NamespaceDeclaration("w", NS),),
-        (tier,),
-        (members, cues),
+        namespaces,
+        (placements_tier, notes_tier),
+        relation_declarations,
         (RelationInstance(cues.name, ItemRef(placements, 0), boundary, "cue-1"),),
-        (gain, label, marker),
+        attribute_declarations,
         (Position(boundary, (AttributeValue(marker.name, XsdType.BOOLEAN, "1"),)),),
         (AttributeValue(label.name, XsdType.STRING, "mix α"),),
     )
 
 
-LAWS = WireLawSuite(dump_bytes, loads, rich_graph)
+def canonical_variants() -> tuple[Graph, Graph]:
+    """Vary every declaration order and the sequence used to attach item values."""
+    left = rich_graph()
+    right = rich_graph(reverse_unordered=True)
+    return left, right
+
+
+def ordered_variants() -> tuple[Graph, Graph, Graph]:
+    """Reverse tiers and reverse items independently in meaningful collections."""
+    graph = rich_graph()
+    reversed_items = Tier(
+        graph.tiers[0].declaration,
+        tuple(reversed(graph.tiers[0].items)),
+        graph.tiers[0].attributes,
+    )
+    return (
+        graph,
+        Graph(
+            graph.namespaces,
+            tuple(reversed(graph.tiers)),
+            graph.relation_declarations,
+            graph.relations,
+            graph.attribute_declarations,
+            graph.position_values,
+            graph.attributes,
+        ),
+        Graph(
+            graph.namespaces,
+            (reversed_items, graph.tiers[1]),
+            graph.relation_declarations,
+            graph.relations,
+            graph.attribute_declarations,
+            graph.position_values,
+            graph.attributes,
+        ),
+    )
+
+
+LAWS = WireLawSuite(dump_bytes, loads, rich_graph, canonical_variants, ordered_variants)
 
 
 @pytest.mark.parametrize(
@@ -87,6 +153,7 @@ LAWS = WireLawSuite(dump_bytes, loads, rich_graph)
     [
         LAWS.check_round_trip,
         LAWS.check_equal_graphs_have_equal_bytes,
+        LAWS.check_ordered_graphs_have_different_bytes,
         LAWS.check_strict_json,
         LAWS.check_canonical_read_back,
     ],
@@ -109,8 +176,21 @@ def graph_data(document: dict[str, object]) -> dict[str, object]:
 
 
 def test_read_edit_write_changes_only_declared_value_line() -> None:
-    """Editing one canonical lexical value leaves every other byte in place."""
-    before = dump_bytes(rich_graph())
+    """Editing one value in an externally serialized document changes only its line."""
+    external_document = {
+        "format_version": "1",
+        "graph": rich_graph().to_data(),
+    }
+    before = (
+        json.dumps(
+            external_document,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
     document = json.loads(before)
     graph = cast(dict[str, object], document["graph"])
     tiers = cast(list[dict[str, object]], graph["tiers"])
@@ -274,8 +354,8 @@ def test_wire_shape_guards_name_their_paths() -> None:
     declarations = cast(
         list[dict[str, object]], graph_data(bad_boolean)["relation_declarations"]
     )
-    declarations[1]["acyclic"] = 0
-    cases.append((bad_boolean, r"relation_declarations\[1\].acyclic must be a boolean"))
+    declarations[0]["acyclic"] = 0
+    cases.append((bad_boolean, r"relation_declarations\[0\].acyclic must be a boolean"))
 
     bad_enum = mutable_document()
     attributes = cast(

@@ -21,6 +21,8 @@ class WireLawSuite:
     encode: Encoder
     decode: Decoder
     fixture: Callable[[], Graph]
+    canonical_variants: Callable[[], tuple[Graph, Graph]]
+    ordered_variants: Callable[[], tuple[Graph, Graph, Graph]]
 
     def check_round_trip(self) -> None:
         """Construction, serialization, and read-back preserve the whole graph."""
@@ -28,12 +30,19 @@ class WireLawSuite:
         assert self.decode(self.encode(graph)) == graph
 
     def check_equal_graphs_have_equal_bytes(self) -> None:
-        """Independent equal constructions have one byte encoding."""
-        left = self.fixture()
-        right = self.fixture()
+        """Supply-order variants of an equal graph have one byte encoding."""
+        left, right = self.canonical_variants()
         assert left == right
         assert left is not right
         assert self.encode(left) == self.encode(right)
+
+    def check_ordered_graphs_have_different_bytes(self) -> None:
+        """A graph order that carries meaning remains visible in its bytes."""
+        baseline, tier_order, item_order = self.ordered_variants()
+        assert baseline != tier_order
+        assert baseline != item_order
+        assert self.encode(baseline) != self.encode(tier_order)
+        assert self.encode(baseline) != self.encode(item_order)
 
     def check_strict_json(self) -> None:
         """The byte encoding is UTF-8 JSON and admits no nonstandard constants."""
