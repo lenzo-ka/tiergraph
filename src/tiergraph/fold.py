@@ -393,6 +393,7 @@ class FoldDeclaration[Value]:
         all_values: list[tuple[State, Value]] = []
         root_states: list[State] = []
         total = self.semiring.zero
+        selected: tuple[Value, Provenance] | None = None
         for coordinate in coordinates:
             cache: dict[ItemRef, tuple[Value, Provenance]] = {}
 
@@ -430,14 +431,19 @@ class FoldDeclaration[Value]:
                                 for right in child_paths
                             )
                     else:
-                        relation_value, relation_paths = child_results[0]
+                        relation_value = child_results[0][0]
+                        # The value accumulates, because that is what OR means,
+                        # while selection tracks the best sibling separately.
+                        # Comparing against the accumulation instead would let
+                        # a non-selective semiring outgrow every later sibling.
+                        best = child_results[0]
                         for child_value, child_paths in child_results[1:]:
-                            previous = relation_value
-                            relation_value = self.semiring.add(previous, child_value)
-                            additions += 1
-                            relation_paths = self._select_paths(
-                                previous, relation_paths, child_value, child_paths
+                            relation_value = self.semiring.add(
+                                relation_value, child_value
                             )
+                            additions += 1
+                            best = self._select_paths(best, (child_value, child_paths))
+                        relation_paths = best[1]
                     value = self.semiring.multiply(value, relation_value)
                     multiplications += 1
                     paths = tuple(
@@ -461,16 +467,17 @@ class FoldDeclaration[Value]:
                 ((reference, coordinate), cache[reference][0])
                 for reference in self._references()
             )
-        complete = None
-        if self.witness_order is not None:
-            # Root provenance is accumulated independently from the carrier above.
-            selected_value, complete = cache[item_roots[0]]
-            for root in item_roots[1:]:
-                candidate_value, candidate_paths = cache[root]
-                complete = self._select_paths(
-                    selected_value, complete, candidate_value, candidate_paths
-                )
-                selected_value = self.semiring.add(selected_value, candidate_value)
+            if self.witness_order is not None:
+                # Selection runs inside the coordinate loop so that provenance
+                # folds over the same domain as the value. Reading it afterwards
+                # would see only the last coordinate's cache.
+                for root in item_roots:
+                    candidate = cache[root]
+                    if selected is None:
+                        selected = candidate
+                    else:
+                        selected = self._select_paths(selected, candidate)
+        complete = None if selected is None else selected[1]
         provenance = None if complete is None else complete[: self.output_cap]
         witness_count = 0 if complete is None else len(complete)
         cost = FoldCost(
@@ -499,22 +506,30 @@ class FoldDeclaration[Value]:
 
     def _select_paths(
         self,
-        left_value: Value,
-        left_paths: Provenance,
-        right_value: Value,
-        right_paths: Provenance,
-    ) -> Provenance:
-        """Apply the declared witness ordering and executable tie policy."""
+        left: tuple[Value, Provenance],
+        right: tuple[Value, Provenance],
+    ) -> tuple[Value, Provenance]:
+        """Apply the declared witness ordering and executable tie policy.
+
+        Both the surviving value and its paths are returned together, so a
+        caller cannot substitute an accumulated carrier value for the value
+        that actually won. Comparing a candidate against a running total is
+        only harmless when addition is selective: under a counting semiring
+        the total grows past every alternative and later equals are never
+        recognized as ties.
+        """
+        left_value, left_paths = left
+        right_value, right_paths = right
         if self.witness_order is None:
-            return ()
+            return left_value, ()
         comparison = self.witness_order(left_value, right_value)
         if comparison < 0:
-            return left_paths
+            return left
         if comparison > 0:
-            return right_paths
+            return right
         if self.tie_policy is TiePolicy.CHOOSE_FIRST:
-            return left_paths
-        return tuple(dict.fromkeys((*left_paths, *right_paths)))
+            return left
+        return left_value, tuple(dict.fromkeys((*left_paths, *right_paths)))
 
 
 @dataclass(frozen=True, slots=True)

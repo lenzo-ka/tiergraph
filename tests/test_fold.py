@@ -567,3 +567,44 @@ def test_undeclared_incidence_does_not_enter_the_dependency_dag() -> None:
     )
     result = replace(declaration(), graph=expanded).run()
     assert result.cost.relation_incidence == len(graph.relations)
+
+
+def test_selection_compares_alternatives_not_the_running_total() -> None:
+    """Every tied alternative survives under a semiring whose addition accumulates.
+
+    Comparing each candidate against an accumulated carrier value is harmless
+    only when addition is selective. Under counting the total outgrows every
+    later alternative, so equals stop being recognized as ties and their
+    witnesses are dropped while the value stays correct.
+    """
+
+    class CountingSemiring:
+        zero = Decimal(0)
+        one = Decimal(1)
+        add_associativity = multiply_associativity = DECIMAL_TROPICAL.add_associativity
+
+        def add(self, left: Decimal, right: Decimal) -> Decimal:
+            return left + right
+
+        def multiply(self, left: Decimal, right: Decimal) -> Decimal:
+            return left * right
+
+    graph = FIXTURE.graph()
+    roots = tuple(state[0] for state in FIXTURE.states(graph))
+    counting = replace(
+        declaration("tie", cast(Semiring[object], CountingSemiring())),
+        lift=lambda value, label: Decimal(1),
+        index_axes=(),
+        roots=roots,
+        witness_order=minimum_order,
+        tie_policy=TiePolicy.ALL,
+    )
+    everything = counting.run()
+    first_only = replace(counting, tie_policy=TiePolicy.CHOOSE_FIRST).run()
+    assert everything.provenance is not None
+    assert first_only.provenance is not None
+    # Selecting against the running total keeps one witness here, because the
+    # accumulated count passes every later equal and no tie is ever seen.
+    assert len(everything.provenance) > 1
+    assert len(first_only.provenance) == 1
+    assert everything.value == first_only.value
