@@ -40,6 +40,20 @@ class XsdType(StrEnum):
     DOUBLE = "double"
 
 
+class BoundarySide(StrEnum):
+    """Choose the boundary immediately before or after an anchor."""
+
+    BEFORE = "before"
+    AFTER = "after"
+
+
+class RelationEndpointKind(StrEnum):
+    """Declare whether one relation endpoint is an item or a boundary."""
+
+    ITEM = "item"
+    BOUNDARY = "boundary"
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class QualifiedName:
     """Identify a declaration by namespace URI and local name."""
@@ -176,6 +190,8 @@ class BipartiteRelationDeclaration:
     name: QualifiedName
     left_type: QualifiedName
     right_type: QualifiedName
+    left_endpoint: RelationEndpointKind = RelationEndpointKind.ITEM
+    right_endpoint: RelationEndpointKind = RelationEndpointKind.ITEM
     single_parent: bool = False
     acyclic: bool = False
     attributes: tuple[AttributeValue, ...] = ()
@@ -192,6 +208,8 @@ class BipartiteRelationDeclaration:
             "name": self.name.to_data(),
             "left_type": self.left_type.to_data(),
             "right_type": self.right_type.to_data(),
+            "left_endpoint": self.left_endpoint.value,
+            "right_endpoint": self.right_endpoint.value,
             "single_parent": self.single_parent,
             "acyclic": self.acyclic,
             "attributes": _attributes_data(self.attributes),
@@ -287,48 +305,55 @@ class DurableItemRef:
 
 @dataclass(frozen=True, slots=True)
 class DurablePositionRef:
-    """Address a boundary by a durable identifier without storing its coordinate."""
+    """Address a boundary whose identity is its anchor and chosen side.
 
-    durable_id: str
+    Distinct anchors may resolve to the same boundary in the current graph and
+    diverge after an edit.  In particular, ``after(a)`` and ``before(b)`` keep
+    different intentions even when ``a`` and ``b`` are adjacent.  Likewise,
+    ``before(tier)`` and ``after(tier)`` are distinct first-edge and last-edge
+    anchors that coincide only while the tier is empty.
+    """
 
-    def __post_init__(self) -> None:
-        """Require the identifier needed for durable resolution."""
-        _require_name(self.durable_id, "durable position reference")
+    anchor: DurableItemRef | QualifiedName
+    side: BoundarySide
 
     def to_data(self) -> dict[str, JsonValue]:
-        """Return the durable reference as JSON-serializable data."""
-        return {"durable_id": self.durable_id}
+        """Return the tagged anchor and side as JSON-serializable data."""
+        if isinstance(self.anchor, DurableItemRef):
+            anchor: dict[str, JsonValue] = {
+                "kind": "item",
+                "durable_id": self.anchor.durable_id,
+            }
+        else:
+            anchor = {"kind": "tier", "tier": self.anchor.to_data()}
+        return {"anchor": anchor, "side": self.side.value}
+
+
+type RelationEndpointRef = ItemRef | DurablePositionRef
 
 
 @dataclass(frozen=True, slots=True)
 class Position:
     """Hold values for one addressable boundary while empty boundaries stay derived."""
 
-    reference: PositionRef
+    reference: PositionRef | DurablePositionRef
     attributes: tuple[AttributeValue, ...]
-    durable_id: str | None = None
-
-    def __post_init__(self) -> None:
-        """Refuse an empty durable identifier when one is carried."""
-        if self.durable_id is not None:
-            _require_name(self.durable_id, "position durable id")
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the position and its values as JSON-serializable data."""
         return {
             "reference": self.reference.to_data(),
             "attributes": _attributes_data(self.attributes),
-            "durable_id": self.durable_id,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class RelationInstance:
-    """Link two structurally addressed items through a declared relation."""
+    """Link item or anchored-boundary endpoints through a declared relation."""
 
     declaration: QualifiedName
-    left: ItemRef
-    right: ItemRef
+    left: RelationEndpointRef
+    right: RelationEndpointRef
     durable_id: str | None = None
     attributes: tuple[AttributeValue, ...] = ()
 
@@ -369,9 +394,6 @@ class Graph:
         init=False, repr=False, compare=False
     )
     _items_by_id: dict[str, ItemRef] = field(init=False, repr=False, compare=False)
-    _positions_by_id: dict[str, PositionRef] = field(
-        init=False, repr=False, compare=False
-    )
 
     def __post_init__(self) -> None:
         """Validate the graph, requiring one prefix per URI for canonical documents."""
@@ -429,6 +451,12 @@ class Graph:
             if isinstance(declaration, SimpleRelationDeclaration)
         ]
         types_by_tier = _unique_simple_types(simple, tiers_by_name)
+        items_by_id = {
+            item.durable_id: ItemRef(tier.declaration.name, index)
+            for tier in self.tiers
+            for index, item in enumerate(tier.items)
+            if item.durable_id is not None
+        }
         durable_ids = [
             (item.durable_id, f"item at tier {tier_index}, index {item_index}")
             for tier_index, tier in enumerate(self.tiers)
@@ -471,24 +499,28 @@ class Graph:
                 "left",
                 relation.left,
                 bipartite_declaration.left_type,
+                bipartite_declaration.left_endpoint,
                 tiers_by_name,
                 types_by_tier,
+                items_by_id,
             )
             _validate_endpoint(
                 index,
                 "right",
                 relation.right,
                 bipartite_declaration.right_type,
+                bipartite_declaration.right_endpoint,
                 tiers_by_name,
                 types_by_tier,
+                items_by_id,
             )
-        positions_by_ref = _unique_by_name(
-            ((position.reference, position) for position in self.position_values),
-            "position value",
-        )
+        positioned_values: list[tuple[PositionRef, Position]] = []
         for position in self.position_values:
-            _validate_position(position.reference, tiers_by_name)
-            if not position.attributes and position.durable_id is None:
+            coordinate = _resolve_position_reference(
+                position.reference, tiers_by_name, items_by_id
+            )
+            positioned_values.append((coordinate, position))
+            if not position.attributes:
                 raise ValueError(
                     f"position {position.reference.to_data()!r} has no attribute values; "
                     "empty positions are derived"
@@ -496,33 +528,18 @@ class Graph:
             _validate_attributes(
                 position.attributes, AttributeDomain.POSITION, attributes
             )
-            if position.durable_id is not None:
-                durable_ids.append(
-                    (position.durable_id, f"position {position.reference.to_data()!r}")
-                )
+        positions_by_ref = _unique_by_name(positioned_values, "position value")
         _require_unique_durable_ids(durable_ids)
-        _validate_relation_invariants(self.relations, bipartite)
+        _validate_relation_invariants(
+            self.relations, bipartite, tiers_by_name, items_by_id
+        )
         object.__setattr__(self, "_tiers_by_name", tiers_by_name)
         object.__setattr__(self, "_types_by_tier", types_by_tier)
         object.__setattr__(self, "_positions_by_ref", positions_by_ref)
         object.__setattr__(
             self,
             "_items_by_id",
-            {
-                item.durable_id: ItemRef(tier.declaration.name, index)
-                for tier in self.tiers
-                for index, item in enumerate(tier.items)
-                if item.durable_id is not None
-            },
-        )
-        object.__setattr__(
-            self,
-            "_positions_by_id",
-            {
-                position.durable_id: position.reference
-                for position in self.position_values
-                if position.durable_id is not None
-            },
+            items_by_id,
         )
 
     def positions(self, tier: QualifiedName) -> tuple[Position, ...]:
@@ -533,8 +550,11 @@ class Graph:
         positions = []
         for index in range(len(member_tier.items) + 1):
             reference = PositionRef(tier, index)
+            stored = self._positions_by_ref.get(reference)
             positions.append(
-                self._positions_by_ref.get(reference, Position(reference, ()))
+                Position(reference, stored.attributes)
+                if stored is not None
+                else Position(reference, ())
             )
         return tuple(positions)
 
@@ -583,10 +603,9 @@ class Graph:
                 "position resolution expected PositionRef or DurablePositionRef; "
                 f"got {type(reference).__name__}"
             )
-        coordinate = self._positions_by_id.get(reference.durable_id)
-        if coordinate is None:
-            raise ValueError(f"unknown durable position id {reference.durable_id!r}")
-        return coordinate
+        return _resolve_position_reference(
+            reference, self._tiers_by_name, self._items_by_id
+        )
 
     def promote_item(
         self, reference: ItemRef, durable_id: str
@@ -608,21 +627,31 @@ class Graph:
     def promote_position(
         self, reference: PositionRef, durable_id: str
     ) -> tuple[Graph, DurablePositionRef]:
-        """Return a graph sparsely carrying the caller's semantic id for a position."""
+        """Return a graph whose boundary anchor has durable identity."""
         _validate_position(reference, self._tiers_by_name)
-        position = self._positions_by_ref.get(reference)
-        if position is not None and position.durable_id is not None:
-            return self, DurablePositionRef(position.durable_id)
-        promoted = Position(
-            reference, position.attributes if position is not None else (), durable_id
-        )
-        values = tuple(
-            promoted if candidate.reference == reference else candidate
-            for candidate in self.position_values
-        )
+        tier = self._tiers_by_name[reference.tier]
+        if reference.index == 0:
+            promoted = self
+            durable = DurablePositionRef(reference.tier, BoundarySide.BEFORE)
+        elif reference.index == len(tier.items):
+            promoted = self
+            durable = DurablePositionRef(reference.tier, BoundarySide.AFTER)
+        else:
+            promoted, anchor = self.promote_item(
+                ItemRef(reference.tier, reference.index), durable_id
+            )
+            durable = DurablePositionRef(anchor, BoundarySide.BEFORE)
+        position = promoted._positions_by_ref.get(reference)
         if position is None:
-            values = (*values, promoted)
-        return self._replace(position_values=values), DurablePositionRef(durable_id)
+            return promoted, durable
+        if isinstance(position.reference, DurablePositionRef):
+            return promoted, position.reference
+        anchored = Position(durable, position.attributes)
+        values = tuple(
+            anchored if candidate is position else candidate
+            for candidate in promoted.position_values
+        )
+        return promoted._replace(position_values=values), durable
 
     def _replace(
         self,
@@ -829,6 +858,37 @@ def _validate_position(
         )
 
 
+def _resolve_position_reference(
+    reference: PositionRef | DurablePositionRef,
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
+) -> PositionRef:
+    if isinstance(reference, PositionRef):
+        _validate_position(reference, tiers)
+        return reference
+    if isinstance(reference.anchor, QualifiedName):
+        tier = tiers.get(reference.anchor)
+        if tier is None:
+            raise ValueError(
+                f"durable position tier anchor {str(reference.anchor)!r} is not declared"
+            )
+        return PositionRef(
+            reference.anchor,
+            0 if reference.side is BoundarySide.BEFORE else len(tier.items),
+        )
+    coordinate = items_by_id.get(reference.anchor.durable_id)
+    if coordinate is None:
+        raise ValueError(
+            f"durable position anchor item {reference.anchor.durable_id!r} was not found"
+        )
+    return PositionRef(
+        coordinate.tier,
+        coordinate.index
+        if reference.side is BoundarySide.BEFORE
+        else coordinate.index + 1,
+    )
+
+
 def _require_integral_index(index: object, subject: str, offender: object) -> None:
     if isinstance(index, bool) or not isinstance(index, int):
         raise ValueError(f"{subject} {offender!r} has non-integral index {index!r}")
@@ -842,17 +902,35 @@ def _require_boolean(value: object, subject: str) -> None:
 def _validate_endpoint(
     relation_index: int,
     side: str,
-    reference: ItemRef,
+    reference: ItemRef | DurablePositionRef,
     expected_type: QualifiedName,
+    expected_kind: RelationEndpointKind,
     tiers: dict[QualifiedName, Tier],
     types: dict[QualifiedName, QualifiedName],
+    items_by_id: dict[str, ItemRef],
 ) -> None:
     subject = f"relation instance {relation_index} {side} endpoint"
-    _validate_reference(reference, subject, tiers)
-    actual_type = types.get(reference.tier)
+    actual_kind = (
+        RelationEndpointKind.ITEM
+        if isinstance(reference, ItemRef)
+        else RelationEndpointKind.BOUNDARY
+    )
+    if actual_kind is not expected_kind:
+        article = "an" if actual_kind is RelationEndpointKind.ITEM else "a"
+        expected_article = "an" if expected_kind is RelationEndpointKind.ITEM else "a"
+        raise ValueError(
+            f"{subject} {reference.to_data()!r} is {article} {actual_kind.value}; "
+            f"declaration requires {expected_article} {expected_kind.value}"
+        )
+    if isinstance(reference, ItemRef):
+        _validate_reference(reference, subject, tiers)
+        tier_name = reference.tier
+    else:
+        tier_name = _boundary_anchor_tier(reference, subject, tiers, items_by_id)
+    actual_type = types.get(tier_name)
     if actual_type is None:
         raise ValueError(
-            f"{subject} {reference.to_data()!r} belongs to untyped tier {str(reference.tier)!r}"
+            f"{subject} {reference.to_data()!r} belongs to untyped tier {str(tier_name)!r}"
         )
     if actual_type != expected_type:
         raise ValueError(
@@ -861,9 +939,33 @@ def _validate_endpoint(
         )
 
 
+def _boundary_anchor_tier(
+    reference: DurablePositionRef,
+    subject: str,
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
+) -> QualifiedName:
+    if isinstance(reference.anchor, QualifiedName):
+        if reference.anchor not in tiers:
+            raise ValueError(
+                f"{subject} {reference.to_data()!r} names undeclared tier "
+                f"{str(reference.anchor)!r}"
+            )
+        return reference.anchor
+    coordinate = items_by_id.get(reference.anchor.durable_id)
+    if coordinate is None:
+        raise ValueError(
+            f"{subject} {reference.to_data()!r} names missing anchor item "
+            f"{reference.anchor.durable_id!r}"
+        )
+    return coordinate.tier
+
+
 def _validate_relation_invariants(
     relations: tuple[RelationInstance, ...],
     declarations: dict[QualifiedName, BipartiteRelationDeclaration],
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
 ) -> None:
     for name, declaration in declarations.items():
         indexed = [
@@ -871,32 +973,55 @@ def _validate_relation_invariants(
             for index, edge in enumerate(relations)
             if edge.declaration == name
         ]
+        resolved = [
+            (
+                index,
+                edge,
+                _resolve_relation_endpoint(edge.left, tiers, items_by_id),
+                _resolve_relation_endpoint(edge.right, tiers, items_by_id),
+            )
+            for index, edge in indexed
+        ]
         if declaration.single_parent:
-            parents: dict[ItemRef, tuple[int, ItemRef]] = {}
-            for index, edge in indexed:
-                previous = parents.get(edge.right)
-                if previous is not None and previous[1] != edge.left:
+            parents: dict[ItemRef | PositionRef, tuple[int, ItemRef | PositionRef]] = {}
+            for index, edge, left, right in resolved:
+                previous = parents.get(right)
+                if previous is not None and previous[1] != left:
                     raise ValueError(
                         f"relation instance {index} gives {edge.right.to_data()!r} a second "
                         f"parent in {str(name)!r}; first parent is relation instance {previous[0]}"
                     )
-                parents[edge.right] = (index, edge.left)
+                parents[right] = (index, left)
         if declaration.acyclic:
-            _require_acyclic(name, indexed)
+            _require_acyclic(name, resolved)
+
+
+def _resolve_relation_endpoint(
+    reference: RelationEndpointRef,
+    tiers: dict[QualifiedName, Tier],
+    items_by_id: dict[str, ItemRef],
+) -> ItemRef | PositionRef:
+    """Resolve boundary spellings to graph places before invariant comparison."""
+    if isinstance(reference, ItemRef):
+        return reference
+    return _resolve_position_reference(reference, tiers, items_by_id)
 
 
 def _require_acyclic(
-    name: QualifiedName, indexed: list[tuple[int, RelationInstance]]
+    name: QualifiedName,
+    indexed: list[
+        tuple[int, RelationInstance, ItemRef | PositionRef, ItemRef | PositionRef]
+    ],
 ) -> None:
-    outgoing: dict[ItemRef, list[tuple[int, ItemRef]]] = {}
-    for index, edge in indexed:
-        outgoing.setdefault(edge.left, []).append((index, edge.right))
-    visited: set[ItemRef] = set()
+    outgoing: dict[ItemRef | PositionRef, list[tuple[int, ItemRef | PositionRef]]] = {}
+    for index, _edge, left, right in indexed:
+        outgoing.setdefault(left, []).append((index, right))
+    visited: set[ItemRef | PositionRef] = set()
     for root in tuple(outgoing):
         if root in visited:
             continue
-        visiting: set[ItemRef] = {root}
-        stack: list[tuple[ItemRef, int]] = [(root, 0)]
+        visiting: set[ItemRef | PositionRef] = {root}
+        stack: list[tuple[ItemRef | PositionRef, int]] = [(root, 0)]
         while stack:
             node, child_index = stack[-1]
             children = outgoing.get(node, [])
