@@ -3,7 +3,9 @@
 The renderer is a read-only view over the public tiergraph API. Tier and item
 order comes from the graph, clock order comes from the clock profile, and
 relation endpoints retain their declared sequence. No layout data is stored in
-the graph.
+the graph. This import package ships in the same ``tiergraph`` distribution as
+the kernel, so it is versioned and installed with the kernel rather than as an
+independently installable renderer.
 """
 
 from __future__ import annotations
@@ -40,7 +42,9 @@ def dumps(
 
     Empty tiers are omitted by default and included when
     ``include_empty_tiers`` is true. Attribute names and values are rendered as
-    data; the renderer assigns no domain-specific meaning to them.
+    data; the renderer assigns no domain-specific meaning to them. A clock
+    profile must belong to this exact graph instance, not merely an equal graph,
+    because its cached derived state was computed from that instance.
     """
     if not isinstance(graph, Graph):
         raise TypeError(f"graph must be a tiergraph.Graph, got {type(graph).__name__}")
@@ -68,7 +72,7 @@ def dumps(
     clock_ids: tuple[str, ...] = ()
     clock_positions: tuple[ClockPosition, ...] = ()
     if clock is not None:
-        clock_positions = _clock_positions(clock)
+        clock_positions = clock.positions
         clock_ids = tuple(f"clock_{index}" for index in range(len(clock_positions)))
         lines.extend(
             ("", "  // The refined clock spine is the total order.", "  { rank=same;")
@@ -194,21 +198,6 @@ def dumps(
     _relation_lines(lines, graph, item_nodes, boundary_nodes)
     lines.append("}")
     return "\n".join(lines) + "\n"
-
-
-def _clock_positions(clock: ClockProfile) -> tuple[ClockPosition, ...]:
-    positions = clock.graph.positions(clock.clock_tier)
-    if clock.tick_attribute is None or clock.gap_attribute is None:
-        return tuple(ClockPosition(index) for index in range(len(positions)))
-    result = []
-    for position in positions:
-        values = {value.name: value.lexical for value in position.attributes}
-        result.append(
-            ClockPosition(
-                int(values[clock.tick_attribute]), int(values[clock.gap_attribute])
-            )
-        )
-    return tuple(result)
 
 
 def _clock_index(

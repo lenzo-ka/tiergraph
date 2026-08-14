@@ -16,6 +16,7 @@ def test_version_is_a_string() -> None:
 def test_typing_marker_ships() -> None:
     """py.typed travels with the package."""
     assert resources.files("tiergraph").joinpath("py.typed").is_file()
+    assert resources.files("tiergraph_dot").joinpath("py.typed").is_file()
 
 
 def test_module_shim_imports() -> None:
