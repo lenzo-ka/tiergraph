@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
@@ -33,19 +34,25 @@ class Field:
 
 @dataclass(frozen=True, slots=True)
 class Shape:
-    """Describe one JSON value without embedding codec behavior."""
+    """Describe JSON syntax; graph-wide semantic constraints remain codec-only."""
 
     kind: ShapeKind
     fields: tuple[Field, ...] = ()
     item: Shape | None = None
     values: tuple[str, ...] = ()
     variants: tuple[str, ...] = ()
+    pattern: str | None = None
+    minimum: int | None = None
+    min_length: int | None = None
 
 
 STRING = Shape(ShapeKind.STRING)
 INTEGER = Shape(ShapeKind.INTEGER)
+NON_NEGATIVE_INTEGER = Shape(ShapeKind.INTEGER, minimum=0)
 BOOLEAN = Shape(ShapeKind.BOOLEAN)
 NULLABLE_STRING = Shape(ShapeKind.NULLABLE_STRING)
+NULLABLE_NON_EMPTY_STRING = Shape(ShapeKind.NULLABLE_STRING, min_length=1)
+NON_EMPTY_STRING = Shape(ShapeKind.STRING, min_length=1)
 
 
 def _field(name: str, shape: Shape) -> Field:
@@ -65,19 +72,36 @@ def _reference(*variants: str) -> Shape:
 
 
 QUALIFIED_NAME = _object(_field("namespace", STRING), _field("local_name", STRING))
-ATTRIBUTE_VALUE = _object(
-    _field("name", QUALIFIED_NAME),
-    _field(
-        "value_type",
-        Shape(
-            ShapeKind.STRING,
-            values=("string", "boolean", "integer", "decimal", "double"),
+_COLLAPSED = r"[ \t\r\n]*"
+_LEXICAL_PATTERNS = {
+    "boolean": rf"^{_COLLAPSED}(?:true|false|1|0){_COLLAPSED}$",
+    "integer": rf"^{_COLLAPSED}[+-]?[0-9]+{_COLLAPSED}$",
+    "decimal": rf"^{_COLLAPSED}[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+){_COLLAPSED}$",
+    "double": rf"^{_COLLAPSED}(?:NaN|[+-]?INF|[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)){_COLLAPSED}$",
+}
+
+
+def _attribute_value(value_type: str) -> Shape:
+    return _object(
+        _field("name", QUALIFIED_NAME),
+        _field("value_type", Shape(ShapeKind.STRING, values=(value_type,))),
+        _field(
+            "lexical",
+            Shape(ShapeKind.STRING, pattern=_LEXICAL_PATTERNS.get(value_type)),
         ),
-    ),
-    _field("lexical", STRING),
+    )
+
+
+ATTRIBUTE_VALUE = _reference(
+    *(
+        f"{value_type}_attribute_value"
+        for value_type in ("string", "boolean", "integer", "decimal", "double")
+    )
 )
 ATTRIBUTES = _array(ATTRIBUTE_VALUE)
-ITEM_REFERENCE = _object(_field("tier", QUALIFIED_NAME), _field("index", INTEGER))
+ITEM_REFERENCE = _object(
+    _field("tier", QUALIFIED_NAME), _field("index", NON_NEGATIVE_INTEGER)
+)
 ANCHOR = Shape(ShapeKind.REFERENCE, variants=("item_anchor", "tier_anchor"))
 DURABLE_POSITION = _object(
     _field("anchor", ANCHOR),
@@ -85,9 +109,13 @@ DURABLE_POSITION = _object(
 )
 
 DECLARATIONS: dict[str, Shape] = {
+    **{
+        f"{value_type}_attribute_value": _attribute_value(value_type)
+        for value_type in ("string", "boolean", "integer", "decimal", "double")
+    },
     "item_anchor": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("item",))),
-        _field("durable_id", STRING),
+        _field("durable_id", NON_EMPTY_STRING),
     ),
     "tier_anchor": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("tier",))),
@@ -117,19 +145,13 @@ DECLARATIONS: dict[str, Shape] = {
 
 RELATION_DECLARATION = _reference("simple_relation", "bipartite_relation")
 ENDPOINT = _reference("item_reference", "durable_position")
+TIER_DECLARATION = _object(_field("name", QUALIFIED_NAME), _field("long_name", STRING))
+ITEM = _object(
+    _field("durable_id", NULLABLE_NON_EMPTY_STRING), _field("attributes", ATTRIBUTES)
+)
 TIER = _object(
-    _field(
-        "declaration",
-        _object(_field("name", QUALIFIED_NAME), _field("long_name", STRING)),
-    ),
-    _field(
-        "items",
-        _array(
-            _object(
-                _field("durable_id", NULLABLE_STRING), _field("attributes", ATTRIBUTES)
-            )
-        ),
-    ),
+    _field("declaration", TIER_DECLARATION),
+    _field("items", _array(ITEM)),
     _field("attributes", ATTRIBUTES),
 )
 GRAPH = _object(
@@ -146,7 +168,7 @@ GRAPH = _object(
                 _field("declaration", QUALIFIED_NAME),
                 _field("left", ENDPOINT),
                 _field("right", ENDPOINT),
-                _field("durable_id", NULLABLE_STRING),
+                _field("durable_id", NULLABLE_NON_EMPTY_STRING),
                 _field("attributes", ATTRIBUTES),
             )
         ),
@@ -199,6 +221,20 @@ def object_fields(shape: Shape) -> set[str]:
     if shape.kind is not ShapeKind.OBJECT:
         raise TypeError("object field metadata requires an object shape")
     return {field.name for field in shape.fields}
+
+
+def field_shape(shape: Shape, name: str) -> Shape:
+    """Return a declared child shape for parser metadata traversal."""
+    if shape.kind is not ShapeKind.OBJECT:
+        raise TypeError("field metadata requires an object shape")
+    return next(field.shape for field in shape.fields if field.name == name)
+
+
+def array_item(shape: Shape) -> Shape:
+    """Return the declared array member shape for parser metadata traversal."""
+    if shape.kind is not ShapeKind.ARRAY or shape.item is None:
+        raise TypeError("item metadata requires an array shape")
+    return shape.item
 
 
 def declaration_data() -> dict[str, JsonValue]:
@@ -295,7 +331,10 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
                 return errors
         return []
     if shape.kind is ShapeKind.NULLABLE_STRING:
-        if value is None or isinstance(value, str):
+        if value is None or (
+            isinstance(value, str)
+            and (shape.min_length is None or len(value) >= shape.min_length)
+        ):
             return []
         return [f"{path} must be a string or null"]
     expected_type = {
@@ -307,6 +346,20 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
         return [f"{path} must be a {shape.kind.value}"]
     if shape.values and value not in shape.values:
         return [f"{path} has unsupported value {value!r}"]
+    if shape.kind is ShapeKind.STRING:
+        if shape.min_length is not None and len(cast(str, value)) < shape.min_length:
+            return [f"{path} must not be empty"]
+        if (
+            shape.pattern is not None
+            and re.fullmatch(shape.pattern, cast(str, value)) is None
+        ):
+            return [f"{path} has an invalid lexical form"]
+    if (
+        shape.kind is ShapeKind.INTEGER
+        and shape.minimum is not None
+        and cast(int, value) < shape.minimum
+    ):
+        return [f"{path} must be at least {shape.minimum}"]
     return []
 
 
@@ -320,6 +373,9 @@ def _shape_data(shape: Shape) -> dict[str, JsonValue]:
         "item": _shape_data(shape.item) if shape.item is not None else None,
         "values": list(shape.values),
         "variants": list(shape.variants),
+        "pattern": shape.pattern,
+        "minimum": shape.minimum,
+        "min_length": shape.min_length,
     }
 
 
@@ -339,8 +395,17 @@ def _json_schema(shape: Shape) -> JsonValue:
     if shape.kind is ShapeKind.REFERENCE:
         return {"oneOf": [{"$ref": f"#/$defs/{name}"} for name in shape.variants]}
     if shape.kind is ShapeKind.NULLABLE_STRING:
-        return {"type": ["string", "null"]}
+        string_schema: dict[str, JsonValue] = {"type": "string"}
+        if shape.min_length is not None:
+            string_schema["minLength"] = shape.min_length
+        return {"anyOf": [string_schema, {"type": "null"}]}
     result: dict[str, JsonValue] = {"type": shape.kind.value}
     if shape.values:
         result["enum"] = list(shape.values)
+    if shape.pattern is not None:
+        result["pattern"] = shape.pattern
+    if shape.minimum is not None:
+        result["minimum"] = shape.minimum
+    if shape.min_length is not None:
+        result["minLength"] = shape.min_length
     return result

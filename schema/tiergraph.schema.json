@@ -8,44 +8,23 @@
         },
         "attributes": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "lexical": {
-                "type": "string"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
               },
-              "name": {
-                "additionalProperties": false,
-                "properties": {
-                  "local_name": {
-                    "type": "string"
-                  },
-                  "namespace": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "namespace",
-                  "local_name"
-                ],
-                "type": "object"
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
               },
-              "value_type": {
-                "enum": [
-                  "string",
-                  "boolean",
-                  "integer",
-                  "decimal",
-                  "double"
-                ],
-                "type": "string"
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
               }
-            },
-            "required": [
-              "name",
-              "value_type",
-              "lexical"
-            ],
-            "type": "object"
+            ]
           },
           "type": "array"
         },
@@ -134,6 +113,117 @@
       ],
       "type": "object"
     },
+    "boolean_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*(?:true|false|1|0)[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "boolean"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "decimal_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "decimal"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
+    "double_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*(?:NaN|[+-]?INF|[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?))[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "double"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
     "durable_position": {
       "additionalProperties": false,
       "properties": {
@@ -161,10 +251,48 @@
       ],
       "type": "object"
     },
+    "integer_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "pattern": "^[ \\t\\r\\n]*[+-]?[0-9]+[ \\t\\r\\n]*$",
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "integer"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
     "item_anchor": {
       "additionalProperties": false,
       "properties": {
         "durable_id": {
+          "minLength": 1,
           "type": "string"
         },
         "kind": {
@@ -184,6 +312,7 @@
       "additionalProperties": false,
       "properties": {
         "index": {
+          "minimum": 0,
           "type": "integer"
         },
         "tier": {
@@ -214,44 +343,23 @@
       "properties": {
         "attributes": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "lexical": {
-                "type": "string"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
               },
-              "name": {
-                "additionalProperties": false,
-                "properties": {
-                  "local_name": {
-                    "type": "string"
-                  },
-                  "namespace": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "namespace",
-                  "local_name"
-                ],
-                "type": "object"
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
               },
-              "value_type": {
-                "enum": [
-                  "string",
-                  "boolean",
-                  "integer",
-                  "decimal",
-                  "double"
-                ],
-                "type": "string"
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
               }
-            },
-            "required": [
-              "name",
-              "value_type",
-              "lexical"
-            ],
-            "type": "object"
+            ]
           },
           "type": "array"
         },
@@ -319,6 +427,42 @@
       ],
       "type": "object"
     },
+    "string_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "lexical": {
+          "type": "string"
+        },
+        "name": {
+          "additionalProperties": false,
+          "properties": {
+            "local_name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "namespace",
+            "local_name"
+          ],
+          "type": "object"
+        },
+        "value_type": {
+          "enum": [
+            "string"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "lexical"
+      ],
+      "type": "object"
+    },
     "tier_anchor": {
       "additionalProperties": false,
       "properties": {
@@ -352,12 +496,12 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-1.json",
+  "$id": "https://tiergraph.org/schema/format-2.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "format_version": {
-      "const": "1"
+      "const": "2"
     },
     "graph": {
       "additionalProperties": false,
@@ -415,44 +559,23 @@
         },
         "attributes": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "lexical": {
-                "type": "string"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/string_attribute_value"
               },
-              "name": {
-                "additionalProperties": false,
-                "properties": {
-                  "local_name": {
-                    "type": "string"
-                  },
-                  "namespace": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "namespace",
-                  "local_name"
-                ],
-                "type": "object"
+              {
+                "$ref": "#/$defs/boolean_attribute_value"
               },
-              "value_type": {
-                "enum": [
-                  "string",
-                  "boolean",
-                  "integer",
-                  "decimal",
-                  "double"
-                ],
-                "type": "string"
+              {
+                "$ref": "#/$defs/integer_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/decimal_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/double_attribute_value"
               }
-            },
-            "required": [
-              "name",
-              "value_type",
-              "lexical"
-            ],
-            "type": "object"
+            ]
           },
           "type": "array"
         },
@@ -481,44 +604,23 @@
             "properties": {
               "attributes": {
                 "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "lexical": {
-                      "type": "string"
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
                     },
-                    "name": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "local_name": {
-                          "type": "string"
-                        },
-                        "namespace": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "namespace",
-                        "local_name"
-                      ],
-                      "type": "object"
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
                     },
-                    "value_type": {
-                      "enum": [
-                        "string",
-                        "boolean",
-                        "integer",
-                        "decimal",
-                        "double"
-                      ],
-                      "type": "string"
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
                     }
-                  },
-                  "required": [
-                    "name",
-                    "value_type",
-                    "lexical"
-                  ],
-                  "type": "object"
+                  ]
                 },
                 "type": "array"
               },
@@ -560,44 +662,23 @@
             "properties": {
               "attributes": {
                 "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "lexical": {
-                      "type": "string"
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
                     },
-                    "name": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "local_name": {
-                          "type": "string"
-                        },
-                        "namespace": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "namespace",
-                        "local_name"
-                      ],
-                      "type": "object"
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
                     },
-                    "value_type": {
-                      "enum": [
-                        "string",
-                        "boolean",
-                        "integer",
-                        "decimal",
-                        "double"
-                      ],
-                      "type": "string"
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
                     }
-                  },
-                  "required": [
-                    "name",
-                    "value_type",
-                    "lexical"
-                  ],
-                  "type": "object"
+                  ]
                 },
                 "type": "array"
               },
@@ -618,9 +699,14 @@
                 "type": "object"
               },
               "durable_id": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "left": {
@@ -661,44 +747,23 @@
             "properties": {
               "attributes": {
                 "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "lexical": {
-                      "type": "string"
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/string_attribute_value"
                     },
-                    "name": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "local_name": {
-                          "type": "string"
-                        },
-                        "namespace": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "namespace",
-                        "local_name"
-                      ],
-                      "type": "object"
+                    {
+                      "$ref": "#/$defs/boolean_attribute_value"
                     },
-                    "value_type": {
-                      "enum": [
-                        "string",
-                        "boolean",
-                        "integer",
-                        "decimal",
-                        "double"
-                      ],
-                      "type": "string"
+                    {
+                      "$ref": "#/$defs/integer_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/decimal_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/double_attribute_value"
                     }
-                  },
-                  "required": [
-                    "name",
-                    "value_type",
-                    "lexical"
-                  ],
-                  "type": "object"
+                  ]
                 },
                 "type": "array"
               },
@@ -737,51 +802,35 @@
                   "properties": {
                     "attributes": {
                       "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "lexical": {
-                            "type": "string"
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/string_attribute_value"
                           },
-                          "name": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "local_name": {
-                                "type": "string"
-                              },
-                              "namespace": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "namespace",
-                              "local_name"
-                            ],
-                            "type": "object"
+                          {
+                            "$ref": "#/$defs/boolean_attribute_value"
                           },
-                          "value_type": {
-                            "enum": [
-                              "string",
-                              "boolean",
-                              "integer",
-                              "decimal",
-                              "double"
-                            ],
-                            "type": "string"
+                          {
+                            "$ref": "#/$defs/integer_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/decimal_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/double_attribute_value"
                           }
-                        },
-                        "required": [
-                          "name",
-                          "value_type",
-                          "lexical"
-                        ],
-                        "type": "object"
+                        ]
                       },
                       "type": "array"
                     },
                     "durable_id": {
-                      "type": [
-                        "string",
-                        "null"
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     }
                   },

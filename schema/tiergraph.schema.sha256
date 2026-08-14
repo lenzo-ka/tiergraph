@@ -1,5 +1,5 @@
 {
-  "format_version": "1",
-  "schema_sha256": "8f3b2cbaaf83c83ffb6590dcbbde7fd2c742665226ea9a0af378c66b5e7eef58",
-  "shape_sha256": "d7998e865ee926222396ab4907919c3cd44738172120344cf7e73f2b1357ce0c"
+  "format_version": "2",
+  "schema_sha256": "b72281cd68eeb6aaa42a497ae1b5cdc8c0c30a3db0dd5067e195a9e161be02e9",
+  "shape_sha256": "eff6e3ab74e5dfdd34adb048c17ffbae4344db91577a479a4933d4a8a1df0f3b"
 }
