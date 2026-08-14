@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
+from decimal import Decimal, Inexact, ROUND_UP, localcontext
 from typing import cast
 
 import pytest
@@ -94,8 +94,8 @@ def test_real_ipakit_rate_derives_timing_on_a_partial_document_tier() -> None:
     assert profile.rate == Decimal("10.0")
     assert profile.extent(SEGMENT) == (1, 3)
     assert profile.clock_position(PositionRef(SEGMENT, 1)) == 2
-    assert profile.duration(SEGMENT, 0) == Decimal("0.1")
-    assert profile.duration(SEGMENT, 1) == Decimal("0.1")
+    assert profile.duration(SEGMENT, 0) == (1, Decimal("10.0"))
+    assert profile.duration(SEGMENT, 1) == (1, Decimal("10.0"))
 
 
 def test_rate_changes_the_derived_measure_without_moving_structure() -> None:
@@ -106,8 +106,19 @@ def test_rate_changes_the_derived_measure_without_moving_structure() -> None:
     after = ClockProfile(changed, CLOCK, BINDING, RATE)
     assert original.tiers == changed.tiers
     assert original.relations == changed.relations
-    assert before.duration(SEGMENT, 0) == Decimal("0.1")
-    assert after.duration(SEGMENT, 0) == Decimal("0.05")
+    assert before.duration(SEGMENT, 0) == (1, Decimal("10"))
+    assert after.duration(SEGMENT, 0) == (1, Decimal("20"))
+
+
+def test_nonterminating_duration_is_exact_and_ignores_decimal_context() -> None:
+    """The profile returns a ratio without performing context-sensitive division."""
+    profile = ClockProfile(fixture("3"), CLOCK, BINDING, RATE)
+    with localcontext() as context:
+        context.prec = 5
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        duration = profile.duration(SEGMENT, 0)
+    assert duration == (1, Decimal("3"))
 
 
 def test_structural_positions_remain_integral() -> None:
@@ -124,7 +135,7 @@ def test_zero_span_is_shared_and_cannot_carry_per_event_duration() -> None:
     profile = ClockProfile(
         replace(graph, relations=tuple(relations)), CLOCK, BINDING, RATE
     )
-    assert profile.duration(SEGMENT, 0) == Decimal("0")
+    assert profile.duration(SEGMENT, 0) == (0, Decimal("10.0"))
 
 
 def test_unrelated_boundary_relations_do_not_enter_the_binding() -> None:
