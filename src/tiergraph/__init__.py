@@ -63,6 +63,7 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
+from tiergraph.traversal import Walk, WalkDirection, WalkResult
 from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
@@ -121,6 +122,9 @@ __all__ = [
     "TierSelector",
     "TypeSelector",
     "XsdType",
+    "Walk",
+    "WalkDirection",
+    "WalkResult",
     "FORMAT_VERSION",
     "dump_bytes",
     "dumps",
