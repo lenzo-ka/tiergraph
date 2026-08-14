@@ -82,6 +82,7 @@ from tiergraph.selection import (
     select,
 )
 from tiergraph.traversal import Walk, WalkDirection, WalkResult
+from tiergraph.value import JsonValueProfile, json_value_graph
 from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
@@ -121,6 +122,7 @@ __all__ = [
     "ItemRef",
     "ItemSelector",
     "ItemsSelector",
+    "JsonValueProfile",
     "MACHINE_VERSION",
     "MAX_REPEAT_COUNT",
     "NamespaceDeclaration",
@@ -162,6 +164,7 @@ __all__ = [
     "loads",
     "to_data",
     "execute",
+    "json_value_graph",
     "anchored_position",
     "select",
     "__version__",
