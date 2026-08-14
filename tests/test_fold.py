@@ -21,14 +21,17 @@ from tiergraph import (
     QualifiedName,
     RelationInstance,
     Tier,
+    TierDeclaration,
     XsdType,
 )
 from tiergraph.fold import (
     AttributeValuation,
+    ChildCombination,
     FoldDeclaration,
     FoldHomomorphism,
+    FoldTransition,
     Lift,
-    ProvenanceReader,
+    TiePolicy,
 )
 from tiergraph.semiring import (
     DECIMAL_ARCTIC,
@@ -58,6 +61,13 @@ def decimal_lift(value: object, label: str) -> Decimal:
     return cast(Decimal, value)
 
 
+def minimum_order(left: object, right: object) -> int:
+    """Compare plain or path carriers by their tropical scalar."""
+    left_value = cast(Decimal, left[0] if isinstance(left, tuple) else left)
+    right_value = cast(Decimal, right[0] if isinstance(right, tuple) else right)
+    return (left_value > right_value) - (left_value < right_value)
+
+
 def valuation(attribute: str) -> AttributeValuation:
     """Declare one item field over the fixture's placement tier."""
     return AttributeValuation(
@@ -79,11 +89,11 @@ def declaration(
         valuation(attribute),
         semiring,
         cast(Lift[object], path_lift if witness else decimal_lift),
-        (FIXTURE.name("depends"),),
+        (FoldTransition(FIXTURE.name("depends"), ChildCombination.OR),),
         (("main", "preview", "archive"),),
         (FIXTURE.states(graph)[0][0],),
-        cast(ProvenanceReader[object], path_provenance) if witness else None,
-        FIXTURE.tie_policy if witness else None,
+        minimum_order if witness else None,
+        TiePolicy.ALL if witness else None,
         CAP,
         5,
     )
@@ -178,6 +188,94 @@ def test_witnesses_require_a_tie_policy() -> None:
         replace(declaration(), tie_policy=None)
 
 
+def test_relation_incidence_declares_and_or_meaning() -> None:
+    """Required children multiply while alternative children add."""
+
+    class CountingSemiring:
+        zero = Decimal(0)
+        one = Decimal(1)
+        add_associativity = multiply_associativity = DECIMAL_TROPICAL.add_associativity
+
+        def add(self, left: Decimal, right: Decimal) -> Decimal:
+            return left + right
+
+        def multiply(self, left: Decimal, right: Decimal) -> Decimal:
+            return left * right
+
+    base = replace(
+        declaration("tie", cast(Semiring[object], CountingSemiring())),
+        lift=lambda value, label: Decimal(1),
+        index_axes=(),
+        roots=(FIXTURE.states(FIXTURE.graph())[0][0],),
+    )
+    disjunction = replace(
+        base,
+        transitions=(FoldTransition(FIXTURE.name("depends"), ChildCombination.OR),),
+    )
+    conjunction = replace(
+        base,
+        transitions=(FoldTransition(FIXTURE.name("depends"), ChildCombination.AND),),
+    )
+    assert disjunction.run().value == Decimal(2)
+    assert conjunction.run().value == Decimal(1)
+
+
+def test_plain_tropical_carrier_accumulates_provenance_and_applies_ties() -> None:
+    """Witnesses are a parallel fold product, not a component of the carrier."""
+    plain = replace(
+        declaration("tie", cast(Semiring[object], DECIMAL_TROPICAL)),
+        witness_order=minimum_order,
+        tie_policy=TiePolicy.ALL,
+    )
+    all_ties = plain.run()
+    first = replace(plain, tie_policy=TiePolicy.CHOOSE_FIRST).run()
+    assert all_ties.value == Decimal(0)
+    assert all_ties.provenance == (
+        ("start", "bed", "out"),
+        ("start", "sting", "out"),
+    )
+    assert first.provenance == (("start", "bed", "out"),)
+    with pytest.raises(ValueError, match="unsupported tie policy"):
+        replace(plain, tie_policy="anything")  # type: ignore[arg-type]
+
+
+def test_cost_bound_uses_each_distinct_measured_quantity() -> None:
+    """Deleting any of D, R, I, C, or capped output invalidates the exact account."""
+    base = declaration("tie")
+    extra_name = FIXTURE.name("excluded")
+    extra = Tier(TierDeclaration(extra_name, "Excluded"), (Item("extra"),))
+    graph = replace(base.graph, tiers=(*base.graph.tiers, extra))
+    result = replace(
+        base,
+        graph=graph,
+        carrier_operation_cost=7,
+        output_cap=2,
+    ).run()
+    cost = result.cost
+    assert (
+        cost.document_size,
+        cost.relation_incidence,
+        cost.index_product_size,
+        cost.carrier_operation_cost,
+        cost.output_cap,
+    ) == (5, 4, 3, 7, 2)
+    assert cost.measured_work == cost.bound
+    terms = (
+        cost.document_size * cost.index_product_size * cost.carrier_operation_cost,
+        cost.relation_incidence * cost.index_product_size * cost.carrier_operation_cost,
+        (cost.document_size + cost.relation_incidence)
+        * (cost.index_product_size - 1)
+        * cost.carrier_operation_cost,
+        (cost.document_size + cost.relation_incidence)
+        * cost.index_product_size
+        * (cost.carrier_operation_cost - 1),
+        min(cost.witness_count, cost.output_cap),
+    )
+    for deleted_term in terms:
+        with pytest.raises(AssertionError):
+            assert cost.measured_work == cost.bound - deleted_term
+
+
 class ForbiddenInspectionSemiring:
     """Use opaque values that can only be combined through declared operations."""
 
@@ -252,11 +350,30 @@ def test_tropical_hides_a_fold_that_selects_outside_semiring_addition() -> None:
         ({"name": ""}, "fold name"),
         ({"output_cap": 0}, "output cap"),
         ({"carrier_operation_cost": 0}, "operation cost"),
-        ({"provenance_reader": None}, "produces no witnesses"),
+        ({"witness_order": None}, "produces no witnesses"),
         ({"index_axes": ((),)}, "axis 0.*empty"),
         ({"index_axes": (("x", "x"),)}, "axis 0.*duplicates"),
-        ({"relations": ()}, "no declared dependency"),
-        ({"relations": (QualifiedName(FIXTURE.namespace, "missing"),)}, "undeclared"),
+        ({"transitions": ()}, "no declared dependency"),
+        ({"transitions": cast(object, (FIXTURE.name("depends"),))}, "AND/OR"),
+        (
+            {
+                "transitions": (
+                    FoldTransition(FIXTURE.name("depends"), ChildCombination.OR),
+                    FoldTransition(FIXTURE.name("depends"), ChildCombination.AND),
+                )
+            },
+            "duplicate dependency",
+        ),
+        (
+            {
+                "transitions": (
+                    FoldTransition(
+                        QualifiedName(FIXTURE.namespace, "missing"), ChildCombination.OR
+                    ),
+                )
+            },
+            "undeclared",
+        ),
         ({"roots": (ItemRef(FIXTURE.name("missing"), 0),)}, "outside its domain"),
     ],
 )
@@ -265,8 +382,8 @@ def test_declaration_refusals_name_the_offender(
 ) -> None:
     """Each near-valid declaration is refused before execution."""
     base = declaration()
-    if change == {"provenance_reader": None}:
-        change["tie_policy"] = "still declared"
+    if change == {"witness_order": None}:
+        change["tie_policy"] = TiePolicy.ALL
     with pytest.raises(ValueError, match=message):
         replace(base, **change)  # type: ignore[arg-type]
 
@@ -383,10 +500,8 @@ def test_homomorphism_refusals_name_the_declaration() -> None:
         replace(valid, name="")
     with pytest.raises(ValueError, match="structures differ"):
         replace(valid, target=replace(valid.target, index_axes=(("other",),)))
-    broken = replace(valid, mapping=lambda value: Decimal(999))
-    assert broken.commutes() is False
     with pytest.raises(ValueError, match="does not commute"):
-        broken.check()
+        replace(valid, mapping=lambda value: Decimal(999))
 
 
 def test_empty_domain_has_no_dependency_root() -> None:
@@ -400,6 +515,14 @@ def test_empty_domain_has_no_dependency_root() -> None:
     )
     with pytest.raises(ValueError, match="no root"):
         replace(declaration(), graph=empty_graph, roots=())
+
+
+def test_inferred_multiple_roots_have_separately_accumulated_provenance() -> None:
+    """Root alternatives use the same declared tie behavior as OR incidence."""
+    base = declaration("tie")
+    graph = replace(base.graph, relations=())
+    result = replace(base, graph=graph, roots=(), index_axes=()).run()
+    assert result.provenance == (("start",), ("bed",), ("sting",), ("out",))
 
 
 def test_isolated_anonymous_item_uses_a_deterministic_structural_label() -> None:

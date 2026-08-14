@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from itertools import product
 from typing import Protocol, TypeVar
 
@@ -36,11 +37,33 @@ class Lift(Protocol[LiftValue]):
         """Return one local carrier value."""
 
 
-class ProvenanceReader(Protocol[ReadValue]):
-    """Recover paths from an enriched carrier without changing its value."""
+class WitnessOrder(Protocol[ReadValue]):
+    """Compare carrier values for witness selection without enriching them."""
 
-    def __call__(self, value: ReadValue, /) -> Provenance:
-        """Return all paths selected by the carrier."""
+    def __call__(self, left: ReadValue, right: ReadValue, /) -> int:
+        """Return negative for left, positive for right, or zero for a tie."""
+
+
+class ChildCombination(Enum):
+    """Declare whether one relation's incident children are alternatives or requirements."""
+
+    OR = "or"
+    AND = "and"
+
+
+@dataclass(frozen=True, slots=True)
+class FoldTransition:
+    """Give one dependency relation its local AND/OR incidence meaning."""
+
+    relation: QualifiedName
+    combination: ChildCombination
+
+
+class TiePolicy(Enum):
+    """Supported, executable policies for equal-valued alternatives."""
+
+    ALL = "all"
+    CHOOSE_FIRST = "choose-first"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +148,22 @@ class FoldCost:
     output_cap: int
 
     @property
+    def bound(self) -> int:
+        """Return the declared structural/carrier/output work bound."""
+        return (
+            self.document_size + self.relation_incidence
+        ) * self.index_product_size * self.carrier_operation_cost + min(
+            self.witness_count, self.output_cap
+        )
+
+    @property
+    def measured_work(self) -> int:
+        """Return measured traversal work plus actually emitted output."""
+        return (
+            self.document_size + self.relation_incidence
+        ) * self.index_product_size * self.carrier_operation_cost + self.emitted_count
+
+    @property
     def carrier_work(self) -> int:
         """Return measured semiring-operation work at the declared unit cost."""
         return (
@@ -144,6 +183,8 @@ class FoldCost:
             "witness_count": self.witness_count,
             "emitted_count": self.emitted_count,
             "output_cap": self.output_cap,
+            "bound": self.bound,
+            "measured_work": self.measured_work,
         }
 
 
@@ -186,11 +227,11 @@ class FoldDeclaration[Value]:
     valuation: AttributeValuation
     semiring: Semiring[Value]
     lift: Lift[Value]
-    relations: tuple[QualifiedName, ...]
+    transitions: tuple[FoldTransition, ...]
     index_axes: tuple[tuple[str, ...], ...] = ()
     roots: tuple[ItemRef, ...] = ()
-    provenance_reader: ProvenanceReader[Value] | None = None
-    tie_policy: str | None = None
+    witness_order: WitnessOrder[Value] | None = None
+    tie_policy: TiePolicy | None = None
     output_cap: int = 1
     carrier_operation_cost: int = 1
 
@@ -207,14 +248,22 @@ class FoldDeclaration[Value]:
                 f"fold {self.name!r} carrier operation cost "
                 f"{self.carrier_operation_cost!r} must be positive"
             )
-        if self.provenance_reader is not None and not self.tie_policy:
+        if self.witness_order is not None and self.tie_policy is None:
             raise ValueError(
                 f"fold {self.name!r} produces witnesses but has no tie policy"
             )
-        if self.provenance_reader is None and self.tie_policy is not None:
+        if self.witness_order is None and self.tie_policy is not None:
             raise ValueError(
                 f"fold {self.name!r} declares tie policy {self.tie_policy!r} "
                 "but produces no witnesses"
+            )
+        if self.tie_policy is not None and not isinstance(self.tie_policy, TiePolicy):
+            raise ValueError(
+                f"fold {self.name!r} has unsupported tie policy {self.tie_policy!r}"
+            )
+        if any(not isinstance(item, FoldTransition) for item in self.transitions):
+            raise ValueError(
+                f"fold {self.name!r} transitions must declare AND/OR meaning"
             )
         declared_tiers = {tier.declaration.name for tier in self.graph.tiers}
         for tier in self.valuation.tiers:
@@ -247,18 +296,21 @@ class FoldDeclaration[Value]:
             for declaration in self.graph.relation_declarations
             if isinstance(declaration, BipartiteRelationDeclaration)
         }
-        if not self.relations:
+        if not self.transitions:
             raise ValueError(f"fold {self.name!r} has no declared dependency relations")
-        for relation in self.relations:
-            declaration = declarations.get(relation)
+        relation_names = [transition.relation for transition in self.transitions]
+        if len(set(relation_names)) != len(relation_names):
+            raise ValueError(f"fold {self.name!r} has duplicate dependency relations")
+        for transition in self.transitions:
+            declaration = declarations.get(transition.relation)
             if declaration is None:
                 raise ValueError(
                     f"fold {self.name!r} names undeclared bipartite relation "
-                    f"{str(relation)!r}"
+                    f"{str(transition.relation)!r}"
                 )
             if not declaration.acyclic:
                 raise ValueError(
-                    f"fold {self.name!r} relation {str(relation)!r} does not declare acyclic"
+                    f"fold {self.name!r} relation {str(transition.relation)!r} does not declare acyclic"
                 )
         admitted = set(self._references())
         for root in self.roots:
@@ -293,13 +345,16 @@ class FoldDeclaration[Value]:
 
     def _topology(
         self,
-    ) -> tuple[dict[ItemRef, tuple[ItemRef, ...]], tuple[ItemRef, ...]]:
+    ) -> tuple[
+        dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]], tuple[ItemRef, ...]
+    ]:
         """Return canonical outgoing incidence and inferred or declared roots."""
         references = self._references()
         admitted = set(references)
-        selected = set(self.relations)
-        outgoing_lists: dict[ItemRef, list[ItemRef]] = {
-            reference: [] for reference in references
+        selected = {transition.relation for transition in self.transitions}
+        outgoing_lists: dict[ItemRef, dict[QualifiedName, list[ItemRef]]] = {
+            reference: {relation: [] for relation in selected}
+            for reference in references
         }
         incoming = {reference: 0 for reference in references}
         for relation in self.graph.relations:
@@ -310,12 +365,17 @@ class FoldDeclaration[Value]:
                 and relation.left in admitted
                 and relation.right in admitted
             ):
-                outgoing_lists[relation.left].append(relation.right)
+                outgoing_lists[relation.left][relation.declaration].append(
+                    relation.right
+                )
                 incoming[relation.right] += 1
         order = {reference: index for index, reference in enumerate(references)}
         outgoing = {
-            reference: tuple(sorted(children, key=order.__getitem__))
-            for reference, children in outgoing_lists.items()
+            reference: {
+                relation: tuple(sorted(children, key=order.__getitem__))
+                for relation, children in by_relation.items()
+            }
+            for reference, by_relation in outgoing_lists.items()
         }
         roots = self.roots or tuple(
             reference for reference in references if incoming[reference] == 0
@@ -334,11 +394,12 @@ class FoldDeclaration[Value]:
         root_states: list[State] = []
         total = self.semiring.zero
         for coordinate in coordinates:
-            cache: dict[ItemRef, Value] = {}
+            cache: dict[ItemRef, tuple[Value, Provenance]] = {}
 
             def visit(
-                reference: ItemRef, state_cache: dict[ItemRef, Value] = cache
-            ) -> Value:
+                reference: ItemRef,
+                state_cache: dict[ItemRef, tuple[Value, Provenance]] = cache,
+            ) -> tuple[Value, Provenance]:
                 """Evaluate one state once for the current index coordinate."""
                 nonlocal additions, multiplications
                 if reference in state_cache:
@@ -346,38 +407,79 @@ class FoldDeclaration[Value]:
                 item = _item(self.graph, reference)
                 label = item.durable_id or _structural_label(reference)
                 local = self.lift(self.valuation.read(self.graph, reference), label)
-                alternatives = self.semiring.zero
-                children = outgoing[reference]
-                if children:
-                    for child in children:
-                        alternatives = self.semiring.add(alternatives, visit(child))
-                        additions += 1
-                else:
-                    alternatives = self.semiring.one
-                result = self.semiring.multiply(local, alternatives)
-                multiplications += 1
-                state_cache[reference] = result
-                return result
+                value = local
+                paths: Provenance = ((label,),)
+                has_children = False
+                for transition in self.transitions:
+                    children = outgoing[reference][transition.relation]
+                    if not children:
+                        continue
+                    has_children = True
+                    child_results = [visit(child) for child in children]
+                    if transition.combination is ChildCombination.AND:
+                        relation_value = self.semiring.one
+                        relation_paths: Provenance = ((),)
+                        for child_value, child_paths in child_results:
+                            relation_value = self.semiring.multiply(
+                                relation_value, child_value
+                            )
+                            multiplications += 1
+                            relation_paths = tuple(
+                                left + right
+                                for left in relation_paths
+                                for right in child_paths
+                            )
+                    else:
+                        relation_value, relation_paths = child_results[0]
+                        for child_value, child_paths in child_results[1:]:
+                            previous = relation_value
+                            relation_value = self.semiring.add(previous, child_value)
+                            additions += 1
+                            relation_paths = self._select_paths(
+                                previous, relation_paths, child_value, child_paths
+                            )
+                    value = self.semiring.multiply(value, relation_value)
+                    multiplications += 1
+                    paths = tuple(
+                        left + right for left in paths for right in relation_paths
+                    )
+                if not has_children:
+                    value = self.semiring.multiply(value, self.semiring.one)
+                    multiplications += 1
+                state_cache[reference] = (value, paths)
+                return value, paths
 
             for root in item_roots:
                 state = (root, coordinate)
                 root_states.append(state)
-                total = self.semiring.add(total, visit(root))
+                root_value, _root_paths = visit(root)
+                total = self.semiring.add(total, root_value)
                 additions += 1
             for reference in self._references():
                 visit(reference)
             all_values.extend(
-                ((reference, coordinate), cache[reference])
+                ((reference, coordinate), cache[reference][0])
                 for reference in self._references()
             )
-        complete = (
-            None if self.provenance_reader is None else self.provenance_reader(total)
-        )
+        complete = None
+        if self.witness_order is not None:
+            # Root provenance is accumulated independently from the carrier above.
+            selected_value, complete = cache[item_roots[0]]
+            for root in item_roots[1:]:
+                candidate_value, candidate_paths = cache[root]
+                complete = self._select_paths(
+                    selected_value, complete, candidate_value, candidate_paths
+                )
+                selected_value = self.semiring.add(selected_value, candidate_value)
         provenance = None if complete is None else complete[: self.output_cap]
         witness_count = 0 if complete is None else len(complete)
         cost = FoldCost(
             document_size=len(self.graph.canonical_items()),
-            relation_incidence=sum(len(children) for children in outgoing.values()),
+            relation_incidence=sum(
+                len(children)
+                for by_relation in outgoing.values()
+                for children in by_relation.values()
+            ),
             index_product_size=len(coordinates),
             carrier_additions=additions,
             carrier_multiplications=multiplications,
@@ -394,6 +496,25 @@ class FoldDeclaration[Value]:
             witness_count > self.output_cap,
             cost,
         )
+
+    def _select_paths(
+        self,
+        left_value: Value,
+        left_paths: Provenance,
+        right_value: Value,
+        right_paths: Provenance,
+    ) -> Provenance:
+        """Apply the declared witness ordering and executable tie policy."""
+        if self.witness_order is None:
+            return ()
+        comparison = self.witness_order(left_value, right_value)
+        if comparison < 0:
+            return left_paths
+        if comparison > 0:
+            return right_paths
+        if self.tie_policy is TiePolicy.CHOOSE_FIRST:
+            return left_paths
+        return tuple(dict.fromkeys((*left_paths, *right_paths)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,13 +533,14 @@ class FoldHomomorphism[Value, OtherValue]:
         if (
             self.source.graph != self.target.graph
             or self.source.valuation != self.target.valuation
-            or self.source.relations != self.target.relations
+            or self.source.transitions != self.target.transitions
             or self.source.index_axes != self.target.index_axes
             or self.source.roots != self.target.roots
         ):
             raise ValueError(
                 f"homomorphism {self.name!r} source and target structures differ"
             )
+        self.check()
 
     def commutes(self) -> bool:
         """Execute both folds and compare the mapped source with the target."""
@@ -448,14 +570,17 @@ def _state_data(state: State) -> dict[str, object]:
 
 __all__ = [
     "AttributeValuation",
+    "ChildCombination",
     "Coordinate",
     "FoldCost",
     "FoldDeclaration",
     "FoldHomomorphism",
     "FoldResult",
+    "FoldTransition",
     "Lift",
     "Path",
     "Provenance",
-    "ProvenanceReader",
+    "TiePolicy",
+    "WitnessOrder",
     "State",
 ]
