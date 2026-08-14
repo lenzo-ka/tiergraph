@@ -154,10 +154,10 @@ def test_refined_clock_mixed_tiers_extents_timing_and_relations_are_exact() -> N
     graph, profile = graph_and_clock()
     rendered = tiergraph_dot.dumps(graph, clock=profile)
     assert hashlib.sha256(rendered.encode()).hexdigest() == (
-        "bcd9151eca379669190882859a8eaab5202a6088e855a0ce1f1537530c1e0b0a"
+        "d4ceb8f02db0945494ebfde54319ce999c47acd883e42d781a21ca1279c7452f"
     )
     assert 'label="0.1"' in rendered
-    assert 'label="seg-0\\nstart=0.05\\nduration=0.15\\ntime=0.05+0.15 s"' in rendered
+    assert 'label="seg-0\\nduration=0.15\\nstart=0.05\\ntime=0.05+0.15 s"' in rendered
     assert 'item_1_0 -> guide_1_2 [xlabel="extent"' in rendered
     assert "subgraph tier_2" in rendered
     assert "clock_0 -> item_1_0" in rendered

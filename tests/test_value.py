@@ -364,7 +364,12 @@ def test_member_key_rules_and_numeric_leaves() -> None:
     double_graph, double_profile, double_root = json_value_graph(1.0)
     double_tier = double_graph.tiers[0]
     double_item = double_tier.items[0]
-    infinite = replace(double_item.attributes[1], lexical="INF")
+    double_value = next(
+        value
+        for value in double_item.attributes
+        if value.name == double_profile.double_attribute
+    )
+    infinite = replace(double_value, lexical="INF")
     infinite_graph = replace(
         double_graph,
         tiers=(
@@ -372,7 +377,11 @@ def test_member_key_rules_and_numeric_leaves() -> None:
                 double_tier,
                 items=(
                     replace(
-                        double_item, attributes=(double_item.attributes[0], infinite)
+                        double_item,
+                        attributes=tuple(
+                            infinite if value is double_value else value
+                            for value in double_item.attributes
+                        ),
                     ),
                 ),
             ),

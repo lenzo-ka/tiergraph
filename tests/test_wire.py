@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -51,11 +52,20 @@ def name(local: str) -> QualifiedName:
 def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     """Build a graph where incidental wire changes affect visible structure."""
     gain = AttributeDeclaration(name("gain"), AttributeDomain.ITEM, XsdType.DECIMAL)
+    item_label = AttributeDeclaration(
+        name("item-label"), AttributeDomain.ITEM, XsdType.STRING
+    )
     label = AttributeDeclaration(
         name("label"), AttributeDomain.DOCUMENT, XsdType.STRING
     )
+    revision = AttributeDeclaration(
+        name("revision"), AttributeDomain.DOCUMENT, XsdType.INTEGER
+    )
     marker = AttributeDeclaration(
         name("marker"), AttributeDomain.POSITION, XsdType.BOOLEAN
+    )
+    offset = AttributeDeclaration(
+        name("offset"), AttributeDomain.POSITION, XsdType.INTEGER
     )
     placements = name("placements")
     members = SimpleRelationDeclaration(name("members"), placements, name("event"))
@@ -78,8 +88,20 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     placements_tier = Tier(
         TierDeclaration(placements, "Placements"),
         (
-            Item("lead", (item_values["lead"],)),
-            Item("bed", (item_values["bed"],)),
+            Item(
+                "lead",
+                (
+                    item_values["lead"],
+                    AttributeValue(item_label.name, XsdType.STRING, "Lead"),
+                ),
+            ),
+            Item(
+                "bed",
+                (
+                    item_values["bed"],
+                    AttributeValue(item_label.name, XsdType.STRING, "Bed"),
+                ),
+            ),
         ),
     )
     notes = name("notes")
@@ -95,7 +117,14 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     relation_declarations: tuple[
         SimpleRelationDeclaration | BipartiteRelationDeclaration, ...
     ] = (members, cues)
-    attribute_declarations: tuple[AttributeDeclaration, ...] = (gain, label, marker)
+    attribute_declarations: tuple[AttributeDeclaration, ...] = (
+        gain,
+        item_label,
+        label,
+        revision,
+        marker,
+        offset,
+    )
     if reverse_unordered:
         namespaces = tuple(reversed(namespaces))
         relation_declarations = tuple(reversed(relation_declarations))
@@ -106,15 +135,55 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
         relation_declarations,
         (RelationInstance(cues.name, ItemRef(placements, 0), boundary, "cue-1"),),
         attribute_declarations,
-        (Position(boundary, (AttributeValue(marker.name, XsdType.BOOLEAN, "1"),)),),
-        (AttributeValue(label.name, XsdType.STRING, "mix α"),),
+        (
+            Position(
+                boundary,
+                (
+                    AttributeValue(marker.name, XsdType.BOOLEAN, "1"),
+                    AttributeValue(offset.name, XsdType.INTEGER, "1"),
+                ),
+            ),
+        ),
+        (
+            AttributeValue(label.name, XsdType.STRING, "mix α"),
+            AttributeValue(revision.name, XsdType.INTEGER, "1"),
+        ),
     )
 
 
 def canonical_variants() -> tuple[Graph, Graph]:
-    """Vary every declaration order and the sequence used to attach item values."""
-    left = rich_graph()
-    right = rich_graph(reverse_unordered=True)
+    """Reverse declarations and keyed values across multiple graph domains."""
+    baseline = rich_graph()
+    extra_position = Position(
+        PositionRef(name("placements"), 0),
+        tuple(
+            replace(value, lexical="0")
+            for value in baseline.position_values[0].attributes
+        ),
+    )
+    left = replace(
+        baseline, position_values=(*baseline.position_values, extra_position)
+    )
+    supplied = rich_graph(reverse_unordered=True)
+    right = replace(
+        supplied,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(
+                    replace(item, attributes=tuple(reversed(item.attributes)))
+                    for item in tier.items
+                ),
+                attributes=tuple(reversed(tier.attributes)),
+            )
+            for tier in supplied.tiers
+        ),
+        position_values=tuple(
+            replace(position, attributes=tuple(reversed(position.attributes)))
+            for position in reversed((*supplied.position_values, extra_position))
+        ),
+        attributes=tuple(reversed(supplied.attributes)),
+    )
     return left, right
 
 

@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
+from typing import Protocol
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -172,6 +173,10 @@ class SimpleRelationDeclaration:
     item_type: QualifiedName
     attributes: tuple[AttributeValue, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Canonicalize declaration attributes by their qualified names."""
+        _canonicalize_attributes(self)
+
     def to_data(self) -> dict[str, JsonValue]:
         """Return the declaration as JSON-serializable data."""
         return {
@@ -197,7 +202,8 @@ class BipartiteRelationDeclaration:
     attributes: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require structural promises to remain JSON booleans."""
+        """Canonicalize attributes and require JSON-boolean promises."""
+        _canonicalize_attributes(self)
         _require_boolean(self.single_parent, "single-parent promise")
         _require_boolean(self.acyclic, "acyclic promise")
 
@@ -227,7 +233,10 @@ class RelationSideDeclaration:
     allow_empty: bool = False
 
     def __post_init__(self) -> None:
-        """Refuse ambiguous sets and incoherent integral arity bounds."""
+        """Canonicalize allowed sets and refuse incoherent arity bounds."""
+        object.__setattr__(self, "endpoint_kinds", tuple(sorted(self.endpoint_kinds)))
+        if self.tiers is not None:
+            object.__setattr__(self, "tiers", tuple(sorted(self.tiers)))
         if not self.endpoint_kinds:
             raise ValueError("relation side endpoint kinds must not be empty")
         if len(set(self.endpoint_kinds)) != len(self.endpoint_kinds):
@@ -283,7 +292,8 @@ class PolyadicRelationDeclaration:
     attributes: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require every structural promise to be an actual JSON boolean."""
+        """Canonicalize attributes and require actual JSON-boolean promises."""
+        _canonicalize_attributes(self)
         for value, subject in (
             (self.unique_sources, "unique-sources promise"),
             (self.distinct_targets, "distinct-targets promise"),
@@ -325,7 +335,8 @@ class Item:
     attributes: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
-        """Refuse an empty durable identifier when one is carried."""
+        """Canonicalize attributes and refuse a carried empty durable id."""
+        _canonicalize_attributes(self)
         if self.durable_id is not None:
             _require_name(self.durable_id, "item durable id")
 
@@ -344,6 +355,10 @@ class Tier:
     declaration: TierDeclaration
     items: tuple[Item, ...] = ()
     attributes: tuple[AttributeValue, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Canonicalize tier attributes while retaining item order."""
+        _canonicalize_attributes(self)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the tier as JSON-serializable data."""
@@ -437,6 +452,10 @@ class Position:
     reference: PositionRef | DurablePositionRef
     attributes: tuple[AttributeValue, ...]
 
+    def __post_init__(self) -> None:
+        """Canonicalize the values attached to this boundary."""
+        _canonicalize_attributes(self)
+
     def to_data(self) -> dict[str, JsonValue]:
         """Return the position and its values as JSON-serializable data."""
         return {
@@ -456,7 +475,8 @@ class RelationInstance:
     attributes: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require a usable durable identifier when one is carried."""
+        """Canonicalize attributes and require a usable carried durable id."""
+        _canonicalize_attributes(self)
         if self.durable_id is not None:
             _require_name(self.durable_id, "relation instance durable id")
 
@@ -482,7 +502,8 @@ class PolyadicRelationInstance:
     attributes: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require a usable durable identifier when one is carried."""
+        """Canonicalize attributes and require a usable carried durable id."""
+        _canonicalize_attributes(self)
         if self.durable_id is not None:
             _require_name(self.durable_id, "relation instance durable id")
 
@@ -501,9 +522,11 @@ class PolyadicRelationInstance:
 class Graph:
     """Hold a validated immutable graph and derive order and empty boundaries.
 
-    Declaration collections are canonicalized because their supply order has no
-    graph meaning.  Tiers, tier items, and relation instances remain ordered:
-    relation instances may represent a meaningful sequence of children or links.
+    Collections keyed by names or references are canonicalized because supply
+    order has no graph meaning: namespaces, relation and attribute declarations,
+    every attribute-value collection, sparse position values, and relation-side
+    allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
+    endpoint sequences remain ordered because their sequence carries graph meaning.
     """
 
     namespaces: tuple[NamespaceDeclaration, ...]
@@ -526,7 +549,8 @@ class Graph:
     _items_by_id: dict[str, ItemRef] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Validate the graph, requiring one prefix per URI for canonical documents."""
+        """Canonicalize keyed collections and validate the complete graph."""
+        _canonicalize_attributes(self)
         object.__setattr__(
             self,
             "namespaces",
@@ -716,6 +740,17 @@ class Graph:
                 position.attributes, AttributeDomain.POSITION, attributes
             )
         positions_by_ref = _unique_by_name(positioned_values, "position value")
+        object.__setattr__(
+            self,
+            "position_values",
+            tuple(
+                position
+                for _, position in sorted(
+                    positioned_values,
+                    key=lambda entry: (entry[0].tier, entry[0].index),
+                )
+            ),
+        )
         _require_unique_durable_ids(durable_ids)
         _validate_relation_invariants(
             self.relations, bipartite, tiers_by_name, items_by_id
@@ -947,6 +982,18 @@ def _canonical_lexical(value_type: XsdType, lexical: str) -> str:
 
 def _attributes_data(attributes: tuple[AttributeValue, ...]) -> list[JsonValue]:
     return [attribute.to_data() for attribute in attributes]
+
+
+class _AttributeCarrier(Protocol):
+    @property
+    def attributes(self) -> tuple[AttributeValue, ...]: ...
+
+
+def _canonicalize_attributes(value: _AttributeCarrier) -> None:
+    attributes = value.attributes
+    object.__setattr__(
+        value, "attributes", tuple(sorted(attributes, key=lambda item: item.name))
+    )
 
 
 def _require_name(value: str, subject: str) -> None:
