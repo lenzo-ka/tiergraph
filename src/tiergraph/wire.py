@@ -31,6 +31,7 @@ from tiergraph.core import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.schema import DOCUMENT, GRAPH, object_fields
 
 FORMAT_VERSION = "1"
 
@@ -68,7 +69,7 @@ def loads(document: str | bytes) -> Graph:
     except UnicodeDecodeError as error:
         raise ValueError(f"parse UTF-8 failed: {error.reason}") from error
     root = _object(value, "document")
-    _keys(root, {"format_version", "graph"}, "document")
+    _keys(root, object_fields(DOCUMENT), "document")
     version = _string(root["format_version"], "format_version")
     if version != FORMAT_VERSION:
         raise ValueError(
@@ -78,16 +79,7 @@ def loads(document: str | bytes) -> Graph:
 
 
 def _graph(data: dict[str, object]) -> Graph:
-    fields = {
-        "namespaces",
-        "tiers",
-        "relation_declarations",
-        "relations",
-        "attribute_declarations",
-        "position_values",
-        "attributes",
-    }
-    _keys(data, fields, "graph")
+    _keys(data, object_fields(GRAPH), "graph")
     return Graph(
         tuple(
             NamespaceDeclaration(
