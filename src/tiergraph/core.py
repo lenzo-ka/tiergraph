@@ -1247,18 +1247,32 @@ def _validate_polyadic_invariants(
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
 ) -> None:
+    """Check promises on hyperedges without reducing composites to one factor.
+
+    A polyadic instance is one parent even when its source composite has several
+    endpoints. Membership, conversely, is the union of every base instance for
+    a source: no source-uniqueness promise is required of a membership base.
+    """
     grouped: dict[QualifiedName, list[tuple[int, PolyadicRelationInstance]]] = {
         name: [] for name in declarations
     }
     for index, relation in enumerate(relations):
         grouped[relation.declaration].append((index, relation))
-    by_source: dict[
+    first_source_instance: dict[tuple[QualifiedName, ItemRef | PositionRef], int] = {}
+    targets_by_source: dict[
         tuple[QualifiedName, ItemRef | PositionRef],
-        tuple[int, PolyadicRelationInstance],
+        set[ItemRef | PositionRef],
     ] = {}
     for name, declaration in declarations.items():
         resolved_edges: list[
             tuple[int, RelationInstance, ItemRef | PositionRef, ItemRef | PositionRef]
+        ] = []
+        resolved_instances: list[
+            tuple[
+                int,
+                tuple[ItemRef | PositionRef, ...],
+                tuple[ItemRef | PositionRef, ...],
+            ]
         ] = []
         for index, relation in grouped[name]:
             resolved_sources = tuple(
@@ -1275,15 +1289,17 @@ def _validate_polyadic_invariants(
                 raise ValueError(
                     f"relation instance {index} has duplicate declared-distinct targets"
                 )
+            resolved_instances.append((index, resolved_sources, resolved_targets))
             for source in resolved_sources:
                 key = (name, source)
-                previous = by_source.get(key)
+                previous = first_source_instance.get(key)
                 if declaration.unique_sources and previous is not None:
                     raise ValueError(
                         f"relation instance {index} repeats source {source.to_data()!r} in "
-                        f"unique-source relation {str(name)!r}; first used by relation instance {previous[0]}"
+                        f"unique-source relation {str(name)!r}; first used by relation instance {previous}"
                     )
-                by_source[key] = (index, relation)
+                first_source_instance.setdefault(key, index)
+                targets_by_source.setdefault(key, set()).update(resolved_targets)
             for source in resolved_sources:
                 for target in resolved_targets:
                     resolved_edges.append(
@@ -1297,15 +1313,19 @@ def _validate_polyadic_invariants(
                         )
                     )
         if declaration.single_parent:
-            parents: dict[ItemRef | PositionRef, tuple[int, ItemRef | PositionRef]] = {}
-            for index, _edge, source, target in resolved_edges:
-                poly_previous = parents.get(target)
-                if poly_previous is not None and poly_previous[1] != source:
-                    raise ValueError(
-                        f"relation instance {index} gives {target.to_data()!r} a second parent "
-                        f"in {str(name)!r}; first parent is relation instance {poly_previous[0]}"
-                    )
-                parents[target] = (index, source)
+            parents: dict[
+                ItemRef | PositionRef,
+                tuple[int, tuple[ItemRef | PositionRef, ...]],
+            ] = {}
+            for index, sources, targets in resolved_instances:
+                for target in targets:
+                    poly_previous = parents.get(target)
+                    if poly_previous is not None and poly_previous[1] != sources:
+                        raise ValueError(
+                            f"relation instance {index} gives {target.to_data()!r} a second parent "
+                            f"in {str(name)!r}; first parent is relation instance {poly_previous[0]}"
+                        )
+                    parents[target] = (index, sources)
         if declaration.acyclic:
             _require_acyclic(name, resolved_edges)
     for name, declaration in declarations.items():
@@ -1319,16 +1339,12 @@ def _validate_polyadic_invariants(
         for index, relation in grouped[name]:
             for source_ref in relation.sources:
                 source = _resolve_relation_endpoint(source_ref, tiers, items_by_id)
-                owner = by_source.get((declaration.targets_subset_of, source))
-                if owner is None:
+                allowed = targets_by_source.get((declaration.targets_subset_of, source))
+                if allowed is None:
                     raise ValueError(
                         f"relation instance {index} source {source.to_data()!r} has no "
                         f"{str(declaration.targets_subset_of)!r} membership relation"
                     )
-                allowed = {
-                    _resolve_relation_endpoint(endpoint, tiers, items_by_id)
-                    for endpoint in owner[1].targets
-                }
                 if any(
                     _resolve_relation_endpoint(endpoint, tiers, items_by_id)
                     not in allowed

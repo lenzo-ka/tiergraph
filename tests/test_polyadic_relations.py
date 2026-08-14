@@ -220,6 +220,55 @@ def test_membership_subset_accepts_neighbour_and_refuses_offender() -> None:
         )
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_membership_subset_unions_every_base_instance(reverse: bool) -> None:
+    """Membership is the order-independent union of same-source base targets."""
+    alternatives = declaration()
+    selects = PolyadicRelationDeclaration(
+        SELECTS,
+        side(tiers=(LEFT,), maximum=1),
+        side(tiers=(RIGHT,), maximum=1),
+        targets_subset_of=MEMBERS,
+    )
+    source = (ItemRef(LEFT, 0),)
+    bases: tuple[PolyadicRelationInstance, ...] = (
+        edge(source, (ItemRef(RIGHT, 0),)),
+        edge(source, (ItemRef(RIGHT, 1),)),
+    )
+    if reverse:
+        bases = tuple(reversed(bases))
+    for member in (ItemRef(RIGHT, 0), ItemRef(RIGHT, 1)):
+        assert graph(
+            (alternatives, selects),
+            (*bases, edge(source, (member,), SELECTS)),
+        )
+    with pytest.raises(ValueError, match=r"relation instance 2 has a target outside"):
+        graph(
+            (alternatives, selects),
+            (*bases, edge(source, (ItemRef(RIGHT, 2),), SELECTS)),
+        )
+
+
+def test_single_parent_counts_source_composite_once_per_instance() -> None:
+    """One hyperedge is one parent; a different source composite is another."""
+    same_tier = PolyadicRelationDeclaration(
+        MEMBERS,
+        side(tiers=(LEFT,), maximum=2),
+        side(tiers=(LEFT,), maximum=1),
+        single_parent=True,
+    )
+    composite = edge((ItemRef(LEFT, 0), ItemRef(LEFT, 1)), (ItemRef(LEFT, 0),))
+    assert graph((same_tier,), (composite,))
+    with pytest.raises(
+        ValueError,
+        match=r"relation instance 1 gives.*second parent.*relation instance 0",
+    ):
+        graph(
+            (same_tier,),
+            (composite, edge((ItemRef(LEFT, 1),), (ItemRef(LEFT, 0),))),
+        )
+
+
 def test_polyadic_acyclic_and_single_parent_refuse_named_offenders() -> None:
     """Composite invariant flags are checked on polyadic incidence itself."""
     same_tier = PolyadicRelationDeclaration(
