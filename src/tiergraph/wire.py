@@ -271,10 +271,11 @@ def _relation(
     data: dict[str, object], index: int
 ) -> RelationInstance | PolyadicRelationInstance:
     path = f"relations[{index}]"
-    durable = data["durable_id"]
-    if durable is not None:
-        durable = _string(durable, f"{path}.durable_id")
     if "sources" in data:
+        _keys(data, object_fields(DECLARATIONS["polyadic_relation_instance"]), path)
+        durable = data["durable_id"]
+        if durable is not None:
+            durable = _string(durable, f"{path}.durable_id")
         return PolyadicRelationInstance(
             _name(data["declaration"], f"{path}.declaration"),
             tuple(
@@ -292,6 +293,10 @@ def _relation(
             durable,
             _attributes(data["attributes"], f"{path}.attributes"),
         )
+    _keys(data, object_fields(DECLARATIONS["binary_relation_instance"]), path)
+    durable = data["durable_id"]
+    if durable is not None:
+        durable = _string(durable, f"{path}.durable_id")
     return RelationInstance(
         _name(data["declaration"], f"{path}.declaration"),
         _endpoint(data["left"], f"{path}.left"),
