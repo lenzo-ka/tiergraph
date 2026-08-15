@@ -19,7 +19,7 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 
 
 class WalkDirection(StrEnum):
-    """Choose the stored or inverse direction of a declared relation."""
+    """Choose the declared descending direction or its computed inverse view."""
 
     FORWARD = "forward"
     INVERSE = "inverse"
@@ -48,7 +48,10 @@ class Walk:
 
     A bounded walk stops after ``cap`` relation steps.  An unbounded walk is
     admitted only when graph construction has validated the declaration's
-    acyclicity promise.
+    acyclicity promise.  Forward access reads the stored relation and inverse
+    access computes its fiber over each selected item.  That fiber is a set:
+    deduplication is a consequence of relational inversion, not an accommodation
+    for any particular domain whose morphs happen to cross-cut.
     """
 
     source: NodeSet
@@ -103,7 +106,7 @@ class Walk:
         return WalkResult(reached, bool(frontier.nodes), self.cap)
 
     def _step(self, source: NodeSet) -> NodeSet:
-        """Follow one edge layer and normalize resolved endpoint identities."""
+        """Follow stored incidence forward or compute its inverse fiber."""
         graph = source.graph
         admitted = set(source.nodes)
         targets: list[Node] = []
