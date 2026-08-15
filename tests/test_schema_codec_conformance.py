@@ -34,12 +34,12 @@ def test_declaration_derived_schema_codec_acceptance() -> None:
     ]
 
 
-def test_every_live_divergence_is_reached_and_necessary() -> None:
+def test_every_live_divergence_is_reached_and_removal_exposes_drift() -> None:
     """Each subtraction rule matches real drift and removing it exposes drift."""
-    _assert_live_divergences_are_necessary(LIVE_DIVERGENCES)
+    _assert_live_divergences_are_reached(LIVE_DIVERGENCES)
 
 
-def _assert_live_divergences_are_necessary(
+def _assert_live_divergences_are_reached(
     divergences: tuple[DeclaredDivergence, ...],
 ) -> None:
     """Audit live rules against actual disagreements in the generated probes."""
@@ -64,7 +64,7 @@ def test_inert_live_divergence_fails_the_policy_audit() -> None:
     """Demonstrate that inflating the live policy with an inert entry fails."""
     inert = DeclaredDivergence("inert", r":mutation-that-does-not-exist$", "test")
     with pytest.raises(AssertionError, match="inert live divergence"):
-        _assert_live_divergences_are_necessary((*LIVE_DIVERGENCES, inert))
+        _assert_live_divergences_are_reached((*LIVE_DIVERGENCES, inert))
 
 
 def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:

@@ -9,8 +9,12 @@ value below), zero-fraction numbers, and valid and invalid edges of each declare
 lexical pattern.  A newly added field is populated from its declaration, then
 mutated, so field coverage does not require a hand-written case.
 
-The generated Draft 2020-12 schema and `wire.loads` are the two independent
-acceptance oracles. `schema.validation_errors` receives the same document as a
+The generated Draft 2020-12 schema and `wire.loads` are two acceptance oracles.
+They are independent on value, type, and enum semantics, where the codec
+hand-writes its checks, but share the `Shape` declarations that determine field
+structure. Consequently, agreement on missing and unknown fields is by
+construction rather than an independent cross-check. `schema.validation_errors`
+receives the same document as a
 third surface, but it shares the schema declaration and validation machinery; it
 agrees by construction rather than independently confirming the other two. Its
 value here is that a change cannot make it silently diverge unnoticed. Opposite
@@ -47,9 +51,12 @@ seconds.  The construction and diagnostic ordering use declaration order and
 explicit sorting, never set iteration order.
 
 The checked claim is therefore: for every declaration-derived mutation around
-the accepted witnesses, the independent schema and codec oracles agree except for
-a necessary live divergence, and the shared structural Python validation surface
-cannot differ from them unnoticed. This is not three-way independent
-triangulation. It is not a proof that schema validation is sufficient for codec
-acceptance for arbitrary graphs, nor a proof of all graph-wide semantic
-invariants.
+the accepted witnesses, the schema and codec oracles agree except for a live
+divergence. Each policy entry matches at least one observed drift, and removing
+it exposes at least one drift that it matched; the audit does not prove that its
+pattern is maximally tight. The oracles independently cross-check value, type,
+and enum semantics, share field structure, and the shared structural Python
+validation surface cannot differ from them unnoticed. This is not three-way
+independent triangulation. It is not a proof that schema validation is
+sufficient for codec acceptance for arbitrary graphs, nor a proof of all
+graph-wide semantic invariants.
