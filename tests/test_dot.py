@@ -193,6 +193,29 @@ def test_refined_clock_mixed_tiers_extents_timing_and_relations_are_exact() -> N
     )
 
 
+def test_clock_view_renders_are_accepted_by_graphviz() -> None:
+    """Graphviz accepts the full clock view, including carried hostile Unicode."""
+    graph, profile = graph_and_clock()
+    assert_graphviz_accepts(tiergraph_dot.dumps(graph, clock=profile))
+
+    hostile_graph = graph_with_durable_id(
+        "astral \U0001f642 bidi \u202e nonchar \ufdd0"
+    )
+    hostile_profile = ClockProfile(
+        hostile_graph,
+        name("clock"),
+        name("binding"),
+        None,
+        name("unit"),
+        name("tick"),
+        name("gap"),
+        name("untimed"),
+        name("start"),
+        name("duration"),
+    )
+    assert_graphviz_accepts(tiergraph_dot.dumps(hostile_graph, clock=hostile_profile))
+
+
 def test_bare_graph_and_empty_tier_policy() -> None:
     """Graphs need no profile, while referenced hidden tiers are loudly refused."""
     graph, _ = graph_and_clock()
