@@ -135,7 +135,8 @@ class ActionDeclaration[Carrier, Result]:
     ``associative``, ``idempotent``, and ``commutative`` are self-attested at
     declaration time. React uses them as normalization gates but does not prove
     them; callers can separately execute ``ActionToleranceLawSuite``. The
-    optional semimodule claim is likewise not automatically enforced.
+    An optional semimodule claim is checked over its declared finite samples
+    before the declaration can exist.
     """
 
     name: str
@@ -146,9 +147,179 @@ class ActionDeclaration[Carrier, Result]:
     semimodule: Semimodule[object, object] | None = None
 
     def __post_init__(self) -> None:
-        """Require a public name for declaration-time diagnostics."""
+        """Require a public name and validate any sampled algebraic claim."""
         if not self.name:
             raise ValueError("action name '' must not be empty")
+        self._validate_semimodule_claim()
+
+    def _validate_semimodule_claim(self) -> None:
+        """Validate the bound semimodule laws over its declared samples."""
+        law = self.semimodule
+        if law is None:
+            return
+        apply = cast(ActionFunction[object, object], self.apply)
+
+        def _require(actual: object, expected: object, description: str) -> None:
+            if actual != expected:
+                raise ValueError(
+                    f"action {self.name!r} semimodule claim violates {description}: "
+                    f"{actual!r} != {expected!r}"
+                )
+
+        _require(
+            law.module_add(law.module_zero, law.module_zero),
+            law.module_zero,
+            "module zero identity",
+        )
+        _require(
+            law.scale(law.scalar_one, law.module_zero),
+            law.module_zero,
+            "unit scalar on module zero",
+        )
+        for value in law.module_samples:
+            _require(
+                law.module_add(value, law.module_zero), value, "right module identity"
+            )
+            _require(
+                law.module_add(law.module_zero, value), value, "left module identity"
+            )
+            _require(law.scale(law.scalar_one, value), value, "unit scalar identity")
+            _require(
+                law.scale(law.scalar_zero, value),
+                law.module_zero,
+                "zero scalar annihilation",
+            )
+            for left in law.module_samples:
+                _require(
+                    law.module_add(value, left),
+                    law.module_add(left, value),
+                    "module commutativity",
+                )
+                for right in law.module_samples:
+                    _require(
+                        law.module_add(law.module_add(value, left), right),
+                        law.module_add(value, law.module_add(left, right)),
+                        "module associativity",
+                    )
+        for scalar in law.scalar_samples:
+            _require(
+                law.scalar_add(scalar, law.scalar_zero),
+                scalar,
+                "right scalar additive identity",
+            )
+            _require(
+                law.scalar_add(law.scalar_zero, scalar),
+                scalar,
+                "left scalar additive identity",
+            )
+            _require(
+                law.scalar_multiply(scalar, law.scalar_one),
+                scalar,
+                "right scalar multiplicative identity",
+            )
+            _require(
+                law.scalar_multiply(law.scalar_one, scalar),
+                scalar,
+                "left scalar multiplicative identity",
+            )
+            _require(
+                law.scalar_multiply(scalar, law.scalar_zero),
+                law.scalar_zero,
+                "right scalar zero annihilation",
+            )
+            _require(
+                law.scalar_multiply(law.scalar_zero, scalar),
+                law.scalar_zero,
+                "left scalar zero annihilation",
+            )
+            _require(
+                law.scale(scalar, law.module_zero),
+                law.module_zero,
+                "module zero scaling",
+            )
+            for value in law.module_samples:
+                expected = law.scale(scalar, value)
+                try:
+                    actual = apply(value, (scalar,))
+                except Exception as error:
+                    raise ValueError(
+                        f"action {self.name!r} does not implement its semimodule "
+                        f"scale for {scalar!r}, {value!r}"
+                    ) from error
+                _require(actual, expected, f"bound scale for {scalar!r}, {value!r}")
+            for left_scalar in law.scalar_samples:
+                _require(
+                    law.scalar_add(scalar, left_scalar),
+                    law.scalar_add(left_scalar, scalar),
+                    "scalar additive commutativity",
+                )
+                for right_scalar in law.scalar_samples:
+                    _require(
+                        law.scalar_add(
+                            law.scalar_add(scalar, left_scalar), right_scalar
+                        ),
+                        law.scalar_add(
+                            scalar, law.scalar_add(left_scalar, right_scalar)
+                        ),
+                        "scalar additive associativity",
+                    )
+                    _require(
+                        law.scalar_multiply(
+                            law.scalar_multiply(scalar, left_scalar), right_scalar
+                        ),
+                        law.scalar_multiply(
+                            scalar, law.scalar_multiply(left_scalar, right_scalar)
+                        ),
+                        "scalar multiplicative associativity",
+                    )
+                    _require(
+                        law.scalar_multiply(
+                            scalar, law.scalar_add(left_scalar, right_scalar)
+                        ),
+                        law.scalar_add(
+                            law.scalar_multiply(scalar, left_scalar),
+                            law.scalar_multiply(scalar, right_scalar),
+                        ),
+                        "left scalar distributivity",
+                    )
+                    _require(
+                        law.scalar_multiply(
+                            law.scalar_add(left_scalar, right_scalar), scalar
+                        ),
+                        law.scalar_add(
+                            law.scalar_multiply(left_scalar, scalar),
+                            law.scalar_multiply(right_scalar, scalar),
+                        ),
+                        "right scalar distributivity",
+                    )
+        for scalar in law.scalar_samples:
+            for left in law.module_samples:
+                for right in law.module_samples:
+                    _require(
+                        law.scale(scalar, law.module_add(left, right)),
+                        law.module_add(
+                            law.scale(scalar, left), law.scale(scalar, right)
+                        ),
+                        "scale distribution over module addition",
+                    )
+        for left_scalar in law.scalar_samples:
+            for right_scalar in law.scalar_samples:
+                for value in law.module_samples:
+                    _require(
+                        law.scale(law.scalar_add(left_scalar, right_scalar), value),
+                        law.module_add(
+                            law.scale(left_scalar, value),
+                            law.scale(right_scalar, value),
+                        ),
+                        "scale distribution over scalar addition",
+                    )
+                    _require(
+                        law.scale(
+                            law.scalar_multiply(left_scalar, right_scalar), value
+                        ),
+                        law.scale(left_scalar, law.scale(right_scalar, value)),
+                        "scale compatibility with scalar multiplication",
+                    )
 
 
 @dataclass(frozen=True, slots=True)
