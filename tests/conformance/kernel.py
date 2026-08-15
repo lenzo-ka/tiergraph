@@ -87,6 +87,18 @@ class KernelLawSuite:
         relation = BipartiteRelationDeclaration(
             self.name("contains"), self.name("syllable"), self.name("segment")
         )
+        self.build(
+            graph.namespaces,
+            graph.tiers,
+            (*graph.relation_declarations, relation),
+            (
+                RelationInstance(
+                    relation.name,
+                    ItemRef(self.name("syl"), 0),
+                    ItemRef(self.name("phon"), 0),
+                ),
+            ),
+        )
         self.assert_refuses(
             "relation instance 0 left endpoint",
             lambda: self.build(
@@ -171,6 +183,12 @@ class KernelLawSuite:
                 ItemRef(self.name("phon"), 1),
             ),
         )
+        self.build(
+            graph.namespaces,
+            graph.tiers,
+            (*graph.relation_declarations, relation),
+            edges[:1],
+        )
         self.assert_refuses(
             "relation instance 1",
             lambda: self.build(
@@ -201,6 +219,12 @@ class KernelLawSuite:
                 ItemRef(self.name("phon"), 1),
                 ItemRef(self.name("phon"), 0),
             ),
+        )
+        self.build(
+            graph.namespaces,
+            graph.tiers,
+            (*graph.relation_declarations, relation),
+            edges[:1],
         )
         self.assert_refuses(
             "relation instance 1",

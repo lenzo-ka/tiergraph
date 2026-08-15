@@ -1,0 +1,54 @@
+# Q-relation law audit
+
+Evidence tags in this report mean:
+
+- **[READ]**: established by reading the named implementation and test.
+- **[EXEC]**: established by an executed test (the final gate is recorded below).
+
+The audit question is always: if the stated property `P` is false, does the
+actual relation `R` still admit the witness? A declaration flag is part of `R`
+only when the law is explicitly conditional on that advertised capability.
+
+## Reusable conformance laws
+
+| Laws | Actual `R` | Counterexample admission and verdict |
+|---|---|---|
+| `KernelLawSuite.check_boundaries`, `check_json_data`, `check_attribute_domains` | Objects built by the supplied `GraphFactory`; no equality precondition. | A bad boundary count, non-JSON value, or rejected declared domain reaches its assertion. **Sound.** [READ: `tests/conformance/kernel.py`, `src/tiergraph/core.py`] [EXEC: `tests/test_core.py`, `tests/test_wire.py`] |
+| `KernelLawSuite.check_endpoint_type_refusal`, `check_single_parent_refusal`, `check_cycle_refusal` | A valid graph and one explicitly constructed malformed near-neighbour. | Refusal is observed directly; each nearest valid edge/path now constructs first, so refusal of everything cannot satisfy the law. **Sound, neighbour strengthened.** [READ: `tests/conformance/kernel.py`] [EXEC: `tests/test_core.py`] |
+| `WireLawSuite.check_round_trip`, `check_strict_json`, `check_canonical_read_back` | The supplied fixture, or its encode/decode image; no equality gate. | A lossy codec, nonstandard JSON, or unstable read-back is admitted and fails. **Sound.** [READ: `tests/conformance/wire.py`, `src/tiergraph/wire.py`] [EXEC: `tests/test_wire.py`] |
+| `WireLawSuite.check_presentation_variants_have_equal_bytes` | The pair returned by `canonical_variants`; the constructor's declared presentation variation is `R`. | Differing bytes are admitted even when derived `Graph.__eq__` is order-sensitive. **Corrected:** the former `left == right` domain check was removed. The discrimination pin makes equality false and bytes unequal, shows the former equality-quantified body is skipped, and shows the corrected law fail. [READ: `tests/conformance/wire.py`, `tests/test_wire.py`] [EXEC: `test_presentation_variant_law_does_not_delegate_its_domain_to_equality`] |
+| `WireLawSuite.check_ordered_graphs_have_different_bytes` | Explicit variants that reverse tier order or item order, both declared meaningful. | Equal bytes or equality is asserted against directly, not used as admission. **Sound.** [READ: `tests/conformance/wire.py`, `src/tiergraph/core.py`] [EXEC: `tests/test_wire.py`] |
+| `WireLawSuite.check_refusal` and wire near-miss tests | A valid serialized fixture with one named structural mutation. | Codec refusal is the property, not an equivalence filter; valid fixture round-trip is independently asserted by `check_round_trip`. **Sound.** [READ: `tests/conformance/wire.py`, `tests/test_wire.py`] [EXEC: `tests/test_wire.py`] |
+| `SchemaLawSuite` (all four checks) | Repeated calls to one generator, a deliberately changed declaration, or the codec fixture; byte equality is the conclusion. | Nondeterministic or shape-insensitive generation and fixture rejection all reach assertions. **Sound.** [READ: `tests/conformance/schema.py`, `tests/test_schema.py`] [EXEC: `tests/test_schema.py`] |
+| schema/codec conformance (`conformance_probes`, `undeclared_drifts`) | The exact same declaration-derived mutated document is submitted independently to JSON Schema, `validation_errors`, and `loads`; only an exact policy-listed divergence is subtracted. | A disagreement is appended before any cross-path equality can filter it. Harness mutants separately force false acceptance and false rejection. **Sound.** [READ: `tests/conformance/schema_codec.py`, `tests/test_schema_codec_conformance.py`] [EXEC: `tests/test_schema_codec_conformance.py`] |
+| `SelectionLawSuite` (all eight checks) | Explicit routes evaluated on the same graph; `NodeSet` equality is only a result comparison. | Wrong order, duplicate retention, set-operation errors, missing axes, bad anchors, or relation order reach assertions/refusals. Refusal checks construct near-valid peers first. **Sound.** [READ: `tests/conformance/selection.py`, `src/tiergraph/selection.py`] [EXEC: `tests/test_selection.py`] |
+| `TraversalLawSuite` (all six checks), including forward/inverse access | Explicit forward and inverse walks over the same stored diamond; reached-node equality is the conclusion. | Missing parents, order/deduplication errors, unsafe termination, and cap errors are admitted. Valid bounded and zero-cap neighbours accompany refusal guards. **Sound.** No separate ascending/descending fiber API exists in this tree; forward/inverse traversal is the nearest applicable law. [READ: `tests/conformance/traversal.py`, `src/tiergraph/traversal.py`] [EXEC: `tests/test_traversal.py`] |
+| `MachineLawSuite.check_primitive_trace_executes`, `check_as_built_is_fixed_point`, `check_deep_procedure_terminates`, `check_refusal_names_opcode`, `check_invalidity_classes`, `check_attach_value` | Explicit programs/traces supplied to the machine; no equality admission gate. | Reconstruction, termination, diagnostic, transition, and attachment defects reach checks. **Sound.** [READ: `tests/conformance/machine.py`, `src/tiergraph/machine.py`] [EXEC: `tests/test_machine.py`] |
+| `MachineLawSuite.check_procedures_lower_identically`, `check_fingerprint_ignores_source_procedure` | A `Repeat` program and its explicitly expanded primitive program; construction history differs by construction. | Graph equality and fingerprint equality are conclusions, never admission tests. A source-sensitive fingerprint is admitted and fails. **Sound.** [READ: `tests/conformance/machine.py`; declared `Program`/`AsBuilt` equality in `src/tiergraph/machine.py`] [EXEC: `tests/test_machine.py`] |
+| `FoldLawSuite` (all five checks) | Explicit oracle, alternate valuation, alternate semiring, inexact declaration, or declared homomorphism. | Independence/equality comparisons are conclusions; the homomorphism computes both sides before comparison. Bad values and maps reach assertions/refusal. **Sound.** [READ: `tests/conformance/recognition.py`, `src/tiergraph/fold.py`] [EXEC: `tests/test_fold.py`] |
+| `ActionLawSuite` (both checks) | Two explicitly supplied carriers, or transactional and one-for-one executions constructed from the same declaration. | Carrier/result disagreement is compared directly; equality does not select inputs. **Sound.** [READ: `tests/conformance/action.py`] [EXEC: `tests/test_action.py`] |
+| `SemimoduleLawSuite.check_laws` | The finite declared scalar/module samples under Python value equality; claim presence admits the suite. | Every sampled operand is iterated unconditionally. A detached valid module bound to the wrong action is explicitly rejected. **Sound for the declared sampled domain.** [READ: `tests/conformance/action.py`] [EXEC: `test_semimodule_claim_is_bound_to_its_action`] |
+| `ActionToleranceLawSuite.check_claims` | Explicit left/right yields when the corresponding associative, idempotent, or commutative flag is declared. | The flag selects the advertised law, but value equality only compares computed results. Mutants that falsely declare normalization tolerance are refused. **Sound.** [READ: `tests/conformance/action.py`, `tests/test_action.py`] [EXEC: `tests/test_action.py`] |
+
+## Semiring laws and equality-derived records
+
+| Laws | Actual `R` | Counterexample admission and verdict |
+|---|---|---|
+| Required associativity, commutativity, identities, annihilation, and distributivity in `tests/semiring_laws.py` | Hypothesis values drawn from each declared carrier; required approximate checks are explicit `LawCheck` functions, otherwise Python value equality. | Operands are drawn before comparison and no equality result filters them. Each required law has a rejecting mutant pin. **Sound for the generated carrier strategies.** [READ: `tests/semiring_laws.py`, `tests/test_semiring.py`] [EXEC: `tests/test_semiring_law_discrimination.py`] |
+| Optional idempotence, multiplicative commutativity, selectivity, strict order, zero-sum freedom, and no-zero-divisors | Declared capability flag plus generated operands; premises use the semiring operations and Python value equality that define these algebraic laws. | Counterexamples satisfying each premise reach the conclusion. Dedicated mutants establish discrimination, including premise-triggering cases. **Sound.** [READ: `tests/semiring_laws.py`] [EXEC: `tests/test_semiring_law_discrimination.py`] |
+| Kernel dataclass equality used elsewhere | Derived field equality for `Graph` and kernel records; `Program` and `AsBuilt` instead declare graph-denotational equality. Graph keyed fields and every attribute carrier are canonicalized in public `__post_init__`; meaningful tier/item/relation/endpoint sequences remain ordered. | Presentation-order counterexamples are admitted by construction in core canonicalization tests rather than selected by `==`; meaningful-order variants are explicitly required unequal. **Sound by construction**, except that the wire law's former equality admission was unsound and is corrected above. [READ: `src/tiergraph/core.py`, `src/tiergraph/machine.py`, `tests/test_core.py`] [EXEC: `tests/test_core.py`, `tests/test_machine.py`, `tests/test_wire.py`] |
+
+## Result
+
+One self-filtering relation was found and corrected: canonical wire bytes are now
+quantified over a constructed presentation-variant relation, not derived graph
+equality. Three kernel refusal laws gained their nearest valid neighbour. No
+other audited law uses the property-under-test to decide whether its witness is
+in domain.
+
+Final execution record: **[EXEC]** `PYTHONPATH=src make check
+VENV=../g-text/.venv` passed: Ruff lint and format, strict mypy, 496 tests with
+100% statement and branch coverage, three hash-seed determinism runs, schema
+verification, tracked-artifact cleanliness, and the docstring check. The shared
+interpreter was used because this host's `python3.12 -m venv` fails in
+`ensurepip`; `PYTHONPATH=src` binds all package imports to this worktree.

@@ -179,12 +179,19 @@ def canonical_variants() -> tuple[Graph, Graph]:
     extra_position = Position(
         PositionRef(name("placements"), 0),
         tuple(
-            replace(value, lexical="0")
+            AttributeValue(value.name, value.value_type, "0")
             for value in baseline.position_values[0].attributes
         ),
     )
-    left = replace(
-        baseline, position_values=(*baseline.position_values, extra_position)
+    left = Graph(
+        baseline.namespaces,
+        baseline.tiers,
+        baseline.relation_declarations,
+        baseline.relations,
+        baseline.attribute_declarations,
+        (*baseline.position_values, extra_position),
+        baseline.attributes,
+        baseline.polyadic_relations,
     )
     supplied_base = rich_graph(reverse_unordered=True)
     reversed_polyadic = PolyadicRelationDeclaration(
@@ -270,7 +277,7 @@ LAWS = WireLawSuite(dump_bytes, loads, rich_graph, canonical_variants, ordered_v
     "law",
     [
         LAWS.check_round_trip,
-        LAWS.check_equal_graphs_have_equal_bytes,
+        LAWS.check_presentation_variants_have_equal_bytes,
         LAWS.check_ordered_graphs_have_different_bytes,
         LAWS.check_strict_json,
         LAWS.check_canonical_read_back,
@@ -281,6 +288,27 @@ def test_wire_law(law: object) -> None:
     """Run each reusable law against the reference codec."""
     assert callable(law)
     law()
+
+
+def test_presentation_variant_law_does_not_delegate_its_domain_to_equality() -> None:
+    """Order-sensitive derived equality cannot hide a byte-level counterexample."""
+    left, right = canonical_variants()
+    object.__setattr__(right, "attributes", tuple(reversed(right.attributes)))
+    assert left != right
+
+    # This is the former equality-quantified domain: the counterexample is skipped.
+    if left == right:  # pragma: no cover - the skipped body is the demonstrated bug
+        assert dump_bytes(left) == dump_bytes(right)
+
+    mutant = WireLawSuite(
+        dump_bytes,
+        loads,
+        rich_graph,
+        lambda: (left, right),
+        ordered_variants,
+    )
+    with pytest.raises(AssertionError):
+        mutant.check_presentation_variants_have_equal_bytes()
 
 
 def mutable_document() -> dict[str, object]:
