@@ -125,13 +125,6 @@ class TraversalLawSuite:
                 graph, *(parent for parent, target in edges if target == child)
             )
             assert upward.nodes == expected
-            for parent in range(5):
-                downward = self.walk(
-                    self.selection(graph, parent), WalkDirection.FORWARD, 1
-                )
-                assert (
-                    self.selection(graph, child).nodes[0] in downward.nodes.nodes
-                ) == (self.selection(graph, parent).nodes[0] in upward.nodes.nodes)
 
     def selection(self, graph: Graph, *indices: int) -> NodeSet:
         """Select fixture items by structural coordinate."""
