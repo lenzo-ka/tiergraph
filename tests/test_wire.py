@@ -152,8 +152,30 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
 
 
 def canonical_variants() -> tuple[Graph, Graph]:
-    """Reverse declarations and keyed values across multiple graph domains."""
-    baseline = rich_graph()
+    """Reverse keyed binary and polyadic collections across graph domains."""
+    original = rich_graph()
+    polyadic = PolyadicRelationDeclaration(
+        name("groups"),
+        RelationSideDeclaration(
+            (RelationEndpointKind.BOUNDARY, RelationEndpointKind.ITEM),
+            (name("notes"), name("placements")),
+            1,
+        ),
+        RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (name("notes"), name("placements")), 1
+        ),
+    )
+    instance = PolyadicRelationInstance(
+        polyadic.name,
+        (ItemRef(name("placements"), 0),),
+        (ItemRef(name("notes"), 0),),
+        "group-1",
+    )
+    baseline = replace(
+        original,
+        relation_declarations=(*original.relation_declarations, polyadic),
+        polyadic_relations=(instance,),
+    )
     extra_position = Position(
         PositionRef(name("placements"), 0),
         tuple(
@@ -164,7 +186,30 @@ def canonical_variants() -> tuple[Graph, Graph]:
     left = replace(
         baseline, position_values=(*baseline.position_values, extra_position)
     )
-    supplied = rich_graph(reverse_unordered=True)
+    supplied_base = rich_graph(reverse_unordered=True)
+    reversed_polyadic = PolyadicRelationDeclaration(
+        polyadic.name,
+        RelationSideDeclaration(
+            tuple(reversed(polyadic.sources.endpoint_kinds)),
+            tuple(reversed((name("notes"), name("placements")))),
+            polyadic.sources.minimum,
+            polyadic.sources.maximum,
+        ),
+        RelationSideDeclaration(
+            polyadic.targets.endpoint_kinds,
+            tuple(reversed((name("notes"), name("placements")))),
+            polyadic.targets.minimum,
+            polyadic.targets.maximum,
+        ),
+    )
+    supplied = replace(
+        supplied_base,
+        relation_declarations=(
+            reversed_polyadic,
+            *supplied_base.relation_declarations,
+        ),
+        polyadic_relations=(instance,),
+    )
     right = replace(
         supplied,
         tiers=tuple(
