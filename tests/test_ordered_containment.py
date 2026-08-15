@@ -298,6 +298,91 @@ def test_runtime_endpoint_membership_refusal_names_corrupt_instance() -> None:
         traversal.direct_children(ItemRef(PARENTS, 0))
 
 
+@pytest.mark.parametrize(
+    "method_name", ["direct_children", "descendants", "leaves", "parents", "ancestors"]
+)
+def test_runtime_cycle_refusal_names_injected_closing_instance(
+    method_name: str,
+) -> None:
+    """A live acyclicity promise is checked against live incidence structure."""
+    tier_name = name("cycle-nodes")
+    contains = name("cycle-contains")
+    tier = Tier(
+        TierDeclaration(tier_name, "Cycle nodes"),
+        tuple(Item(str(index)) for index in range(3)),
+    )
+    relation = PolyadicRelationDeclaration(
+        contains,
+        RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), tiers=(tier_name,), maximum=1
+        ),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), tiers=(tier_name,)),
+        unique_sources=True,
+        acyclic=True,
+    )
+    instances = tuple(
+        PolyadicRelationInstance(
+            contains,
+            (ItemRef(tier_name, index),),
+            (ItemRef(tier_name, index + 1),),
+        )
+        for index in range(2)
+    )
+    value = Graph(
+        (NamespaceDeclaration("o", NS),),
+        (tier,),
+        (relation,),
+        polyadic_relations=instances,
+    )
+    traversal = OrderedContainment(value, contains)
+    closing = PolyadicRelationInstance(
+        contains, (ItemRef(tier_name, 2),), (ItemRef(tier_name, 0),)
+    )
+    object.__setattr__(value, "polyadic_relations", (*instances, closing))
+
+    with pytest.raises(ValueError, match=r"cycle-contains.*instance 2 closes a cycle"):
+        getattr(traversal, method_name)(ItemRef(tier_name, 0))
+
+
+def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
+    """Live incidence validation rechecks the declaration's empty-side contract."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(value.polyadic_relations[0], "targets", ())
+
+    with pytest.raises(ValueError, match=r"contains.*instance 0.*empty target side"):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+
+def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
+    """The explicit empty-side exception still bypasses ordinary arity bounds."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(traversal._declaration.targets, "allow_empty", True)
+    object.__setattr__(value.polyadic_relations[0], "targets", ())
+
+    assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes == ()
+
+
+@pytest.mark.parametrize(
+    ("bound_name", "bound", "instance_index", "arity"),
+    [("minimum", 3, 1, 2), ("maximum", 2, 0, 3)],
+)
+def test_runtime_arity_refusal_names_corrupt_instance_and_side(
+    bound_name: str, bound: int, instance_index: int, arity: int
+) -> None:
+    """Nonempty live sides must remain inside both declared arity bounds."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(traversal._declaration.targets, bound_name, bound)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"contains.*instance {instance_index} target arity {arity}.*bounds",
+    ):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+
 def test_runtime_validation_ignores_instances_of_other_relations() -> None:
     """The live index consumes only the selected relation's incidences."""
     value = graph()

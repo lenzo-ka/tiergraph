@@ -159,6 +159,7 @@ class OrderedContainment:
         items = set(self.graph.canonical_items())
         children: dict[ItemRef, tuple[ItemRef, ...]] = {}
         parents: dict[ItemRef, set[ItemRef]] = {}
+        outgoing: dict[ItemRef, list[tuple[int, ItemRef]]] = {}
         source_instances: dict[ItemRef, int] = {}
         for instance_index, instance in enumerate(self.graph.polyadic_relations):
             if instance.declaration != self.relation:
@@ -169,6 +170,23 @@ class OrderedContainment:
                 ("source", instance.sources, sources),
                 ("target", instance.targets, targets),
             ):
+                side = getattr(declaration, f"{side_name}s")
+                if not endpoints:
+                    if not side.allow_empty:
+                        raise ValueError(
+                            f"ordered containment relation {str(self.relation)!r} "
+                            f"instance {instance_index} has an empty {side_name} side"
+                        )
+                    continue
+                if len(endpoints) < side.minimum or (
+                    side.maximum is not None and len(endpoints) > side.maximum
+                ):
+                    raise ValueError(
+                        f"ordered containment relation {str(self.relation)!r} "
+                        f"instance {instance_index} {side_name} arity "
+                        f"{len(endpoints)} is outside declared bounds "
+                        f"{side.minimum}..{side.maximum}"
+                    )
                 for endpoint_index, endpoint in enumerate(endpoints):
                     if not isinstance(endpoint, ItemRef):
                         raise ValueError(
@@ -194,7 +212,33 @@ class OrderedContainment:
                 source_instances[source] = instance_index
                 children[source] = tuple(targets)
                 for target in targets:
+                    outgoing.setdefault(source, []).append((instance_index, target))
                     parents.setdefault(target, set()).add(source)
+        visited: set[ItemRef] = set()
+        for root in tuple(outgoing):
+            if root in visited:
+                continue
+            visiting: set[ItemRef] = {root}
+            stack: list[tuple[ItemRef, int]] = [(root, 0)]
+            while stack:
+                item, child_index = stack[-1]
+                direct = outgoing.get(item, [])
+                if child_index == len(direct):
+                    stack.pop()
+                    visiting.remove(item)
+                    visited.add(item)
+                    continue
+                instance_index, child = direct[child_index]
+                stack[-1] = (item, child_index + 1)
+                if child in visiting:
+                    raise ValueError(
+                        f"ordered containment relation {str(self.relation)!r} "
+                        f"instance {instance_index} closes a cycle at "
+                        f"{child.to_data()!r}"
+                    )
+                if child not in visited:
+                    visiting.add(child)
+                    stack.append((child, 0))
         return children, parents
 
     @staticmethod
