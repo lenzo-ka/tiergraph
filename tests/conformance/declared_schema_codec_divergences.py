@@ -1,9 +1,8 @@
-"""The complete machine-readable acceptance-path divergence policy.
+"""Live subtraction rules for declaration-derived acceptance probes.
 
-Entries describe constraints intentionally enforced by the codec but not by JSON
-Schema, plus the structural validator's expected decision. Adding a declared
-exception only changes this policy; the probe constructor and comparison harness
-do not contain exception branches.
+Every entry must suppress a disagreement that the generated probe space actually
+reaches.  Codec-only laws outside that space are design documentation, not live
+exceptions; see ``SCHEMA_CODEC_CONFORMANCE.md``.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ class DeclaredDivergence:
         return re.search(self.probe_pattern, probe_id) is not None
 
 
-DECLARED_DIVERGENCES = (
+LIVE_DIVERGENCES = (
     DeclaredDivergence(
         "integral JSON spelling",
         r":wrong-type-float$",
@@ -52,25 +51,5 @@ DECLARED_DIVERGENCES = (
         "position cardinality",
         r"\.(?:minimum:integer-2|maximum:integer-0)$",
         "relation-side bounds and instance cardinalities must be coherent",
-    ),
-    DeclaredDivergence(
-        "name and identity uniqueness",
-        r":duplicate-(?:name|tier|item|durable-id|position|relation)$",
-        "declaration, tier, item, durable-id, position, and relation identities are unique",
-    ),
-    DeclaredDivergence(
-        "one prefix per namespace URI",
-        r":duplicate-namespace-uri$",
-        "a canonical graph binds each namespace URI to one prefix",
-    ),
-    DeclaredDivergence(
-        "relation graph promises",
-        r":violate-(?:single-parent|acyclic|unique-sources|distinct-targets|targets-subset)$",
-        "cross-instance relation promises require whole-graph validation",
-    ),
-    DeclaredDivergence(
-        "nonempty positioned values",
-        r"\.position_values\[\d+\]\.attributes:empty-array$",
-        "empty boundaries are derived rather than serialized as positioned values",
     ),
 )
