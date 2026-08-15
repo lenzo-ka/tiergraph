@@ -119,6 +119,84 @@ class OrderedContainment:
             )
         return Node(NodeKind.ITEM, reference)
 
+    def _incidence(
+        self,
+    ) -> tuple[dict[ItemRef, tuple[ItemRef, ...]], dict[ItemRef, set[ItemRef]]]:
+        """Validate and index the live containment incidence for one operation."""
+        declaration = next(
+            (
+                candidate
+                for candidate in self.graph.relation_declarations
+                if candidate.name == self.relation
+            ),
+            None,
+        )
+        if not isinstance(declaration, PolyadicRelationDeclaration):
+            raise ValueError(
+                f"ordered containment relation {str(self.relation)!r} "
+                "no longer has a polyadic declaration"
+            )
+        item_only = (RelationEndpointKind.ITEM,)
+        if (
+            declaration.sources.endpoint_kinds != item_only
+            or declaration.targets.endpoint_kinds != item_only
+        ):
+            raise ValueError(
+                f"ordered containment relation {str(self.relation)!r} "
+                "no longer has item-only sides"
+            )
+        if not declaration.unique_sources:
+            raise ValueError(
+                f"ordered containment relation {str(self.relation)!r} "
+                "no longer guarantees source uniqueness"
+            )
+        if not declaration.acyclic:
+            raise ValueError(
+                f"ordered containment relation {str(self.relation)!r} "
+                "no longer guarantees declared acyclicity"
+            )
+
+        items = set(self.graph.canonical_items())
+        children: dict[ItemRef, tuple[ItemRef, ...]] = {}
+        parents: dict[ItemRef, set[ItemRef]] = {}
+        source_instances: dict[ItemRef, int] = {}
+        for instance_index, instance in enumerate(self.graph.polyadic_relations):
+            if instance.declaration != self.relation:
+                continue
+            sources: list[ItemRef] = []
+            targets: list[ItemRef] = []
+            for side_name, endpoints, result in (
+                ("source", instance.sources, sources),
+                ("target", instance.targets, targets),
+            ):
+                for endpoint_index, endpoint in enumerate(endpoints):
+                    if not isinstance(endpoint, ItemRef):
+                        raise ValueError(
+                            f"ordered containment relation {str(self.relation)!r} "
+                            f"instance {instance_index} {side_name} "
+                            f"{endpoint_index} is not an item"
+                        )
+                    if endpoint not in items:
+                        raise ValueError(
+                            f"ordered containment relation {str(self.relation)!r} "
+                            f"instance {instance_index} {side_name} "
+                            f"{endpoint.to_data()!r} is outside its graph"
+                        )
+                    result.append(endpoint)
+            for source in sources:
+                previous = source_instances.get(source)
+                if previous is not None:
+                    raise ValueError(
+                        f"ordered containment relation {str(self.relation)!r} "
+                        f"source {source.to_data()!r} occurs in instances "
+                        f"{previous} and {instance_index}, violating source uniqueness"
+                    )
+                source_instances[source] = instance_index
+                children[source] = tuple(targets)
+                for target in targets:
+                    parents.setdefault(target, set()).add(source)
+        return children, parents
+
     @staticmethod
     def _references(nodes: tuple[Node, ...]) -> tuple[ItemRef, ...]:
         return tuple(
@@ -128,62 +206,59 @@ class OrderedContainment:
     def direct_children(self, parent: ItemRef) -> NodeSequence:
         """Return direct children in declared target incidence order."""
         self._node(parent)
-        children: list[Node] = []
-        for instance in self.graph.polyadic_relations:
-            if instance.declaration == self.relation and parent in instance.sources:
-                children.extend(
-                    self._node(target)
-                    for target in instance.targets
-                    if isinstance(target, ItemRef)
-                )
-        return NodeSequence(self.graph, tuple(children))
+        children, _ = self._incidence()
+        return NodeSequence(
+            self.graph,
+            tuple(Node(NodeKind.ITEM, child) for child in children.get(parent, ())),
+        )
 
     def descendants(self, parent: ItemRef) -> NodeSequence:
         """Return descendants in depth-first pre-order, preserving repetition."""
         self._node(parent)
 
-        def descend(item: ItemRef) -> tuple[Node, ...]:
-            """Expand one item's ordered descendants recursively."""
-            result: list[Node] = []
-            for child in self._references(self.direct_children(item).nodes):
-                result.append(self._node(child))
-                result.extend(descend(child))
-            return tuple(result)
-
-        return NodeSequence(self.graph, descend(parent))
+        children, _ = self._incidence()
+        result: list[Node] = []
+        stack = list(reversed(children.get(parent, ())))
+        while stack:
+            child = stack.pop()
+            result.append(Node(NodeKind.ITEM, child))
+            stack.extend(reversed(children.get(child, ())))
+        return NodeSequence(self.graph, tuple(result))
 
     def leaves(self, parent: ItemRef) -> NodeSequence:
         """Return descendant leaves, or the source itself when it has no children."""
         self._node(parent)
 
-        def descend(item: ItemRef) -> tuple[Node, ...]:
-            """Expand one item's ordered leaves recursively."""
-            children = self._references(self.direct_children(item).nodes)
-            if not children:
-                return (self._node(item),)
-            return tuple(node for child in children for node in descend(child))
-
-        return NodeSequence(self.graph, descend(parent))
+        children, _ = self._incidence()
+        result: list[Node] = []
+        stack = [parent]
+        while stack:
+            item = stack.pop()
+            direct = children.get(item, ())
+            if direct:
+                stack.extend(reversed(direct))
+            else:
+                result.append(Node(NodeKind.ITEM, item))
+        return NodeSequence(self.graph, tuple(result))
 
     def parents(self, child: ItemRef) -> NodeSet:
         """Return the canonical set-valued inverse fiber over one child."""
         self._node(child)
+        _, parents = self._incidence()
         return NodeSet(
             self.graph,
-            tuple(
-                self._node(source)
-                for instance in self.graph.polyadic_relations
-                if instance.declaration == self.relation and child in instance.targets
-                for source in instance.sources
-                if isinstance(source, ItemRef)
-            ),
+            tuple(Node(NodeKind.ITEM, source) for source in parents.get(child, set())),
         )
 
     def ancestors(self, child: ItemRef) -> NodeSet:
         """Return the transitive inverse fiber as a canonical reachable set."""
         self._node(child)
+        _, parents = self._incidence()
         reached = NodeSet(self.graph, ())
-        frontier = self.parents(child)
+        frontier = NodeSet(
+            self.graph,
+            tuple(Node(NodeKind.ITEM, parent) for parent in parents.get(child, set())),
+        )
         while frontier.nodes:
             fresh = frontier - reached
             if not fresh.nodes:
@@ -192,9 +267,9 @@ class OrderedContainment:
             frontier = NodeSet(
                 self.graph,
                 tuple(
-                    parent
+                    Node(NodeKind.ITEM, parent)
                     for item in self._references(fresh.nodes)
-                    for parent in self.parents(item).nodes
+                    for parent in parents.get(item, set())
                 ),
             )
         return reached
