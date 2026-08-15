@@ -8,7 +8,10 @@ from typing import cast
 import pytest
 
 from tests.conformance import schema_codec as harness_module
-from tests.conformance.declared_schema_codec_divergences import DeclaredDivergence
+from tests.conformance.declared_schema_codec_divergences import (
+    LIVE_DIVERGENCES,
+    DeclaredDivergence,
+)
 from tests.conformance.schema_codec import conformance_probes, undeclared_drifts
 from tests.test_wire import polyadic_document, rich_graph
 from tiergraph import wire as wire_module
@@ -29,6 +32,39 @@ def test_declaration_derived_schema_codec_acceptance() -> None:
         )
         for drift in drifts
     ]
+
+
+def test_every_live_divergence_is_reached_and_necessary() -> None:
+    """Each subtraction rule matches real drift and removing it exposes drift."""
+    _assert_live_divergences_are_necessary(LIVE_DIVERGENCES)
+
+
+def _assert_live_divergences_are_necessary(
+    divergences: tuple[DeclaredDivergence, ...],
+) -> None:
+    """Audit live rules against actual disagreements in the generated probes."""
+    probes = conformance_probes(_seeds(), DOCUMENT)
+    raw_drifts = undeclared_drifts(probes, ())
+    for divergence in divergences:
+        matching = tuple(
+            drift
+            for drift in raw_drifts
+            if divergence.matches(drift.probe.id)
+            and drift.schema_accepts
+            and divergence.validation_accepts
+            == (drift.validation_diagnostic == "accepted")
+        )
+        assert matching, f"inert live divergence: {divergence.name}"
+        without = tuple(item for item in divergences if item is not divergence)
+        surfaced = undeclared_drifts(tuple(drift.probe for drift in matching), without)
+        assert any(drift in surfaced for drift in matching), divergence.name
+
+
+def test_inert_live_divergence_fails_the_policy_audit() -> None:
+    """Demonstrate that inflating the live policy with an inert entry fails."""
+    inert = DeclaredDivergence("inert", r":mutation-that-does-not-exist$", "test")
+    with pytest.raises(AssertionError, match="inert live divergence"):
+        _assert_live_divergences_are_necessary((*LIVE_DIVERGENCES, inert))
 
 
 def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
@@ -101,30 +137,23 @@ def test_new_declared_field_is_covered_without_a_handwritten_probe() -> None:
         object.__setattr__(TIER, "fields", original)
 
 
-def test_declared_divergence_is_data_not_harness_logic(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_declared_divergence_is_data_not_harness_logic() -> None:
     """Adding a policy entry changes classification without changing the harness."""
     float_probe = next(
         probe
         for probe in conformance_probes(_seeds(), DOCUMENT)
         if probe.id.endswith(".left.index:wrong-type-float")
     )
-    monkeypatch.setattr(harness_module, "DECLARED_DIVERGENCES", ())
-    assert undeclared_drifts((float_probe,))
-    monkeypatch.setattr(
-        harness_module,
-        "DECLARED_DIVERGENCES",
-        (
-            DeclaredDivergence(
-                "test addition",
-                r":wrong-type-float$",
-                "machine-readable policy",
-                validation_accepts=False,
-            ),
+    assert undeclared_drifts((float_probe,), ())
+    policy = (
+        DeclaredDivergence(
+            "test addition",
+            r":wrong-type-float$",
+            "machine-readable policy",
+            validation_accepts=False,
         ),
     )
-    assert not undeclared_drifts((float_probe,))
+    assert not undeclared_drifts((float_probe,), policy)
 
 
 def test_harness_finds_validation_error_false_rejection(

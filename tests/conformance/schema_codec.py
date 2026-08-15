@@ -10,7 +10,8 @@ from typing import cast
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from tests.conformance.declared_schema_codec_divergences import (
-    DECLARED_DIVERGENCES,
+    LIVE_DIVERGENCES,
+    DeclaredDivergence,
 )
 from tiergraph.core import JsonValue
 from tiergraph.schema import (
@@ -56,7 +57,10 @@ class Drift:
     validation_diagnostic: str
 
 
-def undeclared_drifts(probes: tuple[Probe, ...]) -> tuple[Drift, ...]:
+def undeclared_drifts(
+    probes: tuple[Probe, ...],
+    divergences: tuple[DeclaredDivergence, ...] = LIVE_DIVERGENCES,
+) -> tuple[Drift, ...]:
     """Compare all acceptance paths and subtract only policy-listed divergence."""
     validator = Draft202012Validator(json_schema(FORMAT_VERSION))
     result: list[Drift] = []
@@ -103,7 +107,7 @@ def undeclared_drifts(probes: tuple[Probe, ...]) -> tuple[Drift, ...]:
             and any(
                 divergence.matches(probe.id)
                 and validation_accepts is divergence.validation_accepts
-                for divergence in DECLARED_DIVERGENCES
+                for divergence in divergences
             )
         )
         if not declared:
