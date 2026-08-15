@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from itertools import combinations, product
 
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
-    AttributeValuation,
     AttributeValue,
     BipartiteRelationDeclaration,
-    ChildCombination,
-    FoldDeclaration,
-    FoldTransition,
     Graph,
     Item,
     ItemRef,
@@ -93,7 +90,7 @@ VERSE_RANGES = (
 
 
 def _items(prefix: str, size: int) -> tuple[Item, ...]:
-    """Construct counted domain items with durable source-facing labels."""
+    """Construct counted domain items with durable mnemonic labels."""
     return tuple(
         Item(
             f"{prefix}-{index}",
@@ -106,7 +103,7 @@ def _items(prefix: str, size: int) -> tuple[Item, ...]:
 def _coverage(
     tier: QualifiedName, ranges: tuple[tuple[int, int], ...]
 ) -> Iterable[RelationInstance]:
-    """Expand one hierarchy's source-derived membership as graph edges."""
+    """Expand one author-constructed hierarchy as graph membership edges."""
     for span_index, (start, stop) in enumerate(ranges):
         for text_index in range(start, stop):
             yield RelationInstance(
@@ -116,8 +113,12 @@ def _coverage(
             )
 
 
-def fixture() -> Graph:
-    """Build two ordered Hamlet windows around real Folger page crossings."""
+def fixture(
+    page_ranges: tuple[tuple[int, int], ...] = PAGE_RANGES,
+    sentence_ranges: tuple[tuple[int, int], ...] = SENTENCE_RANGES,
+    verse_ranges: tuple[tuple[int, int], ...] = VERSE_RANGES,
+) -> Graph:
+    """Build an author-constructed witness for overlapping text structures."""
     tiers = (
         Tier(
             TierDeclaration(TEXT, "Boundary atoms"),
@@ -129,9 +130,12 @@ def fixture() -> Graph:
                 for durable_id in TEXT_IDS
             ),
         ),
-        Tier(TierDeclaration(PAGE, "Print pages"), _items("page", 6)),
-        Tier(TierDeclaration(SENTENCE, "Sentences"), _items("sentence", 9)),
-        Tier(TierDeclaration(VERSE, "Verse lines"), _items("verse", 9)),
+        Tier(TierDeclaration(PAGE, "Print pages"), _items("page", len(page_ranges))),
+        Tier(
+            TierDeclaration(SENTENCE, "Sentences"),
+            _items("sentence", len(sentence_ranges)),
+        ),
+        Tier(TierDeclaration(VERSE, "Verse lines"), _items("verse", len(verse_ranges))),
     )
     declarations = (
         SimpleRelationDeclaration(TEXT_MEMBERS, TEXT, TEXT_TYPE),
@@ -148,9 +152,9 @@ def fixture() -> Graph:
     relations = tuple(
         relation
         for tier, ranges in (
-            (PAGE, PAGE_RANGES),
-            (SENTENCE, SENTENCE_RANGES),
-            (VERSE, VERSE_RANGES),
+            (PAGE, page_ranges),
+            (SENTENCE, sentence_ranges),
+            (VERSE, verse_ranges),
         )
         for relation in _coverage(tier, ranges)
     )
@@ -163,55 +167,78 @@ def fixture() -> Graph:
     )
 
 
-def _crosses(left: tuple[int, int], right: tuple[int, int]) -> bool:
-    """Return whether two half-open ranges overlap without containment."""
-    left_start, left_stop = left
-    right_start, right_stop = right
-    return (
-        left_start < right_start < left_stop < right_stop
-        or right_start < left_start < right_stop < left_stop
+def _span_members(graph: Graph, tier: QualifiedName) -> tuple[frozenset[int], ...]:
+    """Read a hierarchy's text membership back from graph relations."""
+    span_count = next(
+        len(candidate.items)
+        for candidate in graph.tiers
+        if candidate.declaration.name == tier
     )
+    members = [set[int]() for _ in range(span_count)]
+    for relation in graph.relations:
+        if (
+            relation.declaration == COVERED_BY
+            and isinstance(relation.left, ItemRef)
+            and isinstance(relation.right, ItemRef)
+            and relation.left.tier == TEXT
+            and relation.right.tier == tier
+        ):
+            members[relation.right.index].add(relation.left.index)
+    return tuple(frozenset(span) for span in members)
 
 
-def test_source_structures_cross_and_a_tree_would_duplicate_content() -> None:
-    """The fixture proves page/verse and sentence/verse crossings explicitly."""
+def _crosses(left: frozenset[int], right: frozenset[int]) -> bool:
+    """Return whether two graph-read memberships overlap without containment."""
+    return bool(left & right) and not left <= right and not right <= left
+
+
+def _crossing_pairs(
+    graph: Graph,
+) -> set[tuple[QualifiedName, int, QualifiedName, int]]:
+    """Return every cross-hierarchy span pair that crosses in the composite."""
+    pairs: set[tuple[QualifiedName, int, QualifiedName, int]] = set()
+    for left_tier, right_tier in combinations((PAGE, SENTENCE, VERSE), 2):
+        for (left_index, left), (right_index, right) in product(
+            enumerate(_span_members(graph, left_tier)),
+            enumerate(_span_members(graph, right_tier)),
+        ):
+            if _crosses(left, right):
+                pairs.add((left_tier, left_index, right_tier, right_index))
+    return pairs
+
+
+def _crossing_count_fold(graph: Graph) -> int:
+    """Fold graph-read crossing indicators with the counting semiring's addition."""
+    result = COUNTING.zero
+    for _pair in _crossing_pairs(graph):
+        result = COUNTING.add(result, COUNTING.one)
+    return result
+
+
+def test_composite_memberships_exhibit_all_authored_crossings() -> None:
+    """Crossings are asserted on memberships read from the graph, not range tuples."""
     graph = fixture()
-    assert _crosses(PAGE_RANGES[0], VERSE_RANGES[2])
-    assert _crosses(SENTENCE_RANGES[0], VERSE_RANGES[2])
-    assert _crosses(PAGE_RANGES[2], SENTENCE_RANGES[4])
-    assert _crosses(PAGE_RANGES[4], VERSE_RANGES[7])
-    assert _crosses(SENTENCE_RANGES[8], VERSE_RANGES[7])
-
-    verse = ItemRef(VERSE, 2)
-    verse_members = {
-        relation.left for relation in graph.relations if relation.right == verse
+    assert _crossing_pairs(graph) == {
+        (PAGE, 2, SENTENCE, 4),
+        (PAGE, 0, VERSE, 2),
+        (PAGE, 1, VERSE, 2),
+        (PAGE, 4, VERSE, 7),
+        (PAGE, 5, VERSE, 7),
+        (SENTENCE, 0, VERSE, 2),
+        (SENTENCE, 4, VERSE, 4),
+        (SENTENCE, 8, VERSE, 7),
     }
-    assert verse_members == {ItemRef(TEXT, 2), ItemRef(TEXT, 3)}
-    assert ItemRef(TEXT, 2) in verse_members
-    assert ItemRef(TEXT, 3) in verse_members
-    # A tree rooted in pages must split this one verse and duplicate its identity.
-    assert PAGE_RANGES[0][1] == 3 == PAGE_RANGES[1][0]
+    assert _span_members(graph, VERSE)[2] == frozenset((2, 3))
+    assert _span_members(graph, PAGE)[0] == frozenset((0, 1, 2))
+    assert _span_members(graph, PAGE)[1] == frozenset((3, 4))
 
 
-def test_counting_fold_answers_cross_hierarchy_coverage_by_hand() -> None:
-    """Counting uses (+, *, 0, 1); thirteen atoms have three memberships each."""
-    graph = fixture()
-    declaration = FoldDeclaration(
-        "cross-hierarchy coverage",
-        graph,
-        AttributeValuation(
-            "unit count",
-            COUNT,
-            (TEXT, PAGE, SENTENCE, VERSE),
-        ),
-        COUNTING,
-        lambda value, _label: int(value),
-        (FoldTransition(COVERED_BY, ChildCombination.OR),),
-        roots=tuple(ItemRef(TEXT, index) for index in range(len(TEXT_IDS))),
-    )
-    result = declaration.run()
+def test_crossing_fold_distinguishes_overlapping_from_nested_memberships() -> None:
+    """Eight hand-enumerated crossings disappear when all partitions coincide."""
+    overlapping = fixture()
+    nested = fixture(PAGE_RANGES, PAGE_RANGES, PAGE_RANGES)
 
-    assert result.value == 39
-    root_values = dict(result.values)
-    assert tuple(root_values[(root, ())] for root in declaration.roots) == (3,) * 13
-    assert result.provenance is None
+    # Overlapping: page/sentence 1 + page/verse 4 + sentence/verse 3 = 8.
+    assert _crossing_count_fold(overlapping) == 1 + 4 + 3 == 8
+    # Nested: the three hierarchies share six extents, so no pair partially overlaps.
+    assert _crossing_count_fold(nested) == 0
