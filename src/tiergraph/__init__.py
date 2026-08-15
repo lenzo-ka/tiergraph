@@ -82,7 +82,13 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
-from tiergraph.traversal import Walk, WalkDirection, WalkResult
+from tiergraph.traversal import (
+    NodeSequence,
+    OrderedContainment,
+    Walk,
+    WalkDirection,
+    WalkResult,
+)
 from tiergraph.value import JsonValueProfile, json_value_graph
 from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
@@ -130,6 +136,8 @@ __all__ = [
     "Node",
     "NodeKind",
     "NodeSet",
+    "NodeSequence",
+    "OrderedContainment",
     "OrderedRootsProfile",
     "Position",
     "PositionRef",
