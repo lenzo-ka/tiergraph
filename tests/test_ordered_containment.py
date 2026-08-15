@@ -6,6 +6,9 @@ import pytest
 
 from tiergraph import (
     BipartiteRelationDeclaration,
+    BoundarySide,
+    DurableItemRef,
+    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -170,3 +173,135 @@ def test_item_refusal_names_offender_beside_valid_neighbour() -> None:
     offender = ItemRef(name("missing-tier"), 7)
     with pytest.raises(ValueError, match=r"missing-tier.*7.*outside"):
         traversal.direct_children(offender)
+
+
+def test_deep_containment_walks_are_iterative_in_both_directions() -> None:
+    """All transitive containment walks admit the kernel's supported depth."""
+    item_count = 1500
+    tier_name = name("deep-nodes")
+    deep_contains = name("deep-contains")
+    tier = Tier(
+        TierDeclaration(tier_name, "Deep nodes"),
+        tuple(Item(str(index)) for index in range(item_count)),
+    )
+    relation = PolyadicRelationDeclaration(
+        deep_contains,
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), tiers=(tier_name,)),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), tiers=(tier_name,)),
+        unique_sources=True,
+        acyclic=True,
+    )
+    instances = tuple(
+        PolyadicRelationInstance(
+            deep_contains,
+            (ItemRef(tier_name, index),),
+            (ItemRef(tier_name, index + 1),),
+        )
+        for index in range(item_count - 1)
+    )
+    value = Graph(
+        (NamespaceDeclaration("o", NS),),
+        (tier,),
+        (relation,),
+        polyadic_relations=instances,
+    )
+    traversal = OrderedContainment(value, deep_contains)
+    first = ItemRef(tier_name, 0)
+    last = ItemRef(tier_name, item_count - 1)
+
+    assert len(traversal.descendants(first).nodes) == item_count - 1
+    assert traversal.leaves(first).nodes == nodes(last)
+    assert traversal.parents(last).nodes == nodes(ItemRef(tier_name, item_count - 2))
+    assert len(traversal.ancestors(last).nodes) == item_count - 1
+
+
+def test_runtime_endpoint_kind_refusal_names_corrupt_instance() -> None:
+    """Traversal never narrows a corrupt item-only incidence by filtering it."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    instance = value.polyadic_relations[0]
+    boundary = DurablePositionRef(DurableItemRef("root"), BoundarySide.AFTER)
+    object.__setattr__(instance, "targets", (*instance.targets, boundary))
+
+    with pytest.raises(ValueError, match=r"contains.*instance 0 target 3.*not an item"):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_runtime_source_uniqueness_refusal_is_independent_of_instance_order(
+    reverse: bool,
+) -> None:
+    """Corrupt duplicate source fibers refuse instead of gaining tuple semantics."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    root = ItemRef(PARENTS, 0)
+    duplicate = PolyadicRelationInstance(CONTAINS, (root,), (ItemRef(CHILDREN, 0),))
+    instances = (*value.polyadic_relations, duplicate)
+    object.__setattr__(
+        value,
+        "polyadic_relations",
+        tuple(reversed(instances)) if reverse else instances,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"contains.*source.*index.*0.*instances.*violating"
+    ):
+        traversal.direct_children(root)
+
+
+def test_runtime_declaration_refusal_applies_to_existing_traversal() -> None:
+    """A cached traversal rechecks the live safety promise on every operation."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(traversal._declaration, "acyclic", False)
+
+    with pytest.raises(ValueError, match=r"contains.*no longer.*acyclicity"):
+        traversal.descendants(ItemRef(PARENTS, 0))
+
+
+def test_runtime_refuses_every_live_declaration_dependency() -> None:
+    """Replacement and mutation of each consumed declaration fact are refused."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(
+        value,
+        "relation_declarations",
+        tuple(item for item in value.relation_declarations if item.name != CONTAINS),
+    )
+    with pytest.raises(ValueError, match=r"contains.*no longer.*polyadic"):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+    for side_name in ("sources", "targets"):
+        value = graph()
+        traversal = OrderedContainment(value, CONTAINS)
+        side = getattr(traversal._declaration, side_name)
+        object.__setattr__(side, "endpoint_kinds", (RelationEndpointKind.BOUNDARY,))
+        with pytest.raises(ValueError, match=r"contains.*no longer.*item-only"):
+            traversal.direct_children(ItemRef(PARENTS, 0))
+
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(traversal._declaration, "unique_sources", False)
+    with pytest.raises(ValueError, match=r"contains.*no longer.*source uniqueness"):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+
+def test_runtime_endpoint_membership_refusal_names_corrupt_instance() -> None:
+    """Item-shaped endpoints must still belong to the traversed graph."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    instance = value.polyadic_relations[0]
+    outside = ItemRef(name("missing-tier"), 7)
+    object.__setattr__(instance, "targets", (*instance.targets, outside))
+
+    with pytest.raises(ValueError, match=r"instance 0 target.*missing-tier.*outside"):
+        traversal.direct_children(ItemRef(PARENTS, 0))
+
+
+def test_runtime_validation_ignores_instances_of_other_relations() -> None:
+    """The live index consumes only the selected relation's incidences."""
+    value = graph()
+    traversal = OrderedContainment(value, CONTAINS)
+    object.__setattr__(value.polyadic_relations[1], "declaration", name("other"))
+
+    assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes
