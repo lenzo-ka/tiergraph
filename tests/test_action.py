@@ -84,7 +84,6 @@ MIX = ActionDeclaration[object, object](
     associative=True,
     idempotent=False,
     commutative=True,
-    semimodule=GAIN_MODULE,
 )
 CHAIN = ActionDeclaration[object, object](
     "effect-chain", append, associative=True, idempotent=False, commutative=False
@@ -137,11 +136,37 @@ def test_action_laws() -> None:
     suite.check_one_for_one_equivalence()
 
 
-def test_semimodule_laws_are_conditional_on_the_claim() -> None:
-    """A matching claimed action is checked while an ordered chain makes no claim."""
-    assert SCALE.semimodule is not None
-    SemimoduleLawSuite(SCALE).check_laws()
+def semimodule_claiming_actions() -> tuple[ActionDeclaration[object, object], ...]:
+    """Discover every module-level action that advertises a semimodule."""
+    return tuple(
+        sorted(
+            (
+                value
+                for value in globals().values()
+                if isinstance(value, ActionDeclaration) and value.semimodule is not None
+            ),
+            key=lambda action: action.name,
+        )
+    )
+
+
+def test_every_declared_semimodule_claim_satisfies_bound_laws() -> None:
+    """Discover and execute the suite for every action carrying the claim."""
+    claiming_actions = semimodule_claiming_actions()
+    assert claiming_actions
+    for action in claiming_actions:
+        SemimoduleLawSuite(action).check_laws()
     assert CHAIN.semimodule is None
+
+
+def test_gain_mix_does_not_claim_integer_semimodule_scaling() -> None:
+    """Coordinate mixing is not the claimed integer scaling operation."""
+    assert MIX.semimodule is None
+    with pytest.raises(
+        AssertionError,
+        match=r"gain-mix.*does not implement its semimodule scale",
+    ):
+        SemimoduleLawSuite(replace(MIX, semimodule=GAIN_MODULE)).check_laws()
 
 
 def test_semimodule_claim_is_bound_to_its_action() -> None:
