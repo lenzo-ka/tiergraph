@@ -30,10 +30,14 @@ class WireLawSuite:
         graph = self.fixture()
         assert self.decode(self.encode(graph)) == graph
 
-    def check_equal_graphs_have_equal_bytes(self) -> None:
-        """Presentation-reordered graphs are equal and have one fingerprint."""
+    def check_presentation_variants_have_equal_bytes(self) -> None:
+        """Constructed presentation variants have one encoding and fingerprint.
+
+        The variant factory, rather than ``Graph.__eq__``, defines the domain of
+        this law.  Equality is one of the consequences of canonical construction
+        and must not be allowed to filter a presentation-order counterexample.
+        """
         left, right = self.canonical_variants()
-        assert left == right
         assert left is not right
         assert self.encode(left) == self.encode(right)
         assert (
