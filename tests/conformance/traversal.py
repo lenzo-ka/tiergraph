@@ -87,6 +87,52 @@ class TraversalLawSuite:
             tuple(edges),
         )
 
+    def incidence_graph(self, edges: tuple[tuple[int, int], ...]) -> Graph:
+        """Construct a five-item graph whose only stored incidence is ``edges``."""
+        node_tier = self.name("nodes")
+        node_type = self.name("node")
+        relation = BipartiteRelationDeclaration(
+            self.name("contains"), node_type, node_type
+        )
+        return Graph(
+            (NamespaceDeclaration("t", self.namespace),),
+            (
+                Tier(
+                    TierDeclaration(node_tier, "Nodes"),
+                    tuple(Item(f"node-{index}") for index in range(5)),
+                ),
+            ),
+            (
+                SimpleRelationDeclaration(self.name("members"), node_tier, node_type),
+                relation,
+            ),
+            tuple(
+                RelationInstance(
+                    relation.name,
+                    ItemRef(node_tier, parent),
+                    ItemRef(node_tier, child),
+                )
+                for parent, child in edges
+            ),
+        )
+
+    def check_inverse_fiber(self, edges: tuple[tuple[int, int], ...]) -> None:
+        """Every ascending answer is exactly the set-valued fiber of descent."""
+        graph = self.incidence_graph(edges)
+        for child in range(5):
+            upward = self.walk(self.selection(graph, child), WalkDirection.INVERSE, 1)
+            expected = self.selection(
+                graph, *(parent for parent, target in edges if target == child)
+            )
+            assert upward.nodes == expected
+            for parent in range(5):
+                downward = self.walk(
+                    self.selection(graph, parent), WalkDirection.FORWARD, 1
+                )
+                assert (
+                    self.selection(graph, child).nodes[0] in downward.nodes.nodes
+                ) == (self.selection(graph, parent).nodes[0] in upward.nodes.nodes)
+
     def selection(self, graph: Graph, *indices: int) -> NodeSet:
         """Select fixture items by structural coordinate."""
         return NodeSet(
