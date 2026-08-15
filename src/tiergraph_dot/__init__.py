@@ -113,7 +113,8 @@ def dumps(
         tier_labels.append(label_id)
         lines.extend(("", f"  subgraph tier_{tier_index} {{", "    rank=same;"))
         lines.append(
-            f'    {label_id} [shape=plaintext, label="{_quote(tier.declaration.short_name)}"];'
+            f"    {label_id} [shape=plaintext, "
+            f'label="{_quote(tier.declaration.short_name, "tier name")}"];'
         )
         starts: list[list[int]] = [[] for _ in range(slot_count)]
         for item_index in range(len(tier.items)):
@@ -133,7 +134,7 @@ def dumps(
                 label = _item_label(graph, reference, clock)
                 lines.append(
                     f'    {item_nodes[reference]} [shape=box, group="{group}", '
-                    f'label="{_quote(label)}"];'
+                    f'label="{label}"];'
                 )
             slots.append(slot)
         for left, right in zip(slots, slots[1:], strict=False):
@@ -214,17 +215,27 @@ def _clock_index(
 def _item_label(graph: Graph, reference: ItemRef, clock: ClockProfile | None) -> str:
     tier = next(tier for tier in graph.tiers if tier.declaration.name == reference.tier)
     item = tier.items[reference.index]
-    heading = item.durable_id if item.durable_id is not None else str(reference.index)
+    heading = (
+        _quote(item.durable_id, "item durable ID")
+        if item.durable_id is not None
+        else str(reference.index)
+    )
     fields = [_attribute_label(value) for value in item.attributes]
     if clock is not None and reference.tier != clock.clock_tier:
         timing = clock.timing(reference.tier, reference.index)
         if timing is not None:
-            fields.append(f"time={timing.start}+{timing.duration} {timing.unit}")
-    return "\n".join((heading, *fields))
+            fields.append(
+                f"time={timing.start}+{timing.duration} "
+                f"{_quote(timing.unit, 'clock unit attribute lexical value')}"
+            )
+    return "\\n".join((heading, *fields))
 
 
 def _attribute_label(value: AttributeValue) -> str:
-    return f"{value.name.local_name}={value.lexical}"
+    return (
+        f"{_quote(value.name.local_name, 'attribute name')}"
+        f"={_quote(value.lexical, 'item attribute lexical value')}"
+    )
 
 
 def _position_label(position: ClockPosition) -> str:
@@ -295,12 +306,31 @@ def _endpoint_id(
 
 def _arc(left: str, right: str, declaration: QualifiedName) -> str:
     return (
-        f'  {left} -> {right} [label="{_quote(declaration.local_name)}", '
+        f"  {left} -> {right} "
+        f'[label="{_quote(declaration.local_name, "relation name")}", '
         'color="#5555aa", constraint=false];'
     )
 
 
-def _quote(value: str) -> str:
+def _quote(value: str, field: str) -> str:
+    """Quote one model string or refuse characters DOT cannot carry safely.
+
+    DOT quoted strings carry printable Unicode, backslash, double quote, and LF;
+    the latter three are escaped below. Other C0 controls, DEL, C1 controls, and
+    Unicode surrogates are refused. They have no faithful, portable Graphviz
+    label representation. Nothing is silently stripped or replaced.
+    """
+    for character in value:
+        codepoint = ord(character)
+        if (
+            (codepoint < 0x20 and character != "\n")
+            or 0x7F <= codepoint <= 0x9F
+            or 0xD800 <= codepoint <= 0xDFFF
+        ):
+            raise ValueError(
+                f"DOT cannot render {field} value {value!r}: unsupported character "
+                f"U+{codepoint:04X}"
+            )
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
