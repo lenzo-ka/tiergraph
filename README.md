@@ -10,6 +10,14 @@ define or validate provenance; applications may declare their own relations for 
 optional clock profile aligns tier boundaries to refined `(tick, gap)`
 positions and exposes independently stored or rate-derived physical timing.
 
+`OrderedContainment` traverses an acyclic, source-unique, item-only polyadic
+relation without discarding its declared target incidence order. Direct children,
+depth-first descendants, and leaves return `NodeSequence`, which preserves order
+and repetition but deliberately has no set algebra. Parents and ancestors are the
+computed inverse fiber and return canonical `NodeSet` values. This surface does
+not infer order from tiers, impose target distinctness, accept boundary endpoints,
+or provide a general ordered-walk framework.
+
 ### Graphviz DOT
 
 The companion `tiergraph_dot` package renders a graph through public API only:
