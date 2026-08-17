@@ -31,6 +31,7 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PositionRef,
+    Program,
     PromoteItem,
     PromotePosition,
     QualifiedName,
@@ -65,8 +66,8 @@ def test_version_default_help_and_every_command_help(
     assert main(["--version"]) == 0
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
-    assert "{validate,render,inspect,convert,run}" in capsys.readouterr().out
-    for command in ("validate", "render", "inspect", "convert", "run"):
+    assert "{validate,render,inspect,convert,run,step}" in capsys.readouterr().out
+    for command in ("validate", "render", "inspect", "convert", "run", "step"):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
         assert raised.value.code == 0
@@ -76,7 +77,14 @@ def test_version_default_help_and_every_command_help(
         for action in build_parser()._actions
         if isinstance(action, argparse._SubParsersAction)
     )
-    assert list(action.choices) == ["validate", "render", "inspect", "convert", "run"]
+    assert list(action.choices) == [
+        "validate",
+        "render",
+        "inspect",
+        "convert",
+        "run",
+        "step",
+    ]
 
 
 def test_argparse_usage_error() -> None:
@@ -235,6 +243,180 @@ def test_run_execution_error_and_option_contract(
     assert "requires --to dot" in capsys.readouterr().err
 
 
+def test_step_dump_repeat_is_exact_and_deterministic(tmp_path: Path) -> None:
+    ns = "urn:step"
+    tier = QualifiedName(ns, "events")
+    source = tmp_path / "program.jsonl"
+    opcodes = (
+        DeclareNamespace(NamespaceDeclaration("s", ns)),
+        DeclareTier(TierDeclaration(tier, "Events")),
+        Repeat(2, (AddItem(tier),)),
+    )
+    _program(source, *opcodes)
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    assert main(["step", str(source), "-o", str(first)]) == 0
+    assert main(["step", str(source), "-o", str(second)]) == 0
+    expected = b"".join(
+        cli._step_bytes(step) for step in tiergraph.steps(Program(opcodes))
+    )
+    assert first.read_bytes() == expected == second.read_bytes()
+    records = [json.loads(line) for line in expected.splitlines()]
+    assert [record["index"] for record in records] == [0, 1, 2, 3]
+    assert [record["opcode"]["opcode"] for record in records] == [
+        "declare_namespace",
+        "declare_tier",
+        "add_item",
+        "add_item",
+    ]
+    assert len(records[-1]["graph"]["tiers"][0]["items"]) == 2
+
+
+def test_step_dump_writes_each_record_before_requesting_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ns = "urn:stream"
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("s", ns)),
+            DeclareTier(TierDeclaration(QualifiedName(ns, "events"), "Events")),
+        )
+    )
+    steps = tuple(tiergraph.steps(program))
+    writes: list[bytes] = []
+
+    class Output:
+        def write(self, value: bytes) -> int:
+            writes.append(value)
+            return len(value)
+
+    class Stdout:
+        buffer = Output()
+
+    def streaming_steps(value: Program) -> Any:
+        assert value is program
+        yield steps[0]
+        assert writes == [cli._step_bytes(steps[0])]
+        yield steps[1]
+
+    monkeypatch.setattr(tiergraph, "steps", streaming_steps)
+    monkeypatch.setattr(sys, "stdout", Stdout())
+    assert cli._step_dump(program, "-", "-") == 0
+    assert writes == [cli._step_bytes(step) for step in steps]
+
+
+def test_step_transactional_refusal_reports_last_good_graph(
+    tmp_path: Path, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    ns = "urn:step"
+    source = tmp_path / "refused.jsonl"
+    _program(
+        source,
+        DeclareNamespace(NamespaceDeclaration("s", ns)),
+        AddItem(QualifiedName(ns, "missing")),
+    )
+    assert main(["step", str(source)]) == 1
+    captured = capsysbinary.readouterr()
+    records = [json.loads(line) for line in captured.out.splitlines()]
+    assert len(records) == 1
+    assert records[0]["index"] == 0
+    assert records[0]["graph"]["namespaces"] == [{"namespace": ns, "prefix": "s"}]
+    assert b"failing opcode index: 1" in captured.err
+    assert b"last good graph:" in captured.err
+    assert ns.encode() in captured.err
+    assert b"Traceback" not in captured.err
+
+    output = tmp_path / "partial.jsonl"
+    assert main(["step", str(source), "-o", str(output)]) == 1
+    assert len(output.read_bytes().splitlines()) == 1
+
+
+def test_step_repl_commands_and_public_iterator_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsysbinary: pytest.CaptureFixture[bytes],
+) -> None:
+    ns = "urn:repl"
+    source = tmp_path / "program.jsonl"
+    opcodes = (
+        DeclareNamespace(NamespaceDeclaration("r", ns)),
+        DeclareTier(TierDeclaration(QualifiedName(ns, "tier"), "Tier")),
+        Repeat(2, (AddItem(QualifiedName(ns, "tier")),)),
+    )
+    _program(source, *opcodes)
+    calls: list[Program] = []
+    public_steps = tiergraph.steps
+
+    def recording_steps(program: Program) -> Any:
+        calls.append(program)
+        return public_steps(program)
+
+    monkeypatch.setattr(tiergraph, "steps", recording_steps)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO("print\nstep\nlist\nrun-to 2\nbreak 3\ncontinue\ninspect\nquit\n"),
+    )
+    assert main(["step", str(source), "--interactive"]) == 0
+    captured = capsysbinary.readouterr()
+    assert len(calls) == 1
+    assert b'"index":0' in captured.out
+    assert b'"index":3' in captured.out
+    assert b'"format_version"' in captured.out
+    assert b"end of program" in captured.out
+    assert captured.err == b""
+
+
+def test_step_mode_contracts_and_repl_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "program.jsonl"
+    _program(source)
+    assert main(["step", "-", "--interactive"]) == 1
+    assert "requires a program file" in capsys.readouterr().err
+    assert main(["step", str(source), "--interactive", "-o", str(tmp_path / "x")]) == 1
+    assert "requires stdout" in capsys.readouterr().err
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO("\nrun-to nope\nrun-to -1\nunknown\nnext\nnext\nrun-to 0\nquit\n"),
+    )
+    assert main(["step", str(source), "--interactive"]) == 0
+    output = capsys.readouterr().out
+    assert output.count("expected a non-negative opcode index") == 2
+    assert "commands:" in output
+    assert output.count("end of program") == 3
+    assert "already at opcode" not in output
+
+    ns = "urn:refuse"
+    _program(
+        source,
+        DeclareNamespace(NamespaceDeclaration("r", ns)),
+        AddItem(QualifiedName(ns, "missing")),
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO("step\nrun-to 0\ncontinue\n"))
+    assert main(["step", str(source), "--interactive"]) == 1
+    captured = capsys.readouterr()
+    assert "already at opcode 0" in captured.out
+    assert "failing opcode index: 1" in captured.err
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert main(["step", str(source), "--interactive"]) == 0
+
+    _program(source, AddItem(QualifiedName(ns, "missing")))
+    assert main(["step", str(source)]) == 1
+    assert "failing opcode index: 0" in capsys.readouterr().err
+
+    class TtyInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdin", TtyInput("q\n"))
+    assert main(["step", str(source)]) == 0
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -310,6 +492,13 @@ def test_module_entry_point_and_pipelines(tmp_path: Path) -> None:
     )
     assert validate.stdout == b"ok\n"
     assert run.wait() == 0
+    stepped = subprocess.run(
+        [sys.executable, "-m", "tiergraph", "step", str(program)],
+        capture_output=True,
+        check=True,
+    )
+    assert stepped.stdout == b""
+    assert stepped.stderr == b""
 
 
 def test_every_remaining_opcode_shape_round_trips_through_decoder(

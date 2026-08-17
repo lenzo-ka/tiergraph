@@ -170,8 +170,23 @@ def cli_bytes() -> bytes:
         "and whitespace-only lines are rejected. The decoder caps each line at 1 MiB "
         "and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce "
         "repeat and total expansion bounds.\n\n"
+        "`step` reads that same JSONL program and drives the public `steps()` "
+        "generator. Its default dump mode writes one deterministic compact JSON "
+        "object per yielded `Step.to_data()` value. `--interactive` (or a TTY) "
+        "provides `step`/`next`, `continue`, `run-to N`/`break N`, `print`/`inspect`, "
+        "`list`, and `quit`. A refused opcode exits 1 after reporting its index and "
+        "the last good graph, with no traceback. Interactive programs must come "
+        "from a file because stdin carries REPL commands.\n\n"
         "`inspect` reports tiers in graph order and relation declarations in canonical "
         "graph order (qualified-name order), not source declaration order.\n\n"
+        "## Deterministic stepping example\n\n"
+        "For a program whose first opcode declares prefix `s` for `urn:step`, dump "
+        "its exact public step states:\n\n"
+        "```console\n"
+        "$ tiergraph step program.jsonl\n"
+        '{"graph":{"attribute_declarations":[],"attributes":[],"namespaces":[{"namespace":"urn:step","prefix":"s"}],"polyadic_relations":[],"position_values":[],"relation_declarations":[],"relations":[],"tiers":[]},"index":0,"opcode":{"declaration":{"namespace":"urn:step","prefix":"s"},"opcode":"declare_namespace"}}\n'
+        "```\n\n"
+        "Each output line is independently parseable JSON.\n\n"
         "## Help\n\n" + help_text + "\n"
     ).encode()
 

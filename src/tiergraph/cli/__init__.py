@@ -7,7 +7,8 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -43,6 +44,7 @@ from tiergraph import (
     RelationSideDeclaration,
     Repeat,
     SimpleRelationDeclaration,
+    Step,
     TierDeclaration,
     XsdType,
 )
@@ -84,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include empty tiers in DOT output",
     )
+
+    step = subparsers.add_parser("step", help="step through a JSONL machine program")
+    _document_arguments(step, input_help="JSONL program file, or - for stdin")
+    step.add_argument(
+        "--interactive",
+        action="store_true",
+        help="use the interactive debugger (also enabled when stdin is a TTY)",
+    )
     return parser
 
 
@@ -123,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "convert":
             graph = tiergraph.loads(_read_bytes(args.file))
             _write_output(args.file, args.output, _graph_bytes(graph, args.to))
-        else:
+        elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
             program = _read_program(args.file)
@@ -134,6 +144,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else _graph_bytes(graph, args.to)
             )
             _write_output(args.file, args.output, encoded)
+        else:
+            if args.interactive and args.file == "-":
+                raise ValueError("--interactive requires a program file, not stdin")
+            program = _read_program(args.file)
+            interactive = args.interactive or (args.file != "-" and sys.stdin.isatty())
+            if interactive:
+                if args.output != "-":
+                    raise ValueError("interactive mode requires stdout output")
+                return _step_interactive(program)
+            return _step_dump(program, args.file, args.output)
     except ExecutionError as error:
         _diagnostic(args.command, "ExecutionError", error)
         return 1
@@ -167,8 +187,14 @@ def _stdout_text(value: str) -> None:
 
 
 def _write_output(input_name: str, output_name: str, value: bytes) -> None:
+    with _output_stream(input_name, output_name) as stream:
+        stream.write(value)
+
+
+@contextmanager
+def _output_stream(input_name: str, output_name: str) -> Iterator[BinaryIO]:
     if output_name == "-":
-        sys.stdout.buffer.write(value)
+        yield sys.stdout.buffer
         return
     output_path = Path(output_name).resolve()
     _check_distinct(input_name, output_name)
@@ -179,7 +205,7 @@ def _write_output(input_name: str, output_name: str, value: bytes) -> None:
     replaced = False
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            stream.write(value)
+            yield stream
         os.replace(temporary, output_path)
         replaced = True
     finally:
@@ -218,6 +244,113 @@ def _graph_bytes(graph: tiergraph.Graph, target: str) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _step_bytes(step: Step) -> bytes:
+    """Serialize only the public step data as one deterministic JSONL record."""
+    return (
+        json.dumps(
+            step.to_data(),
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _step_dump(program: Program, input_name: str, output_name: str) -> int:
+    last: Step | None = None
+    with _output_stream(input_name, output_name) as stream:
+        try:
+            for step in tiergraph.steps(program):
+                stream.write(_step_bytes(step))
+                last = step
+        except ExecutionError as error:
+            _step_refusal(last, error)
+            return 1
+    return 0
+
+
+def _step_refusal(last: Step | None, error: ExecutionError) -> None:
+    failing_index = last.index + 1 if last is not None else 0
+    graph = last.graph if last is not None else tiergraph.Graph((), (), ())
+    _diagnostic("step", "ExecutionError", error)
+    print(f"tiergraph: step: failing opcode index: {failing_index}", file=sys.stderr)
+    print("tiergraph: step: last good graph:", file=sys.stderr)
+    sys.stderr.write(tiergraph.dumps(graph))
+
+
+def _step_interactive(program: Program) -> int:
+    iterator = iter(tiergraph.steps(program))
+    trace: list[Step] = []
+    finished = False
+    while True:
+        try:
+            command = input("step> ").strip()
+        except EOFError:
+            return 0
+        if not command:
+            continue
+        words = command.split()
+        name = words[0]
+        if name in {"quit", "q"}:
+            return 0
+        if name in {"print", "inspect", "p"} and len(words) == 1:
+            graph = trace[-1].graph if trace else tiergraph.Graph((), (), ())
+            _stdout_text(tiergraph.dumps(graph))
+            continue
+        if name == "list" and len(words) == 1:
+            for step in trace:
+                sys.stdout.buffer.write(_step_bytes(step))
+            continue
+        target: int | None = None
+        if name in {"step", "next", "s", "n"} and len(words) == 1:
+            target = trace[-1].index + 1 if trace else 0
+        elif name in {"continue", "c"} and len(words) == 1:
+            target = None
+        elif name in {"run-to", "break"} and len(words) == 2:
+            try:
+                target = int(words[1])
+            except ValueError:
+                _stdout_text("expected a non-negative opcode index\n")
+                continue
+            if target < 0:
+                _stdout_text("expected a non-negative opcode index\n")
+                continue
+            if trace and target <= trace[-1].index:
+                _stdout_text(f"already at opcode {trace[-1].index}\n")
+                continue
+        else:
+            _stdout_text(
+                "commands: step/next, continue, run-to N/break N, "
+                "print/inspect, list, quit\n"
+            )
+            continue
+        if finished:
+            _stdout_text("end of program\n")
+            continue
+        status, finished = _step_until(iterator, trace, target)
+        if status != 0:
+            return status
+
+
+def _step_until(
+    iterator: Iterator[Step], trace: list[Step], target: int | None
+) -> tuple[int, bool]:
+    try:
+        while target is None or not trace or trace[-1].index < target:
+            step = next(iterator)
+            trace.append(step)
+            sys.stdout.buffer.write(_step_bytes(step))
+    except StopIteration:
+        _stdout_text("end of program\n")
+        return 0, True
+    except ExecutionError as error:
+        _step_refusal(trace[-1] if trace else None, error)
+        return 1, True
+    return 0, False
 
 
 def _inspect(graph: tiergraph.Graph) -> str:

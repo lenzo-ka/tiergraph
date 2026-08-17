@@ -12,22 +12,37 @@ Every command accepts `-` as stdin. Document-producing commands write to stdout 
 
 `run` consumes a CLI-owned JSONL stream. Its first line is exactly `{"machine_version":"1"}` and each later line has one opcode's public `to_data()` shape (a repeat body remains nested on that line). Header-only programs are valid, CRLF and a final line without a newline are accepted, and whitespace-only lines are rejected. The decoder caps each line at 1 MiB and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce repeat and total expansion bounds.
 
+`step` reads that same JSONL program and drives the public `steps()` generator. Its default dump mode writes one deterministic compact JSON object per yielded `Step.to_data()` value. `--interactive` (or a TTY) provides `step`/`next`, `continue`, `run-to N`/`break N`, `print`/`inspect`, `list`, and `quit`. A refused opcode exits 1 after reporting its index and the last good graph, with no traceback. Interactive programs must come from a file because stdin carries REPL commands.
+
 `inspect` reports tiers in graph order and relation declarations in canonical graph order (qualified-name order), not source declaration order.
+
+## Deterministic stepping example
+
+For a program whose first opcode declares prefix `s` for `urn:step`, dump its exact public step states:
+
+```console
+$ tiergraph step program.jsonl
+{"graph":{"attribute_declarations":[],"attributes":[],"namespaces":[{"namespace":"urn:step","prefix":"s"}],"polyadic_relations":[],"position_values":[],"relation_declarations":[],"relations":[],"tiers":[]},"index":0,"opcode":{"declaration":{"namespace":"urn:step","prefix":"s"},"opcode":"declare_namespace"}}
+```
+
+Each output line is independently parseable JSON.
 
 ## Help
 
 ### `tiergraph`
 
 ```text
-usage: tiergraph [-h] [--version] {validate,render,inspect,convert,run} ...
+usage: tiergraph [-h] [--version]
+                 {validate,render,inspect,convert,run,step} ...
 
 positional arguments:
-  {validate,render,inspect,convert,run}
+  {validate,render,inspect,convert,run,step}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
     convert             canonicalize a graph document
     run                 execute a JSONL machine program
+    step                step through a JSONL machine program
 
 options:
   -h, --help            show this help message and exit
@@ -108,4 +123,20 @@ options:
   --to {json,json-compact,bytes,dot}
   --include-empty-tiers
                         include empty tiers in DOT output
+```
+
+### `tiergraph step`
+
+```text
+usage: tiergraph step [-h] [-o FILE] [--interactive] FILE
+
+positional arguments:
+  FILE                  JSONL program file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
+  --interactive         use the interactive debugger (also enabled when stdin
+                        is a TTY)
 ```
