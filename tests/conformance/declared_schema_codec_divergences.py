@@ -1,8 +1,8 @@
 """Live subtraction rules for declaration-derived acceptance probes.
 
 Every entry must suppress a disagreement that the generated probe space actually
-reaches.  Codec-only laws outside that space are design documentation, not live
-exceptions; see ``SCHEMA_CODEC_CONFORMANCE.md``.
+reaches.  Codec-only laws outside that space are documented at their declaration
+sites, not carried here as live exceptions.
 """
 
 from __future__ import annotations
