@@ -27,11 +27,14 @@ from tiergraph.core import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -65,6 +68,7 @@ from tiergraph.machine import (
     Repeat,
     execute,
 )
+from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
 from tiergraph.selection import (
     AttributeSelector,
     BoundariesSelector,
@@ -78,7 +82,14 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
-from tiergraph.traversal import Walk, WalkDirection, WalkResult
+from tiergraph.traversal import (
+    NodeSequence,
+    OrderedContainment,
+    Walk,
+    WalkDirection,
+    WalkResult,
+)
+from tiergraph.value import JsonValueProfile, json_value_graph
 from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
@@ -118,15 +129,22 @@ __all__ = [
     "ItemRef",
     "ItemSelector",
     "ItemsSelector",
+    "JsonValueProfile",
     "MACHINE_VERSION",
     "MAX_REPEAT_COUNT",
     "NamespaceDeclaration",
     "Node",
     "NodeKind",
     "NodeSet",
+    "NodeSequence",
+    "OrderedContainment",
+    "OrderedRootsProfile",
     "Position",
     "PositionRef",
     "PhysicalTiming",
+    "PersistedChoiceProfile",
+    "PolyadicRelationDeclaration",
+    "PolyadicRelationInstance",
     "Program",
     "PromoteItem",
     "PromotePosition",
@@ -135,6 +153,7 @@ __all__ = [
     "ReactMode",
     "Relate",
     "RelationEndpointKind",
+    "RelationSideDeclaration",
     "RelationInstance",
     "Repeat",
     "SimpleRelationDeclaration",
@@ -156,6 +175,7 @@ __all__ = [
     "loads",
     "to_data",
     "execute",
+    "json_value_graph",
     "anchored_position",
     "select",
     "__version__",

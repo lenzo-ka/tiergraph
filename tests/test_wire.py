@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -22,11 +23,14 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -48,11 +52,20 @@ def name(local: str) -> QualifiedName:
 def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     """Build a graph where incidental wire changes affect visible structure."""
     gain = AttributeDeclaration(name("gain"), AttributeDomain.ITEM, XsdType.DECIMAL)
+    item_label = AttributeDeclaration(
+        name("item-label"), AttributeDomain.ITEM, XsdType.STRING
+    )
     label = AttributeDeclaration(
         name("label"), AttributeDomain.DOCUMENT, XsdType.STRING
     )
+    revision = AttributeDeclaration(
+        name("revision"), AttributeDomain.DOCUMENT, XsdType.INTEGER
+    )
     marker = AttributeDeclaration(
         name("marker"), AttributeDomain.POSITION, XsdType.BOOLEAN
+    )
+    offset = AttributeDeclaration(
+        name("offset"), AttributeDomain.POSITION, XsdType.INTEGER
     )
     placements = name("placements")
     members = SimpleRelationDeclaration(name("members"), placements, name("event"))
@@ -75,8 +88,20 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     placements_tier = Tier(
         TierDeclaration(placements, "Placements"),
         (
-            Item("lead", (item_values["lead"],)),
-            Item("bed", (item_values["bed"],)),
+            Item(
+                "lead",
+                (
+                    item_values["lead"],
+                    AttributeValue(item_label.name, XsdType.STRING, "Lead"),
+                ),
+            ),
+            Item(
+                "bed",
+                (
+                    item_values["bed"],
+                    AttributeValue(item_label.name, XsdType.STRING, "Bed"),
+                ),
+            ),
         ),
     )
     notes = name("notes")
@@ -92,7 +117,14 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
     relation_declarations: tuple[
         SimpleRelationDeclaration | BipartiteRelationDeclaration, ...
     ] = (members, cues)
-    attribute_declarations: tuple[AttributeDeclaration, ...] = (gain, label, marker)
+    attribute_declarations: tuple[AttributeDeclaration, ...] = (
+        gain,
+        item_label,
+        label,
+        revision,
+        marker,
+        offset,
+    )
     if reverse_unordered:
         namespaces = tuple(reversed(namespaces))
         relation_declarations = tuple(reversed(relation_declarations))
@@ -103,15 +135,107 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
         relation_declarations,
         (RelationInstance(cues.name, ItemRef(placements, 0), boundary, "cue-1"),),
         attribute_declarations,
-        (Position(boundary, (AttributeValue(marker.name, XsdType.BOOLEAN, "1"),)),),
-        (AttributeValue(label.name, XsdType.STRING, "mix α"),),
+        (
+            Position(
+                boundary,
+                (
+                    AttributeValue(marker.name, XsdType.BOOLEAN, "1"),
+                    AttributeValue(offset.name, XsdType.INTEGER, "1"),
+                ),
+            ),
+        ),
+        (
+            AttributeValue(label.name, XsdType.STRING, "mix α"),
+            AttributeValue(revision.name, XsdType.INTEGER, "1"),
+        ),
     )
 
 
 def canonical_variants() -> tuple[Graph, Graph]:
-    """Vary every declaration order and the sequence used to attach item values."""
-    left = rich_graph()
-    right = rich_graph(reverse_unordered=True)
+    """Reverse keyed binary and polyadic collections across graph domains."""
+    original = rich_graph()
+    polyadic = PolyadicRelationDeclaration(
+        name("groups"),
+        RelationSideDeclaration(
+            (RelationEndpointKind.BOUNDARY, RelationEndpointKind.ITEM),
+            (name("notes"), name("placements")),
+            1,
+        ),
+        RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (name("notes"), name("placements")), 1
+        ),
+    )
+    instance = PolyadicRelationInstance(
+        polyadic.name,
+        (ItemRef(name("placements"), 0),),
+        (ItemRef(name("notes"), 0),),
+        "group-1",
+    )
+    baseline = replace(
+        original,
+        relation_declarations=(*original.relation_declarations, polyadic),
+        polyadic_relations=(instance,),
+    )
+    extra_position = Position(
+        PositionRef(name("placements"), 0),
+        tuple(
+            AttributeValue(value.name, value.value_type, "0")
+            for value in baseline.position_values[0].attributes
+        ),
+    )
+    left = Graph(
+        baseline.namespaces,
+        baseline.tiers,
+        baseline.relation_declarations,
+        baseline.relations,
+        baseline.attribute_declarations,
+        (*baseline.position_values, extra_position),
+        baseline.attributes,
+        baseline.polyadic_relations,
+    )
+    supplied_base = rich_graph(reverse_unordered=True)
+    reversed_polyadic = PolyadicRelationDeclaration(
+        polyadic.name,
+        RelationSideDeclaration(
+            tuple(reversed(polyadic.sources.endpoint_kinds)),
+            tuple(reversed((name("notes"), name("placements")))),
+            polyadic.sources.minimum,
+            polyadic.sources.maximum,
+        ),
+        RelationSideDeclaration(
+            polyadic.targets.endpoint_kinds,
+            tuple(reversed((name("notes"), name("placements")))),
+            polyadic.targets.minimum,
+            polyadic.targets.maximum,
+        ),
+    )
+    supplied = replace(
+        supplied_base,
+        relation_declarations=(
+            reversed_polyadic,
+            *supplied_base.relation_declarations,
+        ),
+        polyadic_relations=(instance,),
+    )
+    right = replace(
+        supplied,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(
+                    replace(item, attributes=tuple(reversed(item.attributes)))
+                    for item in tier.items
+                ),
+                attributes=tuple(reversed(tier.attributes)),
+            )
+            for tier in supplied.tiers
+        ),
+        position_values=tuple(
+            replace(position, attributes=tuple(reversed(position.attributes)))
+            for position in reversed((*supplied.position_values, extra_position))
+        ),
+        attributes=tuple(reversed(supplied.attributes)),
+    )
     return left, right
 
 
@@ -153,7 +277,7 @@ LAWS = WireLawSuite(dump_bytes, loads, rich_graph, canonical_variants, ordered_v
     "law",
     [
         LAWS.check_round_trip,
-        LAWS.check_equal_graphs_have_equal_bytes,
+        LAWS.check_presentation_variants_have_equal_bytes,
         LAWS.check_ordered_graphs_have_different_bytes,
         LAWS.check_strict_json,
         LAWS.check_canonical_read_back,
@@ -166,14 +290,70 @@ def test_wire_law(law: object) -> None:
     law()
 
 
+def test_presentation_variant_law_does_not_delegate_its_domain_to_equality() -> None:
+    """Order-sensitive derived equality cannot hide a byte-level counterexample."""
+    left, right = canonical_variants()
+    object.__setattr__(right, "attributes", tuple(reversed(right.attributes)))
+    assert left != right
+
+    # This is the former equality-quantified domain: the counterexample is skipped.
+    if left == right:  # pragma: no cover - the skipped body is the demonstrated bug
+        assert dump_bytes(left) == dump_bytes(right)
+
+    mutant = WireLawSuite(
+        dump_bytes,
+        loads,
+        rich_graph,
+        lambda: (left, right),
+        ordered_variants,
+    )
+    with pytest.raises(AssertionError):
+        mutant.check_presentation_variants_have_equal_bytes()
+
+
 def mutable_document() -> dict[str, object]:
     """Return independent JSON-shaped fixture data for near-valid edits."""
     return cast(dict[str, object], deepcopy(to_data(rich_graph())))
 
 
+def polyadic_document() -> dict[str, object]:
+    """Return JSON-shaped fixture data containing one polyadic instance."""
+    original = rich_graph()
+    placements = name("placements")
+    notes = name("notes")
+    declaration = PolyadicRelationDeclaration(
+        name("groups"),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), (placements,), 1),
+        RelationSideDeclaration((RelationEndpointKind.ITEM,), (notes,), 1),
+    )
+    relation = PolyadicRelationInstance(
+        declaration.name,
+        (ItemRef(placements, 0),),
+        (ItemRef(notes, 0),),
+        "group-1",
+    )
+    extended = Graph(
+        original.namespaces,
+        original.tiers,
+        (*original.relation_declarations, declaration),
+        original.relations,
+        original.attribute_declarations,
+        original.position_values,
+        original.attributes,
+        (relation,),
+    )
+    return cast(dict[str, object], deepcopy(to_data(extended)))
+
+
 def graph_data(document: dict[str, object]) -> dict[str, object]:
     """Return the graph object from fixture data."""
     return cast(dict[str, object], document["graph"])
+
+
+def test_polyadic_relation_durable_id_round_trips() -> None:
+    """The guarded polyadic carrier retains a present durable identifier."""
+    decoded = loads(json.dumps(polyadic_document()))
+    assert decoded.polyadic_relations[0].durable_id == "group-1"
 
 
 def test_read_edit_write_changes_only_declared_value_line() -> None:
@@ -322,8 +502,9 @@ def test_wire_shape_guards_name_their_paths() -> None:
     cases: list[tuple[dict[str, object], str]] = []
 
     wrong_version = mutable_document()
-    wrong_version["format_version"] = "4"
-    cases.append((wrong_version, "format_version '4' is unsupported"))
+    wrong = str(int(FORMAT_VERSION) + 1)
+    wrong_version["format_version"] = wrong
+    cases.append((wrong_version, rf"format_version '{wrong}' is unsupported"))
 
     missing = mutable_document()
     del missing["format_version"]
@@ -390,3 +571,30 @@ def test_wire_shape_guards_name_their_paths() -> None:
 
     for document, match in cases:
         LAWS.check_refusal(match, document)
+
+
+@pytest.mark.parametrize(
+    ("document", "index"), [(mutable_document, 0), (polyadic_document, 1)]
+)
+def test_relation_instance_refuses_unknown_field(document: object, index: int) -> None:
+    """Both relation carriers refuse fields outside their published shape."""
+    assert callable(document)
+    value = document()
+    relations = cast(list[dict[str, object]], graph_data(value)["relations"])
+    relations[-1]["bogus"] = 1
+    LAWS.check_refusal(rf"relations\[{index}\] has unknown field 'bogus'", value)
+
+
+@pytest.mark.parametrize(
+    ("document", "index", "required"),
+    [(mutable_document, 0, "right"), (polyadic_document, 1, "targets")],
+)
+def test_relation_instance_refuses_missing_field(
+    document: object, index: int, required: str
+) -> None:
+    """Both relation carriers name a missing required instance field."""
+    assert callable(document)
+    value = document()
+    relations = cast(list[dict[str, object]], graph_data(value)["relations"])
+    del relations[-1][required]
+    LAWS.check_refusal(rf"relations\[{index}\] is missing field '{required}'", value)

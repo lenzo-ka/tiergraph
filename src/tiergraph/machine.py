@@ -20,6 +20,7 @@ from tiergraph.core import (
     ItemRef,
     JsonValue,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
     Position,
     PositionRef,
     QualifiedName,
@@ -590,7 +591,7 @@ def _attach_relation_declaration(
                     declaration.item_type,
                     (*declaration.attributes, value),
                 )
-            else:
+            elif isinstance(declaration, BipartiteRelationDeclaration):
                 declaration = BipartiteRelationDeclaration(
                     declaration.name,
                     declaration.left_type,
@@ -599,6 +600,18 @@ def _attach_relation_declaration(
                     declaration.right_endpoint,
                     declaration.single_parent,
                     declaration.acyclic,
+                    (*declaration.attributes, value),
+                )
+            else:
+                declaration = PolyadicRelationDeclaration(
+                    declaration.name,
+                    declaration.sources,
+                    declaration.targets,
+                    declaration.unique_sources,
+                    declaration.distinct_targets,
+                    declaration.single_parent,
+                    declaration.acyclic,
+                    declaration.targets_subset_of,
                     (*declaration.attributes, value),
                 )
         declarations.append(declaration)

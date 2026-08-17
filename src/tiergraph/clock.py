@@ -345,6 +345,11 @@ class ClockProfile:
         """Return the declared physical timing unit."""
         return self._unit
 
+    @property
+    def positions(self) -> tuple[ClockPosition, ...]:
+        """Return the profile's validated refined clock positions in order."""
+        return self._clock_positions
+
     def is_timed(self, tier: QualifiedName) -> bool:
         """Report whether a tier chose complete clock binding."""
         return tier not in self._untimed_tiers

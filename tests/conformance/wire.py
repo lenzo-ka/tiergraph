@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,12 +30,20 @@ class WireLawSuite:
         graph = self.fixture()
         assert self.decode(self.encode(graph)) == graph
 
-    def check_equal_graphs_have_equal_bytes(self) -> None:
-        """Supply-order variants of an equal graph have one byte encoding."""
+    def check_presentation_variants_have_equal_bytes(self) -> None:
+        """Constructed presentation variants have one encoding and fingerprint.
+
+        The variant factory, rather than ``Graph.__eq__``, defines the domain of
+        this law.  Equality is one of the consequences of canonical construction
+        and must not be allowed to filter a presentation-order counterexample.
+        """
         left, right = self.canonical_variants()
-        assert left == right
         assert left is not right
         assert self.encode(left) == self.encode(right)
+        assert (
+            hashlib.sha256(self.encode(left)).digest()
+            == hashlib.sha256(self.encode(right)).digest()
+        )
 
     def check_ordered_graphs_have_different_bytes(self) -> None:
         """A graph order that carries meaning remains visible in its bytes."""

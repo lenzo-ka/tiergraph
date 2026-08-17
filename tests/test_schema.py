@@ -180,8 +180,9 @@ def test_check_refuses_honestly_regenerated_unversioned_shape(
 def test_validation_rejects_each_declared_json_construction() -> None:
     """Near-valid edits exercise the validator produced from every shape kind."""
     valid = to_data(rich_graph())
-    assert validation_errors(valid, "4") == [
-        f"format_version {FORMAT_VERSION!r} is unsupported; expected '4'"
+    unsupported = str(int(FORMAT_VERSION) + 1)
+    assert validation_errors(valid, unsupported) == [
+        f"format_version {FORMAT_VERSION!r} is unsupported; expected {unsupported!r}"
     ]
     assert validation_errors([], FORMAT_VERSION) == ["document must be an object"]
     assert validation_errors({1: "value"}, FORMAT_VERSION) == [

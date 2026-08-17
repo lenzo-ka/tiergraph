@@ -66,6 +66,14 @@ def add_values(carrier: object, values: tuple[object, ...]) -> object:
     return cast(int, carrier) + sum(cast(int, value) for value in values)
 
 
+def _product(values: tuple[int, ...]) -> int:
+    """Multiply action values, with the empty action as identity."""
+    result = 1
+    for value in values:
+        result *= value
+    return result
+
+
 GAIN_MODULE = Semimodule[object, object](
     0,
     1,
@@ -84,7 +92,6 @@ MIX = ActionDeclaration[object, object](
     associative=True,
     idempotent=False,
     commutative=True,
-    semimodule=GAIN_MODULE,
 )
 CHAIN = ActionDeclaration[object, object](
     "effect-chain", append, associative=True, idempotent=False, commutative=False
@@ -111,14 +118,6 @@ SCALE = ActionDeclaration[object, object](
 )
 
 
-def _product(values: tuple[int, ...]) -> int:
-    """Multiply action values, with the empty action as identity."""
-    result = 1
-    for value in values:
-        result *= value
-    return result
-
-
 def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
     """Build the action-law declaration independently of its carrier value."""
     del carrier
@@ -137,17 +136,30 @@ def test_action_laws() -> None:
     suite.check_one_for_one_equivalence()
 
 
-def test_semimodule_laws_are_conditional_on_the_claim() -> None:
-    """A matching claimed action is checked while an ordered chain makes no claim."""
-    assert SCALE.semimodule is not None
+def test_semimodule_claim_satisfies_bound_laws() -> None:
+    """The reusable suite rechecks an already validated declaration."""
     SemimoduleLawSuite(SCALE).check_laws()
     assert CHAIN.semimodule is None
 
 
+def test_gain_mix_does_not_claim_integer_semimodule_scaling() -> None:
+    """Coordinate mixing is not the claimed integer scaling operation."""
+    assert MIX.semimodule is None
+    with pytest.raises(ValueError, match=r"gain-mix.*does not implement.*scale"):
+        replace(MIX, semimodule=GAIN_MODULE)
+
+
 def test_semimodule_claim_is_bound_to_its_action() -> None:
     """A valid detached module cannot launder an unrelated ordered action."""
-    with pytest.raises(AssertionError):
-        SemimoduleLawSuite(replace(CHAIN, semimodule=GAIN_MODULE)).check_laws()
+    with pytest.raises(ValueError, match=r"effect-chain.*does not implement.*scale"):
+        replace(CHAIN, semimodule=GAIN_MODULE)
+
+
+def test_malformed_semimodule_claim_is_refused_where_it_is_constructed() -> None:
+    """A runtime-local claim cannot bypass sampled algebra validation."""
+    malformed = replace(GAIN_MODULE, scalar_add=lambda left, right: 99)
+    with pytest.raises(ValueError, match=r"runtime-scale.*scalar additive identity"):
+        replace(SCALE, name="runtime-scale", semimodule=malformed)
 
 
 @pytest.mark.parametrize(
