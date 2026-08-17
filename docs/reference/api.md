@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 87 top-level `tiergraph` exports exactly once.
+It covers 89 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -254,6 +254,14 @@ Repeat(count: 'int', body: 'tuple[Opcode, ...]') -> None
 
 Repeat a finite block without adding a primitive consume-tier opcode.
 
+### `Step`
+
+```text
+Step(index: 'int', opcode: 'PrimitiveOpcode', graph: 'Graph') -> None
+```
+
+Record one primitive opcode and its validated resulting graph.
+
 ### `execute`
 
 ```text
@@ -261,6 +269,18 @@ execute(opcodes: 'Iterable[object]') -> 'Graph'
 ```
 
 Execute primitives in order and name the first refused opcode.
+
+Drives the same ``steps`` generator a debugger walks and returns its final
+graph, so execution and stepping are one path: the debugger observes exactly
+what runs, and the two cannot diverge.
+
+### `steps`
+
+```text
+steps(source: 'Program | AsBuilt | Iterable[object]') -> 'Iterator[Step]'
+```
+
+Yield each primitive opcode with its validated resulting graph.
 
 ## Fold
 
