@@ -1,5 +1,20 @@
 """tiergraph: ordered tiers, declared relations, and typed values."""
 
+from tiergraph.action import (
+    ActionDeclaration,
+    DistributionWitness,
+    ReactDeclaration,
+    ReactMode,
+    Semimodule,
+    WitnessCoordinate,
+    YieldNormalization,
+)
+from tiergraph.clock import (
+    ClockPosition,
+    ClockProfile,
+    PhysicalTiming,
+    anchored_position,
+)
 from tiergraph.core import (
     AttributeDeclaration,
     AttributeDomain,
@@ -63,11 +78,13 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
+from tiergraph.traversal import Walk, WalkDirection, WalkResult
 from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
 
 __version__ = "0.0.0"
 
 __all__ = [
+    "ActionDeclaration",
     "AddItem",
     "AsBuilt",
     "AttachValue",
@@ -81,10 +98,13 @@ __all__ = [
     "BoundarySelector",
     "BoundarySide",
     "ChildCombination",
+    "ClockProfile",
+    "ClockPosition",
     "DeclareAttribute",
     "DeclareNamespace",
     "DeclareRelation",
     "DeclareTier",
+    "DistributionWitness",
     "DurableItemRef",
     "DurablePositionRef",
     "ExecutionError",
@@ -106,27 +126,37 @@ __all__ = [
     "NodeSet",
     "Position",
     "PositionRef",
+    "PhysicalTiming",
     "Program",
     "PromoteItem",
     "PromotePosition",
     "QualifiedName",
+    "ReactDeclaration",
+    "ReactMode",
     "Relate",
     "RelationEndpointKind",
     "RelationInstance",
     "Repeat",
     "SimpleRelationDeclaration",
+    "Semimodule",
     "TiePolicy",
     "Tier",
     "TierDeclaration",
     "TierSelector",
     "TypeSelector",
     "XsdType",
+    "Walk",
+    "WalkDirection",
+    "WalkResult",
+    "WitnessCoordinate",
+    "YieldNormalization",
     "FORMAT_VERSION",
     "dump_bytes",
     "dumps",
     "loads",
     "to_data",
     "execute",
+    "anchored_position",
     "select",
     "__version__",
 ]
