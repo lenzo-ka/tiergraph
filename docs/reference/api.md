@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 89 top-level `tiergraph` exports exactly once.
+It covers 91 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -805,6 +805,26 @@ Descending order is exactly stored target incidence order. Descendants are
 depth-first pre-order and leaves are depth-first leaf order; repeated
 incidence remains repeated. Parents and ancestors are computed inverse
 fibers, so their result is intentionally a :class:`NodeSet`.
+
+### `OrderedPolyadicTraversal`
+
+```text
+OrderedPolyadicTraversal(graph: 'Graph', relation: 'QualifiedName', source_side: 'PolyadicSide', target_side: 'PolyadicSide') -> None
+```
+
+Traverse between either pair of sides of one ordered polyadic relation.
+
+Direct and transitive results retain instance order, opposite-side endpoint
+order, and repetition.  Relational inversion is set-valued; callers that
+need stored order can instead request the opposite sequence of one instance.
+
+### `PolyadicSide`
+
+```text
+PolyadicSide(*values)
+```
+
+Choose one stored side of a polyadic relation declaration.
 
 ### `Walk`
 
