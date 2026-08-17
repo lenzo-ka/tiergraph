@@ -16,6 +16,12 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
     (r"/home/[A-Za-z0-9._-]+", "a Linux home-directory path"),
     (r"\.ssh/", "a path into an SSH configuration directory"),
     (r"\bfile:///", "an absolute local file URL"),
+    (
+        r"(?i)generated (?:by|with) (?:an? )?(?:AI|LLM|ChatGPT|Codex)",
+        "AI/tool attribution",
+    ),
+    (r"(?i)as an AI", "AI/tool attribution"),
+    (r"(?i)generated (?:at|on) \d{4}-\d{2}-\d{2}", "a generated timestamp"),
 )
 
 # This file lists the patterns it forbids, so it necessarily contains them.

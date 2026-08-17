@@ -54,7 +54,7 @@ addopts = "-q"
 
 [tool.coverage.run]
 branch = true
-source = ["tiergraph", "tiergraph_dot"]
+source = ["tiergraph", "tiergraph_dot", "examples", "scripts.generate_docs"]
 
 [tool.coverage.report]
 # Ratchets upward, never down.
@@ -65,7 +65,7 @@ exclude_also = ["if __name__ == .__main__.:"]
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "examples", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -74,4 +74,4 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
