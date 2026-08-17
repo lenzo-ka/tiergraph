@@ -3,7 +3,7 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check tracked-clean documented check
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check docs docs-check tracked-clean documented check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -25,7 +25,7 @@ types:
 	@$(VENV_PYTHON) -m mypy
 
 test:
-	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov=tiergraph_dot --cov-report=term-missing
+	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov=tiergraph_dot --cov=examples --cov=scripts.generate_docs --cov-report=term-missing
 
 # Separate processes: interpreter hash state is fixed at startup and cannot be
 # changed honestly inside one run.
@@ -50,4 +50,10 @@ schema:
 schema-check:
 	@$(VENV_PYTHON) scripts/generate_schema.py --check
 
-check: venv lint format-check types test determinism schema-check tracked-clean documented
+docs:
+	@$(VENV_PYTHON) scripts/generate_docs.py
+
+docs-check:
+	@$(VENV_PYTHON) scripts/generate_docs.py --check
+
+check: venv lint format-check types test determinism schema-check docs-check tracked-clean documented
