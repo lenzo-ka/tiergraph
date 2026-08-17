@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Self, cast
 
@@ -341,6 +341,23 @@ _PRIMITIVE_OPCODE_TYPES = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class Step:
+    """Record one primitive opcode and its validated resulting graph."""
+
+    index: int
+    opcode: PrimitiveOpcode
+    graph: Graph
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the step as JSON-serializable data (index, opcode, graph)."""
+        return {
+            "index": self.index,
+            "opcode": self.opcode.to_data(),
+            "graph": self.graph.to_data(),
+        }
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class Program:
     """Carry source opcodes while defining identity on their checked outcome."""
@@ -415,23 +432,47 @@ class AsBuilt:
 
 
 def execute(opcodes: Iterable[object]) -> Graph:
-    """Execute primitives in order and name the first refused opcode."""
+    """Execute primitives in order and name the first refused opcode.
+
+    Drives the same ``steps`` generator a debugger walks and returns its final
+    graph, so execution and stepping are one path: the debugger observes exactly
+    what runs, and the two cannot diverge.
+    """
+    graph = Graph((), (), ())
+    for step in steps(opcodes):
+        graph = step.graph
+    return graph
+
+
+def steps(source: Program | AsBuilt | Iterable[object]) -> Iterator[Step]:
+    """Yield each primitive opcode with its validated resulting graph."""
+    if isinstance(source, Program):
+        opcodes: Iterable[object] = _flatten(source.opcodes)
+    elif isinstance(source, AsBuilt):
+        opcodes = source.trace
+    else:
+        opcodes = source
+
     graph = Graph((), (), ())
     for index, opcode in enumerate(opcodes):
-        try:
-            if type(opcode) not in _PRIMITIVE_OPCODE_TYPES:
-                raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
-            result = cast(PrimitiveOpcode, opcode).apply(graph)
-            if not isinstance(result, Graph):
-                raise TypeError(
-                    f"opcode returned {type(result).__name__!r}, expected Graph"
-                )
-            graph = _validate_graph(result)
-        except Exception as error:
-            raise ExecutionError(
-                f"opcode {index} {_opcode_data(opcode)!r} refused: {error}"
-            ) from error
-    return graph
+        graph = _apply_opcode(graph, index, opcode)
+        yield Step(index, cast(PrimitiveOpcode, opcode), graph)
+
+
+def _apply_opcode(graph: Graph, index: int, opcode: object) -> Graph:
+    try:
+        if type(opcode) not in _PRIMITIVE_OPCODE_TYPES:
+            raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
+        result = cast(PrimitiveOpcode, opcode).apply(graph)
+        if not isinstance(result, Graph):
+            raise TypeError(
+                f"opcode returned {type(result).__name__!r}, expected Graph"
+            )
+        return _validate_graph(result)
+    except Exception as error:
+        raise ExecutionError(
+            f"opcode {index} {_opcode_data(opcode)!r} refused: {error}"
+        ) from error
 
 
 def _flatten(opcodes: tuple[Opcode, ...]) -> tuple[PrimitiveOpcode, ...]:

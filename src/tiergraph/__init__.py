@@ -67,7 +67,9 @@ from tiergraph.machine import (
     PromotePosition,
     Relate,
     Repeat,
+    Step,
     execute,
+    steps,
 )
 from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
 from tiergraph.selection import (
@@ -169,6 +171,7 @@ __all__ = [
     "RelationInstance",
     "Repeat",
     "SimpleRelationDeclaration",
+    "Step",
     "Semimodule",
     "TiePolicy",
     "Tier",
@@ -187,6 +190,7 @@ __all__ = [
     "loads",
     "to_data",
     "execute",
+    "steps",
     "json_value_graph",
     "anchored_position",
     "select",

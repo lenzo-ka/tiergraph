@@ -42,9 +42,12 @@ from tiergraph import (
     RelationInstance,
     Repeat,
     SimpleRelationDeclaration,
+    Step,
     Tier,
     TierDeclaration,
     XsdType,
+    execute,
+    steps,
 )
 from tiergraph.machine import AttributeTarget, Opcode
 
@@ -74,6 +77,74 @@ def test_machine_law(law: object) -> None:
     """Run each reusable law against the reference machine."""
     assert callable(law)
     law()
+
+
+def test_steps_follow_flattened_trace_with_correct_intermediate_graphs() -> None:
+    """Each step corresponds exactly to executing its primitive trace prefix."""
+    declarations = LAWS.declarations()
+    add = AddItem(LAWS.name("events"))
+    program = Program((*declarations, Repeat(2, (add,))))
+    trace = program.unroll().trace
+
+    observed = tuple(steps(program))
+
+    assert len(observed) == len(trace)
+    assert all(isinstance(step, Step) for step in observed)
+    assert tuple(step.index for step in observed) == tuple(range(len(trace)))
+    assert tuple(step.opcode for step in observed) == trace
+    assert tuple(step.graph for step in observed) == tuple(
+        execute(trace[: index + 1]) for index in range(len(trace))
+    )
+    assert observed[-1].graph == execute(trace)
+
+
+def test_step_to_data_is_public_json_serializable_state() -> None:
+    """A repeated program's step state is composed from public JSON data."""
+    declarations = LAWS.declarations()
+    add = AddItem(LAWS.name("events"))
+    observed = tuple(steps(Program((*declarations, Repeat(2, (add,))))))
+    step = observed[-1]
+
+    data = step.to_data()
+
+    assert data == {
+        "index": step.index,
+        "opcode": step.opcode.to_data(),
+        "graph": step.graph.to_data(),
+    }
+    assert json.loads(json.dumps(data)) == data
+
+
+def test_steps_accept_as_built_and_primitive_iterables() -> None:
+    """Every documented source shape produces the same primitive transitions."""
+    outcome = Program(LAWS.declarations()).unroll()
+    assert tuple(steps(outcome)) == tuple(steps(outcome.trace))
+
+
+def test_steps_yield_prefix_before_indexed_refusal() -> None:
+    """A refused transition preserves prior steps and names its trace index."""
+    trace = (*LAWS.declarations(), AddItem(LAWS.name("missing")))
+    iterator = steps(trace)
+    prefix = [next(iterator) for _ in LAWS.declarations()]
+    assert tuple(step.graph for step in prefix) == tuple(
+        execute(trace[: index + 1]) for index in range(len(prefix))
+    )
+    with pytest.raises(
+        ExecutionError,
+        match=rf"opcode {len(prefix)} .*missing.*not declared",
+    ):
+        next(iterator)
+
+
+def test_step_budget_refusal_precedes_iteration() -> None:
+    """A nested repeat bomb cannot produce any primitive step."""
+    yielded: list[Step] = []
+    opcode = AddItem(LAWS.name("events"))
+    hostile = Repeat(MAX_REPEAT_COUNT, (Repeat(MAX_REPEAT_COUNT, (opcode,)),))
+    with pytest.raises(ValueError, match="total primitive opcode count exceeds limit"):
+        program = Program((hostile,))
+        yielded.extend(steps(program))
+    assert yielded == []
 
 
 @pytest.mark.parametrize(
@@ -248,6 +319,29 @@ print(p.fingerprint())
         )
         fingerprints.append(completed.stdout.strip())
     assert len(set(fingerprints)) == 1
+
+
+def test_steps_are_stable_across_hash_seeds() -> None:
+    """Separate interpreters emit the same ordered intermediate states."""
+    script = """import json
+from tiergraph import *
+n=QualifiedName('urn:s','t')
+p=Program((DeclareNamespace(NamespaceDeclaration('s','urn:s')),DeclareTier(TierDeclaration(n,'Tier')),Repeat(2,(AddItem(n),))))
+print(json.dumps([{'index': s.index, 'opcode': s.opcode.to_data(), 'graph': s.graph.to_data()} for s in steps(p)], sort_keys=True))
+"""
+    sequences = []
+    for seed in ("0", "12345", "999"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        sequences.append(completed.stdout)
+    assert len(set(sequences)) == 1
 
 
 def test_all_attribute_domains_are_checked_transitions() -> None:
