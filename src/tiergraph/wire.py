@@ -55,6 +55,10 @@ from tiergraph.schema import (
 # artifact policy refuses older documents rather than interpreting an invalid
 # negative bound differently across validators.
 FORMAT_VERSION = "5"
+# Owner-tunable policy: bound parser memory while admitting substantial graphs.
+MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
+# Owner-tunable policy: stay well below interpreter/parser recursion limits.
+MAX_JSON_DEPTH = 256
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
@@ -88,11 +92,16 @@ def loads(document: str | bytes) -> Graph:
     explicit version-to-version tool, not in the primitive codec.
     """
     try:
-        value = json.loads(document)
+        text = _checked_document(document)
+        value = json.loads(text)
     except json.JSONDecodeError as error:
         raise ValueError(f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
         raise ValueError(f"parse UTF-8 failed: {error.reason}") from error
+    except UnicodeEncodeError as error:
+        raise ValueError(f"encode UTF-8 failed: {error.reason}") from error
+    except RecursionError as error:
+        raise ValueError("parse JSON failed: document nesting is too deep") from error
     root = _object(value, "document")
     _keys(root, object_fields(DOCUMENT), "document")
     version = _string(root["format_version"], "format_version")
@@ -101,6 +110,48 @@ def loads(document: str | bytes) -> Graph:
             f"format_version {version!r} is unsupported; expected {FORMAT_VERSION!r}"
         )
     return _graph(_object(root["graph"], "graph"))
+
+
+def _checked_document(document: str | bytes) -> str:
+    """Enforce byte and nesting policies before invoking the JSON parser."""
+    if isinstance(document, bytes):
+        size = len(document)
+        if size > MAX_DOCUMENT_BYTES:
+            raise ValueError(
+                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}"
+            )
+        text = document.decode("utf-8")
+    else:
+        if len(document) > MAX_DOCUMENT_BYTES:
+            raise ValueError(f"document size exceeds limit {MAX_DOCUMENT_BYTES} bytes")
+        encoded = document.encode("utf-8")
+        size = len(encoded)
+        if size > MAX_DOCUMENT_BYTES:
+            raise ValueError(
+                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}"
+            )
+        text = document
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError(f"JSON nesting depth exceeds limit {MAX_JSON_DEPTH}")
+        elif character in "]}":
+            depth -= 1
+    return text
 
 
 def _graph(data: dict[str, object]) -> Graph:

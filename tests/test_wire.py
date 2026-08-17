@@ -12,6 +12,8 @@ import pytest
 from tests.conformance.wire import WireLawSuite
 from tiergraph import (
     FORMAT_VERSION,
+    MAX_DOCUMENT_BYTES,
+    MAX_JSON_DEPTH,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -38,10 +40,74 @@ from tiergraph import (
     dump_bytes,
     loads,
     to_data,
+    wire,
 )
 
 NS = "urn:wire-test"
 META_NS = "urn:wire-meta"
+
+
+def test_deep_json_is_cleanly_refused_before_parser_recursion() -> None:
+    """Ten thousand nested arrays produce a typed policy error, not recursion."""
+    document = "[" * 10_000 + "0" + "]" * 10_000
+    with pytest.raises(
+        ValueError, match=f"JSON nesting depth exceeds limit {MAX_JSON_DEPTH}"
+    ):
+        loads(document)
+
+
+def test_document_size_budget_discriminates_at_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact UTF-8 bytes are accepted while one byte over is cleanly refused."""
+    document = json.dumps(to_data(Graph((), (), ())))
+    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", len(document.encode("utf-8")))
+    assert loads(document) == Graph((), (), ())
+    with pytest.raises(ValueError, match="document size .*exceeds limit"):
+        loads(document + " ")
+
+    with pytest.raises(ValueError, match="document size .*exceeds limit"):
+        loads((document + " ").encode("utf-8"))
+
+
+def test_document_size_counts_multibyte_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """String documents are bounded by encoded bytes, not code point count."""
+    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
+    with pytest.raises(ValueError, match="document size 2 bytes exceeds limit 1"):
+        loads("é")
+
+
+def test_string_encoding_and_parser_recursion_are_cleanly_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither string encoding nor parser depth failures escape the codec boundary."""
+    with pytest.raises(ValueError, match="encode UTF-8 failed"):
+        loads("\ud800")
+
+    def recursive_parser(_document: str) -> object:
+        raise RecursionError("parser depth")
+
+    monkeypatch.setattr(json, "loads", recursive_parser)
+    with pytest.raises(
+        ValueError, match="parse JSON failed: document nesting is too deep"
+    ):
+        loads("{}")
+
+
+def test_document_size_default_is_a_public_policy_value() -> None:
+    """An input over the shipped size policy is refused without parsing it."""
+    assert MAX_DOCUMENT_BYTES == 16 * 1024 * 1024
+    with pytest.raises(ValueError, match="document size .*exceeds limit"):
+        loads(b" " * (MAX_DOCUMENT_BYTES + 1))
+
+
+def test_reasonable_nested_json_reaches_normal_typed_validation() -> None:
+    """Ordinary nesting is parsed normally rather than rejected by the scanner."""
+    document = "[" * 32 + "0" + "]" * 32
+    with pytest.raises(ValueError, match="document must be an object"):
+        loads(document)
 
 
 def name(local: str) -> QualifiedName:

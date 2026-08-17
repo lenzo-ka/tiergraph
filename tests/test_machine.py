@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -13,6 +14,7 @@ from tests.conformance.machine import MachineLawSuite
 from tiergraph import (
     MACHINE_VERSION,
     MAX_REPEAT_COUNT,
+    MAX_TOTAL_OPCODES,
     AddItem,
     AsBuilt,
     AttachValue,
@@ -100,6 +102,58 @@ def test_repeat_refuses_non_finite_expansion() -> None:
         match=f"repeat count {MAX_REPEAT_COUNT + 1} exceeds limit {MAX_REPEAT_COUNT}",
     ):
         Repeat(MAX_REPEAT_COUNT + 1, ())
+
+
+def test_nested_repeat_refuses_total_expansion_before_materializing() -> None:
+    """A multiplicative procedure bomb is counted, not eagerly expanded."""
+    opcode = AddItem(LAWS.name("events"))
+    hostile = Repeat(MAX_REPEAT_COUNT, (Repeat(MAX_REPEAT_COUNT, (opcode,)),))
+    started = time.monotonic()
+    with pytest.raises(
+        ValueError,
+        match=f"total primitive opcode count exceeds limit {MAX_TOTAL_OPCODES}",
+    ):
+        Program((hostile,))
+    assert time.monotonic() - started < 1.0
+
+
+def test_total_expansion_budget_discriminates_at_boundary() -> None:
+    """The exact trace budget is admitted and one additional primitive is refused."""
+    opcode = AddItem(LAWS.name("events"))
+    Program(
+        (
+            Repeat(
+                MAX_TOTAL_OPCODES // MAX_REPEAT_COUNT,
+                (Repeat(MAX_REPEAT_COUNT, (opcode,)),),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="total primitive opcode count exceeds limit"):
+        Program(
+            (
+                Repeat(
+                    MAX_TOTAL_OPCODES // MAX_REPEAT_COUNT,
+                    (Repeat(MAX_REPEAT_COUNT, (opcode,)),),
+                ),
+                opcode,
+            )
+        )
+
+
+def test_large_admitted_repeat_unrolls_correctly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A useful large procedure beneath policy still produces its complete trace."""
+    opcode = AddItem(LAWS.name("events"))
+
+    def no_op(_opcode: AddItem, graph: Graph) -> Graph:
+        return graph
+
+    monkeypatch.setattr(AddItem, "apply", no_op)
+    outcome = Program((Repeat(MAX_REPEAT_COUNT, (opcode,)),)).unroll()
+    assert len(outcome.trace) == MAX_REPEAT_COUNT
+    assert outcome.trace[0] is opcode
+    assert outcome.trace[-1] is opcode
 
 
 def test_unrecognized_opcode_is_an_indexed_execution_refusal() -> None:

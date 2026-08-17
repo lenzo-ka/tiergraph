@@ -33,6 +33,8 @@ from tiergraph.core import (
 
 MACHINE_VERSION = "1"
 MAX_REPEAT_COUNT = 10_000
+# Owner-tunable policy: bound eager traces while leaving ample room for real builds.
+MAX_TOTAL_OPCODES = 2_000_000
 
 
 class ExecutionError(ValueError):
@@ -345,6 +347,10 @@ class Program:
 
     opcodes: tuple[Opcode, ...]
 
+    def __post_init__(self) -> None:
+        """Refuse source procedures whose flattened trace exceeds policy."""
+        _primitive_count(self.opcodes)
+
     def unroll(self) -> AsBuilt:
         """Lower procedures iteratively and execute every primitive transition."""
         trace = _flatten(self.opcodes)
@@ -443,6 +449,37 @@ def _flatten(opcodes: tuple[Opcode, ...]) -> tuple[PrimitiveOpcode, ...]:
         else:
             flattened.append(cast(PrimitiveOpcode, opcode))
     return tuple(flattened)
+
+
+def _primitive_count(opcodes: tuple[Opcode, ...]) -> int:
+    """Count a procedure tree with capped arithmetic and no recursive calls."""
+    totals: dict[int, int] = {}
+    stack: list[tuple[tuple[Opcode, ...], bool]] = [(opcodes, False)]
+    while stack:
+        block, visited = stack.pop()
+        if not visited:
+            stack.append((block, True))
+            for opcode in block:
+                if type(opcode) is Repeat:
+                    stack.append((opcode.body, False))
+            continue
+
+        total = 0
+        for opcode in block:
+            contribution = 1
+            if type(opcode) is Repeat:
+                body_total = totals[id(opcode.body)]
+                if body_total and opcode.count > MAX_TOTAL_OPCODES // body_total:
+                    contribution = MAX_TOTAL_OPCODES + 1
+                else:
+                    contribution = opcode.count * body_total
+            if contribution > MAX_TOTAL_OPCODES - total:
+                raise ValueError(
+                    f"total primitive opcode count exceeds limit {MAX_TOTAL_OPCODES}"
+                )
+            total += contribution
+        totals[id(block)] = total
+    return totals[id(opcodes)]
 
 
 def _opcode_data(opcode: object) -> object:

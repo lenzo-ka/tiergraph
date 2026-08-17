@@ -53,6 +53,7 @@ from tiergraph.fold import (
 from tiergraph.machine import (
     MACHINE_VERSION,
     MAX_REPEAT_COUNT,
+    MAX_TOTAL_OPCODES,
     AddItem,
     AsBuilt,
     AttachValue,
@@ -90,7 +91,15 @@ from tiergraph.traversal import (
     WalkResult,
 )
 from tiergraph.value import JsonValueProfile, json_value_graph
-from tiergraph.wire import FORMAT_VERSION, dump_bytes, dumps, loads, to_data
+from tiergraph.wire import (
+    FORMAT_VERSION,
+    MAX_DOCUMENT_BYTES,
+    MAX_JSON_DEPTH,
+    dump_bytes,
+    dumps,
+    loads,
+    to_data,
+)
 
 __version__ = "0.0.0"
 
@@ -132,6 +141,9 @@ __all__ = [
     "JsonValueProfile",
     "MACHINE_VERSION",
     "MAX_REPEAT_COUNT",
+    "MAX_TOTAL_OPCODES",
+    "MAX_DOCUMENT_BYTES",
+    "MAX_JSON_DEPTH",
     "NamespaceDeclaration",
     "Node",
     "NodeKind",
