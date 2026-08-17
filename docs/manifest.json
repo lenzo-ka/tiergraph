@@ -1,0 +1,53 @@
+{
+  "api_groups": {
+    "action": ["ActionDeclaration", "DistributionWitness", "ReactDeclaration", "ReactMode", "Semimodule", "WitnessCoordinate", "YieldNormalization"],
+    "clock": ["ClockProfile", "ClockPosition", "PhysicalTiming", "anchored_position"],
+    "construction": ["AddItem", "AsBuilt", "AttachValue", "DeclareAttribute", "DeclareNamespace", "DeclareRelation", "DeclareTier", "ExecutionError", "Program", "PromoteItem", "PromotePosition", "Relate", "Repeat", "execute"],
+    "fold": ["AttributeValuation", "ChildCombination", "FoldCost", "FoldDeclaration", "FoldHomomorphism", "FoldResult", "FoldTransition", "TiePolicy"],
+    "kernel": ["AttributeDeclaration", "AttributeDomain", "AttributeValue", "BipartiteRelationDeclaration", "BoundarySide", "Graph", "Item", "NamespaceDeclaration", "PolyadicRelationDeclaration", "PolyadicRelationInstance", "Position", "QualifiedName", "RelationEndpointKind", "RelationInstance", "RelationSideDeclaration", "SimpleRelationDeclaration", "Tier", "TierDeclaration", "XsdType"],
+    "metadata": ["FORMAT_VERSION", "MACHINE_VERSION", "MAX_REPEAT_COUNT", "__version__"],
+    "profiles": ["JsonValueProfile", "OrderedRootsProfile", "PersistedChoiceProfile", "json_value_graph"],
+    "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
+    "selection": ["AttributeSelector", "BoundariesSelector", "BoundarySelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "TierSelector", "TypeSelector", "select"],
+    "serialization": ["dump_bytes", "dumps", "loads", "to_data"],
+    "traversal": ["NodeSequence", "OrderedContainment", "Walk", "WalkDirection", "WalkResult"]
+  },
+  "companion_exports": {"tiergraph_dot": ["dumps"]},
+  "live_claims": [
+    {
+      "name": "selection-tuple",
+      "page": "docs/guide/selection-and-traversal.md",
+      "text": "`select(graph, (selector,))` returns a canonical `NodeSet`."
+    },
+    {
+      "name": "build-results",
+      "page": "docs/guide/construction.md",
+      "text": "`Program.unroll()` returns `AsBuilt`, including promoted references; `execute()`\nis the convenience operation that returns its `Graph`."
+    }
+  ],
+  "fences": {
+    "README.md": ["console", "python", "python"],
+    "docs/getting-started.md": ["python"],
+    "docs/guide/recognize-and-act.md": ["python", "json"]
+  },
+  "generated_pages": ["docs/reference/api.md", "docs/reference/cli.md"],
+  "constant_descriptions": {
+    "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
+    "MACHINE_VERSION": "Version tag for serialized construction programs.",
+    "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",
+    "__version__": "Installed distribution version."
+  },
+  "reader_pages": [
+    "README.md", "docs/README.md", "docs/concepts.md", "docs/getting-started.md",
+    "docs/guide/construction.md", "docs/guide/selection-and-traversal.md",
+    "docs/guide/folding.md", "docs/guide/recognize-and-act.md",
+    "docs/guide/timing.md", "docs/guide/serialization.md", "docs/guide/profiles.md",
+    "docs/format.md", "docs/contributing-docs.md", "docs/reference/api.md",
+    "docs/reference/cli.md"
+  ],
+  "secondary": {
+    "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "ProductSemiring", "Semiring", "TropicalSemiring"],
+    "tiergraph.schema": ["json_schema", "shape_hash"],
+    "tiergraph.cli": ["build_parser", "main"]
+  }
+}
