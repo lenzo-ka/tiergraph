@@ -1,0 +1,57 @@
+name: Publish
+
+# Build once, then publish via PyPI Trusted Publishing (OIDC) -- no API tokens.
+# Cut a GitHub Release (tag vX.Y.Z) to publish to PyPI.
+#
+# One-time setup (see RELEASING.md):
+#   - PyPI:   add a Trusted Publisher (project tiergraph, this repo, workflow
+#             publish.yml, environment "pypi").
+#   - GitHub: create environment "pypi" (Settings > Environments).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build twine
+      - run: python -m build
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
+      - name: Verify version matches release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION=$(PYTHONPATH=src python -c "import tiergraph; print(tiergraph.__version__)")
+          echo "tiergraph.__version__=$VERSION release tag=$TAG"
+          test "$VERSION" = "${TAG#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tiergraph
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
