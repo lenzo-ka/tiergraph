@@ -27,8 +27,15 @@
   ],
   "fences": {
     "README.md": ["console", "python", "python"],
-    "docs/getting-started.md": ["python"],
-    "docs/guide/recognize-and-act.md": ["python", "json"]
+    "docs/concepts.md": ["python", "text"],
+    "docs/getting-started.md": ["python", "python", "python", "text", "python", "text", "python", "text", "python", "text"],
+    "docs/guide/construction.md": ["python", "text", "python", "text"],
+    "docs/guide/folding.md": ["python", "python", "text", "python", "text", "python", "text"],
+    "docs/guide/profiles.md": ["python", "text", "python", "text"],
+    "docs/guide/recognize-and-act.md": ["python", "json"],
+    "docs/guide/selection-and-traversal.md": ["python", "python", "text", "python", "text", "python", "text"],
+    "docs/guide/serialization.md": ["python", "text", "python", "text"],
+    "docs/guide/timing.md": ["python", "text"]
   },
   "generated_pages": ["docs/reference/api.md", "docs/reference/cli.md"],
   "constant_descriptions": {
