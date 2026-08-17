@@ -133,14 +133,61 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
 
 def cli_bytes() -> bytes:
     """Render normalized parser help and the checked command contracts."""
-    help_text = build_parser().format_help().rstrip()
+    parser = build_parser()
+    action = next(
+        candidate
+        for candidate in parser._actions
+        if isinstance(candidate, argparse._SubParsersAction)
+    )
+    helps = [("tiergraph", parser.format_help().rstrip())]
+    helps.extend(
+        (f"tiergraph {name}", child.format_help().rstrip())
+        for name, child in action.choices.items()
+    )
+    help_text = "\n\n".join(
+        f"### `{name}`\n\n```text\n{body}\n```" for name, body in helps
+    )
     return (
         "# CLI reference\n\n"
         "The `tiergraph` command prints help when called without arguments. "
         "`--version` prints one JSON object and exits successfully.\n\n"
         "`tiergraph.cli.build_parser()` is importable and usable, but carries no "
         f"API-stability promise at version {tiergraph.__version__}.\n\n"
-        "## Help\n\n```text\n" + help_text + "\n```\n"
+        "## Contracts\n\n"
+        "Every command accepts `-` as stdin. Document-producing commands write to "
+        "stdout by default or to `-o/--output`; diagnostics go only to stderr. "
+        "Exit status 0 means success, 1 means invalid input or a refused operation, "
+        "2 means command-line usage error, and 3 means an I/O or encoding failure.\n\n"
+        "`validate` reports whether `loads()` accepts a document. This is deliberately "
+        "separate from emission: a loads-accepted value such as an escaped lone "
+        "surrogate can still be refused cleanly by `convert` during strict UTF-8 "
+        "encoding. `convert` canonicalizes to indented `json`, compact `json-compact`, "
+        "or `bytes`; bytes uses the canonical JSON byte API and is not another syntax.\n\n"
+        "`run` consumes a CLI-owned JSONL stream. Its first line is exactly "
+        '`{"machine_version":"1"}` and each later line has one opcode\'s public '
+        "`to_data()` shape (a repeat body remains nested on that line). Header-only "
+        "programs are valid, CRLF and a final line without a newline are accepted, "
+        "and whitespace-only lines are rejected. The decoder caps each line at 1 MiB "
+        "and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce "
+        "repeat and total expansion bounds.\n\n"
+        "`step` reads that same JSONL program and drives the public `steps()` "
+        "generator. Its default dump mode writes one deterministic compact JSON "
+        "object per yielded `Step.to_data()` value. `--interactive` (or a TTY) "
+        "provides `step`/`next`, `continue`, `run-to N`/`break N`, `print`/`inspect`, "
+        "`list`, and `quit`. A refused opcode exits 1 after reporting its index and "
+        "the last good graph, with no traceback. Interactive programs must come "
+        "from a file because stdin carries REPL commands.\n\n"
+        "`inspect` reports tiers in graph order and relation declarations in canonical "
+        "graph order (qualified-name order), not source declaration order.\n\n"
+        "## Deterministic stepping example\n\n"
+        "For a program whose first opcode declares prefix `s` for `urn:step`, dump "
+        "its exact public step states:\n\n"
+        "```console\n"
+        "$ tiergraph step program.jsonl\n"
+        '{"graph":{"attribute_declarations":[],"attributes":[],"namespaces":[{"namespace":"urn:step","prefix":"s"}],"polyadic_relations":[],"position_values":[],"relation_declarations":[],"relations":[],"tiers":[]},"index":0,"opcode":{"declaration":{"namespace":"urn:step","prefix":"s"},"opcode":"declare_namespace"}}\n'
+        "```\n\n"
+        "Each output line is independently parseable JSON.\n\n"
+        "## Help\n\n" + help_text + "\n"
     ).encode()
 
 

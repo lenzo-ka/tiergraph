@@ -4,6 +4,20 @@ This walkthrough goes from a first graph to a first fold. Install the package on
 Python 3.12 or later, then follow the steps in order; each one builds on the
 graph from the step before.
 
+## Use the command line
+
+The CLI reads graph documents from files or stdin. This validates a document,
+canonicalizes it to compact JSON, and renders the result without intermediate
+files:
+
+    $ tiergraph validate score.json
+    ok
+    $ tiergraph convert score.json --to bytes | tiergraph render - -o score.dot
+
+Machine programs use JSONL rather than the graph document format: the first
+line is `{"machine_version":"1"}`, followed by one public opcode `to_data()`
+object per line. Run one with `tiergraph run program.jsonl --to json`.
+
 ## A first graph
 
 The smallest useful graph is one namespace and one tier with an item. `Graph`
