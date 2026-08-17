@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 84 top-level `tiergraph` exports exactly once.
+It covers 87 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -511,9 +511,21 @@ Version tag written by the JSON wire codec. Current value: `5`.
 
 Version tag for serialized construction programs. Current value: `1`.
 
+### `MAX_DOCUMENT_BYTES`
+
+Largest UTF-8 JSON document accepted by the wire codec. Current value: `16777216`.
+
+### `MAX_JSON_DEPTH`
+
+Deepest JSON container nesting accepted by the wire codec. Current value: `256`.
+
 ### `MAX_REPEAT_COUNT`
 
 Largest repeat count accepted by the build machine. Current value: `10000`.
+
+### `MAX_TOTAL_OPCODES`
+
+Largest flattened primitive trace accepted by the build machine. Current value: `2000000`.
 
 ### `__version__`
 
