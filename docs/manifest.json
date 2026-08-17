@@ -10,7 +10,7 @@
     "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
     "selection": ["AttributeSelector", "BoundariesSelector", "BoundarySelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "TierSelector", "TypeSelector", "select"],
     "serialization": ["dump_bytes", "dumps", "loads", "to_data"],
-    "traversal": ["NodeSequence", "OrderedContainment", "Walk", "WalkDirection", "WalkResult"]
+    "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
   },
   "companion_exports": {"tiergraph_dot": ["dumps"]},
   "live_claims": [

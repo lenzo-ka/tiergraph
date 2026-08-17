@@ -223,8 +223,12 @@ def test_runtime_endpoint_kind_refusal_names_corrupt_instance() -> None:
     boundary = DurablePositionRef(DurableItemRef("root"), BoundarySide.AFTER)
     object.__setattr__(instance, "targets", (*instance.targets, boundary))
 
-    with pytest.raises(ValueError, match=r"contains.*instance 0 target 3.*not an item"):
+    with pytest.raises(ValueError) as caught:
         traversal.direct_children(ItemRef(PARENTS, 0))
+    assert str(caught.value) == (
+        "ordered containment relation "
+        "'{urn:test:ordered-containment}contains' instance 0 target 3 is not an item"
+    )
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -294,8 +298,14 @@ def test_runtime_endpoint_membership_refusal_names_corrupt_instance() -> None:
     outside = ItemRef(name("missing-tier"), 7)
     object.__setattr__(instance, "targets", (*instance.targets, outside))
 
-    with pytest.raises(ValueError, match=r"instance 0 target.*missing-tier.*outside"):
+    with pytest.raises(ValueError) as caught:
         traversal.direct_children(ItemRef(PARENTS, 0))
+    assert str(caught.value) == (
+        "ordered containment relation "
+        "'{urn:test:ordered-containment}contains' instance 0 target "
+        "{'tier': {'namespace': 'urn:test:ordered-containment', "
+        "'local_name': 'missing-tier'}, 'index': 7} is outside its graph"
+    )
 
 
 @pytest.mark.parametrize(
@@ -340,8 +350,14 @@ def test_runtime_cycle_refusal_names_injected_closing_instance(
     )
     object.__setattr__(value, "polyadic_relations", (*instances, closing))
 
-    with pytest.raises(ValueError, match=r"cycle-contains.*instance 2 closes a cycle"):
+    with pytest.raises(ValueError) as caught:
         getattr(traversal, method_name)(ItemRef(tier_name, 0))
+    assert str(caught.value) == (
+        "ordered containment relation "
+        "'{urn:test:ordered-containment}cycle-contains' instance 2 closes a cycle "
+        "at {'tier': {'namespace': 'urn:test:ordered-containment', "
+        "'local_name': 'cycle-nodes'}, 'index': 0}"
+    )
 
 
 def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
@@ -350,8 +366,12 @@ def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
     traversal = OrderedContainment(value, CONTAINS)
     object.__setattr__(value.polyadic_relations[0], "targets", ())
 
-    with pytest.raises(ValueError, match=r"contains.*instance 0.*empty target side"):
+    with pytest.raises(ValueError) as caught:
         traversal.direct_children(ItemRef(PARENTS, 0))
+    assert str(caught.value) == (
+        "ordered containment relation "
+        "'{urn:test:ordered-containment}contains' instance 0 has an empty target side"
+    )
 
 
 def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
@@ -365,22 +385,35 @@ def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("bound_name", "bound", "instance_index", "arity"),
-    [("minimum", 3, 1, 2), ("maximum", 2, 0, 3)],
+    ("bound_name", "bound", "expected"),
+    [
+        (
+            "minimum",
+            3,
+            "ordered containment relation "
+            "'{urn:test:ordered-containment}contains' instance 1 target arity 2 "
+            "is outside declared bounds 3..None",
+        ),
+        (
+            "maximum",
+            2,
+            "ordered containment relation "
+            "'{urn:test:ordered-containment}contains' instance 0 target arity 3 "
+            "is outside declared bounds 1..2",
+        ),
+    ],
 )
 def test_runtime_arity_refusal_names_corrupt_instance_and_side(
-    bound_name: str, bound: int, instance_index: int, arity: int
+    bound_name: str, bound: int, expected: str
 ) -> None:
     """Nonempty live sides must remain inside both declared arity bounds."""
     value = graph()
     traversal = OrderedContainment(value, CONTAINS)
     object.__setattr__(traversal._declaration.targets, bound_name, bound)
 
-    with pytest.raises(
-        ValueError,
-        match=rf"contains.*instance {instance_index} target arity {arity}.*bounds",
-    ):
+    with pytest.raises(ValueError) as caught:
         traversal.direct_children(ItemRef(PARENTS, 0))
+    assert str(caught.value) == expected
 
 
 def test_runtime_validation_ignores_instances_of_other_relations() -> None:

@@ -119,6 +119,25 @@ one hop from a: ['b', 'd'] truncated: True
 One step from `a` reaches `b` and `d`; `c` is a second step away, so the walk
 reports `truncated: True`.
 
+## Ordered polyadic traversal
+
+`OrderedPolyadicTraversal` is the role-neutral engine for any declared polyadic
+relation. It binds the stored source and target sides explicitly. `direct()`
+returns a `NodeSequence` in relation-instance and endpoint-incidence order,
+including repeated endpoints. `transitive()` returns depth-first pre-order in
+that same incidence order and is admitted only for a declaration whose
+`acyclic` promise was validated by the graph.
+
+`inverse()` computes a `NodeSet` fiber, so repeated endpoints and parents are
+deduplicated into canonical graph order. When stored order is the question,
+`stored_opposite(instance_index)` returns the selected opposite-side sequence
+for that particular relation instance instead. Either side may be selected as
+the traversal source, and item and boundary endpoints are resolved without
+assigning them domain roles.
+
+`OrderedContainment` below is the item-only, source-unique, acyclic profile over
+this shared engine. Its existing result types and ordering remain unchanged.
+
 ## Ordered containment
 
 `OrderedContainment` is a narrower reading for one polyadic relation that models
