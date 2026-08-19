@@ -21,6 +21,7 @@ from tiergraph.core import (
     JsonValue,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
@@ -190,12 +191,17 @@ class PromotePosition:
 
 @dataclass(frozen=True, slots=True)
 class Relate:
-    """Add one instance of a declared bipartite relation."""
+    """Add one instance of a declared bipartite or polyadic relation."""
 
-    relation: RelationInstance
+    relation: RelationInstance | PolyadicRelationInstance
 
     def apply(self, graph: Graph) -> Graph:
         """Append the instance through endpoint and invariant validation."""
+        if isinstance(self.relation, PolyadicRelationInstance):
+            return _replace(
+                graph,
+                polyadic_relations=(*graph.polyadic_relations, self.relation),
+            )
         return _replace(graph, relations=(*graph.relations, self.relation))
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -545,6 +551,7 @@ def _validate_graph(graph: Graph) -> Graph:
         graph.attribute_declarations,
         graph.position_values,
         graph.attributes,
+        graph.polyadic_relations,
     )
 
 
@@ -558,6 +565,7 @@ def _replace(
     attribute_declarations: tuple[AttributeDeclaration, ...] | None = None,
     position_values: tuple[Position, ...] | None = None,
     attributes: tuple[AttributeValue, ...] | None = None,
+    polyadic_relations: tuple[PolyadicRelationInstance, ...] | None = None,
 ) -> Graph:
     return Graph(
         graph.namespaces if namespaces is None else namespaces,
@@ -571,6 +579,7 @@ def _replace(
         else attribute_declarations,
         graph.position_values if position_values is None else position_values,
         graph.attributes if attributes is None else attributes,
+        graph.polyadic_relations if polyadic_relations is None else polyadic_relations,
     )
 
 

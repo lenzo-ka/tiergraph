@@ -33,13 +33,17 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     PositionRef,
     Program,
     PromoteItem,
     PromotePosition,
     QualifiedName,
     Relate,
+    RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     Repeat,
     SimpleRelationDeclaration,
     Step,
@@ -475,6 +479,29 @@ def test_relation_declaration_opcode_serializes_both_kernel_kinds() -> None:
     tier = DeclareTier(TierDeclaration(name("t"), "Tier"))
     for opcode in (simple, bipartite, tier, Repeat(0, (AddItem(name("t")),))):
         json.dumps(opcode.to_data(), allow_nan=False)
+
+
+def test_relate_opcode_builds_ordered_polyadic_instances() -> None:
+    """The machine retains a polyadic instance and its ordered target sequence."""
+    tier = LAWS.name("events")
+    relation_name = LAWS.name("ordered")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), 1, 2)
+    relation = PolyadicRelationInstance(
+        relation_name,
+        (ItemRef(tier, 0),),
+        (ItemRef(tier, 1), ItemRef(tier, 0)),
+    )
+    outcome = build_program(
+        (
+            *LAWS.declarations(),
+            AddItem(tier),
+            AddItem(tier),
+            DeclareRelation(PolyadicRelationDeclaration(relation_name, side, side)),
+            Relate(relation),
+        )
+    ).unroll()
+    assert outcome.graph.polyadic_relations == (relation,)
+    assert outcome.trace[-1].to_data()["relation"] == relation.to_data()
 
 
 def test_promoted_references_drive_later_checked_operations() -> None:

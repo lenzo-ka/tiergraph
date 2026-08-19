@@ -28,8 +28,10 @@ from tiergraph import (
     DeclareRelation,
     DeclareTier,
     Item,
+    ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     PositionRef,
     Program,
     PromoteItem,
@@ -528,6 +530,44 @@ def test_every_remaining_opcode_shape_round_trips_through_decoder(
     assert graph.attributes[0].lexical == "value"
 
 
+def test_polyadic_relate_round_trips_through_run_and_step(tmp_path: Path) -> None:
+    """JSONL decoding preserves ordered polyadic endpoints on both CLI paths."""
+    namespace = "urn:polyadic-program"
+    tier = QualifiedName(namespace, "items")
+    relation_name = QualifiedName(namespace, "ordered")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), 1, 2)
+    relation = PolyadicRelationInstance(
+        relation_name,
+        (ItemRef(tier, 0),),
+        (ItemRef(tier, 1), ItemRef(tier, 0)),
+    )
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("p", namespace)),
+            DeclareTier(TierDeclaration(tier, "Items")),
+            AddItem(tier),
+            AddItem(tier),
+            DeclareRelation(PolyadicRelationDeclaration(relation_name, side, side)),
+            Relate(relation),
+        )
+    )
+    source = tmp_path / "polyadic.jsonl"
+    _program(source, *program.opcodes)
+
+    decoded = cli._read_program(str(source))
+    assert decoded.unroll().graph == program.unroll().graph
+    assert decoded.opcodes[-1] == Relate(relation)
+
+    run_output = tmp_path / "run.json"
+    assert main(["run", str(source), "--to", "json", "-o", str(run_output)]) == 0
+    assert tiergraph.loads(run_output.read_bytes()) == program.unroll().graph
+
+    step_output = tmp_path / "steps.jsonl"
+    assert main(["step", str(source), "-o", str(step_output)]) == 0
+    final_step = json.loads(step_output.read_text().splitlines()[-1])
+    assert final_step["graph"] == program.unroll().graph.to_data()
+
+
 def test_public_opcode_data_shapes_decode_exactly() -> None:
     ns = "urn:decode"
     tier = QualifiedName(ns, "tier")
@@ -610,6 +650,10 @@ def test_reference_and_collection_shape_errors() -> None:
             },
             "side",
         )
+    polyadic = PolyadicRelationInstance(QualifiedName("urn:x", "r"), (), ()).to_data()
+    polyadic["sources"] = {}
+    with pytest.raises(ValueError, match="sources and targets must be arrays"):
+        cli._relation_instance(polyadic, "relation")
     with pytest.raises(ValueError, match="must contain at most one"):
         data = PolyadicRelationDeclaration(
             QualifiedName("urn:x", "r"),

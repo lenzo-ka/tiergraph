@@ -241,10 +241,10 @@ Promote one structural boundary reference to anchored identity.
 ### `Relate`
 
 ```text
-Relate(relation: 'RelationInstance') -> None
+Relate(relation: 'RelationInstance | PolyadicRelationInstance') -> None
 ```
 
-Add one instance of a declared bipartite relation.
+Add one instance of a declared bipartite or polyadic relation.
 
 ### `Repeat`
 

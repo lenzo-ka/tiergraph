@@ -33,6 +33,7 @@ from tiergraph import (
     ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     PositionRef,
     Program,
     PromoteItem,
@@ -607,7 +608,32 @@ def _endpoint(value: Any, path: str) -> Any:
     raise ValueError(f"{path} has an unknown reference shape")
 
 
-def _relation_instance(value: Any, path: str) -> RelationInstance:
+def _relation_instance(
+    value: Any, path: str
+) -> RelationInstance | PolyadicRelationInstance:
+    if isinstance(value, dict) and "sources" in value:
+        obj = _object(
+            value,
+            path,
+            {"declaration", "sources", "targets", "durable_id", "attributes"},
+        )
+        sources = obj["sources"]
+        targets = obj["targets"]
+        if not isinstance(sources, list) or not isinstance(targets, list):
+            raise ValueError(f"{path} sources and targets must be arrays")
+        return PolyadicRelationInstance(
+            _qname(obj["declaration"], f"{path}.declaration"),
+            tuple(
+                _endpoint(endpoint, f"{path}.sources[{index}]")
+                for index, endpoint in enumerate(sources)
+            ),
+            tuple(
+                _endpoint(endpoint, f"{path}.targets[{index}]")
+                for index, endpoint in enumerate(targets)
+            ),
+            obj["durable_id"],
+            _attributes(obj["attributes"], f"{path}.attributes"),
+        )
     obj = _object(
         value, path, {"declaration", "left", "right", "durable_id", "attributes"}
     )
