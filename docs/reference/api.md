@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 91 top-level `tiergraph` exports exactly once.
+It covers 102 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -348,6 +348,78 @@ TiePolicy(*values)
 
 Supported, executable policies for equal-valued alternatives.
 
+## Grammar
+
+### `GrammarDeclaration`
+
+```text
+GrammarDeclaration(nonterminals: 'tuple[QualifiedName, ...]', start: 'QualifiedName', rules: 'tuple[GrammarRule, ...]') -> None
+```
+
+Hold a validated synchronous grammar with fixed source and target roles.
+
+### `GrammarHole`
+
+```text
+GrammarHole(variable: 'AttributeValue', nonterminal: 'QualifiedName') -> None
+```
+
+Bind one named pattern variable to a declared nonterminal.
+
+### `GrammarRule`
+
+```text
+GrammarRule(left: 'QualifiedName', source: 'GrammarPattern', target: 'GrammarPattern', boundary: 'AttributeValue' = AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete'), awaited_variables: 'tuple[AttributeValue, ...]' = ()) -> None
+```
+
+Declare one directional pairing of source and target patterns.
+
+### `GrammarTerminal`
+
+```text
+GrammarTerminal(text: 'AttributeValue') -> None
+```
+
+Carry one source or target terminal as a canonical XSD string value.
+
+### `LoweredGrammar`
+
+```text
+LoweredGrammar(declaration: 'GrammarDeclaration', program: 'Program', as_built: 'AsBuilt') -> None
+```
+
+Pair a grammar with its replayable coordinate-hedge construction.
+
+### `ParseForest`
+
+```text
+ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]') -> None
+```
+
+Carry a machine-built parse forest and its Boolean interpretation.
+
+### `lower_grammar`
+
+```text
+lower_grammar(declaration: 'GrammarDeclaration', namespace: 'str' = 'urn:tiergraph:grammar') -> 'LoweredGrammar'
+```
+
+Lower a grammar through machine opcodes to an ordered coordinate hedge.
+
+### `recognize`
+
+```text
+recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str]', namespace: 'str' = 'urn:tiergraph:grammar:chart') -> 'ParseForest'
+```
+
+Build a chart forest for token input using polynomial span deduction.
+
+For a fixed grammar whose longest source pattern has length ``m``, the
+exhaustive boundary discipline takes ``O(n^(m+1))`` time and polynomial
+space in input length ``n``. Nullable expansion and unit closure remove
+same-span dependencies before candidate construction, so every remaining
+child span is shorter than its parent span.
+
 ## Kernel
 
 ### `AttributeDeclaration`
@@ -546,6 +618,18 @@ Largest repeat count accepted by the build machine. Current value: `10000`.
 ### `MAX_TOTAL_OPCODES`
 
 Largest flattened primitive trace accepted by the build machine. Current value: `2000000`.
+
+### `GRAMMAR_NAMESPACE`
+
+Default namespace for lowered grammar coordinates. Current value: `urn:tiergraph:grammar`.
+
+### `CHART_NAMESPACE`
+
+Default namespace for grammar chart forests. Current value: `urn:tiergraph:grammar:chart`.
+
+### `COMPLETE_BOUNDARY`
+
+Canonical complete-boundary grammar value. Current value: `AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete')`.
 
 ### `__version__`
 

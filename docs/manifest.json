@@ -4,8 +4,9 @@
     "clock": ["ClockProfile", "ClockPosition", "PhysicalTiming", "anchored_position"],
     "construction": ["AddItem", "AsBuilt", "AttachValue", "DeclareAttribute", "DeclareNamespace", "DeclareRelation", "DeclareTier", "ExecutionError", "Program", "PromoteItem", "PromotePosition", "Relate", "Repeat", "Step", "execute", "steps"],
     "fold": ["AttributeValuation", "ChildCombination", "FoldCost", "FoldDeclaration", "FoldHomomorphism", "FoldResult", "FoldTransition", "TiePolicy"],
+    "grammar": ["GrammarDeclaration", "GrammarHole", "GrammarRule", "GrammarTerminal", "LoweredGrammar", "ParseForest", "lower_grammar", "recognize"],
     "kernel": ["AttributeDeclaration", "AttributeDomain", "AttributeValue", "BipartiteRelationDeclaration", "BoundarySide", "Graph", "Item", "NamespaceDeclaration", "PolyadicRelationDeclaration", "PolyadicRelationInstance", "Position", "QualifiedName", "RelationEndpointKind", "RelationInstance", "RelationSideDeclaration", "SimpleRelationDeclaration", "Tier", "TierDeclaration", "XsdType"],
-    "metadata": ["FORMAT_VERSION", "MACHINE_VERSION", "MAX_DOCUMENT_BYTES", "MAX_JSON_DEPTH", "MAX_REPEAT_COUNT", "MAX_TOTAL_OPCODES", "__version__"],
+    "metadata": ["FORMAT_VERSION", "MACHINE_VERSION", "MAX_DOCUMENT_BYTES", "MAX_JSON_DEPTH", "MAX_REPEAT_COUNT", "MAX_TOTAL_OPCODES", "GRAMMAR_NAMESPACE", "CHART_NAMESPACE", "COMPLETE_BOUNDARY", "__version__"],
     "profiles": ["JsonValueProfile", "OrderedRootsProfile", "PersistedChoiceProfile", "json_value_graph"],
     "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
     "selection": ["AttributeSelector", "BoundariesSelector", "BoundarySelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "TierSelector", "TypeSelector", "select"],
@@ -45,6 +46,9 @@
     "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec.",
     "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",
     "MAX_TOTAL_OPCODES": "Largest flattened primitive trace accepted by the build machine.",
+    "GRAMMAR_NAMESPACE": "Default namespace for lowered grammar coordinates.",
+    "CHART_NAMESPACE": "Default namespace for grammar chart forests.",
+    "COMPLETE_BOUNDARY": "Canonical complete-boundary grammar value.",
     "__version__": "Installed distribution version."
   },
   "reader_pages": [
