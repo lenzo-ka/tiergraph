@@ -5,7 +5,7 @@ package.*
 
 Publishing is automated via `.github/workflows/publish.yml` using **PyPI Trusted
 Publishing (OIDC)** — no API tokens. You cut a GitHub Release; the workflow
-builds, checks, and uploads. This doc is the operator checklist.
+builds and uploads. This doc is the operator checklist.
 
 ---
 
@@ -53,7 +53,7 @@ job references it; the OIDC identity is scoped to it).
 2. **Verify locally** (all must be clean):
    ```bash
    make check          # lint, strict types, suite, three hash seeds, docs currency
-   python -m build && twine check dist/*
+   python -m build
    PYTHONPATH=src python -c "import tiergraph; print(tiergraph.__version__)"
    rm -rf dist build
    ```
@@ -68,7 +68,6 @@ job references it; the OIDC identity is scoped to it).
 4. **Publish** — create a **GitHub Release** for tag `vX.Y.Z` (Releases → Draft a
    new release). Publishing the release triggers `publish.yml`, which:
    - builds sdist + wheel (both `tiergraph` and `tiergraph_dot` packages),
-   - runs `twine check`,
    - **asserts the tag matches `tiergraph.__version__`** (fails the release
      otherwise),
    - uploads to PyPI via OIDC.
