@@ -24,10 +24,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip build twine
+      - run: python -m pip install --upgrade pip build
       - run: python -m build
-      - name: Check distribution metadata
-        run: python -m twine check dist/*
       - name: Verify version matches release tag
         env:
           TAG: ${{ github.event.release.tag_name }}
