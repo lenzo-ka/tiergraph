@@ -73,6 +73,10 @@ class Semiring[T](Protocol):
         """Report strict order preservation away from zero."""
 
     @property
+    def multiply_preserves_witness_order(self) -> bool:
+        """Report whether multiplication preserves the order induced by addition."""
+
+    @property
     def zero_sum_free(self) -> bool:
         """Report whether a sum is zero only when both operands are zero."""
 
@@ -103,6 +107,7 @@ class BooleanSemiring:
     add_idempotent = multiply_commutative = True
     add_selective = True
     multiply_strictly_order_preserving = False
+    multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
     def _value(self, value: bool, name: str) -> bool:
@@ -138,6 +143,7 @@ class CountingSemiring:
     multiply_commutative = True
     add_selective = False
     multiply_strictly_order_preserving = False
+    multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
     def _value(self, value: int, name: str) -> int:
@@ -170,6 +176,7 @@ class DecimalExtremumSemiring:
     add_idempotent = multiply_commutative = True
     add_selective = True
     multiply_strictly_order_preserving = True
+    multiply_preserves_witness_order = True
     zero_sum_free = no_zero_divisors = True
 
     def __init__(self, *, minimum: bool) -> None:
@@ -245,6 +252,7 @@ class DoubleExtremumSemiring:
     add_idempotent = multiply_commutative = True
     add_selective = True
     multiply_strictly_order_preserving = False
+    multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
     def __init__(self, *, minimum: bool) -> None:
@@ -349,6 +357,11 @@ class ProductSemiring[T, U]:
     @property
     def multiply_strictly_order_preserving(self) -> bool:
         """Report false because a nonzero pair may have a zero component."""
+        return False
+
+    @property
+    def multiply_preserves_witness_order(self) -> bool:
+        """Report false because an external order need not be componentwise."""
         return False
 
     @property
@@ -492,6 +505,7 @@ class PathWitnessSemiring:
     multiply_commutative = False
     add_selective = False
     multiply_strictly_order_preserving = False
+    multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
     def _value(
@@ -582,6 +596,11 @@ class ExpectationSemiring[T](ProductSemiring[T, T]):
         return False
 
     @property
+    def multiply_preserves_witness_order(self) -> bool:
+        """Report false because expectation multiplication mixes components."""
+        return False
+
+    @property
     def zero_sum_free(self) -> bool:
         """Derive zero-sum freedom from the base."""
         return self.left.zero_sum_free
@@ -597,6 +616,11 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
 
     def __init__(self) -> None:
         super().__init__(DECIMAL_TROPICAL, PATH_WITNESSES)
+
+    @property
+    def multiply_preserves_witness_order(self) -> bool:
+        """Report preservation of the exact decimal cost ordering."""
+        return True
 
 
 type Path = tuple[str, ...]

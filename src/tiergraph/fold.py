@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from functools import cmp_to_key
 from itertools import product
 from typing import Protocol, TypeVar
 
@@ -28,6 +29,7 @@ Coordinate = tuple[str, ...]
 State = tuple[ItemRef, Coordinate]
 Path = tuple[str, ...]
 Provenance = tuple[Path, ...]
+type RankedWitness[Value] = tuple[Value, Path]
 
 
 class Lift(Protocol[LiftValue]):
@@ -146,33 +148,50 @@ class FoldCost:
     witness_count: int
     emitted_count: int
     output_cap: int
+    witness_operations: int = 0
+    ranked_multiplications: int = 0
 
     @property
     def bound(self) -> int:
         """Return the declared structural/carrier/output work bound."""
-        return (
+        structural = (
             self.document_size + self.relation_incidence
-        ) * self.index_product_size * self.carrier_operation_cost + min(
-            self.witness_count, self.output_cap
+        ) * self.index_product_size
+        base = structural * self.carrier_operation_cost
+        ranked = (
+            (self.document_size + self.relation_incidence) ** 2
+            * self.index_product_size
+            * self.output_cap**4
+            * self.carrier_operation_cost
+            if self.ranked_multiplications or self.witness_operations
+            else 0
         )
+        return base + ranked + min(self.witness_count, self.output_cap)
 
     @property
     def measured_work(self) -> int:
         """Return measured traversal work plus actually emitted output."""
-        return (
+        structural = (
             self.document_size + self.relation_incidence
-        ) * self.index_product_size * self.carrier_operation_cost + self.emitted_count
+        ) * self.index_product_size
+        base = structural * self.carrier_operation_cost
+        ranked = (
+            self.ranked_multiplications + self.witness_operations
+        ) * self.carrier_operation_cost
+        return base + ranked + self.emitted_count
 
     @property
     def carrier_work(self) -> int:
         """Return measured semiring-operation work at the declared unit cost."""
         return (
-            self.carrier_additions + self.carrier_multiplications
+            self.carrier_additions
+            + self.carrier_multiplications
+            + self.witness_operations
         ) * self.carrier_operation_cost
 
     def to_data(self) -> dict[str, int]:
         """Return a strict-JSON cost account."""
-        return {
+        data = {
             "document_size": self.document_size,
             "relation_incidence": self.relation_incidence,
             "index_product_size": self.index_product_size,
@@ -186,6 +205,10 @@ class FoldCost:
             "bound": self.bound,
             "measured_work": self.measured_work,
         }
+        if self.witness_operations or self.ranked_multiplications:
+            data["witness_operations"] = self.witness_operations
+            data["ranked_multiplications"] = self.ranked_multiplications
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,10 +221,11 @@ class FoldResult[Value]:
     provenance: Provenance | None
     truncated: bool
     cost: FoldCost
+    ranked_witnesses: tuple[RankedWitness[Value], ...] | None = None
 
     def to_data(self, semiring: Semiring[Value]) -> dict[str, object]:
         """Return deterministic strict-JSON data."""
-        return {
+        data: dict[str, object] = {
             "value": semiring.encode(self.value),
             "provenance": (
                 None
@@ -216,11 +240,24 @@ class FoldResult[Value]:
             ],
             "cost": self.cost.to_data(),
         }
+        if self.ranked_witnesses is not None:
+            data["ranked_witnesses"] = [
+                {"value": semiring.encode(value), "path": list(path)}
+                for value, path in self.ranked_witnesses
+            ]
+        return data
 
 
 @dataclass(frozen=True, slots=True)
 class FoldDeclaration[Value]:
-    """Bind one named interpretation to a graph, valuation, algebra, and finite DAG."""
+    """Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
+
+    With ``ranked_output`` the fold also returns up to ``output_cap`` witnesses ranked
+    by the semiring's own order, which its multiplication must preserve
+    (``multiply_preserves_witness_order``); a custom ``witness_order`` is refused. Among
+    witnesses of equal carrier value the ranked selection is deterministic but not
+    guaranteed to be a globally canonical one.
+    """
 
     name: str
     graph: Graph
@@ -234,6 +271,7 @@ class FoldDeclaration[Value]:
     tie_policy: TiePolicy | None = None
     output_cap: int = 1
     carrier_operation_cost: int = 1
+    ranked_output: bool = False
 
     def __post_init__(self) -> None:
         """Validate every declaration-level refusal before a fold can run."""
@@ -252,7 +290,27 @@ class FoldDeclaration[Value]:
             raise ValueError(
                 f"fold {self.name!r} produces witnesses but has no tie policy"
             )
-        if self.witness_order is None and self.tie_policy is not None:
+        if self.ranked_output and self.tie_policy is None:
+            raise ValueError(
+                f"fold {self.name!r} produces ranked witnesses but has no tie policy"
+            )
+        if self.ranked_output and self.witness_order is not None:
+            raise ValueError(
+                f"fold {self.name!r} ranked output uses the semiring's canonical "
+                "order and conflicts with a custom witness_order"
+            )
+        if self.ranked_output and not getattr(
+            self.semiring, "multiply_preserves_witness_order", False
+        ):
+            raise ValueError(
+                f"fold {self.name!r} semiring {type(self.semiring).__name__!r} "
+                "does not declare multiply_preserves_witness_order"
+            )
+        if (
+            self.witness_order is None
+            and not self.ranked_output
+            and self.tie_policy is not None
+        ):
             raise ValueError(
                 f"fold {self.name!r} declares tie policy {self.tie_policy!r} "
                 "but produces no witnesses"
@@ -390,19 +448,30 @@ class FoldDeclaration[Value]:
         coordinates = self.coordinates()
         additions = 0
         multiplications = 0
+        ranked_multiplications = 0
+        ranked_additions = [0]
+        witness_operations = [0]
+        root_witness_count = 0
         all_values: list[tuple[State, Value]] = []
         root_states: list[State] = []
         total = self.semiring.zero
         selected: tuple[Value, Provenance] | None = None
+        ranked_roots: list[RankedWitness[Value]] = []
         for coordinate in coordinates:
-            cache: dict[ItemRef, tuple[Value, Provenance]] = {}
+            cache: dict[
+                ItemRef,
+                tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+            ] = {}
 
             def visit(
                 reference: ItemRef,
-                state_cache: dict[ItemRef, tuple[Value, Provenance]] = cache,
-            ) -> tuple[Value, Provenance]:
+                state_cache: dict[
+                    ItemRef,
+                    tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+                ] = cache,
+            ) -> tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int]:
                 """Evaluate one state once for the current index coordinate."""
-                nonlocal additions, multiplications
+                nonlocal additions, multiplications, ranked_multiplications
                 if reference in state_cache:
                     return state_cache[reference]
                 item = _item(self.graph, reference)
@@ -410,6 +479,12 @@ class FoldDeclaration[Value]:
                 local = self.lift(self.valuation.read(self.graph, reference), label)
                 value = local
                 paths: Provenance = ((label,),)
+                ranked: tuple[RankedWitness[Value], ...] = (
+                    ()
+                    if not self.ranked_output or local == self.semiring.zero
+                    else ((local, (label,)),)
+                )
+                ranked_count = len(ranked)
                 has_children = False
                 for transition in self.transitions:
                     children = outgoing[reference][transition.relation]
@@ -420,7 +495,16 @@ class FoldDeclaration[Value]:
                     if transition.combination is ChildCombination.AND:
                         relation_value = self.semiring.one
                         relation_paths: Provenance = ((),)
-                        for child_value, child_paths in child_results:
+                        relation_ranked: tuple[RankedWitness[Value], ...] = (
+                            (self.semiring.one, ()),
+                        )
+                        relation_count = 1
+                        for (
+                            child_value,
+                            child_paths,
+                            child_ranked,
+                            child_count,
+                        ) in child_results:
                             relation_value = self.semiring.multiply(
                                 relation_value, child_value
                             )
@@ -430,37 +514,94 @@ class FoldDeclaration[Value]:
                                 for left in relation_paths
                                 for right in child_paths
                             )
+                            relation_count *= child_count
+                            if self.ranked_output:
+                                ranked_products = len(relation_ranked) * len(
+                                    child_ranked
+                                )
+                                multiplications += ranked_products
+                                ranked_multiplications += ranked_products
+                                relation_ranked = self._rank_candidates(
+                                    tuple(
+                                        (
+                                            self.semiring.multiply(
+                                                left_value, right_value
+                                            ),
+                                            left_path + right_path,
+                                        )
+                                        for left_value, left_path in relation_ranked
+                                        for right_value, right_path in child_ranked
+                                    ),
+                                    witness_operations,
+                                    ranked_additions,
+                                )
                     else:
                         relation_value = child_results[0][0]
                         # The value accumulates, because that is what OR means,
                         # while selection tracks the best sibling separately.
                         # Comparing against the accumulation instead would let
                         # a non-selective semiring outgrow every later sibling.
-                        best = child_results[0]
-                        for child_value, child_paths in child_results[1:]:
+                        best = child_results[0][:2]
+                        for (
+                            child_value,
+                            child_paths,
+                            _child_ranked,
+                            _child_count,
+                        ) in child_results[1:]:
                             relation_value = self.semiring.add(
                                 relation_value, child_value
                             )
                             additions += 1
                             best = self._select_paths(best, (child_value, child_paths))
                         relation_paths = best[1]
+                        relation_count = sum(result[3] for result in child_results)
+                        if self.ranked_output:
+                            relation_ranked = self._rank_candidates(
+                                tuple(
+                                    candidate
+                                    for _child_value, _child_paths, child_ranked, _child_count in child_results
+                                    for candidate in child_ranked
+                                ),
+                                witness_operations,
+                                ranked_additions,
+                            )
                     value = self.semiring.multiply(value, relation_value)
                     multiplications += 1
                     paths = tuple(
                         left + right for left in paths for right in relation_paths
                     )
+                    ranked_count *= relation_count
+                    if self.ranked_output:
+                        ranked_products = len(ranked) * len(relation_ranked)
+                        multiplications += ranked_products
+                        ranked_multiplications += ranked_products
+                        ranked = self._rank_candidates(
+                            tuple(
+                                (
+                                    self.semiring.multiply(left_value, right_value),
+                                    left_path + right_path,
+                                )
+                                for left_value, left_path in ranked
+                                for right_value, right_path in relation_ranked
+                            ),
+                            witness_operations,
+                            ranked_additions,
+                        )
                 if not has_children:
                     value = self.semiring.multiply(value, self.semiring.one)
                     multiplications += 1
-                state_cache[reference] = (value, paths)
-                return value, paths
+                state_cache[reference] = (value, paths, ranked, ranked_count)
+                return value, paths, ranked, ranked_count
 
             for root in item_roots:
                 state = (root, coordinate)
                 root_states.append(state)
-                root_value, _root_paths = visit(root)
+                root_value, _root_paths, root_ranked, root_count = visit(root)
                 total = self.semiring.add(total, root_value)
                 additions += 1
+                if self.ranked_output:
+                    ranked_roots.extend(root_ranked)
+                    root_witness_count += root_count
             for reference in self._references():
                 visit(reference)
             all_values.extend(
@@ -472,14 +613,28 @@ class FoldDeclaration[Value]:
                 # folds over the same domain as the value. Reading it afterwards
                 # would see only the last coordinate's cache.
                 for root in item_roots:
-                    candidate = cache[root]
+                    candidate = cache[root][:2]
                     if selected is None:
                         selected = candidate
                     else:
                         selected = self._select_paths(selected, candidate)
         complete = None if selected is None else selected[1]
         provenance = None if complete is None else complete[: self.output_cap]
-        witness_count = 0 if complete is None else len(complete)
+        ranked_witnesses = (
+            None
+            if not self.ranked_output
+            else self._rank_candidates(
+                tuple(ranked_roots), witness_operations, ranked_additions
+            )
+        )
+        additions += ranked_additions[0]
+        witness_count = (
+            root_witness_count
+            if ranked_witnesses is not None
+            else 0
+            if complete is None
+            else len(complete)
+        )
         cost = FoldCost(
             document_size=len(self.graph.canonical_items()),
             relation_incidence=sum(
@@ -492,17 +647,62 @@ class FoldDeclaration[Value]:
             carrier_multiplications=multiplications,
             carrier_operation_cost=self.carrier_operation_cost,
             witness_count=witness_count,
-            emitted_count=0 if provenance is None else len(provenance),
+            emitted_count=(
+                len(ranked_witnesses)
+                if ranked_witnesses is not None
+                else 0
+                if provenance is None
+                else len(provenance)
+            ),
             output_cap=self.output_cap,
+            witness_operations=witness_operations[0],
+            ranked_multiplications=ranked_multiplications,
         )
         return FoldResult(
-            tuple(all_values),
-            tuple(root_states),
-            total,
-            provenance,
-            witness_count > self.output_cap,
-            cost,
+            values=tuple(all_values),
+            roots=tuple(root_states),
+            value=total,
+            provenance=provenance,
+            truncated=(
+                root_witness_count > len(ranked_witnesses)
+                if ranked_witnesses is not None
+                else witness_count > self.output_cap
+            ),
+            cost=cost,
+            ranked_witnesses=ranked_witnesses,
         )
+
+    def _rank_candidates(
+        self,
+        candidates: tuple[RankedWitness[Value], ...],
+        witness_operations: list[int],
+        ranked_additions: list[int],
+    ) -> tuple[RankedWitness[Value], ...]:
+        """Return distinct witnesses in declared value and canonical path order."""
+
+        def compare(left: RankedWitness[Value], right: RankedWitness[Value]) -> int:
+            """Compare carrier values before deterministic structural paths."""
+            witness_operations[0] += 1
+            if left[0] != right[0]:
+                ranked_additions[0] += 1
+                preferred = self.semiring.add(left[0], right[0])
+                if preferred == left[0]:
+                    return -1
+                if preferred == right[0]:
+                    return 1
+            return (left[1] > right[1]) - (left[1] < right[1])
+
+        distinct: list[RankedWitness[Value]] = []
+        for candidate in sorted(candidates, key=cmp_to_key(compare)):
+            duplicate = False
+            for existing in distinct:
+                witness_operations[0] += 1
+                if candidate == existing:
+                    duplicate = True
+                    break
+            if not duplicate:
+                distinct.append(candidate)
+        return tuple(distinct[: self.output_cap])
 
     def _select_paths(
         self,

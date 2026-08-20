@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import cast
 
 from tiergraph.core import (
@@ -32,6 +33,7 @@ from tiergraph.fold import (
     FoldDeclaration,
     FoldResult,
     FoldTransition,
+    TiePolicy,
 )
 from tiergraph.machine import (
     AddItem,
@@ -45,12 +47,15 @@ from tiergraph.machine import (
     Program,
     Relate,
 )
-from tiergraph.semiring import BOOLEAN
+from tiergraph.semiring import BOOLEAN, COUNTING, PATH, PathValue
 
 GRAMMAR_NAMESPACE = "urn:tiergraph:grammar"
 CHART_NAMESPACE = "urn:tiergraph:grammar:chart"
 COMPLETE_BOUNDARY = AttributeValue(
     QualifiedName(GRAMMAR_NAMESPACE, "boundary"), XsdType.STRING, "complete"
+)
+UNIT_WEIGHT = AttributeValue(
+    QualifiedName(GRAMMAR_NAMESPACE, "weight"), XsdType.DECIMAL, "1"
 )
 
 
@@ -109,12 +114,18 @@ class GrammarRule:
     target: GrammarPattern
     boundary: AttributeValue = COMPLETE_BOUNDARY
     awaited_variables: tuple[AttributeValue, ...] = ()
+    weight: AttributeValue | None = None
 
     def __post_init__(self) -> None:
         """Canonicalize set-like awaited variables and validate XSD carriers."""
         _string_value(self.boundary, f"rule {str(self.left)!r} boundary")
         for variable in self.awaited_variables:
             _string_value(variable, f"rule {str(self.left)!r} awaited variable")
+        if self.weight is not None and self.weight.value_type is not XsdType.DECIMAL:
+            raise ValueError(
+                f"rule {str(self.left)!r} weight {self.weight.lexical!r} "
+                "must be carried as an xsd:decimal value"
+            )
         ordered = tuple(sorted(self.awaited_variables, key=lambda value: value.lexical))
         if len({value.lexical for value in ordered}) != len(ordered):
             raise ValueError(f"rule {str(self.left)!r} has duplicate awaited variables")
@@ -130,7 +141,13 @@ class GrammarRule:
             "awaited_variables": [
                 variable.to_data() for variable in self.awaited_variables
             ],
+            "weight": None if self.weight is None else self.weight.to_data(),
         }
+
+    @property
+    def effective_weight(self) -> AttributeValue:
+        """Return the declared weight or the unit rule cost."""
+        return UNIT_WEIGHT if self.weight is None else self.weight
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +260,7 @@ def lower_grammar(
             "boundary",
             "text",
             "variable",
+            "weight",
         )
     }
     opcodes: list[Opcode] = [
@@ -285,6 +303,11 @@ def lower_grammar(
                 AttributeDeclaration(names[local], AttributeDomain.ITEM, XsdType.STRING)
             )
         )
+    opcodes.append(
+        DeclareAttribute(
+            AttributeDeclaration(names["weight"], AttributeDomain.ITEM, XsdType.DECIMAL)
+        )
+    )
     slot_index = 0
     element_index = 0
     for rule_index, rule in enumerate(declaration.rules):
@@ -302,6 +325,15 @@ def lower_grammar(
                     AttributeValue(names[local], XsdType.STRING, lexical),
                 )
             )
+        opcodes.append(
+            AttachValue(
+                AttributeDomain.ITEM,
+                production,
+                AttributeValue(
+                    names["weight"], XsdType.DECIMAL, rule.effective_weight.lexical
+                ),
+            )
+        )
         slots: list[ItemRef] = []
         for role, pattern in (("source", rule.source), ("target", rule.target)):
             slot = ItemRef(names["slots"], slot_index)
@@ -364,6 +396,7 @@ class ParseForest:
     program: Program
     root: ItemRef
     fold: FoldDeclaration[bool]
+    declaration: GrammarDeclaration
 
     def recognized(self) -> bool:
         """Return whether the designated start span has a derivation."""
@@ -373,6 +406,23 @@ class ParseForest:
         """Evaluate and return the complete Boolean fold result."""
         return self.fold.run()
 
+    def count(self) -> int:
+        """Count derivations when the grammar lies in the finite-fold domain."""
+        _require_finite_fold_domain(self.declaration, "count")
+        return _count_fold(self).run().value
+
+    def best(self, count: int = 1) -> tuple[BestDerivation, ...]:
+        """Return up to ``count`` cheapest derivations, by exact total cost.
+
+        The grammar must lie in the finite-fold domain. Costs are exact and the
+        returned order is nondecreasing by cost. Among derivations of equal cost a
+        deterministic subset is returned; that tie selection is not guaranteed to be a
+        globally canonical one, because ranking keeps the cheapest by cost rather than
+        by witness identity.
+        """
+        _require_finite_fold_domain(self.declaration, "best")
+        return _best_derivations(self, count)
+
     def to_data(self) -> dict[str, JsonValue]:
         """Return the forest, root, fingerprint, and Boolean answer as JSON data."""
         return {
@@ -381,6 +431,18 @@ class ParseForest:
             "fingerprint": self.program.fingerprint(),
             "recognized": self.recognized(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class BestDerivation:
+    """Carry an exact total cost and one deterministic derivation witness."""
+
+    weight: str
+    witness: tuple[str, ...]
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the result as JSON-serializable data."""
+        return {"weight": self.weight, "witness": list(self.witness)}
 
 
 def _candidate_matches(
@@ -591,6 +653,7 @@ def recognize(
             "children",
             "production-application",
             "local-factor",
+            "weight",
             "kind",
             "nonterminal",
             "start",
@@ -657,6 +720,7 @@ def recognize(
     )
     for local, value_type in (
         ("local-factor", XsdType.BOOLEAN),
+        ("weight", XsdType.DECIMAL),
         ("kind", XsdType.STRING),
         ("nonterminal", XsdType.STRING),
         ("start", XsdType.INTEGER),
@@ -672,6 +736,7 @@ def recognize(
         opcodes.append(AddItem(names["chart-items"], Item()))
         values = (
             ("local-factor", XsdType.BOOLEAN, "true"),
+            ("weight", XsdType.DECIMAL, "0"),
             ("kind", XsdType.STRING, "chart-item"),
             ("nonterminal", XsdType.STRING, str(key[0])),
             ("start", XsdType.INTEGER, str(key[1])),
@@ -695,6 +760,13 @@ def recognize(
                 "local-factor",
                 XsdType.BOOLEAN,
                 "true" if terminals_match else "false",
+            ),
+            (
+                "weight",
+                XsdType.DECIMAL,
+                "0"
+                if rule_index < 0
+                else declaration.rules[rule_index].effective_weight.lexical,
             ),
             ("kind", XsdType.STRING, "production-application"),
             ("start", XsdType.INTEGER, str(rule_index)),
@@ -738,4 +810,178 @@ def recognize(
         ),
         roots=(root,),
     )
-    return ParseForest(graph, program, root, fold)
+    return ParseForest(graph, program, root, fold, declaration)
+
+
+def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
+    return {
+        local: _name(forest.root.tier.namespace, local)
+        for local in (
+            "chart-items",
+            "applications",
+            "alternatives",
+            "children",
+            "local-factor",
+            "weight",
+        )
+    }
+
+
+def _item_attribute(graph: Graph, reference: ItemRef, local: str) -> AttributeValue:
+    item = next(
+        tier.items[reference.index]
+        for tier in graph.tiers
+        if tier.declaration.name == reference.tier
+    )
+    return next(value for value in item.attributes if value.name.local_name == local)
+
+
+def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:
+    names = _forest_names(forest)
+    return FoldDeclaration(
+        "grammar-derivation-count",
+        forest.graph,
+        AttributeValuation(
+            "terminal match",
+            names["local-factor"],
+            (names["chart-items"], names["applications"]),
+        ),
+        COUNTING,
+        lambda value, label: 1 if cast(bool, value) else 0,
+        (
+            FoldTransition(names["alternatives"], ChildCombination.OR),
+            FoldTransition(names["children"], ChildCombination.AND),
+        ),
+        roots=(forest.root,),
+    )
+
+
+def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValue]:
+    names = _forest_names(forest)
+    valid_labels = {
+        f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
+        for reference in forest.graph.canonical_items()
+        if _item_attribute(forest.graph, reference, "local-factor").lexical == "true"
+    }
+
+    def lift(value: object, label: str) -> PathValue:
+        """Lift a valid local weight and annihilate a terminal mismatch."""
+        if label not in valid_labels:
+            return PATH.zero
+        return (cast(Decimal, value), ((label,),))
+
+    return FoldDeclaration(
+        "grammar-best-derivation",
+        forest.graph,
+        AttributeValuation(
+            "rule weight",
+            names["weight"],
+            (names["chart-items"], names["applications"]),
+        ),
+        PATH,
+        lift,
+        (
+            FoldTransition(names["alternatives"], ChildCombination.OR),
+            FoldTransition(names["children"], ChildCombination.AND),
+        ),
+        roots=(forest.root,),
+        tie_policy=TiePolicy.CHOOSE_FIRST,
+        output_cap=output_cap,
+        ranked_output=True,
+    )
+
+
+def _require_finite_fold_domain(
+    declaration: GrammarDeclaration, operation: str
+) -> None:
+    nullable: set[QualifiedName] = set()
+    changed = True
+    while changed:
+        changed = False
+        for rule in declaration.rules:
+            if rule.left in nullable:
+                continue
+            if not rule.source or all(
+                isinstance(element, GrammarHole) and element.nonterminal in nullable
+                for element in rule.source
+            ):
+                nullable.add(rule.left)
+                changed = True
+    for index, rule in enumerate(declaration.rules):
+        unit = len(rule.source) == 1 and isinstance(rule.source[0], GrammarHole)
+        nullable_rule = not rule.source or all(
+            isinstance(element, GrammarHole) and element.nonterminal in nullable
+            for element in rule.source
+        )
+        if unit or nullable_rule:
+            kind = "unit" if unit else "nullable/epsilon"
+            raise ValueError(
+                f"{operation} rule {index} ({str(rule.left)!r}) is a {kind} "
+                "production; counting and best-cost over unit/nullable/cyclic "
+                "grammars require the star / least-fixpoint fold, which is not yet built"
+            )
+
+
+def _forest(
+    grammar: LoweredGrammar | ParseForest,
+    input_tokens: Sequence[str] | None,
+    operation: str,
+) -> ParseForest:
+    if isinstance(grammar, ParseForest):
+        if input_tokens is not None:
+            raise ValueError("a prebuilt parse forest does not accept input tokens")
+        _require_finite_fold_domain(grammar.declaration, operation)
+        return grammar
+    if input_tokens is None:
+        raise ValueError("a lowered grammar requires input tokens")
+    _require_finite_fold_domain(grammar.declaration, operation)
+    return recognize(grammar, input_tokens)
+
+
+def count(
+    grammar: LoweredGrammar | ParseForest,
+    input_tokens: Sequence[str] | None = None,
+) -> int:
+    """Return the derivation count from a new or previously built forest."""
+    forest = _forest(grammar, input_tokens, "count")
+    return _count_fold(forest).run().value
+
+
+def _best_derivations(
+    forest: ParseForest, output_cap: int
+) -> tuple[BestDerivation, ...]:
+    if output_cap < 1:
+        raise ValueError(f"best derivation count {output_cap!r} must be positive")
+    result = _best_fold(forest, output_cap).run()
+    ranked = cast(
+        tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
+    )
+    return tuple(BestDerivation(str(value[0]), witness) for value, witness in ranked)
+
+
+def best(
+    grammar: LoweredGrammar | ParseForest,
+    input_tokens: Sequence[str] | None = None,
+    count: int = 1,
+) -> tuple[BestDerivation, ...]:
+    """Return folded derivations by exact cost, choosing canonical paths on ties."""
+    forest = _forest(grammar, input_tokens, "best")
+    return _best_derivations(forest, count)
+
+
+__all__ = [
+    "BestDerivation",
+    "CHART_NAMESPACE",
+    "COMPLETE_BOUNDARY",
+    "GRAMMAR_NAMESPACE",
+    "GrammarDeclaration",
+    "GrammarHole",
+    "GrammarRule",
+    "GrammarTerminal",
+    "LoweredGrammar",
+    "ParseForest",
+    "best",
+    "count",
+    "lower_grammar",
+    "recognize",
+]

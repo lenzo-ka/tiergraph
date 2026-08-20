@@ -150,6 +150,19 @@ def assert_declared_multiply_strictly_order_preserving(
         assert right_a != right_b and semiring.add(right_a, right_b) == right_a
 
 
+def assert_declared_multiply_preserves_witness_order(
+    semiring: LawSemiring, a: Any, b: Any, c: Any
+) -> None:
+    """Assert weak multiplication monotonicity for the order induced by addition."""
+    if semiring.multiply_preserves_witness_order and a != b and semiring.add(a, b) == a:
+        left_a = semiring.multiply(c, a)
+        left_b = semiring.multiply(c, b)
+        right_a = semiring.multiply(a, c)
+        right_b = semiring.multiply(b, c)
+        assert semiring.add(left_a, left_b) == left_a
+        assert semiring.add(right_a, right_b) == right_a
+
+
 def assert_declared_zero_sum_free(semiring: LawSemiring, a: Any, b: Any) -> None:
     """Assert that a declared zero sum has only zero operands."""
     if semiring.zero_sum_free and semiring.add(a, b) == semiring.zero:

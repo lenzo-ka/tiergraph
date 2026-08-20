@@ -608,3 +608,18 @@ def test_selection_compares_alternatives_not_the_running_total() -> None:
     assert len(everything.provenance) > 1
     assert len(first_only.provenance) == 1
     assert everything.value == first_only.value
+
+
+def test_ranked_candidate_deduplication_is_costed() -> None:
+    """Ranked selection counts comparisons used to remove duplicate witnesses."""
+    declared = replace(
+        declaration(), ranked_output=True, output_cap=1, witness_order=None
+    )
+    operations = [0]
+    additions = [0]
+    candidate = (PATH.one, ("same",))
+    ranked = declared._rank_candidates(
+        (candidate, candidate, (PATH.one, ("other",))), operations, additions
+    )
+    assert ranked == ((PATH.one, ("other",)),)
+    assert operations[0] > 0
