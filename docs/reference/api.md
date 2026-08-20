@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 102 top-level `tiergraph` exports exactly once.
+It covers 105 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -303,7 +303,7 @@ Declare whether one relation's incident children are alternatives or requirement
 ### `FoldCost`
 
 ```text
-FoldCost(document_size: 'int', relation_incidence: 'int', index_product_size: 'int', carrier_additions: 'int', carrier_multiplications: 'int', carrier_operation_cost: 'int', witness_count: 'int', emitted_count: 'int', output_cap: 'int') -> None
+FoldCost(document_size: 'int', relation_incidence: 'int', index_product_size: 'int', carrier_additions: 'int', carrier_multiplications: 'int', carrier_operation_cost: 'int', witness_count: 'int', emitted_count: 'int', output_cap: 'int', witness_operations: 'int' = 0, ranked_multiplications: 'int' = 0) -> None
 ```
 
 Report measured structural quantities and carrier work for one run.
@@ -311,10 +311,16 @@ Report measured structural quantities and carrier work for one run.
 ### `FoldDeclaration`
 
 ```text
-FoldDeclaration(name: 'str', graph: 'Graph', valuation: 'AttributeValuation', semiring: 'Semiring[Value]', lift: 'Lift[Value]', transitions: 'tuple[FoldTransition, ...]', index_axes: 'tuple[tuple[str, ...], ...]' = (), roots: 'tuple[ItemRef, ...]' = (), witness_order: 'WitnessOrder[Value] | None' = None, tie_policy: 'TiePolicy | None' = None, output_cap: 'int' = 1, carrier_operation_cost: 'int' = 1) -> None
+FoldDeclaration(name: 'str', graph: 'Graph', valuation: 'AttributeValuation', semiring: 'Semiring[Value]', lift: 'Lift[Value]', transitions: 'tuple[FoldTransition, ...]', index_axes: 'tuple[tuple[str, ...], ...]' = (), roots: 'tuple[ItemRef, ...]' = (), witness_order: 'WitnessOrder[Value] | None' = None, tie_policy: 'TiePolicy | None' = None, output_cap: 'int' = 1, carrier_operation_cost: 'int' = 1, ranked_output: 'bool' = False) -> None
 ```
 
 Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
+
+With ``ranked_output`` the fold also returns up to ``output_cap`` witnesses ranked
+by the semiring's own order, which its multiplication must preserve
+(``multiply_preserves_witness_order``); a custom ``witness_order`` is refused. Among
+witnesses of equal carrier value the ranked selection is deterministic but not
+guaranteed to be a globally canonical one.
 
 ### `FoldHomomorphism`
 
@@ -327,7 +333,7 @@ Declare a carrier map whose fold result must commute.
 ### `FoldResult`
 
 ```text
-FoldResult(values: 'tuple[tuple[State, Value], ...]', roots: 'tuple[State, ...]', value: 'Value', provenance: 'Provenance | None', truncated: 'bool', cost: 'FoldCost') -> None
+FoldResult(values: 'tuple[tuple[State, Value], ...]', roots: 'tuple[State, ...]', value: 'Value', provenance: 'Provenance | None', truncated: 'bool', cost: 'FoldCost', ranked_witnesses: 'tuple[RankedWitness[Value], ...] | None' = None) -> None
 ```
 
 Keep semiring values, witness provenance, and measured work separate.
@@ -350,6 +356,14 @@ Supported, executable policies for equal-valued alternatives.
 
 ## Grammar
 
+### `BestDerivation`
+
+```text
+BestDerivation(weight: 'str', witness: 'tuple[str, ...]') -> None
+```
+
+Carry an exact total cost and one deterministic derivation witness.
+
 ### `GrammarDeclaration`
 
 ```text
@@ -369,7 +383,7 @@ Bind one named pattern variable to a declared nonterminal.
 ### `GrammarRule`
 
 ```text
-GrammarRule(left: 'QualifiedName', source: 'GrammarPattern', target: 'GrammarPattern', boundary: 'AttributeValue' = AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete'), awaited_variables: 'tuple[AttributeValue, ...]' = ()) -> None
+GrammarRule(left: 'QualifiedName', source: 'GrammarPattern', target: 'GrammarPattern', boundary: 'AttributeValue' = AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete'), awaited_variables: 'tuple[AttributeValue, ...]' = (), weight: 'AttributeValue | None' = None) -> None
 ```
 
 Declare one directional pairing of source and target patterns.
@@ -393,10 +407,26 @@ Pair a grammar with its replayable coordinate-hedge construction.
 ### `ParseForest`
 
 ```text
-ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]') -> None
+ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]', declaration: 'GrammarDeclaration') -> None
 ```
 
 Carry a machine-built parse forest and its Boolean interpretation.
+
+### `best`
+
+```text
+best(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | None' = None, count: 'int' = 1) -> 'tuple[BestDerivation, ...]'
+```
+
+Return folded derivations by exact cost, choosing canonical paths on ties.
+
+### `count`
+
+```text
+count(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | None' = None) -> 'int'
+```
+
+Return the derivation count from a new or previously built forest.
 
 ### `lower_grammar`
 

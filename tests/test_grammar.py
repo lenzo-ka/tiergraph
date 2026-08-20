@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from typing import cast
 
 import pytest
 
 from tiergraph import (
     AttributeValue,
+    BestDerivation,
     GrammarDeclaration,
     GrammarHole,
     GrammarRule,
@@ -17,10 +19,14 @@ from tiergraph import (
     PolyadicRelationInstance,
     QualifiedName,
     XsdType,
+    best,
+    count,
     lower_grammar,
     recognize,
 )
-from tiergraph.fold import ChildCombination, FoldTransition
+from tiergraph.fold import ChildCombination, FoldTransition, TiePolicy
+from tiergraph.grammar import _best_fold
+from tiergraph.semiring import COUNTING, PATH, PathValue, Semiring
 
 NAMESPACE = "urn:test:grammar"
 
@@ -33,6 +39,42 @@ def name(local: str) -> QualifiedName:
 def string(local: str, lexical: str) -> AttributeValue:
     """Return one canonical string carrier for grammar content."""
     return AttributeValue(name(local), XsdType.STRING, lexical)
+
+
+def decimal(lexical: str) -> AttributeValue:
+    """Return one exact rule-weight carrier."""
+    return AttributeValue(name("weight"), XsdType.DECIMAL, lexical)
+
+
+def diamond(*, tied: bool = False) -> GrammarDeclaration:
+    """Return an ambiguous grammar whose alternatives share a word derivation."""
+    sentence = name("S")
+    choice = name("A")
+    shared = name("B")
+    first_weight = decimal("0.5")
+    second_weight = decimal("1" if tied else "2")
+    source = (hole("a", choice), hole("b", shared))
+    return GrammarDeclaration(
+        (sentence, choice, shared),
+        sentence,
+        (
+            GrammarRule(
+                sentence,
+                source,
+                source,
+                weight=first_weight,
+            ),
+            GrammarRule(
+                choice, (terminal("x"),), (terminal("x"),), weight=decimal("1")
+            ),
+            GrammarRule(
+                choice, (terminal("x"),), (terminal("x"),), weight=second_weight
+            ),
+            GrammarRule(
+                shared, (terminal("y"),), (terminal("y"),), weight=decimal("0.25")
+            ),
+        ),
+    )
 
 
 def terminal(text: str) -> GrammarTerminal:
@@ -129,6 +171,8 @@ def test_xsd_carriers_are_checked_at_construction() -> None:
         GrammarRule(name("S"), (), (), integer)
     with pytest.raises(ValueError, match="awaited variable"):
         GrammarRule(name("S"), (), (), awaited_variables=(integer,))
+    with pytest.raises(ValueError, match=r"rule .* weight '1'.*xsd:decimal"):
+        GrammarRule(name("S"), (), (), weight=integer)
     with pytest.raises(ValueError, match="duplicate nonterminal"):
         GrammarDeclaration((name("S"), name("S")), name("S"), ())
 
@@ -379,3 +423,190 @@ def test_fold_transitions_determine_recognition() -> None:
     broken_and = replace(child_forest.fold, graph=changed_graph)
     assert child_forest.recognized() is False
     assert broken_and.run().value is True
+
+
+def test_count_is_diamond_correct_and_has_linear_and_rejected_controls() -> None:
+    """Counting multiplies shared children within each alternative before summing."""
+    lowered = lower_grammar(diamond())
+    assert count(lowered, ("x", "y")) == 2
+    sentence = name("S")
+    linear = lower_grammar(
+        GrammarDeclaration(
+            (sentence,),
+            sentence,
+            (GrammarRule(sentence, (terminal("x"),), (terminal("x"),)),),
+        )
+    )
+    assert count(linear, ("x",)) == 1
+    assert count(lowered, ("other",)) == 0
+    assert best(lowered, ("other",)) == ()
+
+
+def test_best_orders_exact_weights_and_resolves_ties_by_witness() -> None:
+    """N-best retains a locally second child choice and orders exact total costs."""
+    lowered = lower_grammar(diamond())
+    ranked = best(lowered, ("x", "y"), count=2)
+    assert [candidate.weight for candidate in ranked] == ["1.75", "2.75"]
+    assert ranked == tuple(sorted(ranked, key=lambda item: (item.weight, item.witness)))
+    fold_result = _best_fold(recognize(lowered, ("x", "y")), 2).run()
+    assert fold_result.cost.ranked_multiplications > 0
+    assert fold_result.cost.witness_operations > 0
+    assert fold_result.cost.witness_count == 2
+    assert fold_result.cost.emitted_count == 2
+    assert fold_result.cost.measured_work <= fold_result.cost.bound
+    assert "ranked_witnesses" in fold_result.to_data(PATH)
+    assert "ranked_multiplications" in fold_result.cost.to_data()
+    capped = _best_fold(recognize(lowered, ("x", "y")), 1).run()
+    assert capped.cost.witness_count == 2
+    assert capped.cost.emitted_count == 1
+    assert capped.truncated is True
+    tied = best(lower_grammar(diamond(tied=True)), ("x", "y"), count=2)
+    assert [candidate.weight for candidate in tied] == ["1.75", "1.75"]
+    assert tied[0].witness < tied[1].witness
+    assert tied[0].to_data() == {
+        "weight": "1.75",
+        "witness": list(tied[0].witness),
+    }
+    with pytest.raises(ValueError, match="derivation count 0.*positive"):
+        best(lowered, ("x", "y"), count=0)
+
+
+def test_public_api_reuses_one_forest_for_all_three_questions() -> None:
+    """Public counting and ranking consume the forest returned by recognition."""
+    forest = recognize(lower_grammar(diamond()), ("x", "y"))
+    graph = forest.graph
+    fingerprint = forest.program.fingerprint()
+    assert forest.recognized() is True
+    assert count(forest) == 2
+    assert [item.weight for item in best(forest, count=2)] == ["1.75", "2.75"]
+    assert forest.count() == 2
+    assert forest.best(1)[0].weight == "1.75"
+    assert forest.graph is graph
+    assert forest.program.fingerprint() == fingerprint
+    with pytest.raises(ValueError, match="prebuilt parse forest"):
+        count(forest, ("x", "y"))
+    with pytest.raises(ValueError, match="lowered grammar requires input tokens"):
+        count(lower_grammar(diamond()))
+
+
+def test_count_and_best_refuse_unit_nullable_and_cyclic_grammars() -> None:
+    """Finite folds name rules that require an unavailable fixed-point fold."""
+    sentence = name("S")
+    atom = name("A")
+    unit_cycle = GrammarDeclaration(
+        (sentence, atom),
+        sentence,
+        (
+            GrammarRule(sentence, (hole("a", atom),), (hole("a", atom),)),
+            GrammarRule(atom, (hole("s", sentence),), (hole("s", sentence),)),
+            GrammarRule(atom, (terminal("x"),), (terminal("x"),)),
+        ),
+    )
+    epsilon = GrammarDeclaration(
+        (sentence,), sentence, (GrammarRule(sentence, (), ()),)
+    )
+    nullable = GrammarDeclaration(
+        (sentence, atom),
+        sentence,
+        (
+            GrammarRule(
+                sentence,
+                (hole("a", atom), hole("b", atom)),
+                (hole("a", atom), hole("b", atom)),
+            ),
+            GrammarRule(atom, (), ()),
+        ),
+    )
+    for grammar, kind in (
+        (unit_cycle, "unit"),
+        (epsilon, "nullable/epsilon"),
+        (nullable, "nullable/epsilon"),
+    ):
+        lowered = lower_grammar(grammar)
+        assert recognize(lowered, ("x",) if grammar is unit_cycle else ()).recognized()
+        for operation in (count, best):
+            with pytest.raises(
+                ValueError,
+                match=rf"rule 0 .*{kind} production.*star / least-fixpoint fold",
+            ):
+                operation(lowered, ("x",) if grammar is unit_cycle else ())
+
+
+def test_best_candidates_are_produced_by_declared_fold_transitions() -> None:
+    """Changing alternative incidence changes the fold's ranked result."""
+    forest = recognize(lower_grammar(diamond()), ("x", "y"))
+    declared = _best_fold(forest, 2)
+    assert declared.tie_policy is TiePolicy.CHOOSE_FIRST
+    assert declared.run().ranked_witnesses is not None
+    broken = replace(
+        declared,
+        transitions=(
+            declared.transitions[0],
+            FoldTransition(declared.transitions[1].relation, ChildCombination.OR),
+        ),
+    )
+    ranked = broken.run().ranked_witnesses
+    assert ranked is not None
+    assert ranked[0][0][0] != Decimal("1.75")
+
+
+def test_ranked_fold_requires_order_preserving_multiplication() -> None:
+    """Ranked pruning refuses a semiring without the monotonicity declaration."""
+    declared = _best_fold(recognize(lower_grammar(diamond()), ("x", "y")), 2)
+    with pytest.raises(
+        ValueError,
+        match="CountingSemiring.*multiply_preserves_witness_order",
+    ):
+        replace(declared, semiring=cast(Semiring[PathValue], COUNTING))
+
+
+def test_ranked_fold_refuses_a_custom_noncanonical_order() -> None:
+    """Ranked pruning cannot substitute a caller order for the semiring order."""
+    declared = _best_fold(recognize(lower_grammar(diamond()), ("x", "y")), 2)
+    with pytest.raises(ValueError, match="canonical order.*custom witness_order"):
+        replace(declared, witness_order=lambda left, right: 0)
+    with pytest.raises(ValueError, match="ranked witnesses.*no tie policy"):
+        replace(declared, tie_policy=None)
+
+
+def test_nonroot_pruning_does_not_report_root_truncation() -> None:
+    """An ambiguous exhaustive state outside the selected root does not truncate."""
+    sentence = name("S")
+    unused = name("A")
+    token_rule = (terminal("x"),)
+    grammar = GrammarDeclaration(
+        (sentence, unused),
+        sentence,
+        (
+            GrammarRule(sentence, token_rule, token_rule),
+            GrammarRule(unused, token_rule, token_rule),
+            GrammarRule(unused, token_rule, token_rule),
+        ),
+    )
+    result = _best_fold(recognize(lower_grammar(grammar), ("x",)), 1).run()
+    assert result.cost.witness_count == 1
+    assert result.cost.emitted_count == 1
+    assert result.truncated is False
+
+
+def test_small_enumeration_agrees_without_being_the_implementation() -> None:
+    """A hand-sized rule-choice enumeration agrees with packed dynamic programming."""
+    lowered = lower_grammar(diamond())
+    enumerated = tuple(
+        sorted(
+            (
+                BestDerivation(
+                    str(Decimal("0.5") + choice + Decimal("0.25")),
+                    (label,),
+                )
+                for choice, label in (
+                    (Decimal("1"), "first"),
+                    (Decimal("2"), "second"),
+                )
+            ),
+            key=lambda item: (item.weight, item.witness),
+        )
+    )
+    folded = best(lowered, ("x", "y"), count=2)
+    assert count(lowered, ("x", "y")) == len(enumerated)
+    assert [item.weight for item in folded] == [item.weight for item in enumerated]

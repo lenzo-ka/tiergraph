@@ -36,6 +36,7 @@ from .semiring_laws import (
     assert_add_commutative,
     assert_add_identity,
     assert_declared_add_selective,
+    assert_declared_multiply_preserves_witness_order,
     assert_declared_multiply_strictly_order_preserving,
     assert_declared_no_zero_divisors,
     assert_declared_optional_laws,
@@ -194,6 +195,18 @@ def test_declared_strict_multiplication_order_holds_over_each_carrier(
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
 @given(data=st.data())
+def test_declared_witness_order_is_preserved_by_multiplication(
+    case: SemiringCase, data: DataObject
+) -> None:
+    """Every ranked-order declaration holds over sampled carrier operands."""
+    a = data.draw(case.values, label="a")
+    b = data.draw(case.values, label="b")
+    c = data.draw(case.values, label="c")
+    assert_declared_multiply_preserves_witness_order(case.semiring, a, b, c)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+@given(data=st.data())
 def test_declared_zero_sum_freedom_holds_over_each_carrier(
     case: SemiringCase, data: DataObject
 ) -> None:
@@ -327,15 +340,18 @@ def test_composed_properties_are_derived() -> None:
     assert ProductSemiring(DECIMAL_TROPICAL, DECIMAL_ARCTIC).add_selective is False
     assert ProductSemiring(BOOLEAN, BOOLEAN).no_zero_divisors is False
     assert mixed.multiply_strictly_order_preserving is False
+    assert PRODUCT.multiply_preserves_witness_order is False
     assert PATH.multiply_commutative is False
     assert PATH.add_selective is False
     assert PATH.multiply_strictly_order_preserving is False
+    assert PATH.multiply_preserves_witness_order
     assert PATH.no_zero_divisors
     assert PATH.multiply_associativity is LawCheck.EXACT
     assert PATH.left_distributivity is LawCheck.EXACT
     assert PATH.right_distributivity is LawCheck.EXACT
     assert EXPECTATION.add_selective is False
     assert EXPECTATION.multiply_strictly_order_preserving is False
+    assert EXPECTATION.multiply_preserves_witness_order is False
     assert EXPECTATION.zero_sum_free
     assert EXPECTATION.no_zero_divisors is False
     assert PATH.left is DECIMAL_TROPICAL
