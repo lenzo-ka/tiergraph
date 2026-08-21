@@ -853,14 +853,15 @@ The root relation is one polyadic instance with an explicitly empty source
 side. Its target incidence order is the declared root order. Dependency
 relations determine root membership: every item on an admitted root tier
 with no incoming dependency incidence is a root. Stored order adds
-information, but stored membership may not contradict that derived set.
+information, but stored membership may not contradict that derived set:
+stored roots must be a subset of the inferred set, so every declared root
+is parentless. A curated ordered subset is allowed; use
+:meth:`is_exhaustive` to require stored roots to equal the inferred set.
 
 Reconciliation considers exactly the caller-supplied
-``dependency_relations``. It checks that stored roots equal the roots
-inferred over that enumerated set, but is silent about dependencies omitted
-from it; enumeration is not enforcement. If the set is empty, every item in
-the admitted domain is inferred as a root, so a curated ordered subset is
-refused.
+``dependency_relations``. It checks stored roots against the roots inferred
+over that enumerated set, but is silent about dependencies omitted from it;
+enumeration is not enforcement.
 
 ### `PersistedChoiceProfile`
 

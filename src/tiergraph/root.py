@@ -48,14 +48,15 @@ class OrderedRootsProfile:
     side. Its target incidence order is the declared root order. Dependency
     relations determine root membership: every item on an admitted root tier
     with no incoming dependency incidence is a root. Stored order adds
-    information, but stored membership may not contradict that derived set.
+    information, but stored membership may not contradict that derived set:
+    stored roots must be a subset of the inferred set, so every declared root
+    is parentless. A curated ordered subset is allowed; use
+    :meth:`is_exhaustive` to require stored roots to equal the inferred set.
 
     Reconciliation considers exactly the caller-supplied
-    ``dependency_relations``. It checks that stored roots equal the roots
-    inferred over that enumerated set, but is silent about dependencies omitted
-    from it; enumeration is not enforcement. If the set is empty, every item in
-    the admitted domain is inferred as a root, so a curated ordered subset is
-    refused.
+    ``dependency_relations``. It checks stored roots against the roots inferred
+    over that enumerated set, but is silent about dependencies omitted from it;
+    enumeration is not enforcement.
     """
 
     graph: Graph
@@ -97,10 +98,14 @@ class OrderedRootsProfile:
             )
         inferred = self.inferred()
         roots = self.roots()
-        if set(roots) != set(inferred):
+        inferred_set = set(inferred)
+        if not set(roots) <= inferred_set:
+            non_parentless = tuple(item for item in roots if item not in inferred_set)
             raise ValueError(
-                f"ordered-root relation {str(self.root_relation)!r} stored roots "
-                f"{[item.to_data() for item in roots]!r} contradict inferred roots "
+                f"ordered-root relation {str(self.root_relation)!r} declares "
+                f"non-parentless roots "
+                f"{[item.to_data() for item in non_parentless]!r}; declared roots "
+                "must be a subset of the inferred (parentless) set "
                 f"{[item.to_data() for item in inferred]!r}"
             )
 
@@ -141,6 +146,14 @@ class OrderedRootsProfile:
             if relation.declaration == self.root_relation
         )
         return cast(tuple[ItemRef, ...], instance.targets)
+
+    def is_exhaustive(self) -> bool:
+        """Return whether declared roots include every inferred parentless item.
+
+        A subset is sound because every declared root is parentless; exhaustive
+        consumers can use this check to require the complete inferred set.
+        """
+        return set(self.roots()) == set(self.inferred())
 
 
 @dataclass(frozen=True, slots=True)
