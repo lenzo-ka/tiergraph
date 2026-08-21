@@ -55,6 +55,7 @@ from tiergraph.grammar import (
     COMPLETE_BOUNDARY,
     GRAMMAR_NAMESPACE,
     BestDerivation,
+    GrammarChartProfile,
     GrammarDeclaration,
     GrammarHole,
     GrammarRule,
@@ -88,6 +89,7 @@ from tiergraph.machine import (
     steps,
 )
 from tiergraph.path import (
+    AlternativeRef,
     CanonicalPath,
     ItemBinding,
     PathBinding,
@@ -97,6 +99,7 @@ from tiergraph.path import (
     PathRefusal,
     PathRefusalCode,
     PositionBinding,
+    ResolvedAlternative,
     ResolvedItem,
     ResolvedPosition,
     StructuralPathProfile,
@@ -140,6 +143,7 @@ __version__ = "0.0.0"
 
 __all__ = [
     "ActionDeclaration",
+    "AlternativeRef",
     "AddItem",
     "AsBuilt",
     "AttachValue",
@@ -172,6 +176,7 @@ __all__ = [
     "FoldTransition",
     "Graph",
     "GrammarDeclaration",
+    "GrammarChartProfile",
     "GrammarHole",
     "GrammarRule",
     "GrammarTerminal",
@@ -223,6 +228,7 @@ __all__ = [
     "RelationInstance",
     "Repeat",
     "ResolvedItem",
+    "ResolvedAlternative",
     "ResolvedPosition",
     "SimpleRelationDeclaration",
     "Step",

@@ -47,6 +47,14 @@ from tiergraph.machine import (
     Program,
     Relate,
 )
+from tiergraph.path import (
+    AlternativeRef,
+    CanonicalPath,
+    PathBinding,
+    PathOffender,
+    PathRefusal,
+    PathRefusalCode,
+)
 from tiergraph.semiring import BOOLEAN, COUNTING, PATH, PathValue
 
 GRAMMAR_NAMESPACE = "urn:tiergraph:grammar"
@@ -431,6 +439,150 @@ class ParseForest:
             "fingerprint": self.program.fingerprint(),
             "recognized": self.recognized(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class GrammarChartProfile:
+    """Address chart alternatives in a stable order within one forest snapshot.
+
+    The profile vocabulary is
+    ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
+    independent of rule weights, but intentionally are not stable across forest
+    snapshots whose sets of alternatives differ.
+    """
+
+    forest: ParseForest
+
+    def bind(self, path: CanonicalPath, graph: Graph) -> PathBinding:
+        """Bind a chart coordinate and profile-owned alternatives literal."""
+        if graph is not self.forest.graph:
+            raise PathRefusal(
+                PathRefusalCode.PROFILE_REFUSED,
+                PathOffender(
+                    text=str(path),
+                    path=path,
+                    profile_reason="different_forest_snapshot",
+                ),
+            )
+        segments = path.segments
+        if (
+            len(segments) != 6
+            or segments[0] != "chart"
+            or segments[4] != "alternatives"
+        ):
+            raise PathRefusal(
+                PathRefusalCode.UNKNOWN_FORM,
+                PathOffender(text=str(path), path=path),
+            )
+        start = _chart_path_index(segments[2], 2, path)
+        end = _chart_path_index(segments[3], 3, path)
+        index = _chart_path_index(segments[5], 5, path)
+        names = _forest_names(self.forest)
+        owner = next(
+            (
+                reference
+                for reference in graph.canonical_items()
+                if reference.tier == names["chart-items"]
+                and _item_attribute(graph, reference, "nonterminal").lexical
+                == segments[1]
+                and _item_attribute(graph, reference, "start").lexical == str(start)
+                and _item_attribute(graph, reference, "end").lexical == str(end)
+            ),
+            None,
+        )
+        if owner is None:
+            raise PathRefusal(
+                PathRefusalCode.PROFILE_REFUSED,
+                PathOffender(
+                    text=str(path), path=path, profile_reason="unknown_chart_item"
+                ),
+            )
+        return AlternativeRef(owner, names["alternatives"], index)
+
+    def spell(self, binding: PathBinding, graph: Graph) -> CanonicalPath:
+        """Spell an alternative binding in this chart vocabulary."""
+        if not isinstance(binding, AlternativeRef) or graph is not self.forest.graph:
+            raise PathRefusal(
+                PathRefusalCode.UNSPELLABLE,
+                PathOffender(text="", profile_reason="unsupported_binding"),
+            )
+        names = _forest_names(self.forest)
+        if binding.relation != names["alternatives"]:
+            raise PathRefusal(
+                PathRefusalCode.UNSPELLABLE,
+                PathOffender(text="", profile_reason="unsupported_relation"),
+            )
+        owner = graph.resolve_item(binding.owner)
+        if owner.tier != names["chart-items"]:
+            raise PathRefusal(
+                PathRefusalCode.UNSPELLABLE,
+                PathOffender(text="", profile_reason="unsupported_owner"),
+            )
+        return CanonicalPath(
+            (
+                "chart",
+                _item_attribute(graph, owner, "nonterminal").lexical,
+                _item_attribute(graph, owner, "start").lexical,
+                _item_attribute(graph, owner, "end").lexical,
+                "alternatives",
+                str(binding.index),
+            )
+        )
+
+    def alternatives(
+        self, owner: ItemRef, relation: QualifiedName, graph: Graph
+    ) -> tuple[object, ...]:
+        """Order applications by rule ordinal and ordered child spans."""
+        names = _forest_names(self.forest)
+        if graph is not self.forest.graph or relation != names["alternatives"]:
+            raise PathRefusal(
+                PathRefusalCode.PROFILE_REFUSED,
+                PathOffender(
+                    text="", relation=relation, profile_reason="unsupported_relation"
+                ),
+            )
+        if owner.tier != names["chart-items"]:
+            raise PathRefusal(
+                PathRefusalCode.PROFILE_REFUSED,
+                PathOffender(
+                    text="", tier=owner.tier, profile_reason="unsupported_owner"
+                ),
+            )
+        applications = tuple(
+            cast(ItemRef, edge.right)
+            for edge in graph.relations
+            if edge.declaration == relation and edge.left == owner
+        )
+
+        def _stable_key(
+            application: ItemRef,
+        ) -> tuple[int, tuple[tuple[int, int], ...], int]:
+            production = next(
+                instance
+                for instance in graph.polyadic_relations
+                if instance.declaration == names["production-application"]
+                and instance.sources == (application,)
+            )
+            spans = tuple(
+                (
+                    int(_item_attribute(graph, cast(ItemRef, child), "start").lexical),
+                    int(_item_attribute(graph, cast(ItemRef, child), "end").lexical),
+                )
+                for child in production.targets
+            )
+            # (rule ordinal, child spans) is the semantic order; the application's
+            # own tier index is a canonical, unique tiebreak so genuinely colliding
+            # variants (e.g. two nullable expansions that project to the identical
+            # (production, children)) get a stable order rather than falling back
+            # to graph.relations incidence order. The tier index is builder-assigned
+            # and survives any reordering of relation instances.
+            return (
+                int(_item_attribute(graph, application, "start").lexical),
+                spans,
+                application.index,
+            )
+
+        return tuple(sorted(applications, key=_stable_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -821,10 +973,30 @@ def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
             "applications",
             "alternatives",
             "children",
+            "production-application",
             "local-factor",
             "weight",
+            "nonterminal",
+            "start",
+            "end",
         )
     }
+
+
+def _chart_path_index(value: str, index: int, path: CanonicalPath) -> int:
+    if value == "0" or (
+        value.isascii() and value.isdecimal() and not value.startswith("0")
+    ):
+        return int(value)
+    code = (
+        PathRefusalCode.NONCANONICAL_SEGMENT
+        if value.isdecimal() and value != ""
+        else PathRefusalCode.INVALID_SEGMENT
+    )
+    raise PathRefusal(
+        code,
+        PathOffender(text=str(path), path=path, segment_index=index, segment=value),
+    )
 
 
 def _item_attribute(graph: Graph, reference: ItemRef, local: str) -> AttributeValue:
@@ -975,6 +1147,7 @@ __all__ = [
     "COMPLETE_BOUNDARY",
     "GRAMMAR_NAMESPACE",
     "GrammarDeclaration",
+    "GrammarChartProfile",
     "GrammarHole",
     "GrammarRule",
     "GrammarTerminal",

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 118 top-level `tiergraph` exports exactly once.
+It covers 121 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -364,6 +364,19 @@ BestDerivation(weight: 'str', witness: 'tuple[str, ...]') -> None
 
 Carry an exact total cost and one deterministic derivation witness.
 
+### `GrammarChartProfile`
+
+```text
+GrammarChartProfile(forest: 'ParseForest') -> None
+```
+
+Address chart alternatives in a stable order within one forest snapshot.
+
+The profile vocabulary is
+``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
+independent of rule weights, but intentionally are not stable across forest
+snapshots whose sets of alternatives differ.
+
 ### `GrammarDeclaration`
 
 ```text
@@ -667,6 +680,14 @@ Installed distribution version. Current value: `0.0.0`.
 
 ## Paths
 
+### `AlternativeRef`
+
+```text
+AlternativeRef(owner: 'ItemRef | DurableItemRef', relation: 'QualifiedName', index: 'int') -> None
+```
+
+Select one profile-ordered alternative of an owning graph item.
+
 ### `CanonicalPath`
 
 ```text
@@ -719,7 +740,7 @@ Classify the graph reference produced by a path profile.
 ### `PathOffender`
 
 ```text
-PathOffender(text: 'str', path: 'CanonicalPath | None' = None, segment_index: 'int | None' = None, segment: 'str | None' = None, expected_kind: 'PathKind | None' = None, actual_kind: 'PathKind | None' = None, tier: 'QualifiedName | None' = None, index: 'int | None' = None, durable_id: 'str | None' = None, profile_reason: 'str | None' = None) -> None
+PathOffender(text: 'str', path: 'CanonicalPath | None' = None, segment_index: 'int | None' = None, segment: 'str | None' = None, expected_kind: 'PathKind | None' = None, actual_kind: 'PathKind | None' = None, tier: 'QualifiedName | None' = None, index: 'int | None' = None, durable_id: 'str | None' = None, profile_reason: 'str | None' = None, relation: 'QualifiedName | None' = None, available_count: 'int | None' = None) -> None
 ```
 
 Carry stable structured context for a refused path operation.
@@ -756,6 +777,14 @@ PositionBinding(reference: 'PositionRef | DurablePositionRef') -> None
 
 Request resolution of one structural or durable position reference.
 
+### `ResolvedAlternative`
+
+```text
+ResolvedAlternative(path: 'CanonicalPath', owner: 'ItemRef', relation: 'QualifiedName', index: 'int', value: 'object') -> None
+```
+
+Pair a path with one selection from a profile-ordered alternative set.
+
 ### `ResolvedItem`
 
 ```text
@@ -788,7 +817,7 @@ Structural forms are ``/items/structural/NS/LOCAL/INDEX`` and
 ### `resolve_path`
 
 ```text
-resolve_path(graph: 'Graph', profile: 'PathProfile', text: 'str', *, require: 'PathKind | None' = None) -> 'ResolvedItem | ResolvedPosition'
+resolve_path(graph: 'Graph', profile: 'PathProfile', text: 'str', *, require: 'PathKind | None' = None) -> 'ResolvedItem | ResolvedPosition | ResolvedAlternative'
 ```
 
 Parse, bind, kind-check, and resolve a profile-owned graph path.

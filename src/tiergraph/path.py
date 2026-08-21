@@ -25,6 +25,7 @@ class PathKind(StrEnum):
 
     ITEM = "item"
     POSITION = "position"
+    ALTERNATIVE = "alternative"
 
 
 class PathRefusalCode(StrEnum):
@@ -42,6 +43,7 @@ class PathRefusalCode(StrEnum):
     POSITION_NOT_IN_PARENT = "position_not_in_parent"
     UNSPELLABLE = "unspellable"
     PROFILE_REFUSED = "profile_refused"
+    ALTERNATIVE_OUT_OF_RANGE = "alternative_out_of_range"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +103,16 @@ class PositionBinding:
     reference: PositionRef | DurablePositionRef
 
 
-type PathBinding = ItemBinding | PositionBinding
+@dataclass(frozen=True, slots=True)
+class AlternativeRef:
+    """Select one profile-ordered alternative of an owning graph item."""
+
+    owner: ItemRef | DurableItemRef
+    relation: QualifiedName
+    index: int
+
+
+type PathBinding = ItemBinding | PositionBinding | AlternativeRef
 
 
 class PathProfile(Protocol):
@@ -113,6 +124,12 @@ class PathProfile(Protocol):
 
     def spell(self, binding: PathBinding, graph: Graph) -> CanonicalPath:
         """Project a supported graph resolution request back to a path."""
+        ...
+
+    def alternatives(
+        self, owner: ItemRef, relation: QualifiedName, graph: Graph
+    ) -> tuple[object, ...]:
+        """Return alternatives in the profile's stable, snapshot-local order."""
         ...
 
 
@@ -130,6 +147,8 @@ class PathOffender:
     index: int | None = None
     durable_id: str | None = None
     profile_reason: str | None = None
+    relation: QualifiedName | None = None
+    available_count: int | None = None
 
 
 class PathRefusal(Exception):
@@ -164,17 +183,33 @@ class ResolvedPosition:
     current: PositionRef
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedAlternative:
+    """Pair a path with one selection from a profile-ordered alternative set."""
+
+    path: CanonicalPath
+    owner: ItemRef
+    relation: QualifiedName
+    index: int
+    value: object
+
+
 def resolve_path(
     graph: Graph,
     profile: PathProfile,
     text: str,
     *,
     require: PathKind | None = None,
-) -> ResolvedItem | ResolvedPosition:
+) -> ResolvedItem | ResolvedPosition | ResolvedAlternative:
     """Parse, bind, kind-check, and resolve a profile-owned graph path."""
     path = CanonicalPath.parse(text)
     binding = profile.bind(path, graph)
-    actual = PathKind.ITEM if isinstance(binding, ItemBinding) else PathKind.POSITION
+    if isinstance(binding, ItemBinding):
+        actual = PathKind.ITEM
+    elif isinstance(binding, PositionBinding):
+        actual = PathKind.POSITION
+    else:
+        actual = PathKind.ALTERNATIVE
     if require is not None and require is not actual:
         raise PathRefusal(
             PathRefusalCode.WRONG_KIND,
@@ -191,6 +226,34 @@ def resolve_path(
         except (TypeError, ValueError) as error:
             raise _item_resolution_refusal(text, path, binding, graph, error) from error
         return ResolvedItem(path, current_item)
+    if isinstance(binding, AlternativeRef):
+        try:
+            owner = graph.resolve_item(binding.owner)
+        except (TypeError, ValueError) as error:
+            item_binding = ItemBinding(binding.owner)
+            raise _item_resolution_refusal(
+                text, path, item_binding, graph, error
+            ) from error
+        alternatives = profile.alternatives(owner, binding.relation, graph)
+        if binding.index < 0 or binding.index >= len(alternatives):
+            raise PathRefusal(
+                PathRefusalCode.ALTERNATIVE_OUT_OF_RANGE,
+                PathOffender(
+                    text=text,
+                    path=path,
+                    tier=owner.tier,
+                    index=binding.index,
+                    relation=binding.relation,
+                    available_count=len(alternatives),
+                ),
+            )
+        return ResolvedAlternative(
+            path,
+            owner,
+            binding.relation,
+            binding.index,
+            alternatives[binding.index],
+        )
     try:
         current_position = graph.resolve_position(binding.reference)
     except (TypeError, ValueError) as error:
@@ -256,6 +319,11 @@ class StructuralPathProfile:
     def spell(self, binding: PathBinding, graph: Graph) -> CanonicalPath:
         """Spell each reference shape supported by the generic vocabulary."""
         del graph
+        if isinstance(binding, AlternativeRef):
+            raise PathRefusal(
+                PathRefusalCode.UNSPELLABLE,
+                PathOffender(text="", profile_reason="unsupported_reference"),
+            )
         reference = binding.reference
         if isinstance(reference, ItemRef):
             segments = _structural_segments("items", reference.tier, reference.index)
@@ -289,6 +357,13 @@ class StructuralPathProfile:
                 PathOffender(text="", profile_reason="unsupported_reference"),
             )
         return CanonicalPath(segments)
+
+    def alternatives(
+        self, owner: ItemRef, relation: QualifiedName, graph: Graph
+    ) -> tuple[object, ...]:
+        """Return no alternatives because this vocabulary declares none."""
+        del owner, relation, graph
+        return ()
 
 
 def _tier(
