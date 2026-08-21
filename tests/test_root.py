@@ -118,8 +118,8 @@ def test_real_consumer_case_round_trips_byte_identically() -> None:
     assert validation_errors(to_data(decoded), FORMAT_VERSION) == []
 
 
-def test_stored_roots_must_equal_inferred_roots_but_may_reorder_them() -> None:
-    """Membership has one truth while target incidence declares presentation order."""
+def test_stored_roots_may_be_an_ordered_subset_of_inferred_roots() -> None:
+    """Stored incidence may curate and reorder parentless inferred items."""
     graph = consumer_graph()
     roots = graph.polyadic_relations[0]
     neighbour = replace(
@@ -132,15 +132,51 @@ def test_stored_roots_must_equal_inferred_roots_but_may_reorder_them() -> None:
     assert OrderedRootsProfile(neighbour, ROOTS, (DEPENDS,)).roots() == tuple(
         reversed(roots.targets)
     )
-    contradictory = replace(
+    curated = replace(
         graph,
         polyadic_relations=(
             replace(roots, targets=roots.targets[:-1]),
             *graph.polyadic_relations[1:],
         ),
     )
-    with pytest.raises(ValueError, match="ordered-root relation.*contradict inferred"):
+    profile = OrderedRootsProfile(curated, ROOTS, (DEPENDS,))
+    assert profile.roots() == roots.targets[:-1]
+    assert profile.inferred() == (ItemRef(NODE, 0), ItemRef(NODE, 2), ItemRef(NODE, 3))
+
+
+def test_stored_roots_refuse_a_declared_non_parentless_item() -> None:
+    """A declared item with incoming dependency incidence remains unsound."""
+    graph = consumer_graph()
+    roots = graph.polyadic_relations[0]
+    child = ItemRef(NODE, 1)
+    contradictory = replace(
+        graph,
+        polyadic_relations=(
+            replace(roots, targets=(*roots.targets, child)),
+            *graph.polyadic_relations[1:],
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"non-parentless roots.*'index': 1.*must be a subset.*parentless",
+    ):
         OrderedRootsProfile(contradictory, ROOTS, (DEPENDS,))
+
+
+def test_is_exhaustive_distinguishes_complete_and_curated_roots() -> None:
+    """Consumers can opt into equality with the complete inferred set."""
+    graph = consumer_graph()
+    complete = OrderedRootsProfile(graph, ROOTS, (DEPENDS,))
+    assert complete.is_exhaustive()
+    roots = graph.polyadic_relations[0]
+    curated_graph = replace(
+        graph,
+        polyadic_relations=(
+            replace(roots, targets=roots.targets[:-1]),
+            *graph.polyadic_relations[1:],
+        ),
+    )
+    assert not OrderedRootsProfile(curated_graph, ROOTS, (DEPENDS,)).is_exhaustive()
 
 
 @pytest.mark.parametrize(
@@ -251,7 +287,7 @@ def test_unrestricted_root_domain_ignores_cross_domain_dependency_endpoints() ->
             for item in mixed.relation_declarations
         ),
     )
-    with pytest.raises(ValueError, match="contradict inferred"):
+    with pytest.raises(ValueError, match="non-parentless roots"):
         OrderedRootsProfile(unrestricted_graph, ROOTS, (DEPENDS,))
 
 

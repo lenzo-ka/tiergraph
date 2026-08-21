@@ -135,4 +135,5 @@ from the dependency relations you name. Stored order adds information; stored
 membership may not contradict the inferred set. The profile reconciles over
 exactly the dependency relations you pass, and is silent about any you omit,
 because enumerating today's dependencies does not enforce anything about a
-dependency added later.
+dependency added later. A curated ordered subset of parentless items is valid;
+consumers that require every inferred root can call `is_exhaustive()`.
