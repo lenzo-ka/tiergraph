@@ -132,13 +132,15 @@ def test_durable_item_follows_identity_after_insert_but_structural_is_occupant()
     inserted = graph_with(Item("new"), Item("alpha"), Item("beta"))
     durable = resolve_path(inserted, PROFILE, "/items/durable/beta")
     structural = resolve_path(inserted, PROFILE, "/items/structural/urn:path/tokens/1")
+    assert isinstance(durable, ResolvedItem)
+    assert isinstance(structural, ResolvedItem)
     assert durable.current == ItemRef(TIER, 2)
     assert structural.current == ItemRef(TIER, 1)
     # Discriminating occupant check: index 1 now holds "alpha" (shifted by the
     # insert), distinct from "beta" which the durable id followed to index 2.
-    assert resolve_path(inserted, PROFILE, "/items/durable/alpha").current == ItemRef(
-        TIER, 1
-    )
+    alpha = resolve_path(inserted, PROFILE, "/items/durable/alpha")
+    assert isinstance(alpha, ResolvedItem)
+    assert alpha.current == ItemRef(TIER, 1)
 
 
 @pytest.mark.parametrize(
@@ -302,6 +304,13 @@ class RefusingProfile:
         del binding, graph
         raise AssertionError("not reached")
 
+    def alternatives(
+        self, owner: ItemRef, relation: QualifiedName, graph: Graph
+    ) -> tuple[object, ...]:
+        """Exist only to satisfy the profile protocol."""
+        del owner, relation, graph
+        raise AssertionError("not reached")
+
 
 @pytest.mark.parametrize(
     "code",
@@ -356,6 +365,13 @@ def test_resolver_type_errors_are_preserved(
         def spell(self, binding: PathBinding, graph: Graph) -> CanonicalPath:
             """Exist only to satisfy the profile protocol."""
             del binding, graph
+            raise AssertionError("not reached")
+
+        def alternatives(
+            self, owner: ItemRef, relation: QualifiedName, graph: Graph
+        ) -> tuple[object, ...]:
+            """Exist only to satisfy the profile protocol."""
+            del owner, relation, graph
             raise AssertionError("not reached")
 
     with pytest.raises(PathRefusal) as caught:
