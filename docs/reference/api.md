@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 105 top-level `tiergraph` exports exactly once.
+It covers 118 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -664,6 +664,134 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 ### `__version__`
 
 Installed distribution version. Current value: `0.0.0`.
+
+## Paths
+
+### `CanonicalPath`
+
+```text
+CanonicalPath(segments: 'tuple[str, ...]') -> None
+```
+
+Hold decoded segments of a strict, non-fragment RFC 6901 pointer.
+
+### `ItemBinding`
+
+```text
+ItemBinding(reference: 'ItemRef | DurableItemRef') -> None
+```
+
+Request resolution of one structural or durable item reference.
+
+### `PathBinding`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `PathKind`
+
+```text
+PathKind(*values)
+```
+
+Classify the graph reference produced by a path profile.
+
+### `PathOffender`
+
+```text
+PathOffender(text: 'str', path: 'CanonicalPath | None' = None, segment_index: 'int | None' = None, segment: 'str | None' = None, expected_kind: 'PathKind | None' = None, actual_kind: 'PathKind | None' = None, tier: 'QualifiedName | None' = None, index: 'int | None' = None, durable_id: 'str | None' = None, profile_reason: 'str | None' = None) -> None
+```
+
+Carry stable structured context for a refused path operation.
+
+### `PathProfile`
+
+```text
+PathProfile(*args, **kwargs)
+```
+
+Interpret and spell canonical paths for one explicit vocabulary.
+
+### `PathRefusal`
+
+```text
+PathRefusal(code: 'PathRefusalCode', offender: 'PathOffender', cause: 'Exception | None' = None) -> 'None'
+```
+
+Report a typed path failure with offender data and its original cause.
+
+### `PathRefusalCode`
+
+```text
+PathRefusalCode(*values)
+```
+
+Identify stable classes of path refusal independently of diagnostics.
+
+### `PositionBinding`
+
+```text
+PositionBinding(reference: 'PositionRef | DurablePositionRef') -> None
+```
+
+Request resolution of one structural or durable position reference.
+
+### `ResolvedItem`
+
+```text
+ResolvedItem(path: 'CanonicalPath', current: 'ItemRef') -> None
+```
+
+Pair the parsed path with its current structural item coordinate.
+
+### `ResolvedPosition`
+
+```text
+ResolvedPosition(path: 'CanonicalPath', current: 'PositionRef') -> None
+```
+
+Pair the parsed path with its current structural boundary coordinate.
+
+### `StructuralPathProfile`
+
+```text
+StructuralPathProfile()
+```
+
+Address items and boundaries with a domain-neutral explicit vocabulary.
+
+Structural forms are ``/items/structural/NS/LOCAL/INDEX`` and
+``/positions/structural/NS/LOCAL/INDEX``. Durable forms are
+``/items/durable/ID`` and ``/positions/durable/item/ID/SIDE`` or
+``/positions/durable/tier/NS/LOCAL/SIDE``.
+
+### `resolve_path`
+
+```text
+resolve_path(graph: 'Graph', profile: 'PathProfile', text: 'str', *, require: 'PathKind | None' = None) -> 'ResolvedItem | ResolvedPosition'
+```
+
+Parse, bind, kind-check, and resolve a profile-owned graph path.
 
 ## Profiles
 
