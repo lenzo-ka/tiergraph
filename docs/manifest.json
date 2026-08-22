@@ -14,7 +14,7 @@
     "serialization": ["dump_bytes", "dumps", "loads", "to_data"],
     "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
   },
-  "companion_exports": {"tiergraph_dot": ["dumps"]},
+  "companion_exports": {"tiergraph_dot": ["dumps", "dumps_spans"]},
   "live_claims": [
     {
       "name": "selection-tuple",
@@ -50,19 +50,22 @@
     "GRAMMAR_NAMESPACE": "Default namespace for lowered grammar coordinates.",
     "CHART_NAMESPACE": "Default namespace for grammar chart forests.",
     "COMPLETE_BOUNDARY": "Canonical complete-boundary grammar value.",
-    "__version__": "Installed distribution version."
+    "__version__": "Installed distribution version.",
+    "SPANVIEW_FORMAT_VERSION": "Version tag written by span-view JSON."
   },
   "reader_pages": [
     "README.md", "docs/README.md", "docs/concepts.md", "docs/getting-started.md",
     "docs/guide/construction.md", "docs/guide/selection-and-traversal.md",
     "docs/guide/folding.md", "docs/guide/recognize-and-act.md",
     "docs/guide/timing.md", "docs/guide/serialization.md", "docs/guide/profiles.md",
+    "docs/guide/span-views.md",
     "docs/format.md", "docs/contributing-docs.md", "docs/reference/api.md",
     "docs/reference/cli.md"
   ],
   "secondary": {
     "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "ProductSemiring", "Semiring", "TropicalSemiring"],
     "tiergraph.schema": ["json_schema", "shape_hash"],
-    "tiergraph.cli": ["build_parser", "main"]
+    "tiergraph.cli": ["build_parser", "main"],
+    "tiergraph.spanview": ["SpanViewProfile", "SpanView", "Span", "SpanAlternative", "span_view", "to_json", "to_jsonl", "to_text", "to_html", "SPANVIEW_FORMAT_VERSION"]
   }
 }

@@ -24,6 +24,8 @@ from tiergraph import (
     QualifiedName,
     RelationInstance,
 )
+from tiergraph.path import ItemBinding, StructuralPathProfile
+from tiergraph.spanview import SpanViewProfile, span_view
 
 
 def dumps(
@@ -201,6 +203,89 @@ def dumps(
     return "\n".join(lines) + "\n"
 
 
+def dumps_spans(
+    graph: Graph,
+    profile: SpanViewProfile,
+    *,
+    alternatives: bool = False,
+    include_empty_tiers: bool = False,
+) -> str:
+    """Return deterministic DOT focused on a segmentation and its span extents."""
+    view = span_view(graph, profile, alternatives=alternatives)
+    selected_tiers = (profile.base_tier, *profile.span_tiers)
+    tiers = tuple(
+        (index, tier)
+        for index, tier in enumerate(graph.tiers)
+        if tier.declaration.name in selected_tiers
+        and (tier.items or include_empty_tiers)
+    )
+    lines = [
+        "digraph tiergraph_spans {",
+        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
+        '  node [fontname="Helvetica"];',
+        '  edge [fontname="Helvetica", fontsize=9];',
+    ]
+    node_ids: dict[ItemRef, str] = {}
+    for tier_index, tier in tiers:
+        lines.extend(("", f"  subgraph tier_{tier_index} {{", "    rank=same;"))
+        lines.append(
+            f'    tier_label_{tier_index} [shape=plaintext, label="{_quote(tier.declaration.short_name, "tier name")}"];'
+        )
+        for item_index, _item in enumerate(tier.items):
+            reference = ItemRef(tier.declaration.name, item_index)
+            node = f"item_{tier_index}_{item_index}"
+            node_ids[reference] = node
+            label = str(item_index)
+            matching = next(
+                (
+                    span
+                    for span in view.spans
+                    if span.path
+                    == str(StructuralPathProfile().spell(ItemBinding(reference), graph))
+                ),
+                None,
+            )
+            if matching is not None:
+                fields = [matching.label, f"index={matching.start}..{matching.end}"]
+                if matching.char_start is not None:
+                    fields.append(f"chars={matching.char_start}..{matching.char_end}")
+                if matching.value is not None:
+                    fields.append(f"value={matching.value}")
+                if matching.score is not None:
+                    fields.append(f"score={matching.score}")
+                if alternatives:
+                    fields.extend(
+                        f"alternative={candidate.value or '-'} ({candidate.score or '-'})"
+                        for candidate in matching.alternatives
+                    )
+                label = "\\n".join(_quote(field, "span label") for field in fields)
+            lines.append(f'    {node} [shape=box, label="{label}"];')
+        lines.append("  }")
+    lines.extend(("", "  // Span extents over ordered base atoms."))
+    for span in view.spans:
+        span_reference = next(
+            reference
+            for reference in node_ids
+            if str(StructuralPathProfile().spell(ItemBinding(reference), graph))
+            == span.path
+        )
+        first = node_ids[ItemRef(profile.base_tier, span.start)]
+        last = node_ids[ItemRef(profile.base_tier, span.end - 1)]
+        lines.append(
+            f"  {node_ids[span_reference]} -> {first} "
+            '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+            "arrowsize=0.6, fontsize=8, constraint=false];"
+        )
+        if first != last:
+            lines.append(
+                f"  {node_ids[span_reference]} -> {last} "
+                '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                "arrowsize=0.6, fontsize=8, constraint=false];"
+            )
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 def _clock_index(
     clock: ClockProfile,
     reference: PositionRef | DurablePositionRef,
@@ -334,4 +419,4 @@ def _quote(value: str, field: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-__all__ = ["dumps"]
+__all__ = ["dumps", "dumps_spans"]
