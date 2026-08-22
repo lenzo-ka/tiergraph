@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 import tiergraph_dot
+from tests.test_spanview import fixture as span_fixture
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
@@ -174,6 +175,28 @@ def assert_graphviz_accepts(rendered: str) -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("alternatives", [False, True])
+def test_span_renderer_is_stable_and_graphviz_accepts(alternatives: bool) -> None:
+    """Span-aware DOT remains parseable and byte-stable for both detail modes."""
+    graph, profile = span_fixture()
+    rendered = tiergraph_dot.dumps_spans(
+        graph, profile, alternatives=alternatives, include_empty_tiers=True
+    )
+    assert rendered == tiergraph_dot.dumps_spans(
+        graph, profile, alternatives=alternatives, include_empty_tiers=True
+    )
+    assert 'xlabel="extent"' in rendered
+    assert_graphviz_accepts(rendered)
+
+
+def test_span_renderer_omits_external_character_ranges_without_offsets() -> None:
+    """The span renderer handles profiles without external character offsets."""
+    graph, profile = span_fixture(offsets=False)
+    rendered = tiergraph_dot.dumps_spans(graph, profile)
+    assert "chars=" not in rendered
+    assert_graphviz_accepts(rendered)
 
 
 def test_refined_clock_mixed_tiers_extents_timing_and_relations_are_exact() -> None:

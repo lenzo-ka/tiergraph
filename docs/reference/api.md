@@ -1346,6 +1346,94 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 ```
 
 Run the command line. Returns the process exit status.
+### `tiergraph.spanview`
+
+This module is importable and usable, but carries no API-stability promise at version 0.0.0.
+
+### `SpanViewProfile`
+
+```text
+SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
+```
+
+Name every graph declaration used to interpret a segmentation.
+
+### `SpanView`
+
+```text
+SpanView(text: 'str', spans: 'tuple[Span, ...]', base_surfaces: 'tuple[str, ...]') -> None
+```
+
+Hold reconstructed input text and its ordered, non-overlapping spans.
+
+### `Span`
+
+```text
+Span(label: 'str', start: 'int', end: 'int', char_start: 'int | None', char_end: 'int | None', value: 'str | None', score: 'str | None', path: 'str', alternatives: 'tuple[SpanAlternative, ...]' = ()) -> None
+```
+
+Describe one selected span and its graph-derived extent.
+
+### `SpanAlternative`
+
+```text
+SpanAlternative(value: 'str | None', score: 'str | None', path: 'str') -> None
+```
+
+Describe one ranked candidate associated with a selected span.
+
+### `span_view`
+
+```text
+span_view(graph: 'Graph', profile: 'SpanViewProfile', *, alternatives: 'bool' = False) -> 'SpanView'
+```
+
+Read a segmentation and its coverage entirely through the public graph API.
+
+### `to_json`
+
+```text
+to_json(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return one stable, indented JSON span-view document.
+
+### `to_jsonl`
+
+```text
+to_jsonl(views: 'SpanView | Iterable[SpanView]', *, record: 'str' = 'input', alternatives: 'bool' = False) -> 'str'
+```
+
+Return compact JSON Lines records grouped by input or flattened by span.
+
+### `to_text`
+
+```text
+to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a deterministic ruler and aligned plain-text span table.
+
+### `to_html`
+
+```text
+to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a self-contained, injection-safe HTML segmentation report.
+
+### `SPANVIEW_FORMAT_VERSION`
+
+str(object='') -> str
+str(bytes_or_buffer[, encoding[, errors]]) -> str
+
+Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.__str__() (if defined)
+or repr(object).
+encoding defaults to sys.getdefaultencoding().
+errors defaults to 'strict'.
 
 ## Companion package
 
@@ -1368,3 +1456,11 @@ Empty tiers are omitted by default and included when
 data; the renderer assigns no domain-specific meaning to them. A clock
 profile must belong to this exact graph instance, not merely an equal graph,
 because its cached derived state was computed from that instance.
+
+### `dumps_spans`
+
+```text
+dumps_spans(graph: 'Graph', profile: 'SpanViewProfile', *, alternatives: 'bool' = False, include_empty_tiers: 'bool' = False) -> 'str'
+```
+
+Return deterministic DOT focused on a segmentation and its span extents.
