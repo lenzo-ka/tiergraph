@@ -13,6 +13,7 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundarySide,
     DurableItemRef,
     DurablePositionRef,
     Graph,
@@ -30,6 +31,13 @@ from tiergraph.core import (
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    _GraphBuilder,
+    _MutableTier,
+    _resolve_relation_endpoint,
+    _unique_simple_types,
+    _validate_attributes,
+    _validate_endpoint,
+    _validate_polyadic_instance,
 )
 
 MACHINE_VERSION = "1"
@@ -375,9 +383,9 @@ class Program:
         _primitive_count(self.opcodes)
 
     def unroll(self) -> AsBuilt:
-        """Lower procedures iteratively and execute every primitive transition."""
+        """Lower procedures and build their authoritative graph in linear time."""
         trace = _flatten(self.opcodes)
-        return AsBuilt(execute(trace), trace)
+        return AsBuilt._trusted(_build_checked(trace), trace)
 
     def fingerprint(self) -> str:
         """Hash the canonical JSON data of the as-built graph."""
@@ -403,9 +411,16 @@ class AsBuilt:
 
     def __post_init__(self) -> None:
         """Require the trace to execute to the graph it claims to construct."""
-        rebuilt = execute(self.trace)
+        rebuilt = _build_checked(self.trace)
         if rebuilt != self.graph:
             raise ValueError("as-built trace does not execute to its graph")
+
+    @classmethod
+    def _trusted(cls, graph: Graph, trace: tuple[PrimitiveOpcode, ...]) -> AsBuilt:
+        outcome = object.__new__(cls)
+        object.__setattr__(outcome, "graph", graph)
+        object.__setattr__(outcome, "trace", trace)
+        return outcome
 
     def unroll(self) -> Self:
         """Return this already lowered outcome unchanged."""
@@ -435,6 +450,356 @@ class AsBuilt:
     def __hash__(self) -> int:
         """Hash the same graph identity used by equality."""
         return hash(self.fingerprint())
+
+
+def _build_checked(trace: tuple[PrimitiveOpcode, ...]) -> Graph:
+    """Build quickly, using reference execution only to localize refusals."""
+    if _has_shift_sensitive_relation_endpoint(trace):
+        return execute(trace)
+    try:
+        return _build(trace)
+    except Exception as builder_error:
+        try:
+            execute(trace)
+        except Exception:
+            raise
+        raise RuntimeError(  # pragma: no cover - defensive builder/reference mismatch
+            "linear graph builder refused a trace accepted by reference execution"
+        ) from builder_error
+
+
+def _has_shift_sensitive_relation_endpoint(
+    trace: tuple[PrimitiveOpcode, ...],
+) -> bool:
+    """Detect tier-anchored boundaries, whose coordinates move as tiers grow."""
+    for opcode in trace:
+        if type(opcode) is not Relate:
+            continue
+        relation = opcode.relation
+        endpoints = (
+            (*relation.sources, *relation.targets)
+            if isinstance(relation, PolyadicRelationInstance)
+            else (relation.left, relation.right)
+        )
+        if any(
+            isinstance(endpoint, DurablePositionRef)
+            and isinstance(endpoint.anchor, QualifiedName)
+            for endpoint in endpoints
+        ):
+            return True
+    return False
+
+
+def _build(trace: tuple[PrimitiveOpcode, ...]) -> Graph:
+    builder = _GraphBuilder()
+    for opcode in trace:
+        _build_opcode(builder, opcode)
+    return builder._finish()
+
+
+def _build_opcode(builder: _GraphBuilder, opcode: PrimitiveOpcode) -> None:
+    if type(opcode) is DeclareNamespace:
+        builder.namespaces.append(opcode.declaration)
+        builder.declared_namespaces.add(opcode.declaration.namespace)
+        return
+    if type(opcode) is DeclareTier:
+        builder._require_namespaces((opcode.declaration.name,))
+        added_tier = _MutableTier(opcode.declaration, [], [])
+        builder.tiers.append(added_tier)
+        builder.tiers_by_name[opcode.declaration.name] = added_tier
+        return
+    if type(opcode) is DeclareRelation:
+        _build_declare_relation(builder, opcode.declaration)
+        return
+    if type(opcode) is DeclareAttribute:
+        builder._require_namespaces((opcode.declaration.name,))
+        builder.attribute_declarations.append(opcode.declaration)
+        builder.attributes_by_name[opcode.declaration.name] = opcode.declaration
+        return
+    if type(opcode) is AddItem:
+        current_tier = builder.tiers_by_name.get(opcode.tier)
+        if current_tier is None:
+            raise ValueError(f"item tier {str(opcode.tier)!r} is not declared")
+        _validate_attributes(
+            opcode.item.attributes, AttributeDomain.ITEM, builder.attributes_by_name
+        )
+        index = len(current_tier.items)
+        after_index = builder.after_position_by_tier.get(opcode.tier)
+        if after_index is not None:
+            del builder.positions_by_coordinate[PositionRef(opcode.tier, index)]
+            builder.positions_by_coordinate[PositionRef(opcode.tier, index + 1)] = (
+                after_index
+            )
+        current_tier.items.append(opcode.item)
+        if opcode.item.durable_id is not None:
+            builder.items_by_id[opcode.item.durable_id] = ItemRef(opcode.tier, index)
+        return
+    if type(opcode) is PromoteItem:
+        _build_promote_item(builder, opcode.reference, opcode.durable_id)
+        return
+    if type(opcode) is PromotePosition:
+        _build_promote_position(builder, opcode.reference, opcode.durable_id)
+        return
+    if type(opcode) is Relate:
+        _build_relate(builder, opcode.relation)
+        return
+    if type(opcode) is AttachValue:
+        _build_attach_value(builder, opcode)
+        return
+    raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
+
+
+def _build_declare_relation(
+    builder: _GraphBuilder, declaration: RelationDeclaration
+) -> None:
+    names = [declaration.name]
+    if isinstance(declaration, SimpleRelationDeclaration):
+        names.append(declaration.item_type)
+        _unique_simple_types([declaration], builder._tier_views())
+        if declaration.tier in builder.types_by_tier:
+            raise ValueError(
+                f"tier {str(declaration.tier)!r} has multiple simple relations; at most one is allowed"
+            )
+        builder.types_by_tier[declaration.tier] = declaration.item_type
+    elif isinstance(declaration, BipartiteRelationDeclaration):
+        names.extend((declaration.left_type, declaration.right_type))
+    else:
+        names.extend(
+            tier
+            for side in (declaration.sources, declaration.targets)
+            for tier in (() if side.tiers is None else side.tiers)
+        )
+        if declaration.targets_subset_of is not None:
+            names.append(declaration.targets_subset_of)
+            subset = builder.declarations_by_name.get(declaration.targets_subset_of)
+            if declaration.targets_subset_of == declaration.name:
+                subset = declaration
+            if not isinstance(subset, PolyadicRelationDeclaration):
+                raise ValueError(
+                    f"polyadic relation {str(declaration.name)!r} targets-subset-of names undeclared "
+                    f"polyadic relation {str(declaration.targets_subset_of)!r}"
+                )
+    builder._require_namespaces(names)
+    _validate_attributes(
+        declaration.attributes,
+        AttributeDomain.RELATION_DECLARATION,
+        builder.attributes_by_name,
+    )
+    builder.declaration_indexes[declaration.name] = len(builder.relation_declarations)
+    builder.relation_declarations.append(declaration)
+    builder.declarations_by_name[declaration.name] = declaration
+
+
+def _build_promote_item(
+    builder: _GraphBuilder, reference: ItemRef, durable_id: str
+) -> DurableItemRef:
+    coordinate = builder._resolve_item(reference)
+    tier = builder.tiers_by_name[coordinate.tier]
+    item = tier.items[coordinate.index]
+    if item.durable_id is not None:
+        return DurableItemRef(item.durable_id)
+    durable = DurableItemRef(durable_id)
+    tier.items[coordinate.index] = Item(durable_id, item.attributes)
+    builder.items_by_id[durable_id] = coordinate
+    return durable
+
+
+def _build_promote_position(
+    builder: _GraphBuilder, reference: PositionRef, durable_id: str
+) -> DurablePositionRef:
+    coordinate = builder._resolve_position(reference)
+    tier = builder.tiers_by_name[coordinate.tier]
+    if coordinate.index == 0:
+        durable = DurablePositionRef(coordinate.tier, BoundarySide.BEFORE)
+    elif coordinate.index == len(tier.items):
+        durable = DurablePositionRef(coordinate.tier, BoundarySide.AFTER)
+    else:
+        anchor = _build_promote_item(
+            builder, ItemRef(coordinate.tier, coordinate.index), durable_id
+        )
+        durable = DurablePositionRef(anchor, BoundarySide.BEFORE)
+    position_index = builder.positions_by_coordinate.get(coordinate)
+    if position_index is not None:
+        position = builder.position_values[position_index]
+        if isinstance(position.reference, PositionRef):
+            builder.position_values[position_index] = Position(
+                durable, position.attributes
+            )
+            if (
+                isinstance(durable.anchor, QualifiedName)
+                and durable.side is BoundarySide.AFTER
+            ):
+                builder.after_position_by_tier[durable.anchor] = position_index
+        else:
+            durable = position.reference
+    return durable
+
+
+def _build_relate(
+    builder: _GraphBuilder,
+    relation: RelationInstance | PolyadicRelationInstance,
+) -> None:
+    _validate_attributes(
+        relation.attributes,
+        AttributeDomain.RELATION_INSTANCE,
+        builder.attributes_by_name,
+    )
+    if isinstance(relation, RelationInstance):
+        declaration = builder.declarations_by_name.get(relation.declaration)
+        if not isinstance(declaration, BipartiteRelationDeclaration):
+            raise ValueError("a bipartite relation declaration is required")
+        index = len(builder.relations)
+        _validate_endpoint(
+            index,
+            "left",
+            relation.left,
+            declaration.left_type,
+            declaration.left_endpoint,
+            builder._tier_views(),
+            builder.types_by_tier,
+            builder.items_by_id,
+        )
+        _validate_endpoint(
+            index,
+            "right",
+            relation.right,
+            declaration.right_type,
+            declaration.right_endpoint,
+            builder._tier_views(),
+            builder.types_by_tier,
+            builder.items_by_id,
+        )
+        builder.relations.append(relation)
+        return
+    declaration = builder.declarations_by_name.get(relation.declaration)
+    if not isinstance(declaration, PolyadicRelationDeclaration):
+        raise ValueError("a polyadic relation declaration is required")
+    index = len(builder.polyadic_relations)
+    _validate_polyadic_instance(
+        index,
+        relation,
+        declaration,
+        builder._tier_views(),
+        builder.items_by_id,
+    )
+    sources = tuple(
+        _resolve_relation_endpoint(endpoint, builder._tier_views(), builder.items_by_id)
+        for endpoint in relation.sources
+    )
+    targets = {
+        _resolve_relation_endpoint(endpoint, builder._tier_views(), builder.items_by_id)
+        for endpoint in relation.targets
+    }
+    for source in sources:
+        builder.polyadic_targets_by_source.setdefault(
+            (relation.declaration, source), set()
+        ).update(targets)
+    if declaration.targets_subset_of is not None:
+        for source in sources:
+            allowed = builder.polyadic_targets_by_source.get(
+                (declaration.targets_subset_of, source)
+            )
+            if allowed is None or not targets <= allowed:
+                raise ValueError(
+                    "polyadic targets-subset-of membership is not satisfied"
+                )
+    builder.polyadic_relations.append(relation)
+
+
+def _build_attach_value(builder: _GraphBuilder, opcode: AttachValue) -> None:
+    _validate_attributes((opcode.value,), opcode.domain, builder.attributes_by_name)
+    if opcode.domain is AttributeDomain.DOCUMENT:
+        _require_target(opcode.target, None, opcode.domain)
+        builder.attributes.append(opcode.value)
+    elif opcode.domain is AttributeDomain.TIER:
+        target = _qualified_target(opcode.target, opcode.domain)
+        tier = builder.tiers_by_name.get(target)
+        if tier is None:
+            raise ValueError(f"tier attribute target {str(target)!r} is not declared")
+        tier.attributes.append(opcode.value)
+    elif opcode.domain is AttributeDomain.ITEM:
+        coordinate = builder._resolve_item(_item_target(opcode.target, opcode.domain))
+        tier = builder.tiers_by_name[coordinate.tier]
+        item = tier.items[coordinate.index]
+        tier.items[coordinate.index] = Item(
+            item.durable_id, (*item.attributes, opcode.value)
+        )
+    elif opcode.domain is AttributeDomain.RELATION_DECLARATION:
+        target = _qualified_target(opcode.target, opcode.domain)
+        index = builder.declaration_indexes.get(target)
+        if index is None:
+            raise ValueError(
+                f"relation declaration attribute target {str(target)!r} is not declared"
+            )
+        declaration = _relation_with_value(
+            builder.relation_declarations[index], opcode.value
+        )
+        builder.relation_declarations[index] = declaration
+        builder.declarations_by_name[target] = declaration
+    elif opcode.domain is AttributeDomain.RELATION_INSTANCE:
+        index = _index_target(opcode.target, opcode.domain, len(builder.relations))
+        relation = builder.relations[index]
+        builder.relations[index] = RelationInstance(
+            relation.declaration,
+            relation.left,
+            relation.right,
+            relation.durable_id,
+            (*relation.attributes, opcode.value),
+        )
+    else:
+        reference = _position_target(opcode.target, opcode.domain)
+        position_coordinate = builder._resolve_position(reference)
+        index = builder.positions_by_coordinate.get(position_coordinate)
+        if index is None:
+            builder.positions_by_coordinate[position_coordinate] = len(
+                builder.position_values
+            )
+            builder.position_values.append(Position(reference, (opcode.value,)))
+            if (
+                isinstance(reference, DurablePositionRef)
+                and isinstance(reference.anchor, QualifiedName)
+                and reference.side is BoundarySide.AFTER
+            ):
+                builder.after_position_by_tier[reference.anchor] = (
+                    len(builder.position_values) - 1
+                )
+        else:
+            position = builder.position_values[index]
+            builder.position_values[index] = Position(
+                position.reference, (*position.attributes, opcode.value)
+            )
+
+
+def _relation_with_value(
+    declaration: RelationDeclaration, value: AttributeValue
+) -> RelationDeclaration:
+    attributes = (*declaration.attributes, value)
+    if isinstance(declaration, SimpleRelationDeclaration):
+        return SimpleRelationDeclaration(
+            declaration.name, declaration.tier, declaration.item_type, attributes
+        )
+    if isinstance(declaration, BipartiteRelationDeclaration):
+        return BipartiteRelationDeclaration(
+            declaration.name,
+            declaration.left_type,
+            declaration.right_type,
+            declaration.left_endpoint,
+            declaration.right_endpoint,
+            declaration.single_parent,
+            declaration.acyclic,
+            attributes,
+        )
+    return PolyadicRelationDeclaration(
+        declaration.name,
+        declaration.sources,
+        declaration.targets,
+        declaration.unique_sources,
+        declaration.distinct_targets,
+        declaration.single_parent,
+        declaration.acyclic,
+        declaration.targets_subset_of,
+        attributes,
+    )
 
 
 def execute(opcodes: Iterable[object]) -> Graph:
