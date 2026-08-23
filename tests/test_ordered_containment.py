@@ -257,7 +257,7 @@ def test_runtime_source_uniqueness_refusal_is_independent_of_instance_order(
     )
 
     with pytest.raises(
-        ValueError, match=r"contains.*source.*index.*0.*instances.*violating"
+        ValueError, match=r"contains.*source.*parents\[0\].*instances.*violating"
     ):
         OrderedContainment(value, CONTAINS)
 
@@ -309,8 +309,7 @@ def test_runtime_cycle_refusal_names_injected_closing_instance(
     assert str(caught.value) == (
         "ordered containment relation "
         "'{urn:test:ordered-containment}cycle-contains' instance 2 closes a cycle "
-        "at {'tier': {'namespace': 'urn:test:ordered-containment', "
-        "'local_name': 'cycle-nodes'}, 'index': 0}"
+        "at '{urn:test:ordered-containment}cycle-nodes[0]'"
     )
 
 

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 121 top-level `tiergraph` exports exactly once.
+It covers 132 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -519,6 +519,10 @@ every attribute-value collection, sparse position values, and relation-side
 allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
 endpoint sequences remain ordered because their sequence carries graph meaning.
 
+### `GraphValidationError`
+
+Report a declaration or graph-contract validation failure.
+
 ### `Item`
 
 ```text
@@ -871,6 +875,14 @@ PersistedChoiceProfile(graph: 'Graph', alternatives_relation: 'QualifiedName', d
 
 Read alternatives and optional persisted singleton defaults by source.
 
+### `SpanViewProfile`
+
+```text
+SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
+```
+
+Name every graph declaration used to interpret a segmentation.
+
 ### `json_value_graph`
 
 ```text
@@ -878,6 +890,46 @@ json_value_graph(value: 'JsonValue', namespace: 'str' = 'urn:tiergraph:json-valu
 ```
 
 Construct a standalone canonical graph for one recursively nested JSON value.
+
+### `span_view`
+
+```text
+span_view(graph: 'Graph', profile: 'SpanViewProfile', *, alternatives: 'bool' = False) -> 'SpanView'
+```
+
+Read a segmentation and its coverage entirely through the public graph API.
+
+### `to_json`
+
+```text
+to_json(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return one stable, indented JSON span-view document.
+
+### `to_jsonl`
+
+```text
+to_jsonl(views: 'SpanView | Iterable[SpanView]', *, record: 'str' = 'input', alternatives: 'bool' = False) -> 'str'
+```
+
+Return compact JSON Lines records grouped by input or flattened by span.
+
+### `to_text`
+
+```text
+to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a deterministic ruler and aligned plain-text span table.
+
+### `to_html`
+
+```text
+to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a self-contained, injection-safe HTML segmentation report.
 
 ## References
 
@@ -1012,6 +1064,24 @@ select(graph: 'Graph', selectors: 'tuple[Selector, ...]') -> 'NodeSet'
 ```
 
 Union validated selector routes into one canonical node set.
+
+## Semirings
+
+### `BOOLEAN`
+
+The exact Boolean semiring, with disjunction and conjunction.
+
+### `COUNTING`
+
+The exact natural-number semiring.
+
+### `DECIMAL_TROPICAL`
+
+An exact min-plus or max-plus semiring with XSD-decimal finite values.
+
+### `PATH`
+
+The exact decimal tropical semiring enriched with tied best paths.
 
 ## Serialization
 

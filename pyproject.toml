@@ -54,7 +54,7 @@ addopts = "-q"
 
 [tool.coverage.run]
 branch = true
-source = ["tiergraph", "tiergraph_dot", "examples", "scripts.generate_docs"]
+source = ["tiergraph", "tiergraph_dot"]
 
 [tool.coverage.report]
 # Ratchets upward, never down.

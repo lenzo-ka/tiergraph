@@ -26,10 +26,14 @@ tiergraph is domain-general. One application is the phonetics toolkit ipakit,
 which models transcriptions as tiered structure; tiergraph itself carries no
 phonetics.
 
-The package requires Python 3.12 or later.
+The package requires Python 3.12 or later. A PyPI release is not yet available;
+install it from a source checkout:
 
 ```console
-python -m pip install tiergraph
+git clone https://github.com/lenzo-ka/tiergraph.git
+cd tiergraph
+python -m pip install .
+tiergraph --version
 ```
 
 ## A first graph

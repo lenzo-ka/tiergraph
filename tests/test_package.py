@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from importlib import resources
 
+import pytest
+
 import tiergraph
 
 
@@ -11,6 +13,13 @@ def test_version_is_a_string() -> None:
     """__version__ is present and non-empty."""
     assert isinstance(tiergraph.__version__, str)
     assert tiergraph.__version__
+
+
+def test_graph_validation_error_is_a_value_error() -> None:
+    """Callers can identify graph-contract failures without breaking old handlers."""
+    assert issubclass(tiergraph.GraphValidationError, ValueError)
+    with pytest.raises(tiergraph.GraphValidationError, match="must not be empty"):
+        tiergraph.QualifiedName("", "item")
 
 
 def test_typing_marker_ships() -> None:
