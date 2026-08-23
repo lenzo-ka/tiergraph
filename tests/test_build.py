@@ -334,6 +334,54 @@ def test_boundary_relation_refusals() -> None:
             source_type="thing",
         )
 
+    missing_anchor = object.__new__(DurablePositionRef)
+    object.__setattr__(missing_anchor, "side", BoundarySide.BEFORE)
+    with pytest.raises(
+        BuilderError, match="relation missing-anchor source: malformed boundary anchor"
+    ):
+        doc.relation(
+            "missing-anchor",
+            left,
+            right,
+            ((missing_anchor, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+
+    missing_side = object.__new__(DurablePositionRef)
+    object.__setattr__(missing_side, "anchor", left.name)
+    with pytest.raises(
+        BuilderError, match="relation missing-side source: malformed boundary side"
+    ):
+        doc.relation(
+            "missing-side",
+            left,
+            right,
+            ((missing_side, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+
+    missing_durable_id = object.__new__(DurableItemRef)
+    missing_nested_slot = object.__new__(DurablePositionRef)
+    object.__setattr__(missing_nested_slot, "anchor", missing_durable_id)
+    object.__setattr__(missing_nested_slot, "side", BoundarySide.BEFORE)
+    with pytest.raises(
+        BuilderError,
+        match="relation missing-durable-id source: malformed boundary anchor",
+    ):
+        doc.relation(
+            "missing-durable-id",
+            left,
+            right,
+            ((missing_nested_slot, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+
 
 def test_relation_surface_shape_refusals_and_item_endpoint() -> None:
     """The general relation surface checks kinds, pair order, and pair arity."""

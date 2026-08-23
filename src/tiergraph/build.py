@@ -52,6 +52,8 @@ type AttributeDeclarationInput = (
     XsdType | str | tuple[XsdType | str, AttributeDomain | str]
 )
 
+_MISSING = object()
+
 
 class BuilderError(ValueError):
     """Report invalid builder notation before graph-wide kernel validation."""
@@ -617,22 +619,23 @@ class Document:
                 f"{operation}: boundary endpoint needs DurablePositionRef anchor"
             )
         expected = self._owned_tier(tier, operation)
-        if isinstance(value.anchor, QualifiedName):
-            if value.anchor != expected.declaration.name:
+        anchor = getattr(value, "anchor", _MISSING)
+        side_value = getattr(value, "side", _MISSING)
+        if isinstance(anchor, QualifiedName):
+            if anchor != expected.declaration.name:
                 raise BuilderError(f"{operation}: foreign boundary tier anchor")
-        elif isinstance(value.anchor, DurableItemRef):
-            matches = [
-                item
-                for item in expected.items
-                if item.durable_id == value.anchor.durable_id
-            ]
+        elif isinstance(anchor, DurableItemRef):
+            durable_id = getattr(anchor, "durable_id", _MISSING)
+            if not isinstance(durable_id, str):
+                raise BuilderError(f"{operation}: malformed boundary anchor")
+            matches = [item for item in expected.items if item.durable_id == durable_id]
             if len(matches) != 1:
                 raise BuilderError(
                     f"{operation}: foreign or missing boundary item anchor"
                 )
         else:
             raise BuilderError(f"{operation}: malformed boundary anchor")
-        if not isinstance(value.side, BoundarySide):
+        if not isinstance(side_value, BoundarySide):
             raise BuilderError(f"{operation}: malformed boundary side")
         return value
 
