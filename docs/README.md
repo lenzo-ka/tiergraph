@@ -3,6 +3,23 @@
 Read [Concepts](concepts.md) for the model, then [Getting started](getting-started.md)
 for a small graph built two ways.
 
+## How do I…
+
+- **Build or edit a checked graph?** Start with
+  [Construction](guide/construction.md).
+- **Find items or follow their links?** See
+  [Selection and traversal](guide/selection-and-traversal.md).
+- **Attach physical times to positions?** Use [Timing](guide/timing.md).
+- **Compute a cost, count, or recognition result?** Read
+  [Folding](guide/folding.md) and
+  [Recognize and act](guide/recognize-and-act.md).
+- **Write JSON or render DOT?** Go to
+  [Serialization](guide/serialization.md).
+- **Turn segmentation into text, HTML, JSON, or JSON Lines?** See
+  [Span views](guide/span-views.md).
+
+## Documentation map
+
 The guides cover work by concern:
 
 - [Construction](guide/construction.md)

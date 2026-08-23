@@ -1,30 +1,22 @@
 # tiergraph
 
-tiergraph is a library for data that is ordered, layered, and typed: sequences of
-typed items arranged in parallel tiers, with declared relations between them, held
-as one immutable graph and read through views derived from that single structure.
+*Ordered tiers, declared relations, and an algebra over them*
 
-Many domains have this shape — aligned annotations over a signal, layered
-timelines, structured documents whose parts reference each other. Representing it
-by hand tends to produce invalid states, views that drift out of sync, and
-serialization that breaks between versions. tiergraph gives one checked kernel for
-it:
+tiergraph holds parallel ordered sequences and the declared links between them
+as one immutable graph, checked when it is built. Every view — selection,
+traversal, containment, timing, folds — is computed from that one graph, so no
+view can disagree with the store.
 
-- **Construction is checked.** A graph validates its names, declarations,
-  endpoints, attributes, and structural constraints when it is built, so an
-  invalid graph cannot be constructed and nothing downstream has to re-check it.
-- **One structure, many views.** Selection, traversal, containment, and folds all
-  read the same immutable graph, so a view cannot disagree with the store.
-- **Folds measure and recognize.** A fold evaluates a dependency graph with a
-  semiring — least-cost paths, path counts, reachability, recognition — over the
-  declared structure.
-- **The format is versioned and deterministic.** The JSON wire codec and the
-  construction machine carry explicit version stamps, and serialization is
-  canonical, so documents round-trip and interchange without ambiguity.
+The shape is the track view of an audio or video editor: rows of items, ordered
+within a row, aligned across rows, with links between rows. Aligned annotations
+over a signal have it; so do layered timelines and structured documents whose
+parts reference each other.
 
-tiergraph is domain-general. One application is the phonetics toolkit ipakit,
-which models transcriptions as tiered structure; tiergraph itself carries no
-phonetics.
+You have this problem already if:
+
+- you can construct a state your own code treats as invalid;
+- you keep a derived index beside the store and must remember to update both; or
+- your serialized format breaks when you add a field.
 
 The package requires Python 3.12 or later. A PyPI release is not yet available;
 install it from a source checkout:
@@ -36,34 +28,56 @@ python -m pip install .
 tiergraph --version
 ```
 
-## A first graph
+## See an alignment
 
-A graph declares its namespaces, tiers, and items, and validates them on
-construction:
+This caption graph links each word to its phones. Select `cat`, walk the declared
+alignment, and the answer is visible in the input:
 
 ```python
-from tiergraph import (
-    Graph,
-    Item,
-    NamespaceDeclaration,
-    QualifiedName,
-    Tier,
-    TierDeclaration,
-)
+from tiergraph import ItemSelector, Walk, WalkDirection, select
+from tiergraph.build import document
 
-namespace = "https://example.com/score"
-events = QualifiedName(namespace, "events")
-graph = Graph(
-    (NamespaceDeclaration("score", namespace),),
-    (Tier(TierDeclaration(events, "Events"), (Item("opening"),)),),
-    (),
+builder = document("https://example.com/captions", prefix="caption")
+words = builder.tier(
+    "words",
+    ("a", "cat", "sat"),
+    item_type="word",
+    membership="word-membership",
 )
-assert graph.tiers[0].items[0].durable_id == "opening"
+phones = builder.tier(
+    "phones",
+    ("AH", "K", "AE", "T", "S", "AE-2", "T-2"),
+    item_type="phone",
+    membership="phone-membership",
+)
+aligns = builder.link(
+    "aligns",
+    words,
+    phones,
+    ((0, 0), (1, 1), (1, 2), (1, 3), (2, 4), (2, 5), (2, 6)),
+    acyclic=True,
+)
+graph = builder.build()
+
+cat = select(graph, (ItemSelector(graph, words.ref(1)),))
+reached = Walk(cat, aligns.name, WalkDirection.FORWARD).evaluate().nodes
+assert [node.reference for node in reached.nodes] == [
+    phones.ref(1),
+    phones.ref(2),
+    phones.ref(3),
+]
 ```
 
-`Graph` checks names, declarations, endpoints, attributes, and graph-wide
-constraints as it is constructed. An invalid graph fails here, before it can
-reach a selection, a fold, or a serializer.
+The complete runnable example keeps the displayed phone labels separate from
+their durable ids and prints `['K', 'AE', 'T']`; see
+[`examples/caption_alignment.py`](examples/caption_alignment.py).
+
+The model learned from Paul Hertz's Delta representation and the heterogeneous
+relation graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps
+their emphasis on explicit tiered structure while defining a typed, immutable
+model and a versioned interchange format.
+
+Downstream migration (ipakit). ipakit is migrating onto tiergraph: Form's timed representation — units, intervals, positional lookup, and DOT rendering — is authoritative on the tiergraph library via a containment projection, with graph-independent identity hashing. The remaining backend subsystem graphs (such as pronunciation/CMU, mora, pinyin, gesture, and rewrite) and their JSON wire are still on ipakit's embedded graph engine and are being migrated to the library; when that completes the embedded engine is removed.
 
 ## What you can do with it
 
