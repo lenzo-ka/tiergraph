@@ -96,7 +96,18 @@ import tiergraph_dot
 dot = tiergraph_dot.dumps(graph)
 ```
 
-## Status
+## Stability
 
-The project is alpha software. The wire and machine format versions are explicit
-and checked; the Python API may still change before a stable release.
+tiergraph 0.1.x is alpha software. The public Python API may change before 1.0;
+where possible, changes will be additive, but compatibility is not yet promised.
+The JSON wire format, construction machine format, and span-view JSON format
+carry explicit version stamps so a reader can identify the format it receives.
+A format stamp identifies a contract; it does not imply that every version can
+read or migrate every older format.
+
+After 1.0, the intended policy is to announce a deprecated public Python API in
+a minor release, retain it with a warning for at least one subsequent minor
+release, and remove it only in a later release. Security, correctness, or
+otherwise impractical compatibility constraints may require a faster change,
+which will be documented in the release. This is an intended post-1.0 policy,
+not a compatibility promise for the current alpha series.
