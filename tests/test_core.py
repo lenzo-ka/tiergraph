@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 import pytest
 from hypothesis import given
@@ -18,6 +19,7 @@ from tiergraph import (
     DurableItemRef,
     DurablePositionRef,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
     NamespaceDeclaration,
@@ -654,6 +656,47 @@ def test_durable_ids_and_reference_refusals() -> None:
     assert graph.tiers[0].items[0].durable_id == "id"
     with pytest.raises(ValueError, match="outside tier"):
         graph.item_type(ItemRef(tier_name, 3))
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda graph: graph.resolve_item(ItemRef(name("x"), 9)),
+        lambda graph: graph.resolve_position(PositionRef(name("x"), 9)),
+        lambda graph: graph.promote_item(ItemRef(name("x"), 9), "promoted"),
+        lambda graph: graph.promote_position(PositionRef(name("x"), 9), "promoted"),
+        lambda graph: graph.item_type(ItemRef(name("x"), 9)),
+    ],
+    ids=(
+        "resolve-item",
+        "resolve-position",
+        "promote-item",
+        "promote-position",
+        "item-type",
+    ),
+)
+def test_public_reference_errors_are_not_graph_validation_errors(
+    operation: Callable[[Graph], object],
+) -> None:
+    """Bad arguments do not imply that an already-valid graph broke its contract."""
+    tier_name = name("x")
+    tier = Tier(TierDeclaration(tier_name, "X"), (Item(),))
+    membership = SimpleRelationDeclaration(name("members"), tier_name, name("item"))
+    graph = Graph(NAMESPACES, (tier,), (membership,))
+
+    with pytest.raises(ValueError, match=r"x\[9\].*outside tier") as caught:
+        operation(graph)
+
+    assert type(caught.value) is ValueError
+    assert not isinstance(caught.value, GraphValidationError)
+
+
+def test_graph_construction_contract_raises_graph_validation_error() -> None:
+    """Invalid graph content retains its construction-specific exception type."""
+    tier = Tier(TierDeclaration(name("x"), "X"), (Item(),))
+
+    with pytest.raises(GraphValidationError, match="duplicate tier"):
+        Graph(NAMESPACES, (tier, tier), ())
 
 
 def test_durable_position_reference_survives_insertion_but_coordinate_does_not() -> (

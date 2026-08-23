@@ -751,7 +751,10 @@ class Graph:
         positioned_values: list[tuple[PositionRef, Position]] = []
         for position in self.position_values:
             coordinate = _resolve_position_reference(
-                position.reference, tiers_by_name, items_by_id
+                position.reference,
+                tiers_by_name,
+                items_by_id,
+                GraphValidationError,
             )
             positioned_values.append((coordinate, position))
             if not position.attributes:
@@ -816,7 +819,9 @@ class Graph:
 
     def item_type(self, reference: ItemRef) -> QualifiedName:
         """Return the type supplied by simple membership or refuse an untyped tier."""
-        _validate_reference(reference, "item reference", self._tiers_by_name)
+        _validate_reference(
+            reference, "item reference", self._tiers_by_name, ValueError
+        )
         item_type = self._types_by_tier.get(reference.tier)
         if item_type is None:
             raise ValueError(
@@ -827,7 +832,9 @@ class Graph:
     def resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
         """Resolve either identity level to the item's current coordinate."""
         if isinstance(reference, ItemRef):
-            _validate_reference(reference, "item reference", self._tiers_by_name)
+            _validate_reference(
+                reference, "item reference", self._tiers_by_name, ValueError
+            )
             return reference
         if not isinstance(reference, DurableItemRef):
             raise TypeError(
@@ -844,7 +851,7 @@ class Graph:
     ) -> PositionRef:
         """Resolve either identity level to the position's current coordinate."""
         if isinstance(reference, PositionRef):
-            _validate_position(reference, self._tiers_by_name)
+            _validate_position(reference, self._tiers_by_name, ValueError)
             return reference
         if not isinstance(reference, DurablePositionRef):
             raise TypeError(
@@ -852,14 +859,16 @@ class Graph:
                 f"got {type(reference).__name__}"
             )
         return _resolve_position_reference(
-            reference, self._tiers_by_name, self._items_by_id
+            reference, self._tiers_by_name, self._items_by_id, ValueError
         )
 
     def promote_item(
         self, reference: ItemRef, durable_id: str
     ) -> tuple[Graph, DurableItemRef]:
         """Return a graph carrying the caller's semantic id for one item."""
-        _validate_reference(reference, "item reference", self._tiers_by_name)
+        _validate_reference(
+            reference, "item reference", self._tiers_by_name, ValueError
+        )
         tier = self._tiers_by_name[reference.tier]
         item = tier.items[reference.index]
         if item.durable_id is not None:
@@ -876,7 +885,7 @@ class Graph:
         self, reference: PositionRef, durable_id: str
     ) -> tuple[Graph, DurablePositionRef]:
         """Return a graph whose boundary anchor has durable identity."""
-        _validate_position(reference, self._tiers_by_name)
+        _validate_position(reference, self._tiers_by_name, ValueError)
         tier = self._tiers_by_name[reference.tier]
         if reference.index == 0:
             promoted = self
@@ -987,7 +996,9 @@ class _GraphBuilder:
 
     def _resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
         if isinstance(reference, ItemRef):
-            _validate_reference(reference, "item reference", self._tier_views())
+            _validate_reference(
+                reference, "item reference", self._tier_views(), ValueError
+            )
             return reference
         coordinate = self.items_by_id.get(reference.durable_id)
         if coordinate is None:
@@ -998,7 +1009,7 @@ class _GraphBuilder:
         self, reference: PositionRef | DurablePositionRef
     ) -> PositionRef:
         return _resolve_position_reference(
-            reference, self._tier_views(), self.items_by_id
+            reference, self._tier_views(), self.items_by_id, ValueError
         )
 
     def _finish(self) -> Graph:
@@ -1177,29 +1188,32 @@ def _unique_simple_types(
 
 
 def _validate_reference(
-    reference: ItemRef, subject: str, tiers: dict[QualifiedName, Tier]
+    reference: ItemRef,
+    subject: str,
+    tiers: dict[QualifiedName, Tier],
+    error_type: type[ValueError],
 ) -> None:
     tier = tiers.get(reference.tier)
     if tier is None:
-        raise GraphValidationError(
-            f"{subject} names undeclared tier {str(reference.tier)!r}"
-        )
+        raise error_type(f"{subject} names undeclared tier {str(reference.tier)!r}")
     if reference.index < 0 or reference.index >= len(tier.items):
-        raise GraphValidationError(
+        raise error_type(
             f"{subject} {str(reference)!r} is outside tier {str(reference.tier)!r}"
         )
 
 
 def _validate_position(
-    reference: PositionRef, tiers: dict[QualifiedName, Tier]
+    reference: PositionRef,
+    tiers: dict[QualifiedName, Tier],
+    error_type: type[ValueError],
 ) -> None:
     tier = tiers.get(reference.tier)
     if tier is None:
-        raise GraphValidationError(
+        raise error_type(
             f"position {str(reference)!r} names undeclared tier {str(reference.tier)!r}"
         )
     if reference.index < 0 or reference.index > len(tier.items):
-        raise GraphValidationError(
+        raise error_type(
             f"position {str(reference)!r} is outside tier {str(reference.tier)!r}"
         )
 
@@ -1208,14 +1222,15 @@ def _resolve_position_reference(
     reference: PositionRef | DurablePositionRef,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
+    error_type: type[ValueError],
 ) -> PositionRef:
     if isinstance(reference, PositionRef):
-        _validate_position(reference, tiers)
+        _validate_position(reference, tiers, error_type)
         return reference
     if isinstance(reference.anchor, QualifiedName):
         tier = tiers.get(reference.anchor)
         if tier is None:
-            raise GraphValidationError(
+            raise error_type(
                 f"durable position tier anchor {str(reference.anchor)!r} is not declared"
             )
         return PositionRef(
@@ -1224,7 +1239,7 @@ def _resolve_position_reference(
         )
     coordinate = items_by_id.get(reference.anchor.durable_id)
     if coordinate is None:
-        raise GraphValidationError(
+        raise error_type(
             f"durable position anchor item {reference.anchor.durable_id!r} was not found"
         )
     return PositionRef(
@@ -1276,7 +1291,7 @@ def _validate_endpoint(
             f"declaration requires {expected_article} {expected_kind.value}"
         )
     if isinstance(reference, ItemRef):
-        _validate_reference(reference, subject, tiers)
+        _validate_reference(reference, subject, tiers, GraphValidationError)
         tier_name = reference.tier
     else:
         tier_name = _boundary_anchor_tier(reference, subject, tiers, items_by_id)
@@ -1330,8 +1345,12 @@ def _validate_relation_invariants(
             (
                 index,
                 edge,
-                _resolve_relation_endpoint(edge.left, tiers, items_by_id),
-                _resolve_relation_endpoint(edge.right, tiers, items_by_id),
+                _resolve_relation_endpoint(
+                    edge.left, tiers, items_by_id, GraphValidationError
+                ),
+                _resolve_relation_endpoint(
+                    edge.right, tiers, items_by_id, GraphValidationError
+                ),
             )
             for index, edge in indexed
         ]
@@ -1386,7 +1405,7 @@ def _validate_polyadic_instance(
                     "kind is not allowed by the declaration"
                 )
             if isinstance(endpoint, ItemRef):
-                _validate_reference(endpoint, subject, tiers)
+                _validate_reference(endpoint, subject, tiers, GraphValidationError)
                 tier = endpoint.tier
             else:
                 tier = _boundary_anchor_tier(endpoint, subject, tiers, items_by_id)
@@ -1432,11 +1451,15 @@ def _validate_polyadic_invariants(
         ] = []
         for index, relation in grouped[name]:
             resolved_sources = tuple(
-                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                _resolve_relation_endpoint(
+                    endpoint, tiers, items_by_id, GraphValidationError
+                )
                 for endpoint in relation.sources
             )
             resolved_targets = tuple(
-                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                _resolve_relation_endpoint(
+                    endpoint, tiers, items_by_id, GraphValidationError
+                )
                 for endpoint in relation.targets
             )
             if declaration.distinct_targets and len(set(resolved_targets)) != len(
@@ -1494,7 +1517,9 @@ def _validate_polyadic_invariants(
             )
         for index, relation in grouped[name]:
             for source_ref in relation.sources:
-                source = _resolve_relation_endpoint(source_ref, tiers, items_by_id)
+                source = _resolve_relation_endpoint(
+                    source_ref, tiers, items_by_id, GraphValidationError
+                )
                 allowed = targets_by_source.get((declaration.targets_subset_of, source))
                 if allowed is None:
                     raise GraphValidationError(
@@ -1502,7 +1527,9 @@ def _validate_polyadic_invariants(
                         f"{str(declaration.targets_subset_of)!r} membership relation"
                     )
                 if any(
-                    _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                    _resolve_relation_endpoint(
+                        endpoint, tiers, items_by_id, GraphValidationError
+                    )
                     not in allowed
                     for endpoint in relation.targets
                 ):
@@ -1516,11 +1543,12 @@ def _resolve_relation_endpoint(
     reference: RelationEndpointRef,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
+    error_type: type[ValueError],
 ) -> ItemRef | PositionRef:
     """Resolve boundary spellings to graph places before invariant comparison."""
     if isinstance(reference, ItemRef):
         return reference
-    return _resolve_position_reference(reference, tiers, items_by_id)
+    return _resolve_position_reference(reference, tiers, items_by_id, error_type)
 
 
 def _require_acyclic(
