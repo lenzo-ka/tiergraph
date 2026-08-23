@@ -67,7 +67,7 @@ def dumps(
     *,
     clock: ClockProfile | None = None,
     presentation: DotPresentation | None = None,
-    binding: Callable[..., tuple[ClockPosition, ClockPosition] | None] | None = None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None = None,
     include_empty_tiers: bool = False,
 ) -> str:
     """Return byte-stable DOT for ``graph``.
@@ -87,11 +87,12 @@ def dumps(
     A structural clock (built by :meth:`ClockProfile.from_position_values`)
     selects the occupied-spine rendering: the clock tier is drawn only as the
     spine, an occupied clock column is anchored on its item node, and empty
-    columns keep a guide point. Non-clock items are placed by ``binding``, a
-    render-time callable receiving one :class:`tiergraph.Item` and returning the
+    columns keep a guide point. ``binding`` places the non-clock items: when it
+    is supplied it MUST return, for every visible non-clock item, the
     ``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
-    columns the item occupies, or ``None`` when the item is untimed. The kernel
-    never parses domain identifiers; the caller supplies the placement.
+    columns the item occupies. There is no untimed lane, so returning ``None``
+    is refused with the offending item named. The kernel never parses domain
+    identifiers; the caller supplies the placement.
     """
     if not isinstance(graph, Graph):
         raise TypeError(f"graph must be a tiergraph.Graph, got {type(graph).__name__}")
@@ -308,7 +309,7 @@ def _structural_tier_ids(visible: tuple[tuple[int, Tier], ...]) -> list[str]:
 
 
 def _resolve_binding_columns(
-    binding: Callable[..., tuple[ClockPosition, ClockPosition] | None] | None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
     item: Item,
     reference: ItemRef,
     column_of: dict[ClockPosition, int],
@@ -431,7 +432,7 @@ def _dumps_occupied_spine(
     graph: Graph,
     clock: ClockProfile,
     presentation: DotPresentation | None,
-    binding: Callable[..., tuple[ClockPosition, ClockPosition] | None] | None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
     include_empty_tiers: bool,
 ) -> str:
     """Render a structural clock: spine plus item-anchored occupied columns.

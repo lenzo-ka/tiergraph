@@ -1322,7 +1322,11 @@ def test_structural_binding_returning_none_is_refused() -> None:
         return None
 
     with pytest.raises(ValueError, match="binding returned None"):
-        tiergraph_dot.dumps(graph, clock=_structural_clock(graph), binding=binding)
+        tiergraph_dot.dumps(
+            graph,
+            clock=_structural_clock(graph),
+            binding=binding,  # type: ignore[arg-type]
+        )
 
 
 def test_structural_reversed_span_is_refused() -> None:

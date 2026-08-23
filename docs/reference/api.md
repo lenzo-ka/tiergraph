@@ -1467,7 +1467,7 @@ timing, so the default holds under a structural clock as well.
 ### `dumps`
 
 ```text
-dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockPosition, ClockPosition] | None] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
+dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockPosition, ClockPosition]] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
 ```
 
 Return byte-stable DOT for ``graph``.
@@ -1487,11 +1487,12 @@ because its cached derived state was computed from that instance.
 A structural clock (built by :meth:`ClockProfile.from_position_values`)
 selects the occupied-spine rendering: the clock tier is drawn only as the
 spine, an occupied clock column is anchored on its item node, and empty
-columns keep a guide point. Non-clock items are placed by ``binding``, a
-render-time callable receiving one :class:`tiergraph.Item` and returning the
+columns keep a guide point. ``binding`` places the non-clock items: when it
+is supplied it MUST return, for every visible non-clock item, the
 ``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
-columns the item occupies, or ``None`` when the item is untimed. The kernel
-never parses domain identifiers; the caller supplies the placement.
+columns the item occupies. There is no untimed lane, so returning ``None``
+is refused with the offending item named. The kernel never parses domain
+identifiers; the caller supplies the placement.
 
 ### `dumps_spans`
 
