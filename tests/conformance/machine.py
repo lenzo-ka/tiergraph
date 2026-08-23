@@ -26,6 +26,8 @@ from tiergraph import (
     ExecutionError,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     PositionRef,
     Program,
     PromoteItem,
@@ -34,10 +36,12 @@ from tiergraph import (
     Relate,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     Repeat,
     SimpleRelationDeclaration,
     TierDeclaration,
     XsdType,
+    execute,
 )
 from tiergraph.machine import Opcode
 
@@ -78,6 +82,63 @@ class MachineLawSuite:
         outcome = program.unroll()
         assert outcome.trace
         assert AsBuilt(outcome.graph, outcome.trace) == outcome
+
+    def acceptance_cases(self) -> tuple[tuple[Opcode, ...], ...]:
+        """Return varied valid traces for differential builder conformance."""
+        tier = self.name("events")
+        link = self.name("link")
+        group = self.name("group")
+        side = RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (tier,), minimum=1, maximum=2
+        )
+        return (
+            self.declarations(),
+            (
+                *self.declarations(),
+                AddItem(tier),
+                PromoteItem(ItemRef(tier, 0), "event-0"),
+                PromotePosition(PositionRef(tier, 1), "after-event-0"),
+                AttachValue(
+                    AttributeDomain.ITEM,
+                    DurableItemRef("event-0"),
+                    AttributeValue(self.name("label"), XsdType.STRING, "accepted"),
+                ),
+            ),
+            (
+                *self.declarations(),
+                AddItem(tier),
+                AddItem(tier),
+                DeclareRelation(
+                    BipartiteRelationDeclaration(
+                        link, self.name("event"), self.name("event")
+                    )
+                ),
+                Relate(RelationInstance(link, ItemRef(tier, 0), ItemRef(tier, 1))),
+            ),
+            (
+                *self.declarations(),
+                AddItem(tier),
+                AddItem(tier),
+                DeclareRelation(PolyadicRelationDeclaration(group, side, side)),
+                Relate(
+                    PolyadicRelationInstance(
+                        group,
+                        (ItemRef(tier, 0),),
+                        (ItemRef(tier, 1), ItemRef(tier, 0)),
+                    )
+                ),
+            ),
+        )
+
+    def check_linear_builder_matches_reference_on_acceptance(self) -> None:
+        """Every representative accepted trace has the reference graph result."""
+        for index, trace in enumerate(self.acceptance_cases()):
+            outcome = self.build(trace).unroll()
+            reference = execute(outcome.trace)
+            assert outcome.graph == reference, (
+                "linear and reference graph builds diverged "
+                f"for acceptance case {index}"
+            )
 
     def check_as_built_is_fixed_point(self) -> None:
         """Lowering an as-built returns the same object."""

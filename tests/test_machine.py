@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+import tiergraph.machine as machine
 from tests.conformance.machine import MachineLawSuite
 from tiergraph import (
     MACHINE_VERSION,
@@ -66,10 +67,24 @@ def build_program(opcodes: tuple[Opcode, ...]) -> Program:
 LAWS = MachineLawSuite(build_program)
 
 
+def test_normal_unroll_does_not_run_reference_after_linear_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful production lowering pays only for the linear builder."""
+
+    def unexpected_reference(_trace: object) -> Graph:
+        raise AssertionError("reference execution ran after linear acceptance")
+
+    monkeypatch.setattr(machine, "execute", unexpected_reference)
+    outcome = Program((*LAWS.declarations(), AddItem(LAWS.name("events")))).unroll()
+    assert len(outcome.graph.tiers[0].items) == 1
+
+
 @pytest.mark.parametrize(
     "law",
     [
         LAWS.check_primitive_trace_executes,
+        LAWS.check_linear_builder_matches_reference_on_acceptance,
         LAWS.check_as_built_is_fixed_point,
         LAWS.check_procedures_lower_identically,
         LAWS.check_deep_procedure_terminates,
