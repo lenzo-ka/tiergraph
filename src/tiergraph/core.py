@@ -20,6 +20,10 @@ _DOUBLE_LEXICAL = re.compile(
 )
 
 
+class GraphValidationError(ValueError):
+    """Report a declaration or graph-contract validation failure."""
+
+
 class AttributeDomain(StrEnum):
     """The closed set of places where a declared attribute may occur."""
 
@@ -111,7 +115,7 @@ class AttributeValue:
         try:
             canonical = _canonical_lexical(self.value_type, self.lexical)
         except ValueError as error:
-            raise ValueError(
+            raise GraphValidationError(
                 f"attribute {str(self.name)!r} has invalid {self.value_type.value} "
                 f"value {self.lexical!r}"
             ) from error
@@ -238,16 +242,18 @@ class RelationSideDeclaration:
         if self.tiers is not None:
             object.__setattr__(self, "tiers", tuple(sorted(self.tiers)))
         if not self.endpoint_kinds:
-            raise ValueError("relation side endpoint kinds must not be empty")
+            raise GraphValidationError("relation side endpoint kinds must not be empty")
         if len(set(self.endpoint_kinds)) != len(self.endpoint_kinds):
-            raise ValueError("relation side endpoint kinds must be unique")
+            raise GraphValidationError("relation side endpoint kinds must be unique")
         if self.tiers is not None and len(set(self.tiers)) != len(self.tiers):
-            raise ValueError("relation side tiers must be unique")
+            raise GraphValidationError("relation side tiers must be unique")
         _require_integral_bound(self.minimum, "relation side minimum")
         if self.maximum is not None:
             _require_integral_bound(self.maximum, "relation side maximum")
         if self.maximum is not None and self.maximum < self.minimum:
-            raise ValueError("relation side maximum must not be less than minimum")
+            raise GraphValidationError(
+                "relation side maximum must not be less than minimum"
+            )
         _require_boolean(self.allow_empty, "relation side allow-empty promise")
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -384,6 +390,10 @@ class ItemRef:
         """Return the reference as JSON-serializable data."""
         return {"tier": self.tier.to_data(), "index": self.index}
 
+    def __str__(self) -> str:
+        """Return a compact coordinate spelling for diagnostics."""
+        return f"{self.tier}[{self.index}]"
+
 
 @dataclass(frozen=True, slots=True)
 class PositionRef:
@@ -399,6 +409,10 @@ class PositionRef:
     def to_data(self) -> dict[str, JsonValue]:
         """Return the position reference as JSON-serializable data."""
         return {"tier": self.tier.to_data(), "index": self.index}
+
+    def __str__(self) -> str:
+        """Return a compact coordinate spelling for diagnostics."""
+        return f"{self.tier}[{self.index}]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +454,15 @@ class DurablePositionRef:
         else:
             anchor = {"kind": "tier", "tier": self.anchor.to_data()}
         return {"anchor": anchor, "side": self.side.value}
+
+    def __str__(self) -> str:
+        """Return a compact anchored-boundary spelling for diagnostics."""
+        anchor = (
+            str(self.anchor)
+            if isinstance(self.anchor, QualifiedName)
+            else f"item {self.anchor.durable_id!r}"
+        )
+        return f"{self.side.value} {anchor}"
 
 
 type RelationEndpointRef = ItemRef | DurablePositionRef
@@ -572,7 +595,7 @@ class Graph:
         )
         duplicate_uri = _duplicate([binding.namespace for binding in self.namespaces])
         if duplicate_uri is not None:
-            raise ValueError(
+            raise GraphValidationError(
                 f"duplicate namespace URI {duplicate_uri!r}; each URI needs one prefix"
             )
         declared_namespaces = {binding.namespace for binding in namespaces.values()}
@@ -624,7 +647,7 @@ class Graph:
         ]
         for name in qualified_names:
             if name.namespace not in declared_namespaces:
-                raise ValueError(
+                raise GraphValidationError(
                     f"qualified name {str(name)!r} uses undeclared namespace {name.namespace!r}"
                 )
         simple = [
@@ -682,7 +705,7 @@ class Graph:
             )
             bipartite_declaration = bipartite.get(relation.declaration)
             if bipartite_declaration is None:
-                raise ValueError(
+                raise GraphValidationError(
                     f"relation instance {index} names {str(relation.declaration)!r}; "
                     "a bipartite relation declaration is required"
                 )
@@ -714,7 +737,7 @@ class Graph:
             )
             polyadic_declaration = polyadic.get(polyadic_relation.declaration)
             if polyadic_declaration is None:
-                raise ValueError(
+                raise GraphValidationError(
                     f"polyadic relation instance {index} names {str(polyadic_relation.declaration)!r}; "
                     "a polyadic relation declaration is required"
                 )
@@ -728,12 +751,15 @@ class Graph:
         positioned_values: list[tuple[PositionRef, Position]] = []
         for position in self.position_values:
             coordinate = _resolve_position_reference(
-                position.reference, tiers_by_name, items_by_id
+                position.reference,
+                tiers_by_name,
+                items_by_id,
+                GraphValidationError,
             )
             positioned_values.append((coordinate, position))
             if not position.attributes:
-                raise ValueError(
-                    f"position {position.reference.to_data()!r} has no attribute values; "
+                raise GraphValidationError(
+                    f"position {str(position.reference)!r} has no attribute values; "
                     "empty positions are derived"
                 )
             _validate_attributes(
@@ -793,7 +819,9 @@ class Graph:
 
     def item_type(self, reference: ItemRef) -> QualifiedName:
         """Return the type supplied by simple membership or refuse an untyped tier."""
-        _validate_reference(reference, "item reference", self._tiers_by_name)
+        _validate_reference(
+            reference, "item reference", self._tiers_by_name, ValueError
+        )
         item_type = self._types_by_tier.get(reference.tier)
         if item_type is None:
             raise ValueError(
@@ -804,7 +832,9 @@ class Graph:
     def resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
         """Resolve either identity level to the item's current coordinate."""
         if isinstance(reference, ItemRef):
-            _validate_reference(reference, "item reference", self._tiers_by_name)
+            _validate_reference(
+                reference, "item reference", self._tiers_by_name, ValueError
+            )
             return reference
         if not isinstance(reference, DurableItemRef):
             raise TypeError(
@@ -821,7 +851,7 @@ class Graph:
     ) -> PositionRef:
         """Resolve either identity level to the position's current coordinate."""
         if isinstance(reference, PositionRef):
-            _validate_position(reference, self._tiers_by_name)
+            _validate_position(reference, self._tiers_by_name, ValueError)
             return reference
         if not isinstance(reference, DurablePositionRef):
             raise TypeError(
@@ -829,14 +859,16 @@ class Graph:
                 f"got {type(reference).__name__}"
             )
         return _resolve_position_reference(
-            reference, self._tiers_by_name, self._items_by_id
+            reference, self._tiers_by_name, self._items_by_id, ValueError
         )
 
     def promote_item(
         self, reference: ItemRef, durable_id: str
     ) -> tuple[Graph, DurableItemRef]:
         """Return a graph carrying the caller's semantic id for one item."""
-        _validate_reference(reference, "item reference", self._tiers_by_name)
+        _validate_reference(
+            reference, "item reference", self._tiers_by_name, ValueError
+        )
         tier = self._tiers_by_name[reference.tier]
         item = tier.items[reference.index]
         if item.durable_id is not None:
@@ -853,7 +885,7 @@ class Graph:
         self, reference: PositionRef, durable_id: str
     ) -> tuple[Graph, DurablePositionRef]:
         """Return a graph whose boundary anchor has durable identity."""
-        _validate_position(reference, self._tiers_by_name)
+        _validate_position(reference, self._tiers_by_name, ValueError)
         tier = self._tiers_by_name[reference.tier]
         if reference.index == 0:
             promoted = self
@@ -964,7 +996,9 @@ class _GraphBuilder:
 
     def _resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
         if isinstance(reference, ItemRef):
-            _validate_reference(reference, "item reference", self._tier_views())
+            _validate_reference(
+                reference, "item reference", self._tier_views(), ValueError
+            )
             return reference
         coordinate = self.items_by_id.get(reference.durable_id)
         if coordinate is None:
@@ -975,7 +1009,7 @@ class _GraphBuilder:
         self, reference: PositionRef | DurablePositionRef
     ) -> PositionRef:
         return _resolve_position_reference(
-            reference, self._tier_views(), self.items_by_id
+            reference, self._tier_views(), self.items_by_id, ValueError
         )
 
     def _finish(self) -> Graph:
@@ -1076,7 +1110,7 @@ def _canonicalize_attributes(value: _AttributeCarrier) -> None:
 
 def _require_name(value: str, subject: str) -> None:
     if not value:
-        raise ValueError(f"{subject} {value!r} must not be empty")
+        raise GraphValidationError(f"{subject} {value!r} must not be empty")
 
 
 def _unique_by_name[NameKey, NamedValue](
@@ -1085,7 +1119,9 @@ def _unique_by_name[NameKey, NamedValue](
     result: dict[NameKey, NamedValue] = {}
     for name, value in pairs:
         if name in result:
-            raise ValueError(f"duplicate {subject} {str(name)!r}; names must be unique")
+            raise GraphValidationError(
+                f"duplicate {subject} {str(name)!r}; names must be unique"
+            )
         result[name] = value
     return result
 
@@ -1104,7 +1140,7 @@ def _require_unique_durable_ids(values: Iterable[tuple[str, str]]) -> None:
     for durable_id, source in values:
         previous = sources.get(durable_id)
         if previous is not None:
-            raise ValueError(
+            raise GraphValidationError(
                 f"duplicate durable id {durable_id!r}; {previous} collides with {source}"
             )
         sources[durable_id] = source
@@ -1119,14 +1155,14 @@ def _validate_attributes(
     for value in values:
         candidate = declarations.get(value.name)
         if not isinstance(candidate, AttributeDeclaration):
-            raise ValueError(f"attribute {str(value.name)!r} is undeclared")
+            raise GraphValidationError(f"attribute {str(value.name)!r} is undeclared")
         if candidate.domain is not domain:
-            raise ValueError(
+            raise GraphValidationError(
                 f"attribute {str(value.name)!r} has domain {candidate.domain.value!r}; "
                 f"it cannot occur on {domain.value!r}"
             )
         if candidate.value_type is not value.value_type:
-            raise ValueError(
+            raise GraphValidationError(
                 f"attribute {str(value.name)!r} has type {candidate.value_type.value!r}; "
                 f"value has type {value.value_type.value!r}"
             )
@@ -1139,12 +1175,12 @@ def _unique_simple_types(
     result: dict[QualifiedName, QualifiedName] = {}
     for declaration in declarations:
         if declaration.tier not in tiers:
-            raise ValueError(
+            raise GraphValidationError(
                 f"simple relation {str(declaration.name)!r} names undeclared tier "
                 f"{str(declaration.tier)!r}"
             )
         if declaration.tier in result:
-            raise ValueError(
+            raise GraphValidationError(
                 f"tier {str(declaration.tier)!r} has multiple simple relations; at most one is allowed"
             )
         result[declaration.tier] = declaration.item_type
@@ -1152,28 +1188,33 @@ def _unique_simple_types(
 
 
 def _validate_reference(
-    reference: ItemRef, subject: str, tiers: dict[QualifiedName, Tier]
+    reference: ItemRef,
+    subject: str,
+    tiers: dict[QualifiedName, Tier],
+    error_type: type[ValueError],
 ) -> None:
     tier = tiers.get(reference.tier)
     if tier is None:
-        raise ValueError(f"{subject} names undeclared tier {str(reference.tier)!r}")
+        raise error_type(f"{subject} names undeclared tier {str(reference.tier)!r}")
     if reference.index < 0 or reference.index >= len(tier.items):
-        raise ValueError(
-            f"{subject} {reference.to_data()!r} is outside tier {str(reference.tier)!r}"
+        raise error_type(
+            f"{subject} {str(reference)!r} is outside tier {str(reference.tier)!r}"
         )
 
 
 def _validate_position(
-    reference: PositionRef, tiers: dict[QualifiedName, Tier]
+    reference: PositionRef,
+    tiers: dict[QualifiedName, Tier],
+    error_type: type[ValueError],
 ) -> None:
     tier = tiers.get(reference.tier)
     if tier is None:
-        raise ValueError(
-            f"position {reference.to_data()!r} names undeclared tier {str(reference.tier)!r}"
+        raise error_type(
+            f"position {str(reference)!r} names undeclared tier {str(reference.tier)!r}"
         )
     if reference.index < 0 or reference.index > len(tier.items):
-        raise ValueError(
-            f"position {reference.to_data()!r} is outside tier {str(reference.tier)!r}"
+        raise error_type(
+            f"position {str(reference)!r} is outside tier {str(reference.tier)!r}"
         )
 
 
@@ -1181,14 +1222,15 @@ def _resolve_position_reference(
     reference: PositionRef | DurablePositionRef,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
+    error_type: type[ValueError],
 ) -> PositionRef:
     if isinstance(reference, PositionRef):
-        _validate_position(reference, tiers)
+        _validate_position(reference, tiers, error_type)
         return reference
     if isinstance(reference.anchor, QualifiedName):
         tier = tiers.get(reference.anchor)
         if tier is None:
-            raise ValueError(
+            raise error_type(
                 f"durable position tier anchor {str(reference.anchor)!r} is not declared"
             )
         return PositionRef(
@@ -1197,7 +1239,7 @@ def _resolve_position_reference(
         )
     coordinate = items_by_id.get(reference.anchor.durable_id)
     if coordinate is None:
-        raise ValueError(
+        raise error_type(
             f"durable position anchor item {reference.anchor.durable_id!r} was not found"
         )
     return PositionRef(
@@ -1210,17 +1252,19 @@ def _resolve_position_reference(
 
 def _require_integral_index(index: object, subject: str, offender: object) -> None:
     if isinstance(index, bool) or not isinstance(index, int):
-        raise ValueError(f"{subject} {offender!r} has non-integral index {index!r}")
+        raise GraphValidationError(
+            f"{subject} {offender!r} has non-integral index {index!r}"
+        )
 
 
 def _require_integral_bound(value: object, subject: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{subject} {value!r} must be a nonnegative integer")
+        raise GraphValidationError(f"{subject} {value!r} must be a nonnegative integer")
 
 
 def _require_boolean(value: object, subject: str) -> None:
     if not isinstance(value, bool):
-        raise ValueError(f"{subject} {value!r} must be boolean")
+        raise GraphValidationError(f"{subject} {value!r} must be boolean")
 
 
 def _validate_endpoint(
@@ -1242,23 +1286,23 @@ def _validate_endpoint(
     if actual_kind is not expected_kind:
         article = "an" if actual_kind is RelationEndpointKind.ITEM else "a"
         expected_article = "an" if expected_kind is RelationEndpointKind.ITEM else "a"
-        raise ValueError(
-            f"{subject} {reference.to_data()!r} is {article} {actual_kind.value}; "
+        raise GraphValidationError(
+            f"{subject} {str(reference)!r} is {article} {actual_kind.value}; "
             f"declaration requires {expected_article} {expected_kind.value}"
         )
     if isinstance(reference, ItemRef):
-        _validate_reference(reference, subject, tiers)
+        _validate_reference(reference, subject, tiers, GraphValidationError)
         tier_name = reference.tier
     else:
         tier_name = _boundary_anchor_tier(reference, subject, tiers, items_by_id)
     actual_type = types.get(tier_name)
     if actual_type is None:
-        raise ValueError(
-            f"{subject} {reference.to_data()!r} belongs to untyped tier {str(tier_name)!r}"
+        raise GraphValidationError(
+            f"{subject} {str(reference)!r} belongs to untyped tier {str(tier_name)!r}"
         )
     if actual_type != expected_type:
-        raise ValueError(
-            f"{subject} {reference.to_data()!r} has type {str(actual_type)!r}; "
+        raise GraphValidationError(
+            f"{subject} {str(reference)!r} has type {str(actual_type)!r}; "
             f"expected {str(expected_type)!r}"
         )
 
@@ -1271,15 +1315,15 @@ def _boundary_anchor_tier(
 ) -> QualifiedName:
     if isinstance(reference.anchor, QualifiedName):
         if reference.anchor not in tiers:
-            raise ValueError(
-                f"{subject} {reference.to_data()!r} names undeclared tier "
+            raise GraphValidationError(
+                f"{subject} {str(reference)!r} names undeclared tier "
                 f"{str(reference.anchor)!r}"
             )
         return reference.anchor
     coordinate = items_by_id.get(reference.anchor.durable_id)
     if coordinate is None:
-        raise ValueError(
-            f"{subject} {reference.to_data()!r} names missing anchor item "
+        raise GraphValidationError(
+            f"{subject} {str(reference)!r} names missing anchor item "
             f"{reference.anchor.durable_id!r}"
         )
     return coordinate.tier
@@ -1301,8 +1345,12 @@ def _validate_relation_invariants(
             (
                 index,
                 edge,
-                _resolve_relation_endpoint(edge.left, tiers, items_by_id),
-                _resolve_relation_endpoint(edge.right, tiers, items_by_id),
+                _resolve_relation_endpoint(
+                    edge.left, tiers, items_by_id, GraphValidationError
+                ),
+                _resolve_relation_endpoint(
+                    edge.right, tiers, items_by_id, GraphValidationError
+                ),
             )
             for index, edge in indexed
         ]
@@ -1311,8 +1359,8 @@ def _validate_relation_invariants(
             for index, edge, left, right in resolved:
                 previous = parents.get(right)
                 if previous is not None and previous[1] != left:
-                    raise ValueError(
-                        f"relation instance {index} gives {edge.right.to_data()!r} a second "
+                    raise GraphValidationError(
+                        f"relation instance {index} gives {str(edge.right)!r} a second "
                         f"parent in {str(name)!r}; first parent is relation instance {previous[0]}"
                     )
                 parents[right] = (index, left)
@@ -1333,12 +1381,14 @@ def _validate_polyadic_instance(
     ):
         if not endpoints:
             if not side.allow_empty:
-                raise ValueError(f"relation instance {index} has an empty {label} side")
+                raise GraphValidationError(
+                    f"relation instance {index} has an empty {label} side"
+                )
             continue
         if len(endpoints) < side.minimum or (
             side.maximum is not None and len(endpoints) > side.maximum
         ):
-            raise ValueError(
+            raise GraphValidationError(
                 f"relation instance {index} {label} arity {len(endpoints)} is outside "
                 f"declared bounds {side.minimum}..{side.maximum}"
             )
@@ -1350,18 +1400,18 @@ def _validate_polyadic_instance(
                 else RelationEndpointKind.BOUNDARY
             )
             if kind not in side.endpoint_kinds:
-                raise ValueError(
-                    f"{subject} {endpoint.to_data()!r} has kind {kind.value!r}; "
+                raise GraphValidationError(
+                    f"{subject} {str(endpoint)!r} has kind {kind.value!r}; "
                     "kind is not allowed by the declaration"
                 )
             if isinstance(endpoint, ItemRef):
-                _validate_reference(endpoint, subject, tiers)
+                _validate_reference(endpoint, subject, tiers, GraphValidationError)
                 tier = endpoint.tier
             else:
                 tier = _boundary_anchor_tier(endpoint, subject, tiers, items_by_id)
             if side.tiers is not None and tier not in side.tiers:
-                raise ValueError(
-                    f"{subject} {endpoint.to_data()!r} belongs to tier {str(tier)!r}; "
+                raise GraphValidationError(
+                    f"{subject} {str(endpoint)!r} belongs to tier {str(tier)!r}; "
                     "tier is not allowed by the declaration"
                 )
 
@@ -1401,17 +1451,21 @@ def _validate_polyadic_invariants(
         ] = []
         for index, relation in grouped[name]:
             resolved_sources = tuple(
-                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                _resolve_relation_endpoint(
+                    endpoint, tiers, items_by_id, GraphValidationError
+                )
                 for endpoint in relation.sources
             )
             resolved_targets = tuple(
-                _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                _resolve_relation_endpoint(
+                    endpoint, tiers, items_by_id, GraphValidationError
+                )
                 for endpoint in relation.targets
             )
             if declaration.distinct_targets and len(set(resolved_targets)) != len(
                 resolved_targets
             ):
-                raise ValueError(
+                raise GraphValidationError(
                     f"relation instance {index} has duplicate declared-distinct targets"
                 )
             resolved_instances.append((index, resolved_sources, resolved_targets))
@@ -1419,8 +1473,8 @@ def _validate_polyadic_invariants(
                 key = (name, source)
                 previous = first_source_instance.get(key)
                 if declaration.unique_sources and previous is not None:
-                    raise ValueError(
-                        f"relation instance {index} repeats source {source.to_data()!r} in "
+                    raise GraphValidationError(
+                        f"relation instance {index} repeats source {str(source)!r} in "
                         f"unique-source relation {str(name)!r}; first used by relation instance {previous}"
                     )
                 first_source_instance.setdefault(key, index)
@@ -1446,8 +1500,8 @@ def _validate_polyadic_invariants(
                 for target in targets:
                     poly_previous = parents.get(target)
                     if poly_previous is not None and poly_previous[1] != sources:
-                        raise ValueError(
-                            f"relation instance {index} gives {target.to_data()!r} a second parent "
+                        raise GraphValidationError(
+                            f"relation instance {index} gives {str(target)!r} a second parent "
                             f"in {str(name)!r}; first parent is relation instance {poly_previous[0]}"
                         )
                     parents[target] = (index, sources)
@@ -1457,25 +1511,29 @@ def _validate_polyadic_invariants(
         if declaration.targets_subset_of is None:
             continue
         if declaration.targets_subset_of not in declarations:
-            raise ValueError(
+            raise GraphValidationError(
                 f"polyadic relation {str(name)!r} targets-subset-of names undeclared "
                 f"polyadic relation {str(declaration.targets_subset_of)!r}"
             )
         for index, relation in grouped[name]:
             for source_ref in relation.sources:
-                source = _resolve_relation_endpoint(source_ref, tiers, items_by_id)
+                source = _resolve_relation_endpoint(
+                    source_ref, tiers, items_by_id, GraphValidationError
+                )
                 allowed = targets_by_source.get((declaration.targets_subset_of, source))
                 if allowed is None:
-                    raise ValueError(
-                        f"relation instance {index} source {source.to_data()!r} has no "
+                    raise GraphValidationError(
+                        f"relation instance {index} source {str(source)!r} has no "
                         f"{str(declaration.targets_subset_of)!r} membership relation"
                     )
                 if any(
-                    _resolve_relation_endpoint(endpoint, tiers, items_by_id)
+                    _resolve_relation_endpoint(
+                        endpoint, tiers, items_by_id, GraphValidationError
+                    )
                     not in allowed
                     for endpoint in relation.targets
                 ):
-                    raise ValueError(
+                    raise GraphValidationError(
                         f"relation instance {index} has a target outside "
                         f"{str(declaration.targets_subset_of)!r} membership"
                     )
@@ -1485,11 +1543,12 @@ def _resolve_relation_endpoint(
     reference: RelationEndpointRef,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
+    error_type: type[ValueError],
 ) -> ItemRef | PositionRef:
     """Resolve boundary spellings to graph places before invariant comparison."""
     if isinstance(reference, ItemRef):
         return reference
-    return _resolve_position_reference(reference, tiers, items_by_id)
+    return _resolve_position_reference(reference, tiers, items_by_id, error_type)
 
 
 def _require_acyclic(
@@ -1518,9 +1577,9 @@ def _require_acyclic(
             edge_index, child = children[child_index]
             stack[-1] = (node, child_index + 1)
             if child in visiting:
-                raise ValueError(
+                raise GraphValidationError(
                     f"relation instance {edge_index} closes a cycle in acyclic relation "
-                    f"{str(name)!r} at {child.to_data()!r}"
+                    f"{str(name)!r} at {str(child)!r}"
                 )
             if child not in visited:
                 visiting.add(child)

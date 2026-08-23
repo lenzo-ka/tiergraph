@@ -683,11 +683,15 @@ def _build_relate(
         builder.items_by_id,
     )
     sources = tuple(
-        _resolve_relation_endpoint(endpoint, builder._tier_views(), builder.items_by_id)
+        _resolve_relation_endpoint(
+            endpoint, builder._tier_views(), builder.items_by_id, ValueError
+        )
         for endpoint in relation.sources
     )
     targets = {
-        _resolve_relation_endpoint(endpoint, builder._tier_views(), builder.items_by_id)
+        _resolve_relation_endpoint(
+            endpoint, builder._tier_views(), builder.items_by_id, ValueError
+        )
         for endpoint in relation.targets
     }
     for source in sources:

@@ -198,7 +198,7 @@ class OrderedPolyadicTraversal:
                             raise ValueError(
                                 f"ordered containment relation "
                                 f"{str(self.relation)!r} instance {instance_index} "
-                                f"{label} {endpoint.to_data()!r} is outside its graph"
+                                f"{label} {str(endpoint)!r} is outside its graph"
                             )
                         node = Node(NodeKind.ITEM, endpoint)
                     else:
@@ -219,7 +219,7 @@ class OrderedPolyadicTraversal:
                         raise ValueError(
                             f"ordered polyadic relation {str(self.relation)!r} instance "
                             f"{instance_index} {label} {endpoint_index} "
-                            f"{endpoint.to_data()!r} {detail}"
+                            f"{str(endpoint)!r} {detail}"
                         )
                     reference = node.reference
                     assert isinstance(reference, ItemRef | PositionRef)
@@ -227,7 +227,7 @@ class OrderedPolyadicTraversal:
                         raise ValueError(
                             f"ordered polyadic relation {str(self.relation)!r} instance "
                             f"{instance_index} {label} endpoint {endpoint_index} "
-                            f"{endpoint.to_data()!r} belongs to tier "
+                            f"{str(endpoint)!r} belongs to tier "
                             f"{str(reference.tier)!r}; tier is not allowed"
                         )
                     nodes.append(node)
@@ -271,11 +271,11 @@ class OrderedPolyadicTraversal:
                         raise ValueError(
                             f"ordered containment relation {str(self.relation)!r} "
                             f"instance {instance_index} closes a cycle at "
-                            f"{reference.to_data()!r}"
+                            f"{str(reference)!r}"
                         )
                     raise ValueError(
                         f"ordered polyadic relation {str(self.relation)!r} instance "
-                        f"{instance_index} closes a cycle at {target.to_data()!r}"
+                        f"{instance_index} closes a cycle at {str(target.reference)!r}"
                     )
                 if target not in visited:
                     visiting.add(target)
@@ -437,7 +437,7 @@ class OrderedContainment:
         if reference not in self.graph.canonical_items():
             raise ValueError(
                 f"ordered containment relation {str(self.relation)!r} received "
-                f"item {reference.to_data()!r} outside its graph"
+                f"item {str(reference)!r} outside its graph"
             )
         return Node(NodeKind.ITEM, reference)
 
@@ -464,7 +464,7 @@ class OrderedContainment:
                 if previous is not None:
                     raise ValueError(
                         f"ordered containment relation {str(self.relation)!r} "
-                        f"source {source.to_data()!r} occurs in instances "
+                        f"source {str(source)!r} occurs in instances "
                         f"{previous} and {instance_index}, violating source uniqueness"
                     )
                 source_instances[source] = instance_index

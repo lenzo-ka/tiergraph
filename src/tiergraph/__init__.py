@@ -24,6 +24,7 @@ from tiergraph.core import (
     DurableItemRef,
     DurablePositionRef,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
     NamespaceDeclaration,
@@ -119,6 +120,15 @@ from tiergraph.selection import (
     TypeSelector,
     select,
 )
+from tiergraph.semiring import BOOLEAN, COUNTING, DECIMAL_TROPICAL, PATH
+from tiergraph.spanview import (
+    SpanViewProfile,
+    span_view,
+    to_html,
+    to_json,
+    to_jsonl,
+    to_text,
+)
 from tiergraph.traversal import (
     NodeSequence,
     OrderedContainment,
@@ -175,6 +185,7 @@ __all__ = [
     "FoldResult",
     "FoldTransition",
     "Graph",
+    "GraphValidationError",
     "GrammarDeclaration",
     "GrammarChartProfile",
     "GrammarHole",
@@ -247,6 +258,11 @@ __all__ = [
     "WalkResult",
     "WitnessCoordinate",
     "YieldNormalization",
+    "BOOLEAN",
+    "COUNTING",
+    "DECIMAL_TROPICAL",
+    "PATH",
+    "SpanViewProfile",
     "FORMAT_VERSION",
     "dump_bytes",
     "dumps",
@@ -262,5 +278,10 @@ __all__ = [
     "best",
     "count",
     "select",
+    "span_view",
+    "to_html",
+    "to_json",
+    "to_jsonl",
+    "to_text",
     "__version__",
 ]

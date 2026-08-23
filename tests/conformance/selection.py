@@ -145,7 +145,7 @@ class SelectionLawSuite:
         """Each unsatisfied selector class refuses while its near-valid peer constructs."""
         graph = self.graph()
         ItemSelector(graph, ItemRef(self.name("left"), 1))
-        with pytest.raises(ValueError, match=r"index.*2"):
+        with pytest.raises(ValueError, match=r"left\[2\]"):
             ItemSelector(graph, ItemRef(self.name("left"), 2))
         TierSelector(graph, self.name("left"))
         with pytest.raises(ValueError, match="missing"):
