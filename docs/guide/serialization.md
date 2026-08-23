@@ -45,32 +45,22 @@ print("round-trip equal:", loads(text) == graph)
 
 ```text
 {
-  "format_version": "5",
+  "format_version": "6",
   "graph": {
-    "attribute_declarations": [],
-    "attributes": [],
     "namespaces": [
       {
         "namespace": "https://example.com/score",
         "prefix": "score"
       }
     ],
-    "position_values": [],
-    "relation_declarations": [],
-    "relations": [],
     "tiers": [
       {
-        "attributes": [],
         "declaration": {
           "long_name": "Events",
-          "name": {
-            "local_name": "events",
-            "namespace": "https://example.com/score"
-          }
+          "name": "score:events"
         },
         "items": [
           {
-            "attributes": [],
             "durable_id": "opening"
           }
         ]
@@ -78,14 +68,15 @@ print("round-trip equal:", loads(text) == graph)
     ]
   }
 }
-format version: 5
-byte length: 674
+format version: 6
+byte length: 393
 round-trip equal: True
 ```
 
-The keys are sorted and every collection is present, including the empty ones.
-That is what makes the form canonical: the same graph always produces these
-exact bytes. `loads(dumps(graph))` reconstructs a graph equal to the original.
+The keys are sorted; empty collections and null fields are omitted, and
+qualified names use the document's namespace prefixes. The same graph always
+produces these exact bytes. `loads(dumps(graph))` reconstructs a graph equal to
+the original.
 
 Qualified names, declaration order, tier order, item order, relation endpoint
 order, and boundary indexes are all data. A reader must not infer a relation's

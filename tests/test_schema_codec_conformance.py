@@ -77,10 +77,7 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
         ("integer-surface", "integer", "0"),
         ("double-surface", "double", "INF"),
     ):
-        name: dict[str, JsonValue] = {
-            "namespace": "urn:wire-test",
-            "local_name": local_name,
-        }
+        name: JsonValue = f"w:{local_name}"
         declarations.append(
             {"name": name, "domain": "document", "value_type": value_type}
         )
@@ -92,10 +89,7 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
             "reference": {
                 "anchor": {
                     "kind": "tier",
-                    "tier": {
-                        "namespace": "urn:wire-test",
-                        "local_name": "placements",
-                    },
+                    "tier": "w:placements",
                 },
                 "side": "before",
             },
@@ -115,7 +109,7 @@ def test_seeds_realize_every_declared_reference_variant() -> None:
         ".relations[0].left.index:",
         ".relations[1].sources[0].index:",
         ".position_values[0].reference.anchor.durable_id:",
-        ".position_values[1].reference.anchor.tier.local_name:",
+        ".position_values[1].reference.anchor.tier:",
         ".attributes[0].lexical:",
         ".attributes[1].lexical:",
         ".tiers[0].items[0].attributes[0].lexical:",
@@ -197,12 +191,9 @@ def test_harness_rediscovers_missing_nonempty_facets() -> None:
     # reference obtained from the declaration rather than special-casing a path.
     from tiergraph.schema import QUALIFIED_NAME
 
-    qualified_original = QUALIFIED_NAME.fields
-    object.__setattr__(
-        QUALIFIED_NAME,
-        "fields",
-        tuple(Field(field.name, STRING) for field in qualified_original),
-    )
+    qualified_original = (QUALIFIED_NAME.pattern, QUALIFIED_NAME.min_length)
+    object.__setattr__(QUALIFIED_NAME, "pattern", None)
+    object.__setattr__(QUALIFIED_NAME, "min_length", None)
     try:
         probes = tuple(
             probe
@@ -212,7 +203,8 @@ def test_harness_rediscovers_missing_nonempty_facets() -> None:
         drifts = undeclared_drifts(probes)
         assert any(drift.probe.mutation == "empty" for drift in drifts)
     finally:
-        object.__setattr__(QUALIFIED_NAME, "fields", qualified_original)
+        object.__setattr__(QUALIFIED_NAME, "pattern", qualified_original[0])
+        object.__setattr__(QUALIFIED_NAME, "min_length", qualified_original[1])
         assert DOCUMENT.fields == original
 
 

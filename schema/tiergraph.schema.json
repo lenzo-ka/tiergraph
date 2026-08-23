@@ -26,22 +26,9 @@
           "type": "array"
         },
         "declaration": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "durable_id": {
           "anyOf": [
@@ -78,9 +65,7 @@
       "required": [
         "declaration",
         "left",
-        "right",
-        "durable_id",
-        "attributes"
+        "right"
       ],
       "type": "object"
     },
@@ -126,40 +111,14 @@
           "type": "string"
         },
         "left_type": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "right_endpoint": {
           "enum": [
@@ -169,22 +128,9 @@
           "type": "string"
         },
         "right_type": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "single_parent": {
           "type": "boolean"
@@ -198,8 +144,7 @@
         "left_endpoint",
         "right_endpoint",
         "single_parent",
-        "acyclic",
-        "attributes"
+        "acyclic"
       ],
       "type": "object"
     },
@@ -211,22 +156,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "value_type": {
           "enum": [
@@ -250,22 +182,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "value_type": {
           "enum": [
@@ -289,22 +208,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "value_type": {
           "enum": [
@@ -355,22 +261,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "value_type": {
           "enum": [
@@ -414,22 +307,9 @@
           "type": "integer"
         },
         "tier": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         }
       },
       "required": [
@@ -476,22 +356,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "single_parent": {
           "type": "boolean"
@@ -512,22 +379,9 @@
         },
         "targets_subset_of": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "local_name": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "namespace": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "namespace",
-              "local_name"
-            ],
-            "type": "object"
+            "minLength": 3,
+            "pattern": "^[^:]+:[\\s\\S]+$",
+            "type": "string"
           },
           "type": "array"
         },
@@ -543,9 +397,7 @@
         "unique_sources",
         "distinct_targets",
         "single_parent",
-        "acyclic",
-        "targets_subset_of",
-        "attributes"
+        "acyclic"
       ],
       "type": "object"
     },
@@ -575,22 +427,9 @@
           "type": "array"
         },
         "declaration": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "durable_id": {
           "anyOf": [
@@ -631,11 +470,7 @@
         }
       },
       "required": [
-        "declaration",
-        "sources",
-        "targets",
-        "durable_id",
-        "attributes"
+        "declaration"
       ],
       "type": "object"
     },
@@ -665,29 +500,14 @@
         },
         "tiers": {
           "items": {
-            "additionalProperties": false,
-            "properties": {
-              "local_name": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "namespace": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "namespace",
-              "local_name"
-            ],
-            "type": "object"
+            "minLength": 3,
+            "pattern": "^[^:]+:[\\s\\S]+$",
+            "type": "string"
           },
           "type": "array"
         }
       },
       "required": [
-        "endpoint_kinds",
-        "tiers",
         "minimum",
         "maximum",
         "allow_empty"
@@ -720,22 +540,9 @@
           "type": "array"
         },
         "item_type": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "kind": {
           "enum": [
@@ -744,48 +551,21 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "tier": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         }
       },
       "required": [
         "kind",
         "name",
         "tier",
-        "item_type",
-        "attributes"
+        "item_type"
       ],
       "type": "object"
     },
@@ -796,22 +576,9 @@
           "type": "string"
         },
         "name": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         },
         "value_type": {
           "enum": [
@@ -837,22 +604,9 @@
           "type": "string"
         },
         "tier": {
-          "additionalProperties": false,
-          "properties": {
-            "local_name": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "namespace": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "namespace",
-            "local_name"
-          ],
-          "type": "object"
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
         }
       },
       "required": [
@@ -862,13 +616,13 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-5.json",
+  "$id": "https://tiergraph.org/schema/format-6.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, durable-id, position, and relation names; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty position attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "5"
+      "const": "6"
     },
     "graph": {
       "additionalProperties": false,
@@ -889,22 +643,9 @@
                 "type": "string"
               },
               "name": {
-                "additionalProperties": false,
-                "properties": {
-                  "local_name": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "namespace": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "namespace",
-                  "local_name"
-                ],
-                "type": "object"
+                "minLength": 3,
+                "pattern": "^[^:]+:[\\s\\S]+$",
+                "type": "string"
               },
               "value_type": {
                 "enum": [
@@ -1007,8 +748,7 @@
               }
             },
             "required": [
-              "reference",
-              "attributes"
+              "reference"
             ],
             "type": "object"
           },
@@ -1077,22 +817,9 @@
                     "type": "string"
                   },
                   "name": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "local_name": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "namespace": {
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "namespace",
-                      "local_name"
-                    ],
-                    "type": "object"
+                    "minLength": 3,
+                    "pattern": "^[^:]+:[\\s\\S]+$",
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -1139,34 +866,21 @@
                       ]
                     }
                   },
-                  "required": [
-                    "durable_id",
-                    "attributes"
-                  ],
+                  "required": [],
                   "type": "object"
                 },
                 "type": "array"
               }
             },
             "required": [
-              "declaration",
-              "items",
-              "attributes"
+              "declaration"
             ],
             "type": "object"
           },
           "type": "array"
         }
       },
-      "required": [
-        "namespaces",
-        "tiers",
-        "relation_declarations",
-        "relations",
-        "attribute_declarations",
-        "position_values",
-        "attributes"
-      ],
+      "required": [],
       "type": "object"
     }
   },

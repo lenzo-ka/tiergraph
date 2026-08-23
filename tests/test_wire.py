@@ -38,6 +38,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
     dump_bytes,
+    dumps,
     loads,
     to_data,
     wire,
@@ -416,18 +417,89 @@ def graph_data(document: dict[str, object]) -> dict[str, object]:
     return cast(dict[str, object], document["graph"])
 
 
+def test_empty_and_null_values_are_omitted_and_recovered() -> None:
+    """Every omitted empty collection and absent identifier has one decoded value."""
+    document = to_data(Graph((), (), ()))
+    assert document == {"format_version": FORMAT_VERSION, "graph": {}}
+    assert loads(json.dumps(document)) == Graph((), (), ())
+
+    anonymous = Graph(
+        (NamespaceDeclaration("w", NS),),
+        (Tier(TierDeclaration(name("empty"), "Empty"), (Item(),)),),
+        (),
+    )
+    encoded = json.loads(dump_bytes(anonymous))
+
+    def assert_compact(value: object) -> None:
+        assert value is not None
+        assert value != []
+        if isinstance(value, dict):
+            for child in value.values():
+                assert_compact(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_compact(child)
+
+    assert_compact(encoded)
+    assert loads(json.dumps(encoded)) == anonymous
+
+
+def test_qualified_name_colons_split_once_and_prefix_colons_are_refused() -> None:
+    """Colon-bearing locals round-trip while the prefix delimiter stays unique."""
+    colon_name = name("section:voice:entry")
+    graph = Graph(
+        (NamespaceDeclaration("w", NS),),
+        (Tier(TierDeclaration(colon_name, "Colon local"), (Item(),)),),
+        (),
+    )
+    assert '"name": "w:section:voice:entry"' in dumps(graph)
+    assert loads(dumps(graph)) == graph
+
+    bad_prefix = replace(graph, namespaces=(NamespaceDeclaration("bad:prefix", NS),))
+    with pytest.raises(ValueError, match="prefix must not contain ':'"):
+        dump_bytes(bad_prefix)
+
+    document = to_data(graph)
+    graph_object = cast(dict[str, object], document["graph"])
+    namespaces = cast(list[dict[str, object]], graph_object["namespaces"])
+    namespaces[0]["prefix"] = "bad:prefix"
+    with pytest.raises(ValueError, match="prefix must not contain ':'"):
+        loads(json.dumps(document))
+
+
 def test_polyadic_relation_durable_id_round_trips() -> None:
     """The guarded polyadic carrier retains a present durable identifier."""
     decoded = loads(json.dumps(polyadic_document()))
     assert decoded.polyadic_relations[0].durable_id == "group-1"
 
 
+def test_empty_polyadic_sides_remain_distinguishable_after_omission() -> None:
+    """Omitted empty sides still select the polyadic instance object branch."""
+    tier_name = name("empty-polyadic-tier")
+    declaration = PolyadicRelationDeclaration(
+        name("empty-polyadic"),
+        RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (tier_name,), 0, allow_empty=True
+        ),
+        RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (tier_name,), 0, allow_empty=True
+        ),
+    )
+    graph = Graph(
+        (NamespaceDeclaration("w", NS),),
+        (Tier(TierDeclaration(tier_name, "Empty polyadic")),),
+        (declaration,),
+        polyadic_relations=(PolyadicRelationInstance(declaration.name, (), ()),),
+    )
+    document = cast(dict[str, object], to_data(graph)["graph"])
+    relation = cast(list[dict[str, object]], document["relations"])[0]
+    assert "sources" not in relation and "targets" not in relation
+    assert loads(dump_bytes(graph)) == graph
+
+
 def test_read_edit_write_changes_only_declared_value_line() -> None:
     """Editing one value in an externally serialized document changes only its line."""
-    external_document = {
-        "format_version": FORMAT_VERSION,
-        "graph": rich_graph().to_data(),
-    }
+    external_document = to_data(rich_graph())
     before = (
         json.dumps(
             external_document,
@@ -652,8 +724,7 @@ def test_relation_instance_refuses_unknown_field(document: object, index: int) -
 
 
 @pytest.mark.parametrize(
-    ("document", "index", "required"),
-    [(mutable_document, 0, "right"), (polyadic_document, 1, "targets")],
+    ("document", "index", "required"), [(mutable_document, 0, "right")]
 )
 def test_relation_instance_refuses_missing_field(
     document: object, index: int, required: str

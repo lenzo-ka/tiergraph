@@ -162,11 +162,15 @@ def _walk(
         data = cast(dict[str, JsonValue], value)
         for field in shape.fields:
             if field.name not in data:
-                probes.append(
-                    Probe(
-                        seed_name, (*path, field.name), "missing", copy.deepcopy(seed)
+                if field.required:
+                    probes.append(
+                        Probe(
+                            seed_name,
+                            (*path, field.name),
+                            "missing",
+                            copy.deepcopy(seed),
+                        )
                     )
-                )
                 expanded = copy.deepcopy(seed)
                 expanded_data = cast(dict[str, JsonValue], _at(expanded, path))
                 expanded_data[field.name] = _example(field.shape)
@@ -180,9 +184,10 @@ def _walk(
                     )
                 )
                 continue
-            missing = copy.deepcopy(seed)
-            del cast(dict[str, JsonValue], _at(missing, path))[field.name]
-            probes.append(Probe(seed_name, (*path, field.name), "missing", missing))
+            if field.required:
+                missing = copy.deepcopy(seed)
+                del cast(dict[str, JsonValue], _at(missing, path))[field.name]
+                probes.append(Probe(seed_name, (*path, field.name), "missing", missing))
             probes.extend(
                 _walk(
                     seed_name,
@@ -207,7 +212,11 @@ def _example(shape: Shape) -> JsonValue:
     if shape.kind is ShapeKind.REFERENCE:
         return _example(DECLARATIONS[shape.variants[0]])
     if shape.kind is ShapeKind.OBJECT:
-        return {field.name: _example(field.shape) for field in shape.fields}
+        return {
+            field.name: _example(field.shape)
+            for field in shape.fields
+            if field.required
+        }
     if shape.kind is ShapeKind.ARRAY:
         return []
     if shape.kind is ShapeKind.NULLABLE_STRING:
@@ -216,7 +225,7 @@ def _example(shape: Shape) -> JsonValue:
         if shape.values:
             return shape.values[0]
         if shape.pattern is not None:
-            return "0"
+            return "p:x" if ":" in shape.pattern else "0"
         return "x" if shape.min_length is not None else ""
     if shape.kind is ShapeKind.INTEGER:
         return 0 if shape.minimum is None else shape.minimum

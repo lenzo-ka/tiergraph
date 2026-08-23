@@ -644,7 +644,7 @@ The growable XSD datatype subset admitted for attribute values.
 
 ### `FORMAT_VERSION`
 
-Version tag written by the JSON wire codec. Current value: `5`.
+Version tag written by the JSON wire codec. Current value: `6`.
 
 ### `MACHINE_VERSION`
 
