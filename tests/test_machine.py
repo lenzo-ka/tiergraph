@@ -24,6 +24,7 @@ from tiergraph import (
     BipartiteRelationDeclaration,
     BoundarySide,
     DeclareAttribute,
+    DeclareNamespace,
     DeclareRelation,
     DeclareTier,
     DurableItemRef,
@@ -52,8 +53,9 @@ from tiergraph import (
     XsdType,
     execute,
     steps,
+    wire,
 )
-from tiergraph.machine import AttributeTarget, Opcode
+from tiergraph.machine import AttributeTarget, Opcode, _flatten
 
 
 def build_program(opcodes: tuple[Opcode, ...]) -> Program:
@@ -215,20 +217,17 @@ def test_total_expansion_budget_discriminates_at_boundary() -> None:
         )
 
 
-def test_large_admitted_repeat_unrolls_correctly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_large_admitted_repeat_unrolls_correctly() -> None:
     """A useful large procedure beneath policy still produces its complete trace."""
     opcode = AddItem(LAWS.name("events"))
-
-    def no_op(_opcode: AddItem, graph: Graph) -> Graph:
-        return graph
-
-    monkeypatch.setattr(AddItem, "apply", no_op)
-    outcome = Program((Repeat(MAX_REPEAT_COUNT, (opcode,)),)).unroll()
-    assert len(outcome.trace) == MAX_REPEAT_COUNT
-    assert outcome.trace[0] is opcode
+    # The authoritative linear path must admit the full policy-sized build.
+    outcome = Program(
+        (*LAWS.declarations(), Repeat(MAX_REPEAT_COUNT, (opcode,)))
+    ).unroll()
+    assert len(outcome.trace) == len(LAWS.declarations()) + MAX_REPEAT_COUNT
+    assert outcome.trace[len(LAWS.declarations())] is opcode
     assert outcome.trace[-1] is opcode
+    assert len(outcome.graph.tiers[0].items) == MAX_REPEAT_COUNT
 
 
 def test_unrecognized_opcode_is_an_indexed_execution_refusal() -> None:
@@ -263,8 +262,9 @@ def test_execution_revalidates_each_returned_graph(
         return bad
 
     monkeypatch.setattr(DeclareTier, "apply", forged_apply)
+    # Per-opcode apply/revalidation is the reference execute/steps mechanism.
     with pytest.raises(ExecutionError, match="opcode 0 .*duplicate tier"):
-        Program((DeclareTier(tier.declaration),)).unroll()
+        execute((DeclareTier(tier.declaration),))
 
 
 def test_execution_refuses_a_non_graph_result(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,10 +274,11 @@ def test_execution_refuses_a_non_graph_result(monkeypatch: pytest.MonkeyPatch) -
         return object()
 
     monkeypatch.setattr(AddItem, "apply", forged_apply)
+    # Per-opcode result-type checking is the reference execute/steps mechanism.
     with pytest.raises(
         ExecutionError, match="opcode 0 .*returned 'object', expected Graph"
     ):
-        Program((AddItem(LAWS.name("events")),)).unroll()
+        execute((AddItem(LAWS.name("events")),))
 
 
 def test_diagnostic_serialization_failure_stays_indexed(
@@ -416,6 +417,7 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
         )
     )
     outcome = program.unroll()
+    assert execute(outcome.trace) == outcome.graph
     assert outcome.graph.attributes == (value(AttributeDomain.DOCUMENT),)
     assert len(outcome.graph.position_values[1].attributes) == 2
     for opcode in program.opcodes:
@@ -537,3 +539,463 @@ def test_promoted_references_drive_later_checked_operations() -> None:
     assert outcome.graph.tiers[0].items[0].attributes == (item_value,)
     assert outcome.graph.position_values[0].attributes == (position_value,)
     json.dumps(program.opcodes[7].to_data(), allow_nan=False)
+
+
+def test_linear_unroll_matches_reference_execution_for_rich_graph() -> None:
+    """The fast builder preserves every graph field and canonical wire byte."""
+    tier = LAWS.name("events")
+    relation_name = LAWS.name("ordered")
+    position_name = LAWS.name("position-label")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), 1, 2)
+    trace: tuple[Opcode, ...] = (
+        *LAWS.declarations(),
+        DeclareAttribute(
+            AttributeDeclaration(
+                position_name, AttributeDomain.POSITION, XsdType.STRING
+            )
+        ),
+        AddItem(tier),
+        PromoteItem(ItemRef(tier, 0), "durable"),
+        PromotePosition(PositionRef(tier, 1), "outer-unused"),
+        AddItem(tier),
+        AttachValue(
+            AttributeDomain.POSITION,
+            DurablePositionRef(tier, BoundarySide.AFTER),
+            AttributeValue(position_name, XsdType.STRING, "tick"),
+        ),
+        AddItem(tier),
+        DeclareRelation(PolyadicRelationDeclaration(relation_name, side, side)),
+        Relate(
+            PolyadicRelationInstance(
+                relation_name,
+                (ItemRef(tier, 0),),
+                (ItemRef(tier, 1), ItemRef(tier, 0)),
+            )
+        ),
+    )
+    outcome = Program(trace).unroll()
+    reference = execute(outcome.trace)
+
+    assert outcome.graph == reference
+    assert wire.dumps(outcome.graph) == wire.dumps(reference)
+    assert outcome.graph.to_data() == reference.to_data()
+
+
+def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> None:
+    """Less common mutable transitions retain the reference machine's result."""
+    name = LAWS.name
+    tier = name("events")
+    position_attribute = name("position-extra")
+    relation_attribute = name("relation-extra")
+    membership = name("membership-poly")
+    selection = name("selection-poly")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), 1, 2)
+    trace: tuple[Opcode, ...] = (
+        *LAWS.declarations(),
+        DeclareAttribute(
+            AttributeDeclaration(
+                position_attribute, AttributeDomain.POSITION, XsdType.STRING
+            )
+        ),
+        DeclareAttribute(
+            AttributeDeclaration(
+                relation_attribute,
+                AttributeDomain.RELATION_DECLARATION,
+                XsdType.STRING,
+            )
+        ),
+        AddItem(tier, Item("already")),
+        PromoteItem(ItemRef(tier, 0), "ignored"),
+        AddItem(tier),
+        AttachValue(
+            AttributeDomain.POSITION,
+            PositionRef(tier, 1),
+            AttributeValue(position_attribute, XsdType.STRING, "middle"),
+        ),
+        PromotePosition(PositionRef(tier, 1), "middle-anchor"),
+        PromotePosition(PositionRef(tier, 1), "ignored-again"),
+        AttachValue(
+            AttributeDomain.POSITION,
+            PositionRef(tier, 2),
+            AttributeValue(position_attribute, XsdType.STRING, "after"),
+        ),
+        PromotePosition(PositionRef(tier, 2), "outer-unused"),
+        DeclareRelation(PolyadicRelationDeclaration(membership, side, side)),
+        DeclareRelation(
+            PolyadicRelationDeclaration(
+                selection, side, side, targets_subset_of=membership
+            )
+        ),
+        AttachValue(
+            AttributeDomain.RELATION_DECLARATION,
+            selection,
+            AttributeValue(relation_attribute, XsdType.STRING, "decl"),
+        ),
+        Relate(
+            PolyadicRelationInstance(
+                membership, (ItemRef(tier, 0),), (ItemRef(tier, 1),)
+            )
+        ),
+        Relate(
+            PolyadicRelationInstance(
+                selection, (ItemRef(tier, 0),), (ItemRef(tier, 1),)
+            )
+        ),
+        DeclareRelation(
+            PolyadicRelationDeclaration(
+                name("self-subset"),
+                side,
+                side,
+                targets_subset_of=name("self-subset"),
+            )
+        ),
+        Relate(
+            PolyadicRelationInstance(
+                name("self-subset"),
+                (ItemRef(tier, 0),),
+                (ItemRef(tier, 1),),
+            )
+        ),
+    )
+    outcome = Program(trace).unroll()
+    reference = execute(outcome.trace)
+    assert wire.dumps(outcome.graph) == wire.dumps(reference)
+
+    bad_subset = PolyadicRelationDeclaration(
+        name("bad-subset"), side, side, targets_subset_of=name("later")
+    )
+    with pytest.raises(ExecutionError, match="opcode "):
+        Program((*LAWS.declarations(), DeclareRelation(bad_subset))).unroll()
+    with pytest.raises(ExecutionError, match="opcode "):
+        Program(
+            (
+                *LAWS.declarations(),
+                AddItem(tier),
+                DeclareRelation(PolyadicRelationDeclaration(membership, side, side)),
+                DeclareRelation(
+                    PolyadicRelationDeclaration(
+                        selection, side, side, targets_subset_of=membership
+                    )
+                ),
+                Relate(
+                    PolyadicRelationInstance(
+                        selection, (ItemRef(tier, 0),), (ItemRef(tier, 0),)
+                    )
+                ),
+            )
+        ).unroll()
+
+
+def test_linear_builder_localizes_rare_missing_targets() -> None:
+    """Fast-path target lookups refuse with reference execution diagnostics."""
+    name = LAWS.name
+    declarations = LAWS.declarations()
+    tier_attribute = DeclareAttribute(
+        AttributeDeclaration(name("tier-extra"), AttributeDomain.TIER, XsdType.STRING)
+    )
+    relation_attribute = DeclareAttribute(
+        AttributeDeclaration(
+            name("relation-extra"),
+            AttributeDomain.RELATION_DECLARATION,
+            XsdType.STRING,
+        )
+    )
+    cases = (
+        (
+            *declarations,
+            tier_attribute,
+            AttachValue(
+                AttributeDomain.TIER,
+                name("missing"),
+                AttributeValue(name("tier-extra"), XsdType.STRING, "v"),
+            ),
+        ),
+        (
+            *declarations,
+            relation_attribute,
+            AttachValue(
+                AttributeDomain.RELATION_DECLARATION,
+                name("missing"),
+                AttributeValue(name("relation-extra"), XsdType.STRING, "v"),
+            ),
+        ),
+        (
+            *declarations,
+            AttachValue(
+                AttributeDomain.ITEM,
+                DurableItemRef("missing"),
+                AttributeValue(name("label"), XsdType.STRING, "v"),
+            ),
+        ),
+        (
+            *declarations,
+            DeclareRelation(
+                PolyadicRelationDeclaration(
+                    name("poly"),
+                    RelationSideDeclaration((RelationEndpointKind.ITEM,), None),
+                    RelationSideDeclaration((RelationEndpointKind.ITEM,), None),
+                )
+            ),
+            Relate(
+                RelationInstance(
+                    name("poly"), ItemRef(name("events"), 0), ItemRef(name("events"), 0)
+                )
+            ),
+        ),
+        (
+            *declarations,
+            AddItem(name("events")),
+            Relate(
+                PolyadicRelationInstance(
+                    name("members"),
+                    (ItemRef(name("events"), 0),),
+                    (ItemRef(name("events"), 0),),
+                )
+            ),
+        ),
+    )
+    for trace in cases:
+        with pytest.raises(ExecutionError, match="opcode "):
+            Program(trace).unroll()
+
+
+def test_temporal_dependencies_are_not_healed_by_later_opcodes() -> None:
+    """Each use must be valid against its own prefix, not only the final graph."""
+    name = LAWS.name
+    namespace = DeclareNamespace(NamespaceDeclaration("m", "urn:machine-test"))
+    tier = DeclareTier(TierDeclaration(name("events"), "Events"))
+    simple = DeclareRelation(
+        SimpleRelationDeclaration(name("members"), name("events"), name("event"))
+    )
+    add = AddItem(name("events"))
+    attribute = DeclareAttribute(
+        AttributeDeclaration(name("label"), AttributeDomain.ITEM, XsdType.STRING)
+    )
+    attach = AttachValue(
+        AttributeDomain.ITEM,
+        ItemRef(name("events"), 0),
+        AttributeValue(name("label"), XsdType.STRING, "v"),
+    )
+    bipartite = DeclareRelation(
+        BipartiteRelationDeclaration(name("link"), name("event"), name("event"))
+    )
+    relate = Relate(
+        RelationInstance(
+            name("link"), ItemRef(name("events"), 0), ItemRef(name("events"), 0)
+        )
+    )
+    valid_traces: tuple[tuple[Opcode, ...], ...] = (
+        (namespace, tier, simple, add, attribute, attach),
+        (namespace, tier, simple, add, bipartite, relate),
+        (namespace, tier),
+        (namespace, tier, simple),
+        (namespace, tier, simple, bipartite, add, relate),
+    )
+    invalid_traces: tuple[tuple[Opcode, ...], ...] = (
+        (namespace, tier, simple, add, attach, attribute),
+        (namespace, tier, simple, add, relate, bipartite),
+        (tier, namespace),
+        (namespace, simple, tier),
+        (namespace, tier, bipartite, add, relate, simple),
+    )
+
+    for valid, invalid in zip(valid_traces, invalid_traces, strict=True):
+        reference = execute(valid)
+        assert wire.dumps(Program(valid).unroll().graph) == wire.dumps(reference)
+        with pytest.raises(ExecutionError, match="opcode "):
+            execute(invalid)
+        with pytest.raises(ExecutionError, match="opcode "):
+            Program(invalid).unroll()
+
+
+def test_tier_anchored_boundary_cycle_cannot_be_healed_by_later_item() -> None:
+    """A cycle at an empty tier boundary is refused before that boundary shifts."""
+    namespace = "urn:shift-sensitive"
+
+    def name(local: str) -> QualifiedName:
+        return QualifiedName(namespace, local)
+
+    tier = name("tier")
+    item_type = name("type")
+    relation = name("relation")
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("s", namespace)),
+            DeclareTier(TierDeclaration(tier, "Tier")),
+            DeclareRelation(
+                SimpleRelationDeclaration(name("members"), tier, item_type)
+            ),
+            DeclareRelation(
+                BipartiteRelationDeclaration(
+                    relation,
+                    item_type,
+                    item_type,
+                    RelationEndpointKind.BOUNDARY,
+                    RelationEndpointKind.BOUNDARY,
+                    acyclic=True,
+                )
+            ),
+            Relate(
+                RelationInstance(
+                    relation,
+                    DurablePositionRef(tier, BoundarySide.BEFORE),
+                    DurablePositionRef(tier, BoundarySide.AFTER),
+                )
+            ),
+            AddItem(tier),
+        )
+    )
+    trace = _flatten(program.opcodes)
+    with pytest.raises(ExecutionError, match="closes a cycle"):
+        execute(trace)
+    with pytest.raises(ExecutionError, match="closes a cycle"):
+        program.unroll()
+
+
+def test_tier_anchored_boundary_second_parent_cannot_be_healed() -> None:
+    """A shared boundary child is refused before tier-after moves apart."""
+    namespace = "urn:shift-parent"
+
+    def name(local: str) -> QualifiedName:
+        return QualifiedName(namespace, local)
+
+    tier = name("tier")
+    item_type = name("type")
+    relation = name("relation")
+    anchor_after = DurablePositionRef(DurableItemRef("anchor"), BoundarySide.AFTER)
+    tier_after = DurablePositionRef(tier, BoundarySide.AFTER)
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("s", namespace)),
+            DeclareTier(TierDeclaration(tier, "Tier")),
+            DeclareRelation(
+                SimpleRelationDeclaration(name("members"), tier, item_type)
+            ),
+            DeclareRelation(
+                BipartiteRelationDeclaration(
+                    relation,
+                    item_type,
+                    item_type,
+                    RelationEndpointKind.BOUNDARY,
+                    RelationEndpointKind.BOUNDARY,
+                    single_parent=True,
+                )
+            ),
+            AddItem(tier, Item("anchor")),
+            Relate(
+                RelationInstance(
+                    relation,
+                    DurablePositionRef(tier, BoundarySide.BEFORE),
+                    anchor_after,
+                )
+            ),
+            Relate(RelationInstance(relation, tier_after, tier_after)),
+            AddItem(tier),
+        )
+    )
+    trace = _flatten(program.opcodes)
+    with pytest.raises(ExecutionError, match="a second parent"):
+        execute(trace)
+    with pytest.raises(ExecutionError, match="a second parent"):
+        program.unroll()
+
+
+def test_tier_anchored_polyadic_duplicate_targets_cannot_be_healed() -> None:
+    """Coincident empty-tier targets are refused before an append separates them."""
+    namespace = "urn:shift-polyadic"
+
+    def name(local: str) -> QualifiedName:
+        return QualifiedName(namespace, local)
+
+    tier = name("tier")
+    relation = name("relation")
+    side = RelationSideDeclaration((RelationEndpointKind.BOUNDARY,), (tier,), 1, 2)
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("s", namespace)),
+            DeclareTier(TierDeclaration(tier, "Tier")),
+            DeclareRelation(
+                PolyadicRelationDeclaration(relation, side, side, distinct_targets=True)
+            ),
+            Relate(
+                PolyadicRelationInstance(
+                    relation,
+                    (DurablePositionRef(tier, BoundarySide.BEFORE),),
+                    (
+                        DurablePositionRef(tier, BoundarySide.BEFORE),
+                        DurablePositionRef(tier, BoundarySide.AFTER),
+                    ),
+                )
+            ),
+            AddItem(tier),
+        )
+    )
+    trace = _flatten(program.opcodes)
+    with pytest.raises(ExecutionError, match="duplicate declared-distinct targets"):
+        execute(trace)
+    with pytest.raises(ExecutionError, match="duplicate declared-distinct targets"):
+        program.unroll()
+
+
+def test_valid_tier_anchored_relation_uses_identical_reference_graph() -> None:
+    """The guarded reference path remains byte-identical for valid programs."""
+    namespace = "urn:shift-valid"
+
+    def name(local: str) -> QualifiedName:
+        return QualifiedName(namespace, local)
+
+    tier = name("tier")
+    item_type = name("type")
+    relation = name("relation")
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("s", namespace)),
+            DeclareTier(TierDeclaration(tier, "Tier")),
+            DeclareRelation(
+                SimpleRelationDeclaration(name("members"), tier, item_type)
+            ),
+            DeclareRelation(
+                BipartiteRelationDeclaration(
+                    relation,
+                    item_type,
+                    item_type,
+                    RelationEndpointKind.BOUNDARY,
+                    RelationEndpointKind.BOUNDARY,
+                )
+            ),
+            AddItem(tier),
+            Relate(
+                RelationInstance(
+                    relation,
+                    DurablePositionRef(tier, BoundarySide.BEFORE),
+                    DurablePositionRef(tier, BoundarySide.AFTER),
+                )
+            ),
+        )
+    )
+    trace = _flatten(program.opcodes)
+    assert wire.dumps(program.unroll().graph) == wire.dumps(execute(trace))
+
+
+def test_unroll_constructs_one_full_graph_independent_of_trace_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authoritative construction performs one full validation, not one per opcode."""
+    original = Graph.__post_init__
+    constructions = 0
+
+    def counted(graph: Graph) -> None:
+        nonlocal constructions
+        constructions += 1
+        original(graph)
+
+    monkeypatch.setattr(Graph, "__post_init__", counted)
+    prefix = LAWS.declarations()
+    for count in (50, 100, 200, 400):
+        constructions = 0
+        Program((*prefix, Repeat(count, (AddItem(LAWS.name("events")),)))).unroll()
+        assert constructions == 1
+
+    constructions = 0
+    execute((*prefix, *(AddItem(LAWS.name("events")) for _ in range(10))))
+    assert constructions > 10

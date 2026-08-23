@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -916,6 +916,82 @@ class Graph:
             ],
             "attributes": _attributes_data(self.attributes),
         }
+
+
+@dataclass(slots=True)
+class _MutableTier:
+    declaration: TierDeclaration
+    items: list[Item]
+    attributes: list[AttributeValue]
+
+
+class _GraphBuilder:
+    """Accumulate trusted machine state before one complete graph validation."""
+
+    def __init__(self) -> None:
+        self.namespaces: list[NamespaceDeclaration] = []
+        self.tiers: list[_MutableTier] = []
+        self.relation_declarations: list[RelationDeclaration] = []
+        self.relations: list[RelationInstance] = []
+        self.attribute_declarations: list[AttributeDeclaration] = []
+        self.position_values: list[Position] = []
+        self.attributes: list[AttributeValue] = []
+        self.polyadic_relations: list[PolyadicRelationInstance] = []
+        self.declared_namespaces: set[str] = set()
+        self.tiers_by_name: dict[QualifiedName, _MutableTier] = {}
+        self.items_by_id: dict[str, ItemRef] = {}
+        self.types_by_tier: dict[QualifiedName, QualifiedName] = {}
+        self.declarations_by_name: dict[QualifiedName, RelationDeclaration] = {}
+        self.declaration_indexes: dict[QualifiedName, int] = {}
+        self.attributes_by_name: dict[QualifiedName, AttributeDeclaration] = {}
+        self.positions_by_coordinate: dict[PositionRef, int] = {}
+        self.after_position_by_tier: dict[QualifiedName, int] = {}
+        self.polyadic_targets_by_source: dict[
+            tuple[QualifiedName, ItemRef | PositionRef],
+            set[ItemRef | PositionRef],
+        ] = {}
+
+    def _tier_views(self) -> dict[QualifiedName, Tier]:
+        # The validators inspect only declaration identity and item count/indexing.
+        return cast(dict[QualifiedName, Tier], self.tiers_by_name)
+
+    def _require_namespaces(self, names: Iterable[QualifiedName]) -> None:
+        for name in names:
+            if name.namespace not in self.declared_namespaces:
+                raise ValueError(
+                    f"qualified name {str(name)!r} uses undeclared namespace {name.namespace!r}"
+                )
+
+    def _resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
+        if isinstance(reference, ItemRef):
+            _validate_reference(reference, "item reference", self._tier_views())
+            return reference
+        coordinate = self.items_by_id.get(reference.durable_id)
+        if coordinate is None:
+            raise ValueError(f"unknown durable item id {reference.durable_id!r}")
+        return coordinate
+
+    def _resolve_position(
+        self, reference: PositionRef | DurablePositionRef
+    ) -> PositionRef:
+        return _resolve_position_reference(
+            reference, self._tier_views(), self.items_by_id
+        )
+
+    def _finish(self) -> Graph:
+        return Graph(
+            tuple(self.namespaces),
+            tuple(
+                Tier(tier.declaration, tuple(tier.items), tuple(tier.attributes))
+                for tier in self.tiers
+            ),
+            tuple(self.relation_declarations),
+            tuple(self.relations),
+            tuple(self.attribute_declarations),
+            tuple(self.position_values),
+            tuple(self.attributes),
+            tuple(self.polyadic_relations),
+        )
 
 
 def _canonical_lexical(value_type: XsdType, lexical: str) -> str:
