@@ -1455,9 +1455,14 @@ as a DOT identifier and is applied consistently at the node definition and
 at every edge endpoint that references it, so an override never leaves a
 dangling reference.
 
-``tier_name`` receives the :class:`tiergraph.Tier`, ``node_id`` receives the
-:class:`tiergraph.ItemRef` of the item, and ``item_label`` receives the
-:class:`tiergraph.Item`.
+``tier_name`` is called as ``tier_name(tier)`` with the
+:class:`tiergraph.Tier`; ``node_id`` as ``node_id(reference)`` with the
+item's :class:`tiergraph.ItemRef`; and ``item_label`` as
+``item_label(item, tier)`` with the :class:`tiergraph.Item` and its owning
+:class:`tiergraph.Tier`, so a consumer can fall back to a tier-derived
+label. When ``item_label`` is absent or returns ``None`` the default label
+is built from the item's durable id and attributes without querying clock
+timing, so the default holds under a structural clock as well.
 
 ### `dumps`
 

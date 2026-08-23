@@ -566,6 +566,11 @@ def _collapse_shared_boundaries(
     boundaries keeps gaps ``0`` through ``R - 2``. The terminal tick's closing
     boundary is dropped the same way. The input is strictly ordered, so equal
     ticks are consecutive and the drop is always the last member of each run.
+
+    A tick with a single raw boundary (``R == 1``) has no shared closing
+    boundary to fold; collapsing it would delete the tick entirely, so it is
+    refused rather than silently dropped. Collapse therefore only ever folds
+    the trailing boundary of a tick that has at least two.
     """
     collapsed: list[ClockPosition] = []
     index = 0
@@ -574,6 +579,13 @@ def _collapse_shared_boundaries(
         tail = index
         while tail + 1 < count and positions[tail + 1].tick == positions[index].tick:
             tail += 1
+        if tail == index:
+            raise ValueError(
+                f"clock tick {positions[index].tick} has a single raw boundary; "
+                "collapse_shared_boundaries needs at least two raw boundaries per "
+                "tick so the shared closing boundary can be folded without "
+                "deleting the tick"
+            )
         collapsed.extend(positions[index:tail])
         index = tail + 1
     return tuple(collapsed)
