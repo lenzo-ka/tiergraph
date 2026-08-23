@@ -80,10 +80,17 @@ def _encode_value(value: JsonValue, prefixes: dict[str, str]) -> JsonValue:
             namespace = cast(str, value["namespace"])
             local_name = cast(str, value["local_name"])
             return f"{prefixes[namespace]}:{local_name}"
+        relation_side = set(value) == {
+            "endpoint_kinds",
+            "tiers",
+            "minimum",
+            "maximum",
+            "allow_empty",
+        }
         return {
             key: _encode_value(item, prefixes)
             for key, item in value.items()
-            if item is not None and item != []
+            if item is not None and (item != [] or (relation_side and key == "tiers"))
         }
     return value
 
@@ -200,6 +207,8 @@ def _materialize_defaults(value: object, shape: object) -> None:
     if declared.kind is ShapeKind.OBJECT and isinstance(value, dict):
         for field in declared.fields:
             if field.name not in value:
+                if declared is DECLARATIONS["relation_side"] and field.name == "tiers":
+                    continue
                 if field.shape.kind is ShapeKind.ARRAY:
                     value[field.name] = []
                 elif field.shape.kind is ShapeKind.NULLABLE_STRING:
@@ -380,9 +389,16 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
 
 
 def _relation_side(value: object, path: str) -> RelationSideDeclaration:
-    data = _named_object(value, path, object_fields(DECLARATIONS["relation_side"]))
+    data = _object(value, path)
+    expected = object_fields(DECLARATIONS["relation_side"])
+    missing = (expected - {"tiers"}) - data.keys()
+    extra = data.keys() - expected
+    if missing:
+        raise ValueError(f"{path} is missing field {min(missing)!r}")
+    if extra:
+        raise ValueError(f"{path} has unknown field {min(extra)!r}")
     kinds = _array(data["endpoint_kinds"], f"{path}.endpoint_kinds")
-    tiers = _array(data["tiers"], f"{path}.tiers")
+    tiers = None if "tiers" not in data else _array(data["tiers"], f"{path}.tiers")
     maximum = _integer(data["maximum"], f"{path}.maximum")
     return RelationSideDeclaration(
         tuple(
@@ -390,7 +406,7 @@ def _relation_side(value: object, path: str) -> RelationSideDeclaration:
             for index, item in enumerate(kinds)
         ),
         None
-        if not tiers
+        if tiers is None
         else tuple(
             _name(item, f"{path}.tiers[{index}]") for index, item in enumerate(tiers)
         ),

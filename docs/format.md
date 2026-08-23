@@ -5,11 +5,13 @@ arrays retain order, and scalar attribute values retain their declared XSD type
 and canonical lexical form. The top-level document carries
 `"format_version": "6"`.
 
-Empty arrays and null-valued fields are never emitted. A missing array field
-decodes as the empty collection, and a missing nullable string decodes as the
-absent value. Non-empty collections and non-null values retain their existing
-object fields and ordering; relation instances remain objects in the single
-`relations` collection and are not grouped under declarations.
+Empty arrays and null-valued fields are not emitted, with one presence-sensitive
+exception: a relation side's explicit `"tiers": []` means that no tier is
+allowed, while an absent `tiers` field means that any tier is allowed. Other
+missing array fields decode as empty collections, and missing nullable strings
+decode as absent values. Non-empty collections and non-null values retain their
+existing object fields and ordering; relation instances remain objects in the
+single `relations` collection and are not grouped under declarations.
 
 Qualified names are strings in the form `prefix:local`. The prefix is expanded
 through the document's `namespaces` bindings, which are mandatory whenever a

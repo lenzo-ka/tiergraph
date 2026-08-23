@@ -260,9 +260,9 @@ class RelationSideDeclaration:
         """Return the side contract without inventing order for its allowed sets."""
         return {
             "endpoint_kinds": [kind.value for kind in self.endpoint_kinds],
-            "tiers": []
-            if self.tiers is None
-            else [tier.to_data() for tier in self.tiers],
+            "tiers": (
+                None if self.tiers is None else [tier.to_data() for tier in self.tiers]
+            ),
             "minimum": self.minimum,
             "maximum": -1 if self.maximum is None else self.maximum,
             "allow_empty": self.allow_empty,

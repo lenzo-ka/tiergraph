@@ -497,6 +497,47 @@ def test_empty_polyadic_sides_remain_distinguishable_after_omission() -> None:
     assert loads(dump_bytes(graph)) == graph
 
 
+def test_relation_side_tier_restriction_preserves_all_three_states() -> None:
+    """Absent, explicitly empty, and nonempty tier restrictions remain distinct."""
+    tier_name = name("restriction-tier")
+
+    def declaration(
+        local_name: str, tiers: tuple[QualifiedName, ...] | None
+    ) -> PolyadicRelationDeclaration:
+        side = RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), tiers, minimum=0, allow_empty=True
+        )
+        return PolyadicRelationDeclaration(name(local_name), side, side)
+
+    declarations = (
+        declaration("any-tier", None),
+        declaration("no-tier", ()),
+        declaration("one-tier", (tier_name,)),
+    )
+    graph = Graph(
+        (NamespaceDeclaration("w", NS),),
+        (Tier(TierDeclaration(tier_name, "Restriction tier")),),
+        declarations,
+    )
+    document = cast(dict[str, object], to_data(graph)["graph"])
+    encoded = cast(list[dict[str, object]], document["relation_declarations"])
+    sides = {
+        cast(str, entry["name"]): cast(dict[str, object], entry["sources"])
+        for entry in encoded
+    }
+    assert "tiers" not in sides["w:any-tier"]
+    assert sides["w:no-tier"]["tiers"] == []
+    assert sides["w:one-tier"]["tiers"] == ["w:restriction-tier"]
+
+    decoded = loads(dump_bytes(graph))
+    assert decoded == graph
+    decoded_tiers = tuple(
+        cast(PolyadicRelationDeclaration, item).sources.tiers
+        for item in decoded.relation_declarations
+    )
+    assert decoded_tiers == (None, (), (tier_name,))
+
+
 def test_read_edit_write_changes_only_declared_value_line() -> None:
     """Editing one value in an externally serialized document changes only its line."""
     external_document = to_data(rich_graph())

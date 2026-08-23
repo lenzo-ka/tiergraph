@@ -73,10 +73,11 @@ byte length: 393
 round-trip equal: True
 ```
 
-The keys are sorted; empty collections and null fields are omitted, and
-qualified names use the document's namespace prefixes. The same graph always
-produces these exact bytes. `loads(dumps(graph))` reconstructs a graph equal to
-the original.
+The keys are sorted; empty collections and null fields are omitted, except that
+an explicit empty relation-side `tiers` restriction is preserved. Qualified
+names use the document's namespace prefixes. The same graph always produces
+these exact bytes. `loads(dumps(graph))` reconstructs a graph equal to the
+original.
 
 Qualified names, declaration order, tier order, item order, relation endpoint
 order, and boundary indexes are all data. A reader must not infer a relation's
