@@ -1462,7 +1462,7 @@ dangling reference.
 ### `dumps`
 
 ```text
-dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
+dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockPosition, ClockPosition] | None] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
 ```
 
 Return byte-stable DOT for ``graph``.
@@ -1478,6 +1478,15 @@ Empty tiers are omitted by default and included when
 data; the renderer assigns no domain-specific meaning to them. A clock
 profile must belong to this exact graph instance, not merely an equal graph,
 because its cached derived state was computed from that instance.
+
+A structural clock (built by :meth:`ClockProfile.from_position_values`)
+selects the occupied-spine rendering: the clock tier is drawn only as the
+spine, an occupied clock column is anchored on its item node, and empty
+columns keep a guide point. Non-clock items are placed by ``binding``, a
+render-time callable receiving one :class:`tiergraph.Item` and returning the
+``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+columns the item occupies, or ``None`` when the item is untimed. The kernel
+never parses domain identifiers; the caller supplies the placement.
 
 ### `dumps_spans`
 

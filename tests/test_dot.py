@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
@@ -17,6 +18,7 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     BoundarySide,
+    ClockPosition,
     ClockProfile,
     DurablePositionRef,
     Graph,
@@ -711,3 +713,378 @@ def test_empty_polyadic_relation_emits_nothing() -> None:
     # The non-empty 'choices' relation still renders; only the empty one is gone.
     assert "// Declared polyadic relations." in rendered
     assert "roots" not in rendered
+
+
+# --- Occupied-spine full goldens (Deliverable B, item-as-anchor) ------------
+#
+# These pin the exact DOT bytes of ipakit's authoritative to_dot goldens. The
+# graph fixtures are rebuilt here (goldens live outside the repo), and the
+# binding/presentation hooks mirror exactly what ipakit computes on its side:
+# a render-time binding derived from the /clock/N/tier/I durable ids (the
+# kernel never parses them) plus tier-name/node-id/item-label hooks.
+
+_IPAKIT_NS = "urn:ipakit:todot:test"
+
+
+def _ik(local: str) -> QualifiedName:
+    return QualifiedName(_IPAKIT_NS, local)
+
+
+_IK_CLOCK = _ik("clock")
+_IK_TICK = _ik("tick")
+_IK_GAP = _ik("gap")
+_IK_TEXT = _ik("text")
+_IK_DURATION = _ik("structural-duration")
+
+
+def _ik_item(durable: str, text: str, duration: int) -> Item:
+    return Item(
+        durable,
+        (
+            AttributeValue(_IK_TEXT, XsdType.STRING, text),
+            AttributeValue(_IK_DURATION, XsdType.INTEGER, str(duration)),
+        ),
+    )
+
+
+def build_ipakit_graph(
+    clock_raw: tuple[tuple[int, int], ...],
+    segment_items: tuple[tuple[str, str, int], ...],
+    boundary_items: tuple[tuple[str, str, int], ...],
+) -> Graph:
+    """Rebuild ipakit's authoritative containment projection for the renderer."""
+    tiers = (
+        Tier(
+            TierDeclaration(_ik("tier-segment"), "segment"),
+            tuple(_ik_item(*fields) for fields in segment_items),
+        ),
+        Tier(
+            TierDeclaration(_ik("tier-boundary"), "boundary"),
+            tuple(_ik_item(*fields) for fields in boundary_items),
+        ),
+        Tier(
+            TierDeclaration(_IK_CLOCK, "clock"),
+            tuple(Item(f"ipakit-clockcell-{i}") for i in range(len(clock_raw) - 1)),
+        ),
+    )
+    declarations = (
+        AttributeDeclaration(_IK_TICK, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(_IK_GAP, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(_IK_TEXT, AttributeDomain.ITEM, XsdType.STRING),
+        AttributeDeclaration(_IK_DURATION, AttributeDomain.ITEM, XsdType.INTEGER),
+    )
+    positions = tuple(
+        Position(
+            PositionRef(_IK_CLOCK, index),
+            (
+                AttributeValue(_IK_TICK, XsdType.INTEGER, str(tick)),
+                AttributeValue(_IK_GAP, XsdType.INTEGER, str(gap)),
+            ),
+        )
+        for index, (tick, gap) in enumerate(clock_raw)
+    )
+    return Graph(
+        (NamespaceDeclaration("k", _IPAKIT_NS),),
+        tiers,
+        (),
+        attribute_declarations=declarations,
+        position_values=positions,
+    )
+
+
+def _ipakit_node_id(durable: str) -> str:
+    return "event_" + "".join(
+        character if character.isalnum() else f"_{ord(character):02x}_"
+        for character in durable
+    )
+
+
+def _durable(item: Item) -> str:
+    assert item.durable_id is not None
+    return item.durable_id
+
+
+def ipakit_hooks_and_binding(
+    graph: Graph,
+) -> tuple[
+    tiergraph_dot.DotPresentation,
+    Callable[[Item], tuple[ClockPosition, ClockPosition]],
+]:
+    """Mirror ipakit's render-time hooks and clock binding from durable ids."""
+    items_by_ref = {
+        ItemRef(tier.declaration.name, index): item
+        for tier in graph.tiers
+        for index, item in enumerate(tier.items)
+    }
+
+    def attribute(item: Item, local: str) -> str:
+        return next(
+            value.lexical for value in item.attributes if value.name.local_name == local
+        )
+
+    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
+        tick = int(_durable(item).split("/")[2])
+        duration = int(attribute(item, "structural-duration"))
+        return (ClockPosition(tick, 0), ClockPosition(tick + duration, 0))
+
+    presentation = tiergraph_dot.DotPresentation(
+        tier_name=lambda tier: tier.declaration.long_name,
+        node_id=lambda reference: _ipakit_node_id(_durable(items_by_ref[reference])),
+        item_label=lambda item: attribute(item, "text"),
+    )
+    return presentation, binding
+
+
+def _render_ipakit(graph: Graph) -> str:
+    clock = ClockProfile.from_position_values(
+        graph,
+        _IK_CLOCK,
+        tick_attribute=_IK_TICK,
+        gap_attribute=_IK_GAP,
+        collapse_shared_boundaries=True,
+    )
+    presentation, binding = ipakit_hooks_and_binding(graph)
+    return tiergraph_dot.dumps(
+        graph, clock=clock, presentation=presentation, binding=binding
+    )
+
+
+GOLDEN_TODOT_EMBEDDED = """digraph tiergraph {
+  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // The clock spine is the total order.
+  { rank=same;
+    score_start_clock [shape=plaintext, label="clock"];
+    clock_0_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0.0"];
+    clock_0_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="0.1"];
+    clock_1_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="1.0"];
+    clock_1_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="1.1"];
+    clock_1_gap_2 [shape=circle, width=0.46, fixedsize=true, group="time_4", label="1.2"];
+    clock_2_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_5", label="2.0"];
+    clock_2_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_6", label="2.1"];
+    clock_0_gap_0 -> clock_0_gap_1 [weight=100];
+    clock_0_gap_1 -> clock_1_gap_0 [weight=100];
+    clock_1_gap_0 -> clock_1_gap_1 [weight=100];
+    clock_1_gap_1 -> clock_1_gap_2 [weight=100];
+    clock_1_gap_2 -> clock_2_gap_0 [weight=100];
+    clock_2_gap_0 -> clock_2_gap_1 [weight=100];
+  }
+
+  subgraph tier_segment {
+    rank=same;
+    tier_label_segment [shape=plaintext, label="segment"];
+    event__2f_clock_2f_0_2f_segment_2f_0 [shape=box, group="time_0", label="a"];
+    guide_segment_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    event__2f_clock_2f_1_2f_segment_2f_0 [shape=box, group="time_2", label="b"];
+    guide_segment_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_segment_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    guide_segment_5 [shape=point, width=0.01, label="", group="time_5", style=invis];
+    guide_segment_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> guide_segment_1 [style=invis, weight=100];
+    guide_segment_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> guide_segment_3 [style=invis, weight=100];
+    guide_segment_3 -> guide_segment_4 [style=invis, weight=100];
+    guide_segment_4 -> guide_segment_5 [style=invis, weight=100];
+    guide_segment_5 -> guide_segment_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> guide_segment_5 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  subgraph tier_boundary {
+    rank=same;
+    tier_label_boundary [shape=plaintext, label="boundary"];
+    event__2f_clock_2f_0_2f_boundary_2f_0 [shape=box, group="time_0", label="#"];
+    guide_boundary_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    event__2f_clock_2f_1_2f_boundary_2f_0 [shape=box, group="time_2", label="."];
+    event__2f_clock_2f_1_2f_boundary_2f_1 [shape=box, group="time_2", label="."];
+    guide_boundary_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_boundary_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    event__2f_clock_2f_2_2f_boundary_2f_0 [shape=box, group="time_5", label="#"];
+    guide_boundary_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    event__2f_clock_2f_0_2f_boundary_2f_0 -> guide_boundary_1 [style=invis, weight=100];
+    guide_boundary_1 -> event__2f_clock_2f_1_2f_boundary_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_boundary_2f_0 -> guide_boundary_3 [style=invis, weight=100];
+    guide_boundary_3 -> guide_boundary_4 [style=invis, weight=100];
+    guide_boundary_4 -> event__2f_clock_2f_2_2f_boundary_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_2_2f_boundary_2f_0 -> guide_boundary_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_boundary_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_boundary_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_1 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_boundary_2f_1 -> event__2f_clock_2f_2_2f_boundary_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+  }
+
+  // The score brace joins lane starts in declaration order.
+  score_start_clock -> tier_label_segment [dir=none, color="#333333", penwidth=2.4, weight=100];
+  tier_label_segment -> tier_label_boundary [dir=none, color="#333333", penwidth=2.4, weight=100];
+
+  // Register every lane to the clock's time columns.
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_0_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_0_gap_1 -> guide_segment_1 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_1 -> guide_boundary_1 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_1 -> guide_segment_3 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_3 -> guide_boundary_3 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_2 -> guide_segment_4 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_4 -> guide_boundary_4 [style=invis, weight=1000, arrowhead=none];
+  clock_2_gap_0 -> guide_segment_5 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_5 -> event__2f_clock_2f_2_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_2_gap_1 -> guide_segment_6 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_6 -> guide_boundary_6 [style=invis, weight=1000, arrowhead=none];
+
+  // Trigger every event from the clock position it occupies.
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_boundary_2f_1 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_2_gap_0 -> event__2f_clock_2f_2_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+}
+"""
+
+GOLDEN_TODOT_KAT = """digraph tiergraph {
+  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // The clock spine is the total order.
+  { rank=same;
+    score_start_clock [shape=plaintext, label="clock"];
+    clock_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0"];
+    clock_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="1"];
+    clock_2 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="2"];
+    clock_3 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="3"];
+    clock_0 -> clock_1 [weight=100];
+    clock_1 -> clock_2 [weight=100];
+    clock_2 -> clock_3 [weight=100];
+  }
+
+  subgraph tier_segment {
+    rank=same;
+    tier_label_segment [shape=plaintext, label="segment"];
+    event__2f_clock_2f_0_2f_segment_2f_0 [shape=box, group="time_0", label="k"];
+    event__2f_clock_2f_1_2f_segment_2f_0 [shape=box, group="time_1", label="a"];
+    event__2f_clock_2f_2_2f_segment_2f_0 [shape=box, group="time_2", label="t"];
+    guide_segment_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_2_2f_segment_2f_0 -> guide_segment_3 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_2_2f_segment_2f_0 -> guide_segment_3 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  // The score brace joins lane starts in declaration order.
+  score_start_clock -> tier_label_segment [dir=none, color="#333333", penwidth=2.4, weight=100];
+
+  // Register every lane to the clock's time columns.
+  clock_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_2 -> event__2f_clock_2f_2_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_3 -> guide_segment_3 [style=invis, weight=1000, arrowhead=none];
+
+  // Trigger every event from the clock position it occupies.
+  clock_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_2 -> event__2f_clock_2f_2_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+}
+"""
+
+
+def test_occupied_spine_reproduces_ipakit_embedded_golden() -> None:
+    """dumps() reproduces ipakit's '#a..b#' authoritative to_dot byte-for-byte."""
+    graph = build_ipakit_graph(
+        (
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (1, 3),
+            (2, 0),
+            (2, 1),
+            (2, 2),
+        ),
+        (("/clock/0/segment/0", "a", 1), ("/clock/1/segment/0", "b", 1)),
+        (
+            ("/clock/0/boundary/0", "#", 0),
+            ("/clock/1/boundary/0", ".", 0),
+            ("/clock/1/boundary/1", ".", 0),
+            ("/clock/2/boundary/0", "#", 0),
+        ),
+    )
+    rendered = _render_ipakit(graph)
+    assert rendered == GOLDEN_TODOT_EMBEDDED
+    assert_graphviz_accepts(rendered)
+
+
+def test_occupied_spine_reproduces_ipakit_kat_golden() -> None:
+    """dumps() reproduces ipakit's 'kat' authoritative to_dot byte-for-byte."""
+    graph = build_ipakit_graph(
+        ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
+        (
+            ("/clock/0/segment/0", "k", 1),
+            ("/clock/1/segment/0", "a", 1),
+            ("/clock/2/segment/0", "t", 1),
+        ),
+        (),
+    )
+    rendered = _render_ipakit(graph)
+    assert rendered == GOLDEN_TODOT_KAT
+    assert_graphviz_accepts(rendered)
+
+
+def test_occupied_spine_needs_a_binding_for_timed_items() -> None:
+    """A structural clock with placed items but no binding is refused clearly."""
+    graph = build_ipakit_graph(
+        ((0, 0), (0, 1), (1, 0), (1, 1)),
+        (("/clock/0/segment/0", "k", 1),),
+        (),
+    )
+    clock = ClockProfile.from_position_values(
+        graph,
+        _IK_CLOCK,
+        tick_attribute=_IK_TICK,
+        gap_attribute=_IK_GAP,
+        collapse_shared_boundaries=True,
+    )
+    with pytest.raises(ValueError, match="binding callable returned None"):
+        tiergraph_dot.dumps(graph, clock=clock)
+
+
+def test_occupied_spine_binding_type_is_checked() -> None:
+    """A non-callable binding argument is refused by type."""
+    graph = build_ipakit_graph(((0, 0), (0, 1)), (), ())
+    with pytest.raises(TypeError, match="binding must be a callable"):
+        tiergraph_dot.dumps(graph, binding="nope")  # type: ignore[arg-type]
+
+
+def test_occupied_spine_placement_outside_spine_is_refused() -> None:
+    """A binding naming a non-occupied clock position is refused, item named."""
+    graph = build_ipakit_graph(
+        ((0, 0), (0, 1), (1, 0), (1, 1)),
+        (("/clock/0/segment/0", "k", 1),),
+        (),
+    )
+    clock = ClockProfile.from_position_values(
+        graph,
+        _IK_CLOCK,
+        tick_attribute=_IK_TICK,
+        gap_attribute=_IK_GAP,
+        collapse_shared_boundaries=True,
+    )
+    presentation, _ = ipakit_hooks_and_binding(graph)
+
+    def bad_binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
+        return (ClockPosition(9, 9), ClockPosition(9, 9))
+
+    with pytest.raises(ValueError, match="not an occupied spine position"):
+        tiergraph_dot.dumps(
+            graph, clock=clock, presentation=presentation, binding=bad_binding
+        )

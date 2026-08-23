@@ -61,6 +61,7 @@ def dumps(
     *,
     clock: ClockProfile | None = None,
     presentation: DotPresentation | None = None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition] | None] | None = None,
     include_empty_tiers: bool = False,
 ) -> str:
     """Return byte-stable DOT for ``graph``.
@@ -76,6 +77,15 @@ def dumps(
     data; the renderer assigns no domain-specific meaning to them. A clock
     profile must belong to this exact graph instance, not merely an equal graph,
     because its cached derived state was computed from that instance.
+
+    A structural clock (built by :meth:`ClockProfile.from_position_values`)
+    selects the occupied-spine rendering: the clock tier is drawn only as the
+    spine, an occupied clock column is anchored on its item node, and empty
+    columns keep a guide point. Non-clock items are placed by ``binding``, a
+    render-time callable receiving one :class:`tiergraph.Item` and returning the
+    ``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+    columns the item occupies, or ``None`` when the item is untimed. The kernel
+    never parses domain identifiers; the caller supplies the placement.
     """
     if not isinstance(graph, Graph):
         raise TypeError(f"graph must be a tiergraph.Graph, got {type(graph).__name__}")
@@ -92,17 +102,20 @@ def dumps(
             "presentation must be a tiergraph_dot.DotPresentation or None, "
             f"got {type(presentation).__name__}"
         )
+    if binding is not None and not callable(binding):
+        raise TypeError(
+            f"binding must be a callable or None, got {type(binding).__name__}"
+        )
 
-    structural = clock is not None and clock._structural
+    if clock is not None and clock._structural:
+        return _dumps_occupied_spine(
+            graph, clock, presentation, binding, include_empty_tiers
+        )
+
     visible = tuple(
         (tier_index, tier)
         for tier_index, tier in enumerate(graph.tiers)
-        if (tier.items or include_empty_tiers)
-        and not (
-            structural
-            and clock is not None
-            and tier.declaration.name == clock.clock_tier
-        )
+        if tier.items or include_empty_tiers
     )
     lines = [
         "digraph tiergraph {",
@@ -112,25 +125,18 @@ def dumps(
     ]
 
     clock_ids: tuple[str, ...] = ()
-    clock_labels: tuple[str, ...] = ()
     clock_positions: tuple[ClockPosition, ...] = ()
     if clock is not None:
         clock_positions = clock.positions
-        if structural:
-            clock_ids, clock_labels = _occupied_spine_identity(clock_positions)
-            spine_comment = "  // The clock spine is the total order."
-        else:
-            clock_ids = tuple(f"clock_{index}" for index in range(len(clock_positions)))
-            clock_labels = tuple(
-                _position_label(position) for position in clock_positions
-            )
-            spine_comment = "  // The refined clock spine is the total order."
-        lines.extend(("", spine_comment, "  { rank=same;"))
+        clock_ids = tuple(f"clock_{index}" for index in range(len(clock_positions)))
+        lines.extend(
+            ("", "  // The refined clock spine is the total order.", "  { rank=same;")
+        )
         lines.append('    score_start_clock [shape=plaintext, label="clock"];')
-        for index in range(len(clock_positions)):
+        for index, position in enumerate(clock_positions):
             lines.append(
                 f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
-                f'group="time_{index}", label="{clock_labels[index]}"];'
+                f'group="time_{index}", label="{_position_label(position)}"];'
             )
         for left, right in zip(clock_ids, clock_ids[1:], strict=False):
             lines.append(f"    {left} -> {right} [weight=100];")
@@ -216,12 +222,7 @@ def dumps(
             )
 
     if clock is not None or tier_labels:
-        brace_comment = (
-            "  // The score brace joins lane starts in declaration order."
-            if structural
-            else "  // The score brace joins rows in tier order."
-        )
-        lines.extend(("", brace_comment))
+        lines.extend(("", "  // The score brace joins rows in tier order."))
         row_anchors = (["score_start_clock"] if clock is not None else []) + tier_labels
         for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
             lines.append(
@@ -229,12 +230,7 @@ def dumps(
             )
 
     if clock is not None:
-        register_comment = (
-            "  // Register every lane to the clock's time columns."
-            if structural
-            else "  // Register timed lanes to refined clock positions."
-        )
-        lines.extend(("", register_comment))
+        lines.extend(("", "  // Register timed lanes to refined clock positions."))
         for position_index, clock_id in enumerate(clock_ids):
             column = [clock_id]
             for (_tier_index, tier), row_slots in zip(visible, tier_slots, strict=True):
@@ -247,12 +243,7 @@ def dumps(
                     f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
                 )
 
-        trigger_comment = (
-            "  // Trigger every event from the clock position it occupies."
-            if structural
-            else "  // Trigger timed events from their refined positions."
-        )
-        lines.extend(("", trigger_comment))
+        lines.extend(("", "  // Trigger timed events from their refined positions."))
         for _tier_index, tier in visible:
             if tier.declaration.name != clock.clock_tier and not clock.is_timed(
                 tier.declaration.name
@@ -267,6 +258,169 @@ def dumps(
                 )
 
     _relation_lines(lines, graph, item_nodes, boundary_nodes)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _dumps_occupied_spine(
+    graph: Graph,
+    clock: ClockProfile,
+    presentation: DotPresentation | None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition] | None] | None,
+    include_empty_tiers: bool,
+) -> str:
+    """Render a structural clock: spine plus item-anchored occupied columns.
+
+    The clock tier is drawn only as the spine. Each non-clock item is placed at
+    the collapsed column named by ``binding``; a column holding at least one
+    item is anchored on the first such item's node, and only empty columns keep
+    a guide point. Adjacency, extent, registration, and trigger edges all route
+    through those anchors.
+    """
+    clock_positions = clock.positions
+    clock_ids, clock_labels = _occupied_spine_identity(clock_positions)
+    column_of = {position: index for index, position in enumerate(clock_positions)}
+    column_count = len(clock_positions)
+
+    lines = [
+        "digraph tiergraph {",
+        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
+        '  node [fontname="Helvetica"];',
+        '  edge [fontname="Helvetica", fontsize=9];',
+    ]
+
+    lines.extend(("", "  // The clock spine is the total order.", "  { rank=same;"))
+    lines.append('    score_start_clock [shape=plaintext, label="clock"];')
+    for index in range(column_count):
+        lines.append(
+            f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
+            f'group="time_{index}", label="{clock_labels[index]}"];'
+        )
+    for left, right in zip(clock_ids, clock_ids[1:], strict=False):
+        lines.append(f"    {left} -> {right} [weight=100];")
+    lines.append("  }")
+
+    visible = tuple(
+        (tier_index, tier)
+        for tier_index, tier in enumerate(graph.tiers)
+        if tier.declaration.name != clock.clock_tier
+        and (tier.items or include_empty_tiers)
+    )
+
+    tier_labels: list[str] = []
+    item_nodes: dict[ItemRef, str] = {}
+    tier_starts: list[list[list[int]]] = []
+    tier_anchor_lists: list[list[str]] = []
+
+    for tier_index, tier in visible:
+        tier_name = tier.declaration.name
+        long_name = tier.declaration.long_name
+        starts_at: list[list[int]] = [[] for _ in range(column_count)]
+        item_columns: list[int] = []
+        item_end_columns: list[int] = []
+        for item_index, item in enumerate(tier.items):
+            span = binding(item) if binding is not None else None
+            reference = ItemRef(tier_name, item_index)
+            if span is None:
+                raise ValueError(
+                    "structural rendering needs a clock placement for item "
+                    f"{reference.to_data()!r}; the binding callable returned None "
+                    "or was not supplied"
+                )
+            start_position, end_position = span
+            try:
+                start_column = column_of[start_position]
+                end_column = column_of[end_position]
+            except KeyError as error:
+                raise ValueError(
+                    f"clock placement {error.args[0]!r} for item "
+                    f"{reference.to_data()!r} is not an occupied spine position"
+                ) from error
+            item_columns.append(start_column)
+            item_end_columns.append(end_column)
+            starts_at[start_column].append(item_index)
+        for item_index in range(len(tier.items)):
+            reference = ItemRef(tier_name, item_index)
+            item_nodes[reference] = _resolve_node_id(
+                presentation, reference, f"item_{tier_index}_{item_index}"
+            )
+        anchors = [
+            item_nodes[ItemRef(tier_name, starts_at[column][0])]
+            if starts_at[column]
+            else f"guide_{long_name}_{column}"
+            for column in range(column_count)
+        ]
+
+        label_id = f"tier_label_{long_name}"
+        tier_labels.append(label_id)
+        lines.extend(("", f"  subgraph tier_{long_name} {{", "    rank=same;"))
+        lines.append(
+            f"    {label_id} [shape=plaintext, "
+            f'label="{_resolve_tier_name(presentation, tier)}"];'
+        )
+        for column in range(column_count):
+            if starts_at[column]:
+                for item_index in starts_at[column]:
+                    reference = ItemRef(tier_name, item_index)
+                    label = _resolve_item_label(
+                        presentation, tier.items[item_index], graph, reference, clock
+                    )
+                    lines.append(
+                        f"    {item_nodes[reference]} [shape=box, "
+                        f'group="time_{column}", label="{label}"];'
+                    )
+            else:
+                lines.append(
+                    f"    guide_{long_name}_{column} [shape=point, width=0.01, "
+                    f'label="", group="time_{column}", style=invis];'
+                )
+        for left, right in zip(anchors, anchors[1:], strict=False):
+            lines.append(f"    {left} -> {right} [style=invis, weight=100];")
+        for item_index in range(len(tier.items) - 1):
+            left = item_nodes[ItemRef(tier_name, item_index)]
+            right = item_nodes[ItemRef(tier_name, item_index + 1)]
+            lines.append(
+                f"    {left} -> {right} "
+                '[color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];'
+            )
+        for item_index in range(len(tier.items)):
+            if item_columns[item_index] != item_end_columns[item_index]:
+                anchor = anchors[item_end_columns[item_index]]
+                lines.append(
+                    f"    {item_nodes[ItemRef(tier_name, item_index)]} -> {anchor} "
+                    '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                    "arrowsize=0.6, fontsize=8, constraint=false];"
+                )
+        lines.append("  }")
+        tier_starts.append(starts_at)
+        tier_anchor_lists.append(anchors)
+
+    lines.extend(("", "  // The score brace joins lane starts in declaration order."))
+    row_anchors = ["score_start_clock", *tier_labels]
+    for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
+        lines.append(
+            f'  {upper} -> {lower} [dir=none, color="#333333", penwidth=2.4, weight=100];'
+        )
+
+    lines.extend(("", "  // Register every lane to the clock's time columns."))
+    for column in range(column_count):
+        chain = [clock_ids[column], *(anchors[column] for anchors in tier_anchor_lists)]
+        for upper, lower in zip(chain, chain[1:], strict=False):
+            lines.append(
+                f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
+            )
+
+    lines.extend(("", "  // Trigger every event from the clock position it occupies."))
+    for column in range(column_count):
+        for (_tier_index, tier), starts_at in zip(visible, tier_starts, strict=True):
+            for item_index in starts_at[column]:
+                reference = ItemRef(tier.declaration.name, item_index)
+                lines.append(
+                    f"  {clock_ids[column]} -> {item_nodes[reference]} "
+                    '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+                )
+
+    _relation_lines(lines, graph, item_nodes, {})
     lines.append("}")
     return "\n".join(lines) + "\n"
 
