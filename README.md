@@ -72,6 +72,8 @@ reach a selection, a fold, or a serializer.
 - Attach a clock profile and resolve physical timing — see [timing](docs/guide/timing.md).
 - Serialize to canonical JSON or render Graphviz DOT — see
   [serialization](docs/guide/serialization.md).
+- Project segmentation graphs into deterministic span views for JSON, JSON Lines,
+  text, HTML, or DOT — see [span views](docs/guide/span-views.md).
 
 ## Documentation
 

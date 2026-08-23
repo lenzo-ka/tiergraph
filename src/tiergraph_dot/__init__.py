@@ -127,7 +127,13 @@ def dumps(
             f"binding must be a callable or None, got {type(binding).__name__}"
         )
 
-    if clock is not None and clock._structural:
+    if binding is not None and (clock is None or not clock.is_structural):
+        raise ValueError(
+            "binding is only used with a structural ClockProfile built by "
+            "from_position_values"
+        )
+
+    if clock is not None and clock.is_structural:
         return _dumps_occupied_spine(
             graph, clock, presentation, binding, include_empty_tiers
         )
@@ -178,7 +184,6 @@ def dumps(
             boundary_indexes = tuple(
                 _clock_index(clock, position.reference, clock_positions)
                 for position in positions
-                if isinstance(position.reference, PositionRef)
             )
         else:
             slot_count = len(positions)

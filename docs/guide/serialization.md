@@ -95,9 +95,12 @@ meaning from its name or collapse an ordered relation into an unordered set.
 
 The companion `tiergraph_dot` package renders a read-only Graphviz DOT view
 through the public API. It ships in the same distribution as the kernel.
-`dumps(graph, clock=None, include_empty_tiers=False)` follows graph and relation
-order, so its output is byte-stable. A clock profile passed here must be the one
-built for this exact graph instance.
+`dumps(graph, *, clock=None, presentation=None, binding=None,
+include_empty_tiers=False)` follows graph and relation order, so its output is
+byte-stable. A clock profile passed here must be the one built for this exact
+graph instance. `presentation` customizes labels and relation styling; `binding`
+places non-clock items when rendering a structural clock built with
+`ClockProfile.from_position_values`.
 
 ```python
 import tiergraph_dot

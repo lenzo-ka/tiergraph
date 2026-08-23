@@ -384,6 +384,8 @@ class OrderedContainment:
     relation: QualifiedName
     _declaration: PolyadicRelationDeclaration = field(init=False, repr=False)
     _traversal: OrderedPolyadicTraversal = field(init=False, repr=False)
+    _children: dict[ItemRef, tuple[ItemRef, ...]] = field(init=False, repr=False)
+    _parents: dict[ItemRef, set[ItemRef]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         declaration = next(
@@ -427,6 +429,9 @@ class OrderedContainment:
         )
         object.__setattr__(traversal, "_containment_profile", True)
         object.__setattr__(self, "_traversal", traversal)
+        children, parents = self._build_incidence()
+        object.__setattr__(self, "_children", children)
+        object.__setattr__(self, "_parents", parents)
 
     def _node(self, reference: ItemRef) -> Node:
         if reference not in self.graph.canonical_items():
@@ -439,40 +444,13 @@ class OrderedContainment:
     def _incidence(
         self,
     ) -> tuple[dict[ItemRef, tuple[ItemRef, ...]], dict[ItemRef, set[ItemRef]]]:
-        """Apply containment constraints over the shared live incidence engine."""
-        declaration = next(
-            (
-                candidate
-                for candidate in self.graph.relation_declarations
-                if candidate.name == self.relation
-            ),
-            None,
-        )
-        if not isinstance(declaration, PolyadicRelationDeclaration):
-            raise ValueError(
-                f"ordered containment relation {str(self.relation)!r} "
-                "no longer has a polyadic declaration"
-            )
-        item_only = (RelationEndpointKind.ITEM,)
-        if (
-            declaration.sources.endpoint_kinds != item_only
-            or declaration.targets.endpoint_kinds != item_only
-        ):
-            raise ValueError(
-                f"ordered containment relation {str(self.relation)!r} "
-                "no longer has item-only sides"
-            )
-        if not declaration.unique_sources:
-            raise ValueError(
-                f"ordered containment relation {str(self.relation)!r} "
-                "no longer guarantees source uniqueness"
-            )
-        if not declaration.acyclic:
-            raise ValueError(
-                f"ordered containment relation {str(self.relation)!r} "
-                "no longer guarantees declared acyclicity"
-            )
+        """Return incidence validated and cached when the profile was built."""
+        return self._children, self._parents
 
+    def _build_incidence(
+        self,
+    ) -> tuple[dict[ItemRef, tuple[ItemRef, ...]], dict[ItemRef, set[ItemRef]]]:
+        """Build containment incidence once from the immutable graph."""
         children: dict[ItemRef, tuple[ItemRef, ...]] = {}
         parents: dict[ItemRef, set[ItemRef]] = {}
         source_instances: dict[ItemRef, int] = {}

@@ -97,7 +97,7 @@ commutativity.
 ### `ClockProfile`
 
 ```text
-ClockProfile(graph: 'Graph', clock_tier: 'QualifiedName', binding_relation: 'QualifiedName', rate_attribute: 'QualifiedName | None', unit_attribute: 'QualifiedName', tick_attribute: 'QualifiedName | None' = None, gap_attribute: 'QualifiedName | None' = None, untimed_attribute: 'QualifiedName | None' = None, start_attribute: 'QualifiedName | None' = None, duration_attribute: 'QualifiedName | None' = None) -> None
+ClockProfile(graph: 'Graph', clock_tier: 'QualifiedName', binding_relation: 'QualifiedName | None', rate_attribute: 'QualifiedName | None', unit_attribute: 'QualifiedName | None', tick_attribute: 'QualifiedName | None' = None, gap_attribute: 'QualifiedName | None' = None, untimed_attribute: 'QualifiedName | None' = None, start_attribute: 'QualifiedName | None' = None, duration_attribute: 'QualifiedName | None' = None) -> None
 ```
 
 Interpret ordered tier boundaries against a refined structural clock.

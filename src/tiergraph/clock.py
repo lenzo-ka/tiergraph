@@ -82,9 +82,9 @@ class ClockProfile:
 
     graph: Graph
     clock_tier: QualifiedName
-    binding_relation: QualifiedName
+    binding_relation: QualifiedName | None
     rate_attribute: QualifiedName | None
-    unit_attribute: QualifiedName
+    unit_attribute: QualifiedName | None
     tick_attribute: QualifiedName | None = None
     gap_attribute: QualifiedName | None = None
     untimed_attribute: QualifiedName | None = None
@@ -105,6 +105,10 @@ class ClockProfile:
         if clock is None:
             raise ValueError(f"clock tier {str(self.clock_tier)!r} is not declared")
 
+        if self.binding_relation is None:
+            raise ValueError("clock binding relation is required")
+        if self.unit_attribute is None:
+            raise ValueError("clock unit attribute is required")
         unit = self._document_value(self.unit_attribute, XsdType.STRING, "clock unit")
         if not unit.lexical:
             raise ValueError(f"clock unit {str(self.unit_attribute)!r} is empty")
@@ -253,8 +257,8 @@ class ClockProfile:
         object.__setattr__(profile, "duration_attribute", None)
         positions = profile._read_clock_positions(len(clock.items))
         if collapse_shared_boundaries:
-            # TODO(collapse): ipakit's raw-boundary -> occupied-position collapse
-            # rule is applied here. It folds each coarse tick's trailing gap.
+            # Apply ipakit's raw-boundary -> occupied-position collapse rule by
+            # folding away each coarse tick's trailing gap.
             positions = _collapse_shared_boundaries(positions)
         unit = ""
         if unit_attribute is not None:
@@ -421,6 +425,11 @@ class ClockProfile:
         return timings
 
     @property
+    def is_structural(self) -> bool:
+        """Report whether this profile derives only a renderable clock spine."""
+        return self._structural
+
+    @property
     def rate(self) -> Decimal | None:
         """Return ticks per declared unit, or ``None`` for an uncalibrated clock."""
         return self._rate
@@ -467,8 +476,12 @@ class ClockProfile:
             ),
             None,
         )
-        if member is None or tier == self.clock_tier or tier in self._untimed_tiers:
-            raise ValueError(f"timed tier {str(tier)!r} is not declared")
+        if member is None:
+            raise ValueError(f"tier {str(tier)!r} is not declared")
+        if tier == self.clock_tier:
+            raise ValueError(f"tier {str(tier)!r} is the clock tier")
+        if tier in self._untimed_tiers:
+            raise ValueError(f"tier {str(tier)!r} is untimed")
         return self.refined_position(PositionRef(tier, 0)), self.refined_position(
             PositionRef(tier, len(member.items))
         )
