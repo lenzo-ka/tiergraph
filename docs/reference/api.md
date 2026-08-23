@@ -676,7 +676,7 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 
 ### `__version__`
 
-Installed distribution version. Current value: `0.0.0`.
+Installed distribution version. Current value: `0.1.0`.
 
 ## Paths
 
@@ -1310,7 +1310,7 @@ TropicalSemiring() -> 'None'
 The inexact IEEE-double min-plus semiring.
 ### `tiergraph.schema`
 
-This module is importable and usable, but carries no API-stability promise at version 0.0.0.
+This module is importable and usable, but carries no API-stability promise at version 0.1.0.
 
 ### `json_schema`
 
@@ -1329,7 +1329,7 @@ shape_hash() -> 'str'
 Hash the declaration independently of JSON Schema presentation.
 ### `tiergraph.cli`
 
-This module is importable and usable, but carries no API-stability promise at version 0.0.0.
+This module is importable and usable, but carries no API-stability promise at version 0.1.0.
 
 ### `build_parser`
 
@@ -1348,7 +1348,7 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 Run the command line. Returns the process exit status.
 ### `tiergraph.spanview`
 
-This module is importable and usable, but carries no API-stability promise at version 0.0.0.
+This module is importable and usable, but carries no API-stability promise at version 0.1.0.
 
 ### `SpanViewProfile`
 
