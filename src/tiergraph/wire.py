@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import cast
 
 from tiergraph.core import (
@@ -41,20 +42,18 @@ from tiergraph.schema import (
     GRAPH,
     ITEM,
     ITEM_REFERENCE,
-    QUALIFIED_NAME,
     TIER,
     TIER_DECLARATION,
     array_item,
     field_shape,
     object_fields,
+    required_object_fields,
 )
 
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
-# artifact. Version 5 closes the arity-maximum schema surface so only -1, the
-# unbounded sentinel, or a nonnegative bound can reach the codec. The strict
-# artifact policy refuses older documents rather than interpreting an invalid
-# negative bound differently across validators.
-FORMAT_VERSION = "5"
+# artifact. Version 6 omits empty collections and nulls and spells qualified names
+# with document prefixes. Older documents are deliberately refused.
+FORMAT_VERSION = "6"
 # Owner-tunable policy: bound parser memory while admitting substantial graphs.
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 # Owner-tunable policy: stay well below interpreter/parser recursion limits.
@@ -63,7 +62,37 @@ MAX_JSON_DEPTH = 256
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
     """Return the versioned primitive document as strict JSON data."""
-    return {"format_version": FORMAT_VERSION, "graph": graph.to_data()}
+    prefixes: dict[str, str] = {}
+    for binding in graph.namespaces:
+        if ":" in binding.prefix:
+            raise ValueError("namespace prefix must not contain ':' in wire format")
+        prefixes[binding.namespace] = binding.prefix
+    encoded = _encode_value(graph.to_data(), prefixes)
+    return {"format_version": FORMAT_VERSION, "graph": encoded}
+
+
+def _encode_value(value: JsonValue, prefixes: dict[str, str]) -> JsonValue:
+    """Compact expanded names and omit values recovered uniquely by the decoder."""
+    if isinstance(value, list):
+        return [_encode_value(item, prefixes) for item in value]
+    if isinstance(value, dict):
+        if set(value) == {"namespace", "local_name"}:
+            namespace = cast(str, value["namespace"])
+            local_name = cast(str, value["local_name"])
+            return f"{prefixes[namespace]}:{local_name}"
+        relation_side = set(value) == {
+            "endpoint_kinds",
+            "tiers",
+            "minimum",
+            "maximum",
+            "allow_empty",
+        }
+        return {
+            key: _encode_value(item, prefixes)
+            for key, item in value.items()
+            if item is not None and (item != [] or (relation_side and key == "tiers"))
+        }
+    return value
 
 
 def dumps(graph: Graph) -> str:
@@ -103,6 +132,7 @@ def loads(document: str | bytes) -> Graph:
     except RecursionError as error:
         raise ValueError("parse JSON failed: document nesting is too deep") from error
     root = _object(value, "document")
+    _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
     version = _string(root["format_version"], "format_version")
     if version != FORMAT_VERSION:
@@ -154,8 +184,68 @@ def _checked_document(document: str | bytes) -> str:
     return text
 
 
+_namespace_by_prefix: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
+    "wire_namespace_by_prefix", default=()
+)
+
+
+def _materialize_defaults(value: object, shape: object) -> None:
+    """Restore omitted arrays and nullable strings for the existing decoder."""
+    from tiergraph.schema import DECLARATIONS, Shape, ShapeKind
+
+    declared = cast(Shape, shape)
+    if declared.kind is ShapeKind.REFERENCE:
+        alternatives = [DECLARATIONS[name] for name in declared.variants]
+        keys = set(value) if isinstance(value, dict) else set()
+        declared = max(
+            alternatives,
+            key=lambda candidate: (
+                sum(field.name in keys for field in candidate.fields),
+                required_object_fields(candidate) <= keys,
+            ),
+        )
+    if declared.kind is ShapeKind.OBJECT and isinstance(value, dict):
+        for field in declared.fields:
+            if field.name not in value:
+                if declared is DECLARATIONS["relation_side"] and field.name == "tiers":
+                    continue
+                if field.shape.kind is ShapeKind.ARRAY:
+                    value[field.name] = []
+                elif field.shape.kind is ShapeKind.NULLABLE_STRING:
+                    value[field.name] = None
+            if field.name in value:
+                _materialize_defaults(value[field.name], field.shape)
+    elif declared.kind is ShapeKind.ARRAY and isinstance(value, list):
+        assert declared.item is not None
+        for item in value:
+            _materialize_defaults(item, declared.item)
+
+
 def _graph(data: dict[str, object]) -> Graph:
     _keys(data, object_fields(GRAPH), "graph")
+    namespaces = {
+        _string(entry["prefix"], f"namespaces[{index}].prefix"): _string(
+            entry["namespace"], f"namespaces[{index}].namespace"
+        )
+        for index, entry in enumerate(
+            _objects(
+                data["namespaces"],
+                "namespaces",
+                object_fields(array_item(field_shape(GRAPH, "namespaces"))),
+            )
+        )
+    }
+    if any(":" in prefix for prefix in namespaces):
+        raise ValueError("namespace prefix must not contain ':'")
+    token = _namespace_by_prefix.set(tuple(namespaces.items()))
+    try:
+        return _decode_graph(data)
+    finally:
+        _namespace_by_prefix.reset(token)
+
+
+def _decode_graph(data: dict[str, object]) -> Graph:
+    """Decode graph content after installing its document-local prefix table."""
     decoded_relations = tuple(
         _relation(entry, index)
         for index, entry in enumerate(_object_list(data["relations"], "relations"))
@@ -299,9 +389,16 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
 
 
 def _relation_side(value: object, path: str) -> RelationSideDeclaration:
-    data = _named_object(value, path, object_fields(DECLARATIONS["relation_side"]))
+    data = _object(value, path)
+    expected = object_fields(DECLARATIONS["relation_side"])
+    missing = (expected - {"tiers"}) - data.keys()
+    extra = data.keys() - expected
+    if missing:
+        raise ValueError(f"{path} is missing field {min(missing)!r}")
+    if extra:
+        raise ValueError(f"{path} has unknown field {min(extra)!r}")
     kinds = _array(data["endpoint_kinds"], f"{path}.endpoint_kinds")
-    tiers = _array(data["tiers"], f"{path}.tiers")
+    tiers = None if "tiers" not in data else _array(data["tiers"], f"{path}.tiers")
     maximum = _integer(data["maximum"], f"{path}.maximum")
     return RelationSideDeclaration(
         tuple(
@@ -309,7 +406,7 @@ def _relation_side(value: object, path: str) -> RelationSideDeclaration:
             for index, item in enumerate(kinds)
         ),
         None
-        if not tiers
+        if tiers is None
         else tuple(
             _name(item, f"{path}.tiers[{index}]") for index, item in enumerate(tiers)
         ),
@@ -427,11 +524,14 @@ def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
 
 
 def _name(value: object, path: str) -> QualifiedName:
-    data = _named_object(value, path, object_fields(QUALIFIED_NAME))
-    return QualifiedName(
-        _string(data["namespace"], f"{path}.namespace"),
-        _string(data["local_name"], f"{path}.local_name"),
-    )
+    spelling = _string(value, path)
+    prefix, separator, local_name = spelling.partition(":")
+    if not separator or not prefix or not local_name:
+        raise ValueError(f"{path} must be a qualified name spelled 'prefix:local'")
+    namespace = dict(_namespace_by_prefix.get()).get(prefix)
+    if namespace is None:
+        raise ValueError(f"{path} uses undeclared namespace prefix {prefix!r}")
+    return QualifiedName(namespace, local_name)
 
 
 def _named_object(value: object, path: str, keys: set[str]) -> dict[str, object]:

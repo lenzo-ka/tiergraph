@@ -8,7 +8,6 @@ from typing import Any, cast
 import pytest
 
 from tiergraph import (
-    FORMAT_VERSION,
     AttachValue,
     AttributeDeclaration,
     AttributeDomain,
@@ -30,6 +29,7 @@ from tiergraph import (
     XsdType,
     dumps,
     loads,
+    to_data,
 )
 
 NS = "urn:polyadic"
@@ -375,24 +375,36 @@ def test_polyadic_instance_requires_its_own_declaration_kind() -> None:
 def test_wire_refuses_plural_subset_names_and_non_array_side() -> None:
     """Near-valid polyadic wire edits name the malformed field."""
     original = graph((declaration(),), ())
-    data = cast(dict[str, Any], original.to_data())
+    wire_document = to_data(original)
+    data = cast(dict[str, Any], wire_document["graph"])
     declared = next(
         value for value in data["relation_declarations"] if value["kind"] == "polyadic"
     )
-    declared["targets_subset_of"] = [MEMBERS.to_data(), SELECTS.to_data()]
+    declared["targets_subset_of"] = ["p:members", "p:selects"]
     import json
 
-    document = json.dumps({"format_version": FORMAT_VERSION, "graph": data})
+    document = json.dumps(wire_document)
     with pytest.raises(ValueError, match=r"targets_subset_of must contain at most one"):
         loads(document)
     declared["targets_subset_of"] = []
     declared["sources"] = []
     with pytest.raises(ValueError, match=r"sources must be an object"):
-        loads(json.dumps({"format_version": FORMAT_VERSION, "graph": data}))
-    declared["sources"] = declaration().sources.to_data()
+        loads(json.dumps(wire_document))
+    encoded_original = cast(dict[str, Any], to_data(original)["graph"])
+    declared["sources"] = cast(
+        dict[str, Any],
+        next(
+            value
+            for value in cast(
+                list[dict[str, Any]],
+                encoded_original["relation_declarations"],
+            )
+            if value["kind"] == "polyadic"
+        )["sources"],
+    )
     declared["sources"]["endpoint_kinds"] = {}
     with pytest.raises(ValueError, match=r"endpoint_kinds must be an array"):
-        loads(json.dumps({"format_version": FORMAT_VERSION, "graph": data}))
+        loads(json.dumps(wire_document))
 
 
 def test_machine_attaches_a_declared_value_to_polyadic_declaration() -> None:

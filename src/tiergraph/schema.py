@@ -30,6 +30,7 @@ class Field:
 
     name: str
     shape: Shape
+    required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,10 +73,7 @@ def _reference(*variants: str) -> Shape:
     return Shape(ShapeKind.REFERENCE, variants=variants)
 
 
-QUALIFIED_NAME = _object(
-    _field("namespace", NON_EMPTY_STRING),
-    _field("local_name", NON_EMPTY_STRING),
-)
+QUALIFIED_NAME = Shape(ShapeKind.STRING, pattern=r"^[^:]+:[\s\S]+$", min_length=3)
 _COLLAPSED = r"[ \t\r\n]*"
 _LEXICAL_PATTERNS = {
     "boolean": rf"^{_COLLAPSED}(?:true|false|1|0){_COLLAPSED}$",
@@ -262,11 +260,50 @@ GRAPH = _object(
 DOCUMENT = _object(_field("format_version", STRING), _field("graph", GRAPH))
 
 
+def _mark_omittable_fields(shape: Shape, seen: set[int] | None = None) -> None:
+    """Make empty collections and null-valued fields optional throughout the shape."""
+    visited = set() if seen is None else seen
+    if id(shape) in visited:
+        return
+    visited.add(id(shape))
+    if shape.kind is ShapeKind.OBJECT:
+        object.__setattr__(
+            shape,
+            "fields",
+            tuple(
+                Field(
+                    field.name,
+                    field.shape,
+                    field.shape.kind
+                    not in (ShapeKind.ARRAY, ShapeKind.NULLABLE_STRING),
+                )
+                for field in shape.fields
+            ),
+        )
+        for field in shape.fields:
+            _mark_omittable_fields(field.shape, visited)
+    elif shape.kind is ShapeKind.ARRAY and shape.item is not None:
+        _mark_omittable_fields(shape.item, visited)
+    elif shape.kind is ShapeKind.REFERENCE:
+        for name in shape.variants:
+            _mark_omittable_fields(DECLARATIONS[name], visited)
+
+
+_mark_omittable_fields(DOCUMENT)
+
+
 def object_fields(shape: Shape) -> set[str]:
     """Return parser metadata for an object declaration."""
     if shape.kind is not ShapeKind.OBJECT:
         raise TypeError("object field metadata requires an object shape")
     return {field.name for field in shape.fields}
+
+
+def required_object_fields(shape: Shape) -> set[str]:
+    """Return the fields that cannot be recovered from an omitted value."""
+    if shape.kind is not ShapeKind.OBJECT:
+        raise TypeError("required field metadata requires an object shape")
+    return {field.name for field in shape.fields if field.required}
 
 
 def field_shape(shape: Shape, name: str) -> Shape:
@@ -376,13 +413,15 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
         ):
             return [f"{path} must be an object"]
         expected = object_fields(shape)
-        missing = expected - value.keys()
+        missing = required_object_fields(shape) - value.keys()
         extra = value.keys() - expected
         if missing:
             return [f"{path} is missing field {min(missing)!r}"]
         if extra:
             return [f"{path} has unknown field {min(extra)!r}"]
         for field in shape.fields:
+            if field.name not in value:
+                continue
             errors = _validation_errors(
                 value[field.name], field.shape, f"{path}.{field.name}"
             )
@@ -450,7 +489,11 @@ def _shape_data(shape: Shape) -> dict[str, JsonValue]:
     return {
         "kind": shape.kind.value,
         "fields": [
-            {"name": field.name, "shape": _shape_data(field.shape)}
+            {
+                "name": field.name,
+                "shape": _shape_data(field.shape),
+                "required": field.required,
+            }
             for field in shape.fields
         ],
         "item": _shape_data(shape.item) if shape.item is not None else None,
@@ -467,7 +510,7 @@ def _json_schema(shape: Shape) -> JsonValue:
         return {
             "type": "object",
             "additionalProperties": False,
-            "required": [field.name for field in shape.fields],
+            "required": [field.name for field in shape.fields if field.required],
             "properties": {
                 field.name: _json_schema(field.shape) for field in shape.fields
             },

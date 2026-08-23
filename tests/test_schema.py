@@ -39,6 +39,7 @@ from tiergraph.schema import (
     json_schema,
     json_schema_for,
     object_fields,
+    required_object_fields,
     validation_errors,
 )
 from tiergraph.wire import FORMAT_VERSION, dumps, loads, to_data
@@ -83,6 +84,12 @@ def test_generated_schema_is_json_data() -> None:
     schema = json_schema(FORMAT_VERSION)
     LAWS.check_schema_is_json_data(schema)
     json.dumps(schema, allow_nan=False)
+
+
+def test_required_field_metadata_requires_an_object() -> None:
+    """Required-field introspection refuses scalar shapes explicitly."""
+    with pytest.raises(TypeError, match="required field metadata requires an object"):
+        required_object_fields(STRING)
 
 
 def test_committed_artifact_and_hash_match_generation() -> None:
@@ -294,6 +301,7 @@ def _facet_paths(
         return [
             found
             for field in shape.fields
+            if field.name in data
             for found in _facet_paths(
                 data[field.name], field.shape, (*path, field.name)
             )
