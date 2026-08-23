@@ -1437,10 +1437,48 @@ errors defaults to 'strict'.
 
 ## Companion package
 
+### `DotPresentation`
+
+```text
+DotPresentation(tier_name: 'Callable[..., str | None] | None' = None, node_id: 'Callable[..., str | None] | None' = None, item_label: 'Callable[..., str | None] | None' = None, relation_name: 'Callable[..., str | None] | None' = None, relation_style: 'Callable[..., str | None] | None' = None) -> None
+```
+
+Optional overrides for tier labels, node ids, and item labels in DOT.
+
+Each hook is optional and may return ``None`` for any element to fall back
+to the renderer's default. When the whole profile is ``None`` -- or a hook
+is absent or returns ``None`` -- the emitted DOT is byte-identical to the
+default rendering; the hooks are the only surface through which output can
+differ. Overridden tier names and item labels are quoted through the same
+``_quote`` path as the defaults. An overridden node id is emitted verbatim
+as a DOT identifier and is applied consistently at the node definition and
+at every edge endpoint that references it, so an override never leaves a
+dangling reference.
+
+``tier_name`` is called as ``tier_name(tier)`` with the
+:class:`tiergraph.Tier`; ``node_id`` as ``node_id(reference)`` with the
+item's :class:`tiergraph.ItemRef`; and ``item_label`` as
+``item_label(item, tier)`` with the :class:`tiergraph.Item` and its owning
+:class:`tiergraph.Tier`, so a consumer can fall back to a tier-derived
+label. When ``item_label`` is absent or returns ``None`` the default label
+is built from the item's durable id and attributes without querying clock
+timing, so the default holds under a structural clock as well.
+
+Two further hooks shape relation rendering on the occupied-spine path.
+``relation_style`` is called as ``relation_style(relation)`` with the
+relation instance; when it returns ``"bipartite"`` for a polyadic relation
+that relation is drawn as individual parent-to-child edges (one per
+source-target pair) under a ``// Declared relations.`` header rather than as
+the default polyadic fan-out. ``relation_name`` is called as
+``relation_name(relation)`` and supplies each such edge's label, defaulting
+to the relation's local name. Both are per-relation: absent hooks, a ``None``
+return, or any non-``"bipartite"`` style leave relations rendered exactly as
+before.
+
 ### `dumps`
 
 ```text
-dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
+dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockPosition, ClockPosition]] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
 ```
 
 Return byte-stable DOT for ``graph``.
@@ -1456,6 +1494,16 @@ Empty tiers are omitted by default and included when
 data; the renderer assigns no domain-specific meaning to them. A clock
 profile must belong to this exact graph instance, not merely an equal graph,
 because its cached derived state was computed from that instance.
+
+A structural clock (built by :meth:`ClockProfile.from_position_values`)
+selects the occupied-spine rendering: the clock tier is drawn only as the
+spine, an occupied clock column is anchored on its item node, and empty
+columns keep a guide point. ``binding`` places the non-clock items: when it
+is supplied it MUST return, for every visible non-clock item, the
+``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+columns the item occupies. There is no untimed lane, so returning ``None``
+is refused with the offending item named. The kernel never parses domain
+identifiers; the caller supplies the placement.
 
 ### `dumps_spans`
 

@@ -10,28 +10,77 @@ independently installable renderer.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from tiergraph import (
     AttributeValue,
     ClockPosition,
     ClockProfile,
+    DurableItemRef,
     DurablePositionRef,
     Graph,
+    Item,
     ItemRef,
     PolyadicRelationInstance,
     PositionRef,
     QualifiedName,
     RelationInstance,
+    Tier,
 )
 from tiergraph.path import ItemBinding, StructuralPathProfile
 from tiergraph.spanview import SpanViewProfile, span_view
+
+
+@dataclass(frozen=True, slots=True)
+class DotPresentation:
+    """Optional overrides for tier labels, node ids, and item labels in DOT.
+
+    Each hook is optional and may return ``None`` for any element to fall back
+    to the renderer's default. When the whole profile is ``None`` -- or a hook
+    is absent or returns ``None`` -- the emitted DOT is byte-identical to the
+    default rendering; the hooks are the only surface through which output can
+    differ. Overridden tier names and item labels are quoted through the same
+    ``_quote`` path as the defaults. An overridden node id is emitted verbatim
+    as a DOT identifier and is applied consistently at the node definition and
+    at every edge endpoint that references it, so an override never leaves a
+    dangling reference.
+
+    ``tier_name`` is called as ``tier_name(tier)`` with the
+    :class:`tiergraph.Tier`; ``node_id`` as ``node_id(reference)`` with the
+    item's :class:`tiergraph.ItemRef`; and ``item_label`` as
+    ``item_label(item, tier)`` with the :class:`tiergraph.Item` and its owning
+    :class:`tiergraph.Tier`, so a consumer can fall back to a tier-derived
+    label. When ``item_label`` is absent or returns ``None`` the default label
+    is built from the item's durable id and attributes without querying clock
+    timing, so the default holds under a structural clock as well.
+
+    Two further hooks shape relation rendering on the occupied-spine path.
+    ``relation_style`` is called as ``relation_style(relation)`` with the
+    relation instance; when it returns ``"bipartite"`` for a polyadic relation
+    that relation is drawn as individual parent-to-child edges (one per
+    source-target pair) under a ``// Declared relations.`` header rather than as
+    the default polyadic fan-out. ``relation_name`` is called as
+    ``relation_name(relation)`` and supplies each such edge's label, defaulting
+    to the relation's local name. Both are per-relation: absent hooks, a ``None``
+    return, or any non-``"bipartite"`` style leave relations rendered exactly as
+    before.
+    """
+
+    tier_name: Callable[..., str | None] | None = None
+    node_id: Callable[..., str | None] | None = None
+    item_label: Callable[..., str | None] | None = None
+    relation_name: Callable[..., str | None] | None = None
+    relation_style: Callable[..., str | None] | None = None
 
 
 def dumps(
     graph: Graph,
     *,
     clock: ClockProfile | None = None,
+    presentation: DotPresentation | None = None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None = None,
     include_empty_tiers: bool = False,
 ) -> str:
     """Return byte-stable DOT for ``graph``.
@@ -47,6 +96,16 @@ def dumps(
     data; the renderer assigns no domain-specific meaning to them. A clock
     profile must belong to this exact graph instance, not merely an equal graph,
     because its cached derived state was computed from that instance.
+
+    A structural clock (built by :meth:`ClockProfile.from_position_values`)
+    selects the occupied-spine rendering: the clock tier is drawn only as the
+    spine, an occupied clock column is anchored on its item node, and empty
+    columns keep a guide point. ``binding`` places the non-clock items: when it
+    is supplied it MUST return, for every visible non-clock item, the
+    ``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+    columns the item occupies. There is no untimed lane, so returning ``None``
+    is refused with the offending item named. The kernel never parses domain
+    identifiers; the caller supplies the placement.
     """
     if not isinstance(graph, Graph):
         raise TypeError(f"graph must be a tiergraph.Graph, got {type(graph).__name__}")
@@ -58,6 +117,20 @@ def dumps(
             )
         if clock.graph is not graph:
             raise ValueError("clock profile graph is not the graph being rendered")
+    if presentation is not None and not isinstance(presentation, DotPresentation):
+        raise TypeError(
+            "presentation must be a tiergraph_dot.DotPresentation or None, "
+            f"got {type(presentation).__name__}"
+        )
+    if binding is not None and not callable(binding):
+        raise TypeError(
+            f"binding must be a callable or None, got {type(binding).__name__}"
+        )
+
+    if clock is not None and clock._structural:
+        return _dumps_occupied_spine(
+            graph, clock, presentation, binding, include_empty_tiers
+        )
 
     visible = tuple(
         (tier_index, tier)
@@ -116,7 +189,7 @@ def dumps(
         lines.extend(("", f"  subgraph tier_{tier_index} {{", "    rank=same;"))
         lines.append(
             f"    {label_id} [shape=plaintext, "
-            f'label="{_quote(tier.declaration.short_name, "tier name")}"];'
+            f'label="{_resolve_tier_name(presentation, tier)}"];'
         )
         starts: list[list[int]] = [[] for _ in range(slot_count)]
         for item_index in range(len(tier.items)):
@@ -132,8 +205,12 @@ def dumps(
             )
             for item_index in starting_items:
                 reference = ItemRef(tier_name, item_index)
-                item_nodes[reference] = f"item_{tier_index}_{item_index}"
-                label = _item_label(graph, reference, clock)
+                item_nodes[reference] = _resolve_node_id(
+                    presentation, reference, f"item_{tier_index}_{item_index}"
+                )
+                label = _resolve_item_label(
+                    presentation, tier.items[item_index], tier, graph, reference, clock
+                )
                 lines.append(
                     f'    {item_nodes[reference]} [shape=box, group="{group}", '
                     f'label="{label}"];'
@@ -142,8 +219,10 @@ def dumps(
         for left, right in zip(slots, slots[1:], strict=False):
             lines.append(f"    {left} -> {right} [style=invis, weight=100];")
         for item_index in range(len(tier.items) - 1):
+            left = item_nodes[ItemRef(tier_name, item_index)]
+            right = item_nodes[ItemRef(tier_name, item_index + 1)]
             lines.append(
-                f"    item_{tier_index}_{item_index} -> item_{tier_index}_{item_index + 1} "
+                f"    {left} -> {right} "
                 '[color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];'
             )
         for item_index in range(len(tier.items)):
@@ -151,7 +230,7 @@ def dumps(
             end_index = boundary_indexes[item_index + 1]
             if start_index != end_index:
                 lines.append(
-                    f"    item_{tier_index}_{item_index} -> {slots[end_index]} "
+                    f"    {item_nodes[ItemRef(tier_name, item_index)]} -> {slots[end_index]} "
                     '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
                     "arrowsize=0.6, fontsize=8, constraint=false];"
                 )
@@ -199,6 +278,412 @@ def dumps(
                 )
 
     _relation_lines(lines, graph, item_nodes, boundary_nodes)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _sanitize_structural_id(name: str) -> str:
+    """Map a tier name to a safe bare DOT identifier, verbatim when already safe.
+
+    A name that is already a run of ASCII letters, digits, and underscores is
+    returned unchanged, so tiers whose long names satisfy that (every ipakit
+    tier) keep the ids they render today. Any other byte is escaped as
+    ``_<hex>_`` so hyphens, spaces, and non-ASCII never produce an invalid or
+    ambiguous identifier.
+    """
+    safe = "".join(
+        character
+        if character.isascii() and (character.isalnum() or character == "_")
+        else f"_{ord(character):02x}_"
+        for character in name
+    )
+    return safe or "_"
+
+
+def _structural_tier_ids(visible: tuple[tuple[int, Tier], ...]) -> list[str]:
+    """Return one collision-free sanitized id per visible tier, in order.
+
+    Distinct sanitized names keep their sanitized form (so ipakit's distinct
+    long names are byte-identical to today); a collision is broken with a
+    deterministic numeric suffix.
+    """
+    used: set[str] = set()
+    ids: list[str] = []
+    for _tier_index, tier in visible:
+        base = _sanitize_structural_id(tier.declaration.long_name)
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        ids.append(candidate)
+    return ids
+
+
+def _resolve_binding_columns(
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
+    item: Item,
+    reference: ItemRef,
+    column_of: dict[ClockPosition, int],
+) -> tuple[int, int]:
+    """Resolve one item's binding to its ``(start, end)`` collapsed columns.
+
+    Every visible non-clock item must be placed: the occupied-spine view has no
+    untimed lane. The seam is hardened so a missing, malformed, mistyped,
+    off-spine, or reversed placement is refused with the offending item named,
+    never an incidental crash or partial output.
+    """
+    if binding is None:
+        raise ValueError(
+            f"item {reference.to_data()!r} has no clock placement: the occupied "
+            "spine needs a binding callable that places every visible non-clock "
+            "item"
+        )
+    placement = binding(item)
+    if placement is None:
+        raise ValueError(
+            f"item {reference.to_data()!r} has no clock placement: the binding "
+            "returned None, but the occupied spine has no untimed lane"
+        )
+    try:
+        start_position, end_position = placement
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"binding for item {reference.to_data()!r} must return a "
+            "(start, end) pair of ClockPositions"
+        ) from error
+    if not isinstance(start_position, ClockPosition) or not isinstance(
+        end_position, ClockPosition
+    ):
+        raise ValueError(
+            f"binding for item {reference.to_data()!r} must return ClockPositions, "
+            f"got ({type(start_position).__name__}, {type(end_position).__name__})"
+        )
+    try:
+        start_column = column_of[start_position]
+        end_column = column_of[end_position]
+    except KeyError as error:
+        raise ValueError(
+            f"clock placement {error.args[0]!r} for item {reference.to_data()!r} "
+            "is not an occupied spine position"
+        ) from error
+    if start_column > end_column:
+        raise ValueError(
+            f"binding for item {reference.to_data()!r} is reversed: start column "
+            f"{start_column} is after end column {end_column}"
+        )
+    return start_column, end_column
+
+
+def _structural_endpoint_id(
+    graph: Graph,
+    clock: ClockProfile,
+    endpoint: ItemRef | DurableItemRef | DurablePositionRef,
+    item_nodes: dict[ItemRef, str],
+    declaration: QualifiedName,
+) -> str:
+    """Resolve a relation endpoint to a drawn item node, or refuse it clearly."""
+    name = str(declaration.local_name)
+    if isinstance(endpoint, ItemRef | DurableItemRef):
+        resolved = graph.resolve_item(endpoint)
+        if resolved.tier == clock.clock_tier:
+            raise ValueError(
+                f"relation {name!r} targets clock-tier item "
+                f"{resolved.to_data()!r}; the clock tier is drawn only as the spine"
+            )
+        # ``resolve_item`` guarantees a real item on a real tier, and every tier
+        # with items is visible, so its nodes are all in ``item_nodes``.
+        return item_nodes[resolved]
+    raise ValueError(
+        f"relation {name!r} has a boundary endpoint {endpoint.to_data()!r}; the "
+        "occupied-spine view relates item endpoints only"
+    )
+
+
+def _relation_style(
+    presentation: DotPresentation | None, relation: PolyadicRelationInstance
+) -> str | None:
+    if presentation is not None and presentation.relation_style is not None:
+        return presentation.relation_style(relation)
+    return None
+
+
+def _relation_label(
+    presentation: DotPresentation | None, relation: PolyadicRelationInstance
+) -> str:
+    if presentation is not None and presentation.relation_name is not None:
+        override = presentation.relation_name(relation)
+        if override is not None:
+            return override
+    return str(relation.declaration.local_name)
+
+
+def _arc_labeled(left: str, right: str, label: str) -> str:
+    return (
+        f"  {left} -> {right} "
+        f'[label="{_quote(label, "relation name")}", '
+        'color="#5555aa", constraint=false];'
+    )
+
+
+def _structural_relation_lines(
+    lines: list[str],
+    graph: Graph,
+    clock: ClockProfile,
+    item_nodes: dict[ItemRef, str],
+    presentation: DotPresentation | None,
+) -> None:
+    """Emit relations for the occupied-spine view, refusing unrenderable ones.
+
+    Boundary endpoints and clock-tier targets are refused (they have no drawn
+    node), and a declared polyadic relation with no endpoints emits nothing. A
+    polyadic relation the ``relation_style`` hook marks ``"bipartite"`` is drawn
+    as individual parent-to-child edges under a ``// Declared relations.``
+    header, labeled by ``relation_name``; every other relation renders as
+    before.
+    """
+
+    def _endpoint(
+        endpoint_ref: ItemRef | DurableItemRef | DurablePositionRef,
+        declaration: QualifiedName,
+    ) -> str:
+        return _structural_endpoint_id(
+            graph, clock, endpoint_ref, item_nodes, declaration
+        )
+
+    if graph.relations:
+        lines.extend(("", "  // Declared bipartite relations."))
+        for relation in graph.relations:
+            lines.append(
+                _arc(
+                    _endpoint(relation.left, relation.declaration),
+                    _endpoint(relation.right, relation.declaration),
+                    relation.declaration,
+                )
+            )
+    # Evaluate relation_style exactly once per non-empty polyadic relation and
+    # cache it, so a stateful or non-deterministic hook cannot place a relation
+    # in neither section (or both) across two separate evaluations.
+    styled = tuple(
+        (polyadic, _relation_style(presentation, polyadic))
+        for polyadic in graph.polyadic_relations
+        if polyadic.sources and polyadic.targets
+    )
+    fanned = tuple(polyadic for polyadic, style in styled if style != "bipartite")
+    bipartite = tuple(polyadic for polyadic, style in styled if style == "bipartite")
+    if fanned:
+        lines.extend(("", "  // Declared polyadic relations."))
+        for polyadic in fanned:
+            for source in polyadic.sources:
+                for target in polyadic.targets:
+                    lines.append(
+                        _arc(
+                            _endpoint(source, polyadic.declaration),
+                            _endpoint(target, polyadic.declaration),
+                            polyadic.declaration,
+                        )
+                    )
+    if bipartite:
+        lines.extend(("", "  // Declared relations."))
+        for polyadic in bipartite:
+            label = _relation_label(presentation, polyadic)
+            for source in polyadic.sources:
+                for target in polyadic.targets:
+                    lines.append(
+                        _arc_labeled(
+                            _endpoint(source, polyadic.declaration),
+                            _endpoint(target, polyadic.declaration),
+                            label,
+                        )
+                    )
+
+
+def _dumps_occupied_spine(
+    graph: Graph,
+    clock: ClockProfile,
+    presentation: DotPresentation | None,
+    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
+    include_empty_tiers: bool,
+) -> str:
+    """Render a structural clock: spine plus item-anchored occupied columns.
+
+    The clock tier is drawn only as the spine. Each visible non-clock item is
+    placed at the collapsed columns named by ``binding`` (there is no untimed
+    lane).
+
+    Anchor invariant. A tier's items must be supplied in non-decreasing
+    start-column order, which is validated; this keeps items sharing a column
+    contiguous. A clock column occupied by one or more of a tier's items is
+    anchored on the first such item (least item index); a column with none of
+    that tier's items uses an invisible guide point. Every occupant is defined,
+    joined into the tier's adjacency chain, and triggered from its column; the
+    per-column anchor alone carries the invisible alignment (the tier's slot
+    chain and the cross-tier registration chain). Co-located items -- whether
+    two items of one tier at a tick or items of different tiers at a tick --
+    are thus all drawn and aligned, with a single deterministic representative
+    per column.
+    """
+    clock_positions = clock.positions
+    clock_ids, clock_labels = _occupied_spine_identity(clock_positions)
+    column_of = {position: index for index, position in enumerate(clock_positions)}
+    column_count = len(clock_positions)
+
+    lines = [
+        "digraph tiergraph {",
+        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
+        '  node [fontname="Helvetica"];',
+        '  edge [fontname="Helvetica", fontsize=9];',
+    ]
+
+    lines.extend(("", "  // The clock spine is the total order.", "  { rank=same;"))
+    lines.append('    score_start_clock [shape=plaintext, label="clock"];')
+    for index in range(column_count):
+        lines.append(
+            f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
+            f'group="time_{index}", label="{clock_labels[index]}"];'
+        )
+    for left, right in zip(clock_ids, clock_ids[1:], strict=False):
+        lines.append(f"    {left} -> {right} [weight=100];")
+    lines.append("  }")
+
+    visible = tuple(
+        (tier_index, tier)
+        for tier_index, tier in enumerate(graph.tiers)
+        if tier.declaration.name != clock.clock_tier
+        and (tier.items or include_empty_tiers)
+    )
+    tier_ids = _structural_tier_ids(visible)
+
+    tier_labels: list[str] = []
+    item_nodes: dict[ItemRef, str] = {}
+    tier_starts: list[list[list[int]]] = []
+    tier_anchor_lists: list[list[str]] = []
+
+    for (tier_index, tier), safe_id in zip(visible, tier_ids, strict=True):
+        tier_name = tier.declaration.name
+        starts_at: list[list[int]] = [[] for _ in range(column_count)]
+        item_columns: list[int] = []
+        item_end_columns: list[int] = []
+        for item_index, item in enumerate(tier.items):
+            reference = ItemRef(tier_name, item_index)
+            start_column, end_column = _resolve_binding_columns(
+                binding, item, reference, column_of
+            )
+            if item_columns and start_column < item_columns[-1]:
+                raise ValueError(
+                    f"item {reference.to_data()!r} is placed at clock column "
+                    f"{start_column}, before the previous item at column "
+                    f"{item_columns[-1]}; occupied-spine items must be supplied "
+                    "in non-decreasing clock order"
+                )
+            item_columns.append(start_column)
+            item_end_columns.append(end_column)
+            starts_at[start_column].append(item_index)
+        for item_index in range(len(tier.items)):
+            reference = ItemRef(tier_name, item_index)
+            item_nodes[reference] = _resolve_node_id(
+                presentation, reference, f"item_{tier_index}_{item_index}"
+            )
+        anchors = [
+            item_nodes[ItemRef(tier_name, starts_at[column][0])]
+            if starts_at[column]
+            else f"guide_{safe_id}_{column}"
+            for column in range(column_count)
+        ]
+
+        label_id = f"tier_label_{safe_id}"
+        tier_labels.append(label_id)
+        lines.extend(("", f"  subgraph tier_{safe_id} {{", "    rank=same;"))
+        lines.append(
+            f"    {label_id} [shape=plaintext, "
+            f'label="{_resolve_tier_name(presentation, tier)}"];'
+        )
+        for column in range(column_count):
+            if starts_at[column]:
+                for item_index in starts_at[column]:
+                    reference = ItemRef(tier_name, item_index)
+                    label = _resolve_item_label(
+                        presentation,
+                        tier.items[item_index],
+                        tier,
+                        graph,
+                        reference,
+                        None,
+                    )
+                    lines.append(
+                        f"    {item_nodes[reference]} [shape=box, "
+                        f'group="time_{column}", label="{label}"];'
+                    )
+            else:
+                lines.append(
+                    f"    guide_{safe_id}_{column} [shape=point, width=0.01, "
+                    f'label="", group="time_{column}", style=invis];'
+                )
+        for left, right in zip(anchors, anchors[1:], strict=False):
+            lines.append(f"    {left} -> {right} [style=invis, weight=100];")
+        for item_index in range(len(tier.items) - 1):
+            left = item_nodes[ItemRef(tier_name, item_index)]
+            right = item_nodes[ItemRef(tier_name, item_index + 1)]
+            lines.append(
+                f"    {left} -> {right} "
+                '[color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];'
+            )
+        for item_index in range(len(tier.items)):
+            if item_columns[item_index] != item_end_columns[item_index]:
+                anchor = anchors[item_end_columns[item_index]]
+                lines.append(
+                    f"    {item_nodes[ItemRef(tier_name, item_index)]} -> {anchor} "
+                    '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                    "arrowsize=0.6, fontsize=8, constraint=false];"
+                )
+        lines.append("  }")
+        tier_starts.append(starts_at)
+        tier_anchor_lists.append(anchors)
+
+    lines.extend(("", "  // The score brace joins lane starts in declaration order."))
+    row_anchors = ["score_start_clock", *tier_labels]
+    for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
+        lines.append(
+            f'  {upper} -> {lower} [dir=none, color="#333333", penwidth=2.4, weight=100];'
+        )
+
+    lines.extend(("", "  // Register every lane to the clock's time columns."))
+    for column in range(column_count):
+        chain = [clock_ids[column], *(anchors[column] for anchors in tier_anchor_lists)]
+        for upper, lower in zip(chain, chain[1:], strict=False):
+            lines.append(
+                f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
+            )
+
+    lines.extend(("", "  // Trigger every event from the clock position it occupies."))
+    # ipakit orders trigger edges by (coarse tick, tier declaration index, event
+    # index) -- the coarse tick, not the collapsed column, so an item placed in a
+    # refined gap still sorts with its tick. The edge source stays the item's own
+    # collapsed column.
+    triggers: list[tuple[int, int, int, str, str]] = []
+    for (tier_index, tier), starts_at in zip(visible, tier_starts, strict=True):
+        for column in range(column_count):
+            coarse_tick = clock_positions[column].tick
+            for item_index in starts_at[column]:
+                reference = ItemRef(tier.declaration.name, item_index)
+                triggers.append(
+                    (
+                        coarse_tick,
+                        tier_index,
+                        item_index,
+                        clock_ids[column],
+                        item_nodes[reference],
+                    )
+                )
+    triggers.sort(key=lambda trigger: (trigger[0], trigger[1], trigger[2]))
+    for _tick, _tier_index, _item_index, source, node in triggers:
+        lines.append(
+            f"  {source} -> {node} "
+            '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+        )
+
+    _structural_relation_lines(lines, graph, clock, item_nodes, presentation)
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -295,6 +780,61 @@ def _clock_index(
     if resolved.tier == clock.clock_tier:
         return resolved.index
     return positions.index(clock.refined_position(resolved))
+
+
+def _resolve_tier_name(presentation: DotPresentation | None, tier: Tier) -> str:
+    if presentation is not None and presentation.tier_name is not None:
+        override = presentation.tier_name(tier)
+        if override is not None:
+            return _quote(override, "tier name")
+    return _quote(tier.declaration.short_name, "tier name")
+
+
+def _resolve_node_id(
+    presentation: DotPresentation | None, reference: ItemRef, default: str
+) -> str:
+    if presentation is not None and presentation.node_id is not None:
+        override = presentation.node_id(reference)
+        if override is not None:
+            return override
+    return default
+
+
+def _resolve_item_label(
+    presentation: DotPresentation | None,
+    item: Item,
+    tier: Tier,
+    graph: Graph,
+    reference: ItemRef,
+    clock: ClockProfile | None,
+) -> str:
+    if presentation is not None and presentation.item_label is not None:
+        override = presentation.item_label(item, tier)
+        if override is not None:
+            return _quote(override, "item label")
+    return _item_label(graph, reference, clock)
+
+
+def _occupied_spine_identity(
+    positions: tuple[ClockPosition, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Name each occupied spine node from its tick, sharing single-gap ticks.
+
+    A coarse tick with exactly one occupied position is drawn as ``clock_{t}``
+    labeled ``{t}``; a tick with several occupied gaps distinguishes each as
+    ``clock_{t}_gap_{g}`` labeled ``{t}.{g}``.
+    """
+    counts = Counter(position.tick for position in positions)
+    ids: list[str] = []
+    labels: list[str] = []
+    for position in positions:
+        if counts[position.tick] == 1:
+            ids.append(f"clock_{position.tick}")
+            labels.append(str(position.tick))
+        else:
+            ids.append(f"clock_{position.tick}_gap_{position.gap}")
+            labels.append(f"{position.tick}.{position.gap}")
+    return tuple(ids), tuple(labels)
 
 
 def _item_label(graph: Graph, reference: ItemRef, clock: ClockProfile | None) -> str:
@@ -419,4 +959,4 @@ def _quote(value: str, field: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-__all__ = ["dumps", "dumps_spans"]
+__all__ = ["DotPresentation", "dumps", "dumps_spans"]

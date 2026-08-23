@@ -766,3 +766,156 @@ def test_refined_coordinate_values_remain_nonnegative_integral_structure() -> No
     ):
         with pytest.raises(ValueError, match=message):
             ClockPosition(tick, gap)  # type: ignore[arg-type]
+
+
+SPINE_TICK = QualifiedName(NS, "spine-tick")
+SPINE_GAP = QualifiedName(NS, "spine-gap")
+SPINE_UNIT = QualifiedName(NS, "spine-unit")
+
+
+def spine_fixture(
+    raw: tuple[tuple[int, int], ...], *, with_unit: bool = False
+) -> Graph:
+    """Build a clock-only graph carrying tick/gap position values alone.
+
+    Relations and document attributes stay empty, mirroring the structural
+    input the DOT spine is derived from without any tier-to-clock binding.
+    """
+    tiers = (
+        Tier(
+            TierDeclaration(CLOCK, "clock"),
+            tuple(Item(f"cell-{index}") for index in range(len(raw) - 1)),
+        ),
+    )
+    declarations: tuple[AttributeDeclaration, ...] = (
+        AttributeDeclaration(SPINE_TICK, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(SPINE_GAP, AttributeDomain.POSITION, XsdType.INTEGER),
+    )
+    if with_unit:
+        declarations = (
+            *declarations,
+            AttributeDeclaration(SPINE_UNIT, AttributeDomain.DOCUMENT, XsdType.STRING),
+        )
+    positions = tuple(
+        Position(
+            PositionRef(CLOCK, index),
+            (
+                AttributeValue(SPINE_TICK, XsdType.INTEGER, str(tick)),
+                AttributeValue(SPINE_GAP, XsdType.INTEGER, str(gap)),
+            ),
+        )
+        for index, (tick, gap) in enumerate(raw)
+    )
+    return Graph(
+        (NamespaceDeclaration("s", NS),),
+        tiers,
+        (),
+        attribute_declarations=declarations,
+        position_values=positions,
+        attributes=(
+            (AttributeValue(SPINE_UNIT, XsdType.STRING, "cell"),) if with_unit else ()
+        ),
+    )
+
+
+def test_from_position_values_derives_the_spine_without_relations_or_unit() -> None:
+    """The structural factory reads the spine from position values alone."""
+    graph = spine_fixture(((0, 0), (0, 1), (1, 0)))
+    profile = ClockProfile.from_position_values(
+        graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
+    )
+    assert profile.positions == (
+        ClockPosition(0, 0),
+        ClockPosition(0, 1),
+        ClockPosition(1, 0),
+    )
+    assert profile.clock_tier == CLOCK
+    assert profile.rate is None
+    assert profile.unit == ""
+
+
+def test_from_position_values_reads_an_optional_unit_when_named() -> None:
+    """A unit is read only when its attribute is supplied."""
+    graph = spine_fixture(((0, 0), (0, 1)), with_unit=True)
+    profile = ClockProfile.from_position_values(
+        graph,
+        CLOCK,
+        tick_attribute=SPINE_TICK,
+        gap_attribute=SPINE_GAP,
+        unit_attribute=SPINE_UNIT,
+    )
+    assert profile.unit == "cell"
+
+
+def test_from_position_values_collapse_folds_each_tick_trailing_gap() -> None:
+    """Collapsing drops each tick's closing boundary, leaving occupied gaps."""
+    raw = (
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+        (1, 2),
+        (1, 3),
+        (2, 0),
+        (2, 1),
+        (2, 2),
+    )
+    graph = spine_fixture(raw)
+    raw_profile = ClockProfile.from_position_values(
+        graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
+    )
+    assert len(raw_profile.positions) == len(raw)
+    collapsed = ClockProfile.from_position_values(
+        graph,
+        CLOCK,
+        tick_attribute=SPINE_TICK,
+        gap_attribute=SPINE_GAP,
+        collapse_shared_boundaries=True,
+    )
+    assert collapsed.positions == (
+        ClockPosition(0, 0),
+        ClockPosition(0, 1),
+        ClockPosition(1, 0),
+        ClockPosition(1, 1),
+        ClockPosition(1, 2),
+        ClockPosition(2, 0),
+        ClockPosition(2, 1),
+    )
+    # Sanity: sum(R_t) - num_ticks == 10 - 3 == 7.
+    assert len(collapsed.positions) == len(raw) - 3
+
+
+def test_structural_profile_refuses_every_non_spine_timing_query() -> None:
+    """A spine-only profile refuses queries needing tier-to-clock bindings."""
+    graph = spine_fixture(((0, 0), (0, 1), (1, 0)))
+    profile = ClockProfile.from_position_values(
+        graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
+    )
+    for call in (
+        lambda: profile.is_timed(SEGMENT),
+        lambda: profile.clock_position(PositionRef(SEGMENT, 0)),
+        lambda: profile.refined_position(PositionRef(SEGMENT, 0)),
+        lambda: profile.extent(SEGMENT),
+        lambda: profile.structural_span(SEGMENT, 0),
+        lambda: profile.timing(SEGMENT, 0),
+        lambda: profile.duration(SEGMENT, 0),
+    ):
+        with pytest.raises(ValueError, match="from_position_values"):
+            call()
+
+
+def test_from_position_values_refuses_bad_graph_and_missing_clock_tier() -> None:
+    """Construction refusals name the offending input."""
+    with pytest.raises(TypeError, match="got str"):
+        ClockProfile.from_position_values(
+            "graph",  # type: ignore[arg-type]
+            CLOCK,
+            tick_attribute=SPINE_TICK,
+            gap_attribute=SPINE_GAP,
+        )
+    graph = spine_fixture(((0, 0), (0, 1)))
+    with pytest.raises(ValueError, match="not declared"):
+        ClockProfile.from_position_values(
+            graph, SEGMENT, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
+        )
