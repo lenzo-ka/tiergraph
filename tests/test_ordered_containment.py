@@ -218,17 +218,27 @@ def test_deep_containment_walks_are_iterative_in_both_directions() -> None:
 def test_runtime_endpoint_kind_refusal_names_corrupt_instance() -> None:
     """Traversal never narrows a corrupt item-only incidence by filtering it."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
     instance = value.polyadic_relations[0]
     boundary = DurablePositionRef(DurableItemRef("root"), BoundarySide.AFTER)
     object.__setattr__(instance, "targets", (*instance.targets, boundary))
 
     with pytest.raises(ValueError) as caught:
-        traversal.direct_children(ItemRef(PARENTS, 0))
+        OrderedContainment(value, CONTAINS)
     assert str(caught.value) == (
         "ordered containment relation "
         "'{urn:test:ordered-containment}contains' instance 0 target 3 is not an item"
     )
+
+
+def test_construction_refuses_item_endpoint_outside_the_frozen_graph() -> None:
+    """Cached incidence still validates item membership when it is constructed."""
+    value = graph()
+    instance = value.polyadic_relations[0]
+    outside = ItemRef(name("missing-tier"), 7)
+    object.__setattr__(instance, "targets", (*instance.targets, outside))
+
+    with pytest.raises(ValueError, match=r"instance 0 target.*outside its graph"):
+        OrderedContainment(value, CONTAINS)
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -237,7 +247,6 @@ def test_runtime_source_uniqueness_refusal_is_independent_of_instance_order(
 ) -> None:
     """Corrupt duplicate source fibers refuse instead of gaining tuple semantics."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
     root = ItemRef(PARENTS, 0)
     duplicate = PolyadicRelationInstance(CONTAINS, (root,), (ItemRef(CHILDREN, 0),))
     instances = (*value.polyadic_relations, duplicate)
@@ -250,62 +259,7 @@ def test_runtime_source_uniqueness_refusal_is_independent_of_instance_order(
     with pytest.raises(
         ValueError, match=r"contains.*source.*index.*0.*instances.*violating"
     ):
-        traversal.direct_children(root)
-
-
-def test_runtime_declaration_refusal_applies_to_existing_traversal() -> None:
-    """A cached traversal rechecks the live safety promise on every operation."""
-    value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    object.__setattr__(traversal._declaration, "acyclic", False)
-
-    with pytest.raises(ValueError, match=r"contains.*no longer.*acyclicity"):
-        traversal.descendants(ItemRef(PARENTS, 0))
-
-
-def test_runtime_refuses_every_live_declaration_dependency() -> None:
-    """Replacement and mutation of each consumed declaration fact are refused."""
-    value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    object.__setattr__(
-        value,
-        "relation_declarations",
-        tuple(item for item in value.relation_declarations if item.name != CONTAINS),
-    )
-    with pytest.raises(ValueError, match=r"contains.*no longer.*polyadic"):
-        traversal.direct_children(ItemRef(PARENTS, 0))
-
-    for side_name in ("sources", "targets"):
-        value = graph()
-        traversal = OrderedContainment(value, CONTAINS)
-        side = getattr(traversal._declaration, side_name)
-        object.__setattr__(side, "endpoint_kinds", (RelationEndpointKind.BOUNDARY,))
-        with pytest.raises(ValueError, match=r"contains.*no longer.*item-only"):
-            traversal.direct_children(ItemRef(PARENTS, 0))
-
-    value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    object.__setattr__(traversal._declaration, "unique_sources", False)
-    with pytest.raises(ValueError, match=r"contains.*no longer.*source uniqueness"):
-        traversal.direct_children(ItemRef(PARENTS, 0))
-
-
-def test_runtime_endpoint_membership_refusal_names_corrupt_instance() -> None:
-    """Item-shaped endpoints must still belong to the traversed graph."""
-    value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    instance = value.polyadic_relations[0]
-    outside = ItemRef(name("missing-tier"), 7)
-    object.__setattr__(instance, "targets", (*instance.targets, outside))
-
-    with pytest.raises(ValueError) as caught:
-        traversal.direct_children(ItemRef(PARENTS, 0))
-    assert str(caught.value) == (
-        "ordered containment relation "
-        "'{urn:test:ordered-containment}contains' instance 0 target "
-        "{'tier': {'namespace': 'urn:test:ordered-containment', "
-        "'local_name': 'missing-tier'}, 'index': 7} is outside its graph"
-    )
+        OrderedContainment(value, CONTAINS)
 
 
 @pytest.mark.parametrize(
@@ -344,13 +298,13 @@ def test_runtime_cycle_refusal_names_injected_closing_instance(
         (relation,),
         polyadic_relations=instances,
     )
-    traversal = OrderedContainment(value, contains)
     closing = PolyadicRelationInstance(
         contains, (ItemRef(tier_name, 2),), (ItemRef(tier_name, 0),)
     )
     object.__setattr__(value, "polyadic_relations", (*instances, closing))
 
     with pytest.raises(ValueError) as caught:
+        traversal = OrderedContainment(value, contains)
         getattr(traversal, method_name)(ItemRef(tier_name, 0))
     assert str(caught.value) == (
         "ordered containment relation "
@@ -363,11 +317,10 @@ def test_runtime_cycle_refusal_names_injected_closing_instance(
 def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
     """Live incidence validation rechecks the declaration's empty-side contract."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
     object.__setattr__(value.polyadic_relations[0], "targets", ())
 
     with pytest.raises(ValueError) as caught:
-        traversal.direct_children(ItemRef(PARENTS, 0))
+        OrderedContainment(value, CONTAINS)
     assert str(caught.value) == (
         "ordered containment relation "
         "'{urn:test:ordered-containment}contains' instance 0 has an empty target side"
@@ -377,10 +330,14 @@ def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
 def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
     """The explicit empty-side exception still bypasses ordinary arity bounds."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    object.__setattr__(traversal._declaration.targets, "allow_empty", True)
+    declaration = next(
+        item for item in value.relation_declarations if item.name == CONTAINS
+    )
+    assert isinstance(declaration, PolyadicRelationDeclaration)
+    object.__setattr__(declaration.targets, "allow_empty", True)
     object.__setattr__(value.polyadic_relations[0], "targets", ())
 
+    traversal = OrderedContainment(value, CONTAINS)
     assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes == ()
 
 
@@ -408,18 +365,21 @@ def test_runtime_arity_refusal_names_corrupt_instance_and_side(
 ) -> None:
     """Nonempty live sides must remain inside both declared arity bounds."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
-    object.__setattr__(traversal._declaration.targets, bound_name, bound)
+    declaration = next(
+        item for item in value.relation_declarations if item.name == CONTAINS
+    )
+    assert isinstance(declaration, PolyadicRelationDeclaration)
+    object.__setattr__(declaration.targets, bound_name, bound)
 
     with pytest.raises(ValueError) as caught:
-        traversal.direct_children(ItemRef(PARENTS, 0))
+        OrderedContainment(value, CONTAINS)
     assert str(caught.value) == expected
 
 
 def test_runtime_validation_ignores_instances_of_other_relations() -> None:
     """The live index consumes only the selected relation's incidences."""
     value = graph()
-    traversal = OrderedContainment(value, CONTAINS)
     object.__setattr__(value.polyadic_relations[1], "declaration", name("other"))
 
+    traversal = OrderedContainment(value, CONTAINS)
     assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes

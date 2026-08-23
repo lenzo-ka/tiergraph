@@ -6,7 +6,7 @@ import html
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from tiergraph.core import Graph, Item, ItemRef, QualifiedName, Tier
 from tiergraph.path import ItemBinding, StructuralPathProfile
@@ -146,7 +146,13 @@ def span_view(
                 raise ValueError(
                     f"base item {index} lacks character offset attribute {str(profile.char_offset_attribute)!r}"
                 )
-            offsets.append(int(lexical))
+            try:
+                offsets.append(int(lexical))
+            except ValueError as error:
+                raise ValueError(
+                    f"base item {index} character offset {lexical!r} from "
+                    f"attribute {str(profile.char_offset_attribute)!r} is not an integer"
+                ) from error
 
     members: dict[ItemRef, set[int]] = {}
     span_tiers = set(profile.span_tiers)
@@ -194,12 +200,29 @@ def span_view(
                             str(paths.spell(ItemBinding(relation.right), graph)),
                         )
                     )
+            scores: dict[str, Decimal] = {}
+            for alternative in candidates:
+                if alternative.score is None:
+                    continue
+                try:
+                    score = Decimal(alternative.score)
+                except InvalidOperation as error:
+                    raise ValueError(
+                        f"alternative {alternative.path!r} score {alternative.score!r} "
+                        f"from attribute {str(profile.score_attribute)!r} is not numeric"
+                    ) from error
+                if not score.is_finite():
+                    raise ValueError(
+                        f"alternative {alternative.path!r} score {alternative.score!r} "
+                        f"from attribute {str(profile.score_attribute)!r} is not finite"
+                    )
+                scores[alternative.path] = score
             ranked = tuple(
                 sorted(
                     candidates,
                     key=lambda candidate: (
                         candidate.score is None,
-                        Decimal(candidate.score).copy_negate()
+                        scores[candidate.path].copy_negate()
                         if candidate.score is not None
                         else Decimal(0),
                         candidate.path,

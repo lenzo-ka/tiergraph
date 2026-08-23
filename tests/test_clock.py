@@ -333,7 +333,7 @@ def test_profile_declaration_and_lookup_refusals_are_explicit() -> None:
             RATE,
             UNIT,
         )
-    with pytest.raises(ValueError, match="timed tier.*not declared"):
+    with pytest.raises(ValueError, match="tier.*not declared"):
         ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).extent(missing)
     with pytest.raises(ValueError, match="has no clock binding"):
         ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).clock_position(
@@ -536,7 +536,7 @@ def test_one_graph_mixes_complete_timing_with_a_wholly_untimed_tier() -> None:
     profile = advanced_profile(ipakit_shape())
     assert not profile.is_timed(SYNTAX)
     assert profile.is_timed(SEGMENT)
-    with pytest.raises(ValueError, match="timed tier.*not declared"):
+    with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
         profile.extent(SYNTAX)
 
 
@@ -919,3 +919,37 @@ def test_from_position_values_refuses_bad_graph_and_missing_clock_tier() -> None
         ClockProfile.from_position_values(
             graph, SEGMENT, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
         )
+
+
+def test_clock_profile_modes_and_required_full_profile_fields_are_explicit() -> None:
+    """The public predicate and optional-in-fact fields describe both modes."""
+    graph = fixture()
+    full = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT)
+    assert not full.is_structural
+    with pytest.raises(ValueError, match="binding relation is required"):
+        ClockProfile(graph, CLOCK, None, RATE, UNIT)
+    with pytest.raises(ValueError, match="unit attribute is required"):
+        ClockProfile(graph, CLOCK, BINDING, RATE, None)
+
+    structural_graph = spine_fixture(((0, 0), (0, 1)))
+    structural = ClockProfile.from_position_values(
+        structural_graph,
+        CLOCK,
+        tick_attribute=SPINE_TICK,
+        gap_attribute=SPINE_GAP,
+    )
+    assert structural.is_structural
+    assert structural.binding_relation is None
+    assert structural.unit_attribute is None
+
+
+def test_extent_distinguishes_missing_clock_and_untimed_tiers() -> None:
+    """Each unsupported extent request identifies its distinct cause."""
+    profile = advanced_profile(ipakit_shape())
+    with pytest.raises(ValueError, match="is the clock tier"):
+        profile.extent(CLOCK)
+    with pytest.raises(ValueError, match="is untimed"):
+        profile.extent(SYNTAX)
+    missing = QualifiedName(NS, "missing-extent")
+    with pytest.raises(ValueError, match="is not declared"):
+        profile.extent(missing)

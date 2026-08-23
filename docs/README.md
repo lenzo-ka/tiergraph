@@ -11,6 +11,7 @@ The guides cover work by concern:
 - [Recognize and act](guide/recognize-and-act.md), including the mixing example
 - [Timing](guide/timing.md)
 - [Serialization](guide/serialization.md)
+- [Span views](guide/span-views.md)
 - [Profiles](guide/profiles.md)
 
 Use the [format notes](format.md) when implementing an interchange reader or

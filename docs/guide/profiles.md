@@ -6,7 +6,7 @@ declarations and instances support one interpretation, then answers questions
 against them. Constructing a profile is the check: an invalid arrangement raises
 instead of returning a profile that would give wrong answers later.
 
-The library ships three:
+Three profiles read common stored roles:
 
 - `JsonValueProfile` reads a recursive JSON value out of items joined by ordered
   relations.

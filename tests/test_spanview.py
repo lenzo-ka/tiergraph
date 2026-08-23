@@ -315,7 +315,10 @@ def test_spanview_type_rejects_out_of_range_or_inverted_spans() -> None:
             )
 
 
-def _ranking_view(scored: tuple[tuple[str, str | None], ...]) -> SpanView:
+def _ranking_view(
+    scored: tuple[tuple[str, str | None], ...],
+    score_type: XsdType = XsdType.DECIMAL,
+) -> SpanView:
     """Project a one-span cover whose alternatives carry the given scores."""
     candidates = tuple(
         Item(
@@ -323,7 +326,7 @@ def _ranking_view(scored: tuple[tuple[str, str | None], ...]) -> SpanView:
             (
                 AttributeValue(VALUE, XsdType.STRING, value),
                 *(
-                    (AttributeValue(SCORE, XsdType.DECIMAL, score),)
+                    (AttributeValue(SCORE, score_type, score),)
                     if score is not None
                     else ()
                 ),
@@ -362,7 +365,7 @@ def _ranking_view(scored: tuple[tuple[str, str | None], ...]) -> SpanView:
         (
             AttributeDeclaration(SURFACE, AttributeDomain.ITEM, XsdType.STRING),
             AttributeDeclaration(VALUE, AttributeDomain.ITEM, XsdType.STRING),
-            AttributeDeclaration(SCORE, AttributeDomain.ITEM, XsdType.DECIMAL),
+            AttributeDeclaration(SCORE, AttributeDomain.ITEM, score_type),
         ),
     )
     profile = SpanViewProfile(
@@ -394,6 +397,57 @@ def test_alternative_ranking_is_exact_decimal_with_path_and_none_order() -> None
         "d",
         "e",
     ]
+
+
+@pytest.mark.parametrize(
+    ("score", "message"), (("high", "not numeric"), ("NaN", "not finite"))
+)
+def test_alternative_ranking_refuses_invalid_scores_clearly(
+    score: str, message: str
+) -> None:
+    """Invalid score lexicals name the alternative instead of leaking Decimal errors."""
+    with pytest.raises(ValueError, match=message):
+        _ranking_view((("bad", score),), XsdType.STRING)
+
+
+def test_character_offset_refusal_names_the_item_and_lexical() -> None:
+    """A malformed character offset is reported with profile context."""
+    graph, profile = fixture()
+    malformed = replace(
+        graph,
+        tiers=(
+            replace(
+                graph.tiers[0],
+                items=tuple(
+                    replace(
+                        item,
+                        attributes=tuple(
+                            AttributeValue(
+                                OFFSET,
+                                XsdType.DECIMAL,
+                                "1.5" if index == 0 else value.lexical,
+                            )
+                            if value.name == OFFSET
+                            else value
+                            for value in item.attributes
+                        ),
+                    )
+                    for index, item in enumerate(graph.tiers[0].items)
+                ),
+            ),
+            *graph.tiers[1:],
+        ),
+        attribute_declarations=tuple(
+            replace(declaration, value_type=XsdType.DECIMAL)
+            if declaration.name == OFFSET
+            else declaration
+            for declaration in graph.attribute_declarations
+        ),
+    )
+    with pytest.raises(
+        ValueError, match=r"base item 0 character offset '1\.5'.*not an integer"
+    ):
+        span_view(malformed, profile)
 
 
 def test_untyped_span_label_falls_back_to_tier_short_name() -> None:

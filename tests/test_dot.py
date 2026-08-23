@@ -1782,6 +1782,19 @@ def test_structural_binding_type_is_checked() -> None:
         tiergraph_dot.dumps(graph, binding="nope")  # type: ignore[arg-type]
 
 
+def test_binding_is_refused_when_the_renderer_cannot_use_it() -> None:
+    """Placement cannot be silently ignored without a structural clock."""
+    graph, profile = graph_and_clock()
+
+    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
+        return ClockPosition(0), ClockPosition(1)
+
+    with pytest.raises(ValueError, match="only used with a structural"):
+        tiergraph_dot.dumps(graph, binding=binding)
+    with pytest.raises(ValueError, match="only used with a structural"):
+        tiergraph_dot.dumps(graph, clock=profile, binding=binding)
+
+
 def test_structural_boundary_relation_endpoint_is_refused() -> None:
     """A relation with a boundary endpoint is refused, not crashed, in the view."""
     base = _kat_graph()
