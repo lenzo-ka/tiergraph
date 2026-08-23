@@ -20,6 +20,7 @@ from tiergraph import (
     ItemRef,
     QualifiedName,
     RelationInstance,
+    SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
     XsdType,
@@ -218,6 +219,58 @@ def test_relation_incidence_declares_and_or_meaning() -> None:
     )
     assert disjunction.run().value == Decimal(2)
     assert conjunction.run().value == Decimal(1)
+
+
+def test_deep_dependency_chain_folds_without_python_recursion() -> None:
+    """Evaluate a dependency chain far deeper than Python's call stack."""
+    item_count = 5000
+    tier_name = FIXTURE.name("deep-nodes")
+    item_type = FIXTURE.name("deep-node")
+    cost = FIXTURE.name("deep-cost")
+    membership = SimpleRelationDeclaration(
+        FIXTURE.name("deep-members"), tier_name, item_type
+    )
+    depends = BipartiteRelationDeclaration(
+        FIXTURE.name("deep-depends"), item_type, item_type, acyclic=True
+    )
+    tier = Tier(
+        TierDeclaration(tier_name, "Deep nodes"),
+        tuple(
+            Item(
+                str(index),
+                (AttributeValue(cost, XsdType.DECIMAL, "1"),),
+            )
+            for index in range(item_count)
+        ),
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (tier,),
+        (membership, depends),
+        tuple(
+            RelationInstance(
+                depends.name,
+                ItemRef(tier_name, index),
+                ItemRef(tier_name, index + 1),
+            )
+            for index in range(item_count - 1)
+        ),
+        (AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    declared = FoldDeclaration(
+        "deep-chain",
+        graph,
+        AttributeValuation("deep-cost", cost, (tier_name,)),
+        DECIMAL_TROPICAL,
+        decimal_lift,
+        (FoldTransition(depends.name, ChildCombination.AND),),
+    )
+
+    result = declared.run()
+
+    assert result.value == Decimal(item_count)
+    assert result.values[0][1] == Decimal(item_count)
+    assert result.values[-1][1] == Decimal(1)
 
 
 def test_plain_tropical_carrier_accumulates_provenance_and_applies_ties() -> None:

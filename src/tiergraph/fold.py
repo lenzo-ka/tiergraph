@@ -472,126 +472,152 @@ class FoldDeclaration[Value]:
             ) -> tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int]:
                 """Evaluate one state once for the current index coordinate."""
                 nonlocal additions, multiplications, ranked_multiplications
-                if reference in state_cache:
-                    return state_cache[reference]
-                item = _item(self.graph, reference)
-                label = item.durable_id or _structural_label(reference)
-                local = self.lift(self.valuation.read(self.graph, reference), label)
-                value = local
-                paths: Provenance = ((label,),)
-                ranked: tuple[RankedWitness[Value], ...] = (
-                    ()
-                    if not self.ranked_output or local == self.semiring.zero
-                    else ((local, (label,)),)
-                )
-                ranked_count = len(ranked)
-                has_children = False
-                for transition in self.transitions:
-                    children = outgoing[reference][transition.relation]
-                    if not children:
+                prepared: dict[ItemRef, tuple[Value, str]] = {}
+                work: list[tuple[ItemRef, bool]] = [(reference, False)]
+                while work:
+                    current, finish = work.pop()
+                    if current in state_cache:
                         continue
-                    has_children = True
-                    child_results = [visit(child) for child in children]
-                    if transition.combination is ChildCombination.AND:
-                        relation_value = self.semiring.one
-                        relation_paths: Provenance = ((),)
-                        relation_ranked: tuple[RankedWitness[Value], ...] = (
-                            (self.semiring.one, ()),
+                    if not finish:
+                        item = _item(self.graph, current)
+                        label = item.durable_id or _structural_label(current)
+                        local = self.lift(
+                            self.valuation.read(self.graph, current), label
                         )
-                        relation_count = 1
-                        for (
-                            child_value,
-                            child_paths,
-                            child_ranked,
-                            child_count,
-                        ) in child_results:
-                            relation_value = self.semiring.multiply(
-                                relation_value, child_value
+                        prepared[current] = (local, label)
+                        work.append((current, True))
+                        pending_children = (
+                            child
+                            for transition in reversed(self.transitions)
+                            for child in reversed(
+                                outgoing[current][transition.relation]
                             )
-                            multiplications += 1
-                            relation_paths = tuple(
-                                left + right
-                                for left in relation_paths
-                                for right in child_paths
+                        )
+                        work.extend(
+                            (child, False)
+                            for child in pending_children
+                            if child not in state_cache
+                        )
+                        continue
+
+                    local, label = prepared.pop(current)
+                    value = local
+                    paths: Provenance = ((label,),)
+                    ranked: tuple[RankedWitness[Value], ...] = (
+                        ()
+                        if not self.ranked_output or local == self.semiring.zero
+                        else ((local, (label,)),)
+                    )
+                    ranked_count = len(ranked)
+                    has_children = False
+                    for transition in self.transitions:
+                        children = outgoing[current][transition.relation]
+                        if not children:
+                            continue
+                        has_children = True
+                        child_results = [state_cache[child] for child in children]
+                        if transition.combination is ChildCombination.AND:
+                            relation_value = self.semiring.one
+                            relation_paths: Provenance = ((),)
+                            relation_ranked: tuple[RankedWitness[Value], ...] = (
+                                (self.semiring.one, ()),
                             )
-                            relation_count *= child_count
-                            if self.ranked_output:
-                                ranked_products = len(relation_ranked) * len(
-                                    child_ranked
+                            relation_count = 1
+                            for (
+                                child_value,
+                                child_paths,
+                                child_ranked,
+                                child_count,
+                            ) in child_results:
+                                relation_value = self.semiring.multiply(
+                                    relation_value, child_value
                                 )
-                                multiplications += ranked_products
-                                ranked_multiplications += ranked_products
+                                multiplications += 1
+                                relation_paths = tuple(
+                                    left + right
+                                    for left in relation_paths
+                                    for right in child_paths
+                                )
+                                relation_count *= child_count
+                                if self.ranked_output:
+                                    ranked_products = len(relation_ranked) * len(
+                                        child_ranked
+                                    )
+                                    multiplications += ranked_products
+                                    ranked_multiplications += ranked_products
+                                    relation_ranked = self._rank_candidates(
+                                        tuple(
+                                            (
+                                                self.semiring.multiply(
+                                                    left_value, right_value
+                                                ),
+                                                left_path + right_path,
+                                            )
+                                            for left_value, left_path in relation_ranked
+                                            for right_value, right_path in child_ranked
+                                        ),
+                                        witness_operations,
+                                        ranked_additions,
+                                    )
+                        else:
+                            relation_value = child_results[0][0]
+                            # The value accumulates, because that is what OR means,
+                            # while selection tracks the best sibling separately.
+                            # Comparing against the accumulation instead would let
+                            # a non-selective semiring outgrow every later sibling.
+                            best = child_results[0][:2]
+                            for (
+                                child_value,
+                                child_paths,
+                                _child_ranked,
+                                _child_count,
+                            ) in child_results[1:]:
+                                relation_value = self.semiring.add(
+                                    relation_value, child_value
+                                )
+                                additions += 1
+                                best = self._select_paths(
+                                    best, (child_value, child_paths)
+                                )
+                            relation_paths = best[1]
+                            relation_count = sum(result[3] for result in child_results)
+                            if self.ranked_output:
                                 relation_ranked = self._rank_candidates(
                                     tuple(
-                                        (
-                                            self.semiring.multiply(
-                                                left_value, right_value
-                                            ),
-                                            left_path + right_path,
-                                        )
-                                        for left_value, left_path in relation_ranked
-                                        for right_value, right_path in child_ranked
+                                        candidate
+                                        for _child_value, _child_paths, child_ranked, _child_count in child_results
+                                        for candidate in child_ranked
                                     ),
                                     witness_operations,
                                     ranked_additions,
                                 )
-                    else:
-                        relation_value = child_results[0][0]
-                        # The value accumulates, because that is what OR means,
-                        # while selection tracks the best sibling separately.
-                        # Comparing against the accumulation instead would let
-                        # a non-selective semiring outgrow every later sibling.
-                        best = child_results[0][:2]
-                        for (
-                            child_value,
-                            child_paths,
-                            _child_ranked,
-                            _child_count,
-                        ) in child_results[1:]:
-                            relation_value = self.semiring.add(
-                                relation_value, child_value
-                            )
-                            additions += 1
-                            best = self._select_paths(best, (child_value, child_paths))
-                        relation_paths = best[1]
-                        relation_count = sum(result[3] for result in child_results)
+                        value = self.semiring.multiply(value, relation_value)
+                        multiplications += 1
+                        paths = tuple(
+                            left + right for left in paths for right in relation_paths
+                        )
+                        ranked_count *= relation_count
                         if self.ranked_output:
-                            relation_ranked = self._rank_candidates(
+                            ranked_products = len(ranked) * len(relation_ranked)
+                            multiplications += ranked_products
+                            ranked_multiplications += ranked_products
+                            ranked = self._rank_candidates(
                                 tuple(
-                                    candidate
-                                    for _child_value, _child_paths, child_ranked, _child_count in child_results
-                                    for candidate in child_ranked
+                                    (
+                                        self.semiring.multiply(left_value, right_value),
+                                        left_path + right_path,
+                                    )
+                                    for left_value, left_path in ranked
+                                    for right_value, right_path in relation_ranked
                                 ),
                                 witness_operations,
                                 ranked_additions,
                             )
-                    value = self.semiring.multiply(value, relation_value)
-                    multiplications += 1
-                    paths = tuple(
-                        left + right for left in paths for right in relation_paths
-                    )
-                    ranked_count *= relation_count
-                    if self.ranked_output:
-                        ranked_products = len(ranked) * len(relation_ranked)
-                        multiplications += ranked_products
-                        ranked_multiplications += ranked_products
-                        ranked = self._rank_candidates(
-                            tuple(
-                                (
-                                    self.semiring.multiply(left_value, right_value),
-                                    left_path + right_path,
-                                )
-                                for left_value, left_path in ranked
-                                for right_value, right_path in relation_ranked
-                            ),
-                            witness_operations,
-                            ranked_additions,
-                        )
-                if not has_children:
-                    value = self.semiring.multiply(value, self.semiring.one)
-                    multiplications += 1
-                state_cache[reference] = (value, paths, ranked, ranked_count)
-                return value, paths, ranked, ranked_count
+                    if not has_children:
+                        value = self.semiring.multiply(value, self.semiring.one)
+                        multiplications += 1
+                    state_cache[current] = (value, paths, ranked, ranked_count)
+                return state_cache[reference]
 
             for root in item_roots:
                 state = (root, coordinate)
