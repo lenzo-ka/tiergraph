@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
@@ -88,6 +88,8 @@ def item(
     """Describe an item with values to lower through declared attribute types."""
     values: list[tuple[Name, object]] = []
     if attrs is not None:
+        if not isinstance(attrs, Mapping):
+            raise BuilderError("item attrs: expected a mapping")
         values.extend(attrs.items())
     values.extend(attributes.items())
     return ItemSpec(durable_id, tuple(values))
@@ -161,6 +163,8 @@ class Document:
                 f"tier {local} needs both item_type and membership, or neither"
             )
         lowered_items: list[Item] = []
+        if isinstance(items, Set | Mapping):
+            raise BuilderError(f"tier {local}: items must be an ordered iterable")
         try:
             source_items = tuple(items)
         except TypeError as error:
@@ -211,8 +215,8 @@ class Document:
         *,
         source_type: Name | None = None,
         target_type: Name | None = None,
-        left_endpoint: RelationEndpointKind = RelationEndpointKind.ITEM,
-        right_endpoint: RelationEndpointKind = RelationEndpointKind.ITEM,
+        left_endpoint: RelationEndpointKind | str = RelationEndpointKind.ITEM,
+        right_endpoint: RelationEndpointKind | str = RelationEndpointKind.ITEM,
         single_parent: bool = False,
         acyclic: bool = False,
         attributes: AttributeInput = None,
@@ -220,24 +224,33 @@ class Document:
         """Declare a bipartite relation and add its ordered endpoint pairs."""
         relation_name = self._name(name)
         local = relation_name.local_name
+        try:
+            normalized_left_endpoint = RelationEndpointKind(left_endpoint)
+            normalized_right_endpoint = RelationEndpointKind(right_endpoint)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"link {local}: invalid endpoint kind: {error}"
+            ) from error
         source_handle = self._tier(source, f"link {local} source")
         target_handle = self._tier(target, f"link {local} target")
         left_type = self._endpoint_type(
-            local, "source", source_handle, source_type, left_endpoint
+            local, "source", source_handle, source_type, normalized_left_endpoint
         )
         right_type = self._endpoint_type(
-            local, "target", target_handle, target_type, right_endpoint
+            local, "target", target_handle, target_type, normalized_right_endpoint
         )
         declaration = BipartiteRelationDeclaration(
             relation_name,
             left_type,
             right_type,
-            left_endpoint,
-            right_endpoint,
+            normalized_left_endpoint,
+            normalized_right_endpoint,
             single_parent,
             acyclic,
             self._mapping_values(attributes, f"link {local}"),
         )
+        if isinstance(pairs, Set | Mapping):
+            raise BuilderError(f"link {local}: pairs must be an ordered iterable")
         try:
             pair_values = tuple(pairs)
         except TypeError as error:
@@ -253,9 +266,19 @@ class Document:
             instances.append(
                 RelationInstance(
                     relation_name,
-                    self._endpoint(local, "source", source_handle, left, left_endpoint),
                     self._endpoint(
-                        local, "target", target_handle, right, right_endpoint
+                        local,
+                        "source",
+                        source_handle,
+                        left,
+                        normalized_left_endpoint,
+                    ),
+                    self._endpoint(
+                        local,
+                        "target",
+                        target_handle,
+                        right,
+                        normalized_right_endpoint,
                     ),
                 )
             )
@@ -351,17 +374,14 @@ class Document:
         return handle
 
     def _tier_ref(self, handle: TierHandle, index: int) -> ItemRef:
-        if type(index) is not int or index < 0:
+        if type(index) is not int:
             raise BuilderError(
                 f"tier ref {handle.name.local_name}: invalid index {index!r}"
             )
         tier = next(
             tier for tier in self._tiers if tier.declaration.name == handle.name
         )
-        if index >= len(tier.items):
-            raise BuilderError(
-                f"tier ref {handle.name.local_name}: index {index} out of range"
-            )
+        self._checked_item_index(tier, index, f"tier ref {handle.name.local_name}")
         return ItemRef(handle.name, index)
 
     def _memberships(self, tier: QualifiedName) -> tuple[QualifiedName, ...]:
@@ -391,8 +411,9 @@ class Document:
         inferred = memberships[0] if len(memberships) == 1 else None
         if supplied is None:
             if inferred is None:
+                state = "ambiguous" if len(memberships) > 1 else "untyped"
                 raise BuilderError(
-                    f"link {link} {side}: tier {tier.name.local_name} is untyped; "
+                    f"link {link} {side}: tier {tier.name.local_name} is {state}; "
                     f"explicit {side}_type is required"
                 )
             return inferred
@@ -452,7 +473,11 @@ class Document:
     def _mapping_values(
         self, values: AttributeInput, operation: str
     ) -> tuple[AttributeValue, ...]:
-        return () if values is None else self._values(tuple(values.items()), operation)
+        if values is None:
+            return ()
+        if not isinstance(values, Mapping):
+            raise BuilderError(f"{operation}: expected a mapping")
+        return self._values(tuple(values.items()), operation)
 
     def _values(
         self, values: tuple[tuple[Name, object], ...], operation: str
@@ -513,8 +538,7 @@ class Document:
             reference = self._item_target(target, operation)
             tier_index = self._tier_index(reference.tier, operation)
             tier = self._tiers[tier_index]
-            if reference.index >= len(tier.items):
-                raise BuilderError(f"{operation}: index {reference.index} out of range")
+            self._checked_item_index(tier, reference.index, operation)
             members = list(tier.items)
             members[reference.index] = replace(
                 members[reference.index],
@@ -589,6 +613,11 @@ class Document:
             if tier.declaration.name == name:
                 return index
         raise BuilderError(f"{operation}: tier {name.local_name} is not declared")
+
+    @staticmethod
+    def _checked_item_index(tier: Tier, index: int, operation: str) -> None:
+        if index < 0 or index >= len(tier.items):
+            raise BuilderError(f"{operation}: index {index} out of range")
 
 
 __all__ = ["Document", "document", "item"]

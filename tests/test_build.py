@@ -169,7 +169,7 @@ def test_required_refusals_and_empty_pairs() -> None:
         )
     doc.link("empty", typed, typed)
     doc.link("explicit-match", typed, typed, source_type="thing", target_type="thing")
-    with pytest.raises(BuilderError, match="invalid index"):
+    with pytest.raises(BuilderError, match="index -1 out of range"):
         typed.ref(-1)
     graph = doc.build()
     assert any(
@@ -410,3 +410,73 @@ def test_attachment_target_refusals(
     doc.tier("items", ("a",), item_type="thing", membership="members")
     with pytest.raises(BuilderError, match=message):
         doc.attach(domain, target, {"value": "x"})  # type: ignore[arg-type]
+
+
+def test_negative_item_references_are_refused_everywhere() -> None:
+    """Negative structural indexes never reach Python's sequence indexing."""
+    doc = document("urn:negative", prefix="n")
+    doc.attribute("value", XsdType.STRING)
+    tier = doc.tier("items", ("first", "last"), item_type="thing", membership="members")
+    negative = ItemRef(tier.name, -1)
+    with pytest.raises(BuilderError, match="attach item: index -1 out of range"):
+        doc.attach(AttributeDomain.ITEM, negative, {"value": "wrong"})
+    with pytest.raises(BuilderError, match="tier ref items: index -1 out of range"):
+        doc.link("negative-link", tier, tier, ((negative, 0),))
+    with pytest.raises(BuilderError, match="tier ref items: invalid index True"):
+        tier.ref(True)
+
+
+def test_non_mapping_attribute_inputs_are_refused() -> None:
+    """Every attribute entry point labels non-mapping notation clearly."""
+    with pytest.raises(BuilderError, match="item attrs: expected a mapping"):
+        item(attrs=42)  # type: ignore[arg-type]
+
+    doc = document("urn:mapping", prefix="m")
+    doc.attribute("value", XsdType.STRING, domain=AttributeDomain.DOCUMENT)
+    with pytest.raises(BuilderError, match="tier bad-tier: expected a mapping"):
+        doc.tier("bad-tier", attributes=42)  # type: ignore[arg-type]
+    left = doc.tier("left", item_type="thing", membership="left-members")
+    right = doc.tier("right", item_type="thing", membership="right-members")
+    with pytest.raises(BuilderError, match="link bad-link: expected a mapping"):
+        doc.link("bad-link", left, right, attributes=42)  # type: ignore[arg-type]
+    with pytest.raises(BuilderError, match="attach document: expected a mapping"):
+        doc.attach(AttributeDomain.DOCUMENT, None, 42)  # type: ignore[arg-type]
+
+
+def test_endpoint_kinds_are_normalized_or_refused_at_link() -> None:
+    """String enum values work while invalid endpoint kinds fail immediately."""
+    doc = document("urn:kinds", prefix="k")
+    tier = doc.tier("items", ("one",), item_type="thing", membership="members")
+    doc.link("string-kind", tier, tier, ((0, 0),), left_endpoint="item")
+    with pytest.raises(BuilderError, match="link bad-kind: invalid endpoint kind"):
+        doc.link("bad-kind", tier, tier, ((0, 0),), left_endpoint="bad")
+    doc.declare(
+        SimpleRelationDeclaration(
+            doc.qname("other-members"), tier.name, doc.qname("other-thing")
+        )
+    )
+    with pytest.raises(BuilderError, match="tier items is ambiguous"):
+        doc.link("ambiguous", tier, tier)
+
+
+def test_unordered_tier_items_and_link_pairs_are_refused() -> None:
+    """Sets and mappings cannot choose order-sensitive graph collections."""
+    doc = document("urn:ordered", prefix="o")
+    with pytest.raises(
+        BuilderError, match="tier set-items: items must be an ordered iterable"
+    ):
+        doc.tier("set-items", {"a", "b"})
+    with pytest.raises(
+        BuilderError, match="tier mapping-items: items must be an ordered iterable"
+    ):
+        doc.tier("mapping-items", {"a": None})
+    left = doc.tier("left", ("a", "b"), item_type="thing", membership="left-members")
+    right = doc.tier("right", ("a", "b"), item_type="thing", membership="right-members")
+    with pytest.raises(
+        BuilderError, match="link set-pairs: pairs must be an ordered iterable"
+    ):
+        doc.link("set-pairs", left, right, {(0, 0), (1, 1)})
+    with pytest.raises(
+        BuilderError, match="link mapping-pairs: pairs must be an ordered iterable"
+    ):
+        doc.link("mapping-pairs", left, right, {(0, 0): None})
