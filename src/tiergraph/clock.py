@@ -96,6 +96,7 @@ class ClockProfile:
     _clock_positions: tuple[ClockPosition, ...] = field(init=False, repr=False)
     _timings: dict[ItemRef, PhysicalTiming] = field(init=False, repr=False)
     _untimed_tiers: frozenset[QualifiedName] = field(init=False, repr=False)
+    _structural: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self) -> None:
         """Validate declarations, totality, refinement, and timing agreement."""
@@ -193,6 +194,90 @@ class ClockProfile:
         object.__setattr__(self, "_clock_positions", clock_positions)
         object.__setattr__(self, "_timings", timings)
         object.__setattr__(self, "_untimed_tiers", frozenset(untimed_tiers))
+
+    @classmethod
+    def from_position_values(
+        cls,
+        graph: Graph,
+        clock_tier: QualifiedName,
+        *,
+        tick_attribute: QualifiedName,
+        gap_attribute: QualifiedName,
+        unit_attribute: QualifiedName | None = None,
+        collapse_shared_boundaries: bool = False,
+    ) -> ClockProfile:
+        """Derive only the clock spine from the clock tier's boundary positions.
+
+        This construction path reads the ``(tick, gap)`` position attributes on
+        the clock tier's own boundaries -- exactly as the full constructor reads
+        them -- and yields the same :attr:`positions` sequence that the DOT
+        renderer draws as the spine. It requires neither a binding relation nor
+        a unit attribute, so it accepts a graph whose relations and document
+        attributes are empty; a unit is read only when ``unit_attribute`` is
+        given.
+
+        The result supports spine rendering alone. It carries no tier-to-clock
+        bindings, so every non-spine timing query -- :meth:`is_timed`,
+        :meth:`clock_position`, :meth:`refined_position`, :meth:`extent`,
+        :meth:`structural_span`, :meth:`timing`, and :meth:`duration` -- raises
+        rather than returning an answer it cannot justify. Binding other tiers
+        to the clock genuinely needs ``graph.relations`` and remains the full
+        constructor's responsibility; this path never weakens that validation.
+
+        With ``collapse_shared_boundaries``, each coarse tick's trailing gap --
+        its closing boundary, coincident with the next tick's opening boundary
+        -- is folded away so the spine shows one node per occupied position.
+        The default is off, leaving the raw boundaries and keeping every other
+        caller's spine byte-identical.
+        """
+        if not isinstance(graph, Graph):
+            raise TypeError(
+                f"graph must be a tiergraph.Graph, got {type(graph).__name__}"
+            )
+        clock = next(
+            (tier for tier in graph.tiers if tier.declaration.name == clock_tier),
+            None,
+        )
+        if clock is None:
+            raise ValueError(f"clock tier {str(clock_tier)!r} is not declared")
+        profile = object.__new__(cls)
+        object.__setattr__(profile, "graph", graph)
+        object.__setattr__(profile, "clock_tier", clock_tier)
+        object.__setattr__(profile, "binding_relation", None)
+        object.__setattr__(profile, "rate_attribute", None)
+        object.__setattr__(profile, "unit_attribute", unit_attribute)
+        object.__setattr__(profile, "tick_attribute", tick_attribute)
+        object.__setattr__(profile, "gap_attribute", gap_attribute)
+        object.__setattr__(profile, "untimed_attribute", None)
+        object.__setattr__(profile, "start_attribute", None)
+        object.__setattr__(profile, "duration_attribute", None)
+        positions = profile._read_clock_positions(len(clock.items))
+        if collapse_shared_boundaries:
+            # TODO(collapse): ipakit's raw-boundary -> occupied-position collapse
+            # rule is applied here. It folds each coarse tick's trailing gap.
+            positions = _collapse_shared_boundaries(positions)
+        unit = ""
+        if unit_attribute is not None:
+            unit = profile._document_value(
+                unit_attribute, XsdType.STRING, "clock unit"
+            ).lexical
+        object.__setattr__(profile, "_rate", None)
+        object.__setattr__(profile, "_unit", unit)
+        object.__setattr__(profile, "_bindings", {})
+        object.__setattr__(profile, "_clock_positions", positions)
+        object.__setattr__(profile, "_timings", {})
+        object.__setattr__(profile, "_untimed_tiers", frozenset())
+        object.__setattr__(profile, "_structural", True)
+        return profile
+
+    def _refuse_structural_timing(self, operation: str) -> None:
+        """Refuse a timing query a spine-only structural profile cannot answer."""
+        if self._structural:
+            raise ValueError(
+                f"{operation} is unsupported on a ClockProfile built by "
+                "from_position_values: it derives only the clock spine from "
+                "position values and carries no tier-to-clock bindings"
+            )
 
     def _declaration(
         self,
@@ -352,10 +437,12 @@ class ClockProfile:
 
     def is_timed(self, tier: QualifiedName) -> bool:
         """Report whether a tier chose complete clock binding."""
+        self._refuse_structural_timing("is_timed")
         return tier not in self._untimed_tiers
 
     def clock_position(self, position: PositionRef) -> int:
         """Return the integral clock-tier boundary bound to one tier position."""
+        self._refuse_structural_timing("clock_position")
         try:
             return self._bindings[position]
         except KeyError as error:
@@ -371,6 +458,7 @@ class ClockProfile:
 
     def extent(self, tier: QualifiedName) -> tuple[ClockPosition, ClockPosition]:
         """Return a timed tier's possibly partial refined clock extent."""
+        self._refuse_structural_timing("extent")
         member = next(
             (
                 candidate
@@ -403,6 +491,7 @@ class ClockProfile:
         Explicitly untimed tiers consistently return ``None`` with or without a
         document rate.
         """
+        self._refuse_structural_timing("timing")
         if tier in self._untimed_tiers:
             return None
         reference = ItemRef(tier, index)
@@ -420,6 +509,7 @@ class ClockProfile:
 
     def duration(self, tier: QualifiedName, index: int) -> tuple[int, Decimal]:
         """Return the legacy coarse-tick span and rate when a rate exists."""
+        self._refuse_structural_timing("duration")
         if self._rate is None:
             raise ValueError("clock has no uniform rate")
         start, end = self.structural_span(tier, index)
@@ -463,6 +553,30 @@ def _exact_decimal_ratio(tick: int, rate: Decimal) -> Decimal:
     sign = int(coefficient < 0)
     digits = tuple(int(digit) for digit in str(abs(coefficient)))
     return Decimal((sign, digits, -scale))
+
+
+def _collapse_shared_boundaries(
+    positions: tuple[ClockPosition, ...],
+) -> tuple[ClockPosition, ...]:
+    """Fold each coarse tick's trailing gap, keeping one node per occupied gap.
+
+    ipakit lays a tick's closing boundary and the next tick's opening boundary
+    on the same instant. Collapsing drops each tick's final raw gap so the
+    spine shows exactly the occupied positions: a tick with ``R`` raw
+    boundaries keeps gaps ``0`` through ``R - 2``. The terminal tick's closing
+    boundary is dropped the same way. The input is strictly ordered, so equal
+    ticks are consecutive and the drop is always the last member of each run.
+    """
+    collapsed: list[ClockPosition] = []
+    index = 0
+    count = len(positions)
+    while index < count:
+        tail = index
+        while tail + 1 < count and positions[tail + 1].tick == positions[index].tick:
+            tail += 1
+        collapsed.extend(positions[index:tail])
+        index = tail + 1
+    return tuple(collapsed)
 
 
 def anchored_position(graph: Graph, position: PositionRef) -> DurablePositionRef:

@@ -14,7 +14,7 @@
     "serialization": ["dump_bytes", "dumps", "loads", "to_data"],
     "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
   },
-  "companion_exports": {"tiergraph_dot": ["dumps", "dumps_spans"]},
+  "companion_exports": {"tiergraph_dot": ["DotPresentation", "dumps", "dumps_spans"]},
   "live_claims": [
     {
       "name": "selection-tuple",

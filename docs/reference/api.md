@@ -1437,10 +1437,32 @@ errors defaults to 'strict'.
 
 ## Companion package
 
+### `DotPresentation`
+
+```text
+DotPresentation(tier_name: 'Callable[..., str | None] | None' = None, node_id: 'Callable[..., str | None] | None' = None, item_label: 'Callable[..., str | None] | None' = None) -> None
+```
+
+Optional overrides for tier labels, node ids, and item labels in DOT.
+
+Each hook is optional and may return ``None`` for any element to fall back
+to the renderer's default. When the whole profile is ``None`` -- or a hook
+is absent or returns ``None`` -- the emitted DOT is byte-identical to the
+default rendering; the hooks are the only surface through which output can
+differ. Overridden tier names and item labels are quoted through the same
+``_quote`` path as the defaults. An overridden node id is emitted verbatim
+as a DOT identifier and is applied consistently at the node definition and
+at every edge endpoint that references it, so an override never leaves a
+dangling reference.
+
+``tier_name`` receives the :class:`tiergraph.Tier`, ``node_id`` receives the
+:class:`tiergraph.ItemRef` of the item, and ``item_label`` receives the
+:class:`tiergraph.Item`.
+
 ### `dumps`
 
 ```text
-dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
+dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
 ```
 
 Return byte-stable DOT for ``graph``.

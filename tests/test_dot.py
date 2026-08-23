@@ -511,3 +511,203 @@ def test_empty_zero_span_and_unrefined_profiles_have_defined_output() -> None:
     )
     rendered = tiergraph_dot.dumps(zero_graph, clock=zero_profile)
     assert 'item_1_0 -> guide_1_0 [xlabel="extent"' not in rendered
+
+
+# --- Presentation hooks (Deliverable A) ------------------------------------
+
+
+def _node_lines(rendered: str) -> tuple[set[str], set[str]]:
+    """Return (defined node ids, edge-endpoint ids) parsed from DOT."""
+    defined: set[str] = set()
+    endpoints: set[str] = set()
+    for line in rendered.splitlines():
+        stripped = line.strip()
+        if " -> " in stripped:
+            left, _, rest = stripped.partition(" -> ")
+            right = rest.split(" ", 1)[0].rstrip(";")
+            endpoints.add(left.strip())
+            endpoints.add(right.strip())
+        elif " [" in stripped and not stripped.startswith(("{", "subgraph", "//")):
+            defined.add(stripped.split(" [", 1)[0].strip())
+    return defined, endpoints
+
+
+def test_presentation_default_is_byte_identical() -> None:
+    """No profile, an empty profile, and None hooks all reproduce the default."""
+    graph, profile = graph_and_clock()
+    baseline = tiergraph_dot.dumps(graph, clock=profile)
+    assert tiergraph_dot.dumps(graph, clock=profile, presentation=None) == baseline
+    assert (
+        tiergraph_dot.dumps(
+            graph, clock=profile, presentation=tiergraph_dot.DotPresentation()
+        )
+        == baseline
+    )
+    all_none = tiergraph_dot.DotPresentation(
+        tier_name=lambda _tier: None,
+        node_id=lambda _reference: None,
+        item_label=lambda _item: None,
+    )
+    assert tiergraph_dot.dumps(graph, clock=profile, presentation=all_none) == baseline
+
+
+def test_presentation_overrides_are_applied_without_dangling_ids() -> None:
+    """Custom tier names, node ids, and labels reach every reference site."""
+    graph, profile = graph_and_clock()
+    presentation = tiergraph_dot.DotPresentation(
+        tier_name=lambda tier: f"T:{tier.declaration.short_name}",
+        node_id=lambda reference: f"N_{reference.tier.local_name}_{reference.index}",
+        item_label=lambda item: item.durable_id or "item",
+    )
+    rendered = tiergraph_dot.dumps(graph, clock=profile, presentation=presentation)
+    # Custom ids are defined and referenced; no default item id survives anywhere.
+    assert "N_segment_0" in rendered
+    assert 'label="T:segment"' in rendered
+    assert "item_0_0" not in rendered
+    assert "item_1_0" not in rendered
+    # Every edge endpoint resolves to a defined node: no dangling reference.
+    defined, endpoints = _node_lines(rendered)
+    assert endpoints <= defined
+    assert_graphviz_accepts(rendered)
+
+
+def test_presentation_none_return_falls_back_per_element() -> None:
+    """A hook returning None for some elements defaults exactly those."""
+    graph, profile = graph_and_clock()
+    segment_name = name("segment")
+
+    def node_id(reference: ItemRef) -> str | None:
+        if reference.tier == segment_name:
+            return None
+        return f"N_{reference.tier.local_name}_{reference.index}"
+
+    rendered = tiergraph_dot.dumps(
+        graph,
+        clock=profile,
+        presentation=tiergraph_dot.DotPresentation(node_id=node_id),
+    )
+    # Segment items keep the default id; the note item takes the override.
+    assert "item_1_0" in rendered
+    assert "N_note_0" in rendered
+    defined, endpoints = _node_lines(rendered)
+    assert endpoints <= defined
+    assert_graphviz_accepts(rendered)
+
+
+def test_presentation_type_is_checked() -> None:
+    """A non-profile presentation argument is refused by type."""
+    graph, profile = graph_and_clock()
+    with pytest.raises(TypeError, match="got str"):
+        tiergraph_dot.dumps(graph, clock=profile, presentation="hooks")  # type: ignore[arg-type]
+
+
+# --- Structural spine (Deliverable B) --------------------------------------
+
+_EMBEDDED_SPINE = '  // The clock spine is the total order.\n  { rank=same;\n    score_start_clock [shape=plaintext, label="clock"];\n    clock_0_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0.0"];\n    clock_0_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="0.1"];\n    clock_1_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="1.0"];\n    clock_1_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="1.1"];\n    clock_1_gap_2 [shape=circle, width=0.46, fixedsize=true, group="time_4", label="1.2"];\n    clock_2_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_5", label="2.0"];\n    clock_2_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_6", label="2.1"];\n    clock_0_gap_0 -> clock_0_gap_1 [weight=100];\n    clock_0_gap_1 -> clock_1_gap_0 [weight=100];\n    clock_1_gap_0 -> clock_1_gap_1 [weight=100];\n    clock_1_gap_1 -> clock_1_gap_2 [weight=100];\n    clock_1_gap_2 -> clock_2_gap_0 [weight=100];\n    clock_2_gap_0 -> clock_2_gap_1 [weight=100];\n  }'
+
+_KAT_SPINE = '  // The clock spine is the total order.\n  { rank=same;\n    score_start_clock [shape=plaintext, label="clock"];\n    clock_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0"];\n    clock_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="1"];\n    clock_2 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="2"];\n    clock_3 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="3"];\n    clock_0 -> clock_1 [weight=100];\n    clock_1 -> clock_2 [weight=100];\n    clock_2 -> clock_3 [weight=100];\n  }'
+
+
+def clock_only_graph(raw: tuple[tuple[int, int], ...]) -> Graph:
+    """Build a clock-only graph with tick/gap boundary positions, no relations."""
+    clock, tick, gap = name("clock"), name("tick"), name("gap")
+    tiers = (
+        Tier(
+            TierDeclaration(clock, "clock"),
+            tuple(Item(f"cell-{index}") for index in range(len(raw) - 1)),
+        ),
+    )
+    attributes = (
+        AttributeDeclaration(tick, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(gap, AttributeDomain.POSITION, XsdType.INTEGER),
+    )
+    positions = tuple(
+        Position(
+            PositionRef(clock, index),
+            (
+                AttributeValue(tick, XsdType.INTEGER, str(coarse)),
+                AttributeValue(gap, XsdType.INTEGER, str(refined)),
+            ),
+        )
+        for index, (coarse, refined) in enumerate(raw)
+    )
+    return Graph(
+        (NamespaceDeclaration("d", NS),),
+        tiers,
+        (),
+        attribute_declarations=attributes,
+        position_values=positions,
+    )
+
+
+def _structural_spine(raw: tuple[tuple[int, int], ...]) -> str:
+    graph = clock_only_graph(raw)
+    clock = ClockProfile.from_position_values(
+        graph,
+        name("clock"),
+        tick_attribute=name("tick"),
+        gap_attribute=name("gap"),
+        collapse_shared_boundaries=True,
+    )
+    rendered = tiergraph_dot.dumps(graph, clock=clock)
+    start = rendered.index("  // The clock spine is the total order.")
+    end = rendered.index("\n  }\n", start) + len("\n  }")
+    return rendered[start:end]
+
+
+def test_structural_spine_matches_ipakit_embedded_golden() -> None:
+    """The collapsed spine reproduces ipakit's '#a..b#' golden byte-for-byte."""
+    raw = (
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+        (1, 2),
+        (1, 3),
+        (2, 0),
+        (2, 1),
+        (2, 2),
+    )
+    assert _structural_spine(raw) == _EMBEDDED_SPINE
+
+
+def test_structural_spine_matches_ipakit_kat_golden() -> None:
+    """The collapsed spine reproduces ipakit's 'kat' golden byte-for-byte."""
+    raw = ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1))
+    assert _structural_spine(raw) == _KAT_SPINE
+
+
+def test_structural_spine_draws_without_raising_and_graphviz_accepts() -> None:
+    """A structural clock renders the spine cleanly on a clock-only graph."""
+    graph = clock_only_graph(((0, 0), (0, 1), (1, 0)))
+    clock = ClockProfile.from_position_values(
+        graph, name("clock"), tick_attribute=name("tick"), gap_attribute=name("gap")
+    )
+    rendered = tiergraph_dot.dumps(graph, clock=clock)
+    assert "  // The clock spine is the total order." in rendered
+    assert_graphviz_accepts(rendered)
+
+
+def test_empty_polyadic_relation_emits_nothing() -> None:
+    """A declared polyadic relation with no endpoints emits no header or line."""
+    graph, _ = graph_and_clock()
+    roots = name("roots")
+    empty_side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), None, minimum=0, maximum=0, allow_empty=True
+    )
+    empty = replace(
+        graph,
+        relation_declarations=(
+            *graph.relation_declarations,
+            PolyadicRelationDeclaration(roots, empty_side, empty_side),
+        ),
+        polyadic_relations=(
+            *graph.polyadic_relations,
+            PolyadicRelationInstance(roots, (), ()),
+        ),
+    )
+    rendered = tiergraph_dot.dumps(empty)
+    # The non-empty 'choices' relation still renders; only the empty one is gone.
+    assert "// Declared polyadic relations." in rendered
+    assert "roots" not in rendered
