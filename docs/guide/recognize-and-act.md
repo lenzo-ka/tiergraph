@@ -1,5 +1,9 @@
 # Recognize and act: mixing coordinates
 
+This is an advanced example that leads with reactions, semimodules, and tie
+policies. Newcomers should start with the caption alignment, text segmentation,
+and critical-path examples.
+
 This example keeps three claims separate. First, a tropical-semiring fold finds
 the least-cost path through a dependency diamond and retains provenance. Second,
 the provenance becomes coordinates for an action. A `DistributionWitness`
@@ -12,7 +16,12 @@ imports only the top-level API and the supported `tiergraph.semiring` surface.
 
 <!-- tiergraph:copy-example -->
 ```python
-"""Recognize a weighted dependency path, then apply two distinct actions."""
+"""Advanced example: recognize a path, then apply two distinct actions.
+
+This example leads with reactions, semimodules, and tie policies. Newcomers
+should start with the caption alignment, text segmentation, and critical-path
+examples.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Recognize a weighted dependency path, then apply two distinct actions."""
+"""Advanced example: recognize a path, then apply two distinct actions.
+
+This example leads with reactions, semimodules, and tie policies. Newcomers
+should start with the caption alignment, text segmentation, and critical-path
+examples.
+"""
 
 from __future__ import annotations
 

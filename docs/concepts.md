@@ -83,6 +83,32 @@ membership relation is what gives item 0 a type; a tier with no membership
 relation is untyped, and asking for its item type is refused rather than
 guessed.
 
+## Structured payloads in scalar attributes
+
+Attribute values are typed scalars (`XsdType`). When an application needs to
+attach non-scalar evidence, such as nested feature structures, scored
+alternatives, or provenance, tiergraph does not currently provide a first-class
+in-graph attachment mechanism. For now, the sanctioned pattern is a declared
+string attribute containing a JSON object with this canonical envelope:
+
+`{"schema": "<stable versioned schema id>", "value": <the JSON value>}`
+
+The producing application serializes the whole envelope with
+`json.dumps(payload, ensure_ascii=False, allow_nan=False, sort_keys=True,
+separators=(",", ":"))`.
+
+tiergraph checks only that the attribute is declared as a string in the correct
+domain. It does not check whether the string is valid JSON; whether the envelope
+or schema is present or recognized; required fields or types inside `value`;
+numeric ranges; or canonical serialization. The producing and consuming
+applications must perform those validations.
+
+Separately, `json_value_graph` and `JsonValueProfile` already represent a JSON
+value as a checked, standalone graph. They are the foundation for a future
+first-class payload-attachment API that could attach a JSON value to an item in
+another graph. That API does not yet exist. If it is added, stringified-JSON
+attributes will be candidates for migration.
+
 ## Immutability and refusal
 
 `Graph` is a frozen value that validates its whole boundary in
