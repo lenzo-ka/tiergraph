@@ -273,6 +273,90 @@ def test_deep_dependency_chain_folds_without_python_recursion() -> None:
     assert result.values[-1][1] == Decimal(1)
 
 
+def test_fold_refuses_a_cycle_across_individually_acyclic_transitions() -> None:
+    """A back-edge across two relation declarations is still a fold cycle."""
+    tier_name = FIXTURE.name("cycle-nodes")
+    item_type = FIXTURE.name("cycle-node")
+    cost = FIXTURE.name("cycle-cost")
+    membership = SimpleRelationDeclaration(
+        FIXTURE.name("cycle-members"), tier_name, item_type
+    )
+    first = BipartiteRelationDeclaration(
+        FIXTURE.name("cycle-first"), item_type, item_type, acyclic=True
+    )
+    second = BipartiteRelationDeclaration(
+        FIXTURE.name("cycle-second"), item_type, item_type, acyclic=True
+    )
+    tier = Tier(
+        TierDeclaration(tier_name, "Cycle nodes"),
+        tuple(
+            Item(label, (AttributeValue(cost, XsdType.DECIMAL, "1"),))
+            for label in ("a", "b")
+        ),
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (tier,),
+        (membership, first, second),
+        (
+            RelationInstance(first.name, ItemRef(tier_name, 0), ItemRef(tier_name, 1)),
+            RelationInstance(second.name, ItemRef(tier_name, 1), ItemRef(tier_name, 0)),
+        ),
+        (AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    declared = FoldDeclaration(
+        "combined-cycle",
+        graph,
+        AttributeValuation("cycle-cost", cost, (tier_name,)),
+        DECIMAL_TROPICAL,
+        decimal_lift,
+        (
+            FoldTransition(first.name, ChildCombination.AND),
+            FoldTransition(second.name, ChildCombination.AND),
+        ),
+        roots=(ItemRef(tier_name, 0),),
+    )
+
+    with pytest.raises(ValueError, match="transitions form a cycle.*cycle-second"):
+        declared.run()
+
+
+def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
+    """Pin branching PATH ties, ranked witnesses, and exact carrier work."""
+    declared = replace(
+        declaration("tie"),
+        index_axes=(),
+        witness_order=None,
+        ranked_output=True,
+    )
+
+    result = declared.run()
+
+    assert result.value == (
+        Decimal("0.0"),
+        (
+            ("start", "bed", "out"),
+            ("start", "sting", "out"),
+        ),
+    )
+    assert result.ranked_witnesses == (
+        (
+            (Decimal("0.0"), (("start", "bed", "out"),)),
+            ("start", "bed", "out"),
+        ),
+        (
+            (Decimal("0.0"), (("start", "sting", "out"),)),
+            ("start", "sting", "out"),
+        ),
+    )
+    assert (
+        result.cost.carrier_additions,
+        result.cost.carrier_multiplications,
+        result.cost.witness_operations,
+        result.cost.ranked_multiplications,
+    ) == (5, 8, 6, 4)
+
+
 def test_plain_tropical_carrier_accumulates_provenance_and_applies_ties() -> None:
     """Witnesses are a parallel fold product, not a component of the carrier."""
     plain = replace(

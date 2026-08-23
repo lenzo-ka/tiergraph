@@ -473,6 +473,7 @@ class FoldDeclaration[Value]:
                 """Evaluate one state once for the current index coordinate."""
                 nonlocal additions, multiplications, ranked_multiplications
                 prepared: dict[ItemRef, tuple[Value, str]] = {}
+                in_progress: set[ItemRef] = set()
                 work: list[tuple[ItemRef, bool]] = [(reference, False)]
                 while work:
                     current, finish = work.pop()
@@ -485,19 +486,21 @@ class FoldDeclaration[Value]:
                             self.valuation.read(self.graph, current), label
                         )
                         prepared[current] = (local, label)
+                        in_progress.add(current)
                         work.append((current, True))
-                        pending_children = (
-                            child
-                            for transition in reversed(self.transitions)
+                        for transition in reversed(self.transitions):
                             for child in reversed(
                                 outgoing[current][transition.relation]
-                            )
-                        )
-                        work.extend(
-                            (child, False)
-                            for child in pending_children
-                            if child not in state_cache
-                        )
+                            ):
+                                if child in in_progress:
+                                    raise ValueError(
+                                        f"fold {self.name!r} transitions form a cycle "
+                                        f"from {current.to_data()!r} to "
+                                        f"{child.to_data()!r} through relation "
+                                        f"{str(transition.relation)!r}"
+                                    )
+                                if child not in state_cache:
+                                    work.append((child, False))
                         continue
 
                     local, label = prepared.pop(current)
@@ -617,6 +620,7 @@ class FoldDeclaration[Value]:
                         value = self.semiring.multiply(value, self.semiring.one)
                         multiplications += 1
                     state_cache[current] = (value, paths, ranked, ranked_count)
+                    in_progress.remove(current)
                 return state_cache[reference]
 
             for root in item_roots:
