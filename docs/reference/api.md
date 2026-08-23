@@ -1440,7 +1440,7 @@ errors defaults to 'strict'.
 ### `DotPresentation`
 
 ```text
-DotPresentation(tier_name: 'Callable[..., str | None] | None' = None, node_id: 'Callable[..., str | None] | None' = None, item_label: 'Callable[..., str | None] | None' = None) -> None
+DotPresentation(tier_name: 'Callable[..., str | None] | None' = None, node_id: 'Callable[..., str | None] | None' = None, item_label: 'Callable[..., str | None] | None' = None, relation_name: 'Callable[..., str | None] | None' = None, relation_style: 'Callable[..., str | None] | None' = None) -> None
 ```
 
 Optional overrides for tier labels, node ids, and item labels in DOT.
@@ -1463,6 +1463,17 @@ item's :class:`tiergraph.ItemRef`; and ``item_label`` as
 label. When ``item_label`` is absent or returns ``None`` the default label
 is built from the item's durable id and attributes without querying clock
 timing, so the default holds under a structural clock as well.
+
+Two further hooks shape relation rendering on the occupied-spine path.
+``relation_style`` is called as ``relation_style(relation)`` with the
+relation instance; when it returns ``"bipartite"`` for a polyadic relation
+that relation is drawn as individual parent-to-child edges (one per
+source-target pair) under a ``// Declared relations.`` header rather than as
+the default polyadic fan-out. ``relation_name`` is called as
+``relation_name(relation)`` and supplies each such edge's label, defaulting
+to the relation's local name. Both are per-relation: absent hooks, a ``None``
+return, or any non-``"bipartite"`` style leave relations rendered exactly as
+before.
 
 ### `dumps`
 

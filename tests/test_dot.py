@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -724,7 +725,7 @@ def _ik_item(
     *,
     text: str | None = None,
     duration: int | None = None,
-    span: tuple[int, int] | None = None,
+    span: tuple[tuple[int, int], tuple[int, int]] | None = None,
 ) -> Item:
     attributes: list[AttributeValue] = []
     if text is not None:
@@ -732,11 +733,16 @@ def _ik_item(
     if duration is not None:
         attributes.append(AttributeValue(_IK_DURATION, XsdType.INTEGER, str(duration)))
     if span is not None:
+        (start_tick, start_gap), (end_tick, end_gap) = span
         attributes.append(
-            AttributeValue(_IK_SPAN_START, XsdType.STRING, f"/clock/{span[0]}")
+            AttributeValue(
+                _IK_SPAN_START, XsdType.STRING, f"/clock/{start_tick}/gaps/{start_gap}"
+            )
         )
         attributes.append(
-            AttributeValue(_IK_SPAN_END, XsdType.STRING, f"/clock/{span[1]}")
+            AttributeValue(
+                _IK_SPAN_END, XsdType.STRING, f"/clock/{end_tick}/gaps/{end_gap}"
+            )
         )
     return Item(durable, tuple(attributes))
 
@@ -809,9 +815,11 @@ def ipakit_hooks_and_binding(
 ]:
     """Mirror ipakit's render-time hooks and clock binding.
 
-    Placement comes from span-start/span-end for interval tiers and from the
-    durable-id tick plus structural-duration for flat tiers; the item label
-    falls back to the tier long name when the item carries no text.
+    Placement comes from span-start/span-end (``/clock/<tick>/gaps/<gap>``) for
+    interval tiers and from the durable-id tick plus structural-duration for
+    flat tiers; the item label falls back to the tier long name when the item
+    carries no text. ``contains-*`` polyadics render as bipartite parent-child
+    edges labeled ``contains``.
     """
     items_by_ref = {
         ItemRef(tier.declaration.name, index): item
@@ -819,26 +827,37 @@ def ipakit_hooks_and_binding(
         for index, item in enumerate(tier.items)
     }
 
+    def parse_ref(reference: str) -> ClockPosition:
+        parts = reference.split("/")
+        return ClockPosition(int(parts[2]), int(parts[4]))
+
     def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
         span_start = _attr(item, "span-start")
         span_end = _attr(item, "span-end")
         if span_start is not None and span_end is not None:
-            start = int(span_start.split("/")[2])
-            end = int(span_end.split("/")[2])
-        else:
-            tick = int(_durable(item).split("/")[2])
-            start = tick
-            end = tick + int(_attr(item, "structural-duration") or 0)
-        return (ClockPosition(start, 0), ClockPosition(end, 0))
+            return (parse_ref(span_start), parse_ref(span_end))
+        tick = int(_durable(item).split("/")[2])
+        duration = int(_attr(item, "structural-duration") or 0)
+        return (ClockPosition(tick, 0), ClockPosition(tick + duration, 0))
 
     def item_label(item: Item, tier: Tier) -> str:
         text = _attr(item, "text")
         return text if text is not None else tier.declaration.long_name
 
+    def relation_name(relation: PolyadicRelationInstance) -> str:
+        return re.sub(r"-\d+$", "", relation.declaration.local_name)
+
+    def relation_style(relation: PolyadicRelationInstance) -> str | None:
+        if relation.declaration.local_name.startswith("contains"):
+            return "bipartite"
+        return None
+
     presentation = tiergraph_dot.DotPresentation(
         tier_name=lambda tier: tier.declaration.long_name,
         node_id=lambda reference: _ipakit_node_id(_durable(items_by_ref[reference])),
         item_label=item_label,
+        relation_name=relation_name,
+        relation_style=relation_style,
     )
     return presentation, binding
 
@@ -912,8 +931,8 @@ def _interval_graph() -> Graph:
     return build_ipakit_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
         (
-            ("syllable", (_ik_item("/clock/0/syllable/0", span=(0, 3)),)),
-            ("mora", (_ik_item("/clock/1/mora/0", span=(1, 3)),)),
+            ("syllable", (_ik_item("/clock/0/syllable/0", span=((0, 0), (3, 0))),)),
+            ("mora", (_ik_item("/clock/1/mora/0", span=((1, 0), (3, 0))),)),
             (
                 "segment",
                 (
@@ -937,6 +956,107 @@ def _degenerate_graph() -> Graph:
                     _ik_item("/clock/0/boundary/1", text="#", duration=0),
                 ),
             ),
+        ),
+    )
+
+
+def _held_graph() -> Graph:
+    """A held syllable pair plus a gap-refined mora, over the flat '#a..b#' base."""
+    return build_ipakit_graph(
+        (
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (1, 3),
+            (2, 0),
+            (2, 1),
+            (2, 2),
+        ),
+        (
+            (
+                "syllable",
+                (
+                    _ik_item("/clock/0/syllable/0", span=((0, 0), (1, 1))),
+                    _ik_item("/clock/0/syllable/1", span=((0, 0), (1, 1))),
+                ),
+            ),
+            ("mora", (_ik_item("/clock/0/mora/0", span=((0, 1), (1, 2))),)),
+            (
+                "segment",
+                (
+                    _ik_item("/clock/0/segment/0", text="a", duration=1),
+                    _ik_item("/clock/1/segment/0", text="b", duration=1),
+                ),
+            ),
+            (
+                "boundary",
+                (
+                    _ik_item("/clock/0/boundary/0", text="#", duration=0),
+                    _ik_item("/clock/1/boundary/0", text=".", duration=0),
+                    _ik_item("/clock/1/boundary/1", text=".", duration=0),
+                    _ik_item("/clock/2/boundary/0", text="#", duration=0),
+                ),
+            ),
+        ),
+    )
+
+
+def _hierarchy_graph() -> Graph:
+    """An utterance containing three segments via a bipartite-styled polyadic.
+
+    ipakit derives the utterance's clock extent from its containment; the test
+    supplies it directly as a span, since the renderer consumes only the
+    binding's (start, end). ``roots`` (empty sources) is present and omitted.
+    """
+    base = build_ipakit_graph(
+        ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
+        (
+            ("utterance", (_ik_item("/clock/0/utterance/0", span=((0, 0), (3, 0))),)),
+            (
+                "segment",
+                (
+                    _ik_item("/clock/0/segment/0", text="k", duration=1),
+                    _ik_item("/clock/1/segment/0", text="æ", duration=1),
+                    _ik_item("/clock/2/segment/0", text="t", duration=1),
+                ),
+            ),
+        ),
+    )
+    utterance, segment = _ik("tier-0"), _ik("tier-1")
+    contains, roots = _ik("contains-0"), _ik("roots")
+    roots_sources = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,),
+        (utterance,),
+        minimum=0,
+        maximum=0,
+        allow_empty=True,
+    )
+    roots_targets = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,),
+        (utterance,),
+        allow_empty=True,
+    )
+    return replace(
+        base,
+        relation_declarations=(
+            *base.relation_declarations,
+            PolyadicRelationDeclaration(
+                contains,
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (utterance,)),
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (segment,)),
+            ),
+            PolyadicRelationDeclaration(roots, roots_sources, roots_targets),
+        ),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                contains,
+                (ItemRef(utterance, 0),),
+                (ItemRef(segment, 0), ItemRef(segment, 1), ItemRef(segment, 2)),
+            ),
+            PolyadicRelationInstance(roots, (), (ItemRef(utterance, 0),)),
         ),
     )
 
@@ -1245,6 +1365,285 @@ def test_occupied_spine_reproduces_ipakit_degenerate_golden() -> None:
     assert_graphviz_accepts(rendered)
 
 
+GOLDEN_TODOT_HELD = """digraph tiergraph {
+  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // The clock spine is the total order.
+  { rank=same;
+    score_start_clock [shape=plaintext, label="clock"];
+    clock_0_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0.0"];
+    clock_0_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="0.1"];
+    clock_1_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="1.0"];
+    clock_1_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="1.1"];
+    clock_1_gap_2 [shape=circle, width=0.46, fixedsize=true, group="time_4", label="1.2"];
+    clock_2_gap_0 [shape=circle, width=0.46, fixedsize=true, group="time_5", label="2.0"];
+    clock_2_gap_1 [shape=circle, width=0.46, fixedsize=true, group="time_6", label="2.1"];
+    clock_0_gap_0 -> clock_0_gap_1 [weight=100];
+    clock_0_gap_1 -> clock_1_gap_0 [weight=100];
+    clock_1_gap_0 -> clock_1_gap_1 [weight=100];
+    clock_1_gap_1 -> clock_1_gap_2 [weight=100];
+    clock_1_gap_2 -> clock_2_gap_0 [weight=100];
+    clock_2_gap_0 -> clock_2_gap_1 [weight=100];
+  }
+
+  subgraph tier_syllable {
+    rank=same;
+    tier_label_syllable [shape=plaintext, label="syllable"];
+    event__2f_clock_2f_0_2f_syllable_2f_0 [shape=box, group="time_0", label="syllable"];
+    event__2f_clock_2f_0_2f_syllable_2f_1 [shape=box, group="time_0", label="syllable"];
+    guide_syllable_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    guide_syllable_2 [shape=point, width=0.01, label="", group="time_2", style=invis];
+    guide_syllable_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_syllable_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    guide_syllable_5 [shape=point, width=0.01, label="", group="time_5", style=invis];
+    guide_syllable_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    event__2f_clock_2f_0_2f_syllable_2f_0 -> guide_syllable_1 [style=invis, weight=100];
+    guide_syllable_1 -> guide_syllable_2 [style=invis, weight=100];
+    guide_syllable_2 -> guide_syllable_3 [style=invis, weight=100];
+    guide_syllable_3 -> guide_syllable_4 [style=invis, weight=100];
+    guide_syllable_4 -> guide_syllable_5 [style=invis, weight=100];
+    guide_syllable_5 -> guide_syllable_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_syllable_2f_0 -> event__2f_clock_2f_0_2f_syllable_2f_1 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_0_2f_syllable_2f_0 -> guide_syllable_3 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_0_2f_syllable_2f_1 -> guide_syllable_3 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  subgraph tier_mora {
+    rank=same;
+    tier_label_mora [shape=plaintext, label="mora"];
+    guide_mora_0 [shape=point, width=0.01, label="", group="time_0", style=invis];
+    event__2f_clock_2f_0_2f_mora_2f_0 [shape=box, group="time_1", label="mora"];
+    guide_mora_2 [shape=point, width=0.01, label="", group="time_2", style=invis];
+    guide_mora_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_mora_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    guide_mora_5 [shape=point, width=0.01, label="", group="time_5", style=invis];
+    guide_mora_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    guide_mora_0 -> event__2f_clock_2f_0_2f_mora_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_mora_2f_0 -> guide_mora_2 [style=invis, weight=100];
+    guide_mora_2 -> guide_mora_3 [style=invis, weight=100];
+    guide_mora_3 -> guide_mora_4 [style=invis, weight=100];
+    guide_mora_4 -> guide_mora_5 [style=invis, weight=100];
+    guide_mora_5 -> guide_mora_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_mora_2f_0 -> guide_mora_4 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  subgraph tier_segment {
+    rank=same;
+    tier_label_segment [shape=plaintext, label="segment"];
+    event__2f_clock_2f_0_2f_segment_2f_0 [shape=box, group="time_0", label="a"];
+    guide_segment_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    event__2f_clock_2f_1_2f_segment_2f_0 [shape=box, group="time_2", label="b"];
+    guide_segment_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_segment_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    guide_segment_5 [shape=point, width=0.01, label="", group="time_5", style=invis];
+    guide_segment_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> guide_segment_1 [style=invis, weight=100];
+    guide_segment_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> guide_segment_3 [style=invis, weight=100];
+    guide_segment_3 -> guide_segment_4 [style=invis, weight=100];
+    guide_segment_4 -> guide_segment_5 [style=invis, weight=100];
+    guide_segment_5 -> guide_segment_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> guide_segment_5 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  subgraph tier_boundary {
+    rank=same;
+    tier_label_boundary [shape=plaintext, label="boundary"];
+    event__2f_clock_2f_0_2f_boundary_2f_0 [shape=box, group="time_0", label="#"];
+    guide_boundary_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    event__2f_clock_2f_1_2f_boundary_2f_0 [shape=box, group="time_2", label="."];
+    event__2f_clock_2f_1_2f_boundary_2f_1 [shape=box, group="time_2", label="."];
+    guide_boundary_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    guide_boundary_4 [shape=point, width=0.01, label="", group="time_4", style=invis];
+    event__2f_clock_2f_2_2f_boundary_2f_0 [shape=box, group="time_5", label="#"];
+    guide_boundary_6 [shape=point, width=0.01, label="", group="time_6", style=invis];
+    event__2f_clock_2f_0_2f_boundary_2f_0 -> guide_boundary_1 [style=invis, weight=100];
+    guide_boundary_1 -> event__2f_clock_2f_1_2f_boundary_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_boundary_2f_0 -> guide_boundary_3 [style=invis, weight=100];
+    guide_boundary_3 -> guide_boundary_4 [style=invis, weight=100];
+    guide_boundary_4 -> event__2f_clock_2f_2_2f_boundary_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_2_2f_boundary_2f_0 -> guide_boundary_6 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_boundary_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_boundary_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_1 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_boundary_2f_1 -> event__2f_clock_2f_2_2f_boundary_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+  }
+
+  // The score brace joins lane starts in declaration order.
+  score_start_clock -> tier_label_syllable [dir=none, color="#333333", penwidth=2.4, weight=100];
+  tier_label_syllable -> tier_label_mora [dir=none, color="#333333", penwidth=2.4, weight=100];
+  tier_label_mora -> tier_label_segment [dir=none, color="#333333", penwidth=2.4, weight=100];
+  tier_label_segment -> tier_label_boundary [dir=none, color="#333333", penwidth=2.4, weight=100];
+
+  // Register every lane to the clock's time columns.
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_syllable_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_0_2f_syllable_2f_0 -> guide_mora_0 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_0_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_0_gap_1 -> guide_syllable_1 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_1 -> event__2f_clock_2f_0_2f_mora_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_0_2f_mora_2f_0 -> guide_segment_1 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_1 -> guide_boundary_1 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_0 -> guide_syllable_2 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_2 -> guide_mora_2 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_2 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_1 -> guide_syllable_3 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_3 -> guide_mora_3 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_3 -> guide_segment_3 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_3 -> guide_boundary_3 [style=invis, weight=1000, arrowhead=none];
+  clock_1_gap_2 -> guide_syllable_4 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_4 -> guide_mora_4 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_4 -> guide_segment_4 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_4 -> guide_boundary_4 [style=invis, weight=1000, arrowhead=none];
+  clock_2_gap_0 -> guide_syllable_5 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_5 -> guide_mora_5 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_5 -> guide_segment_5 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_5 -> event__2f_clock_2f_2_2f_boundary_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_2_gap_1 -> guide_syllable_6 [style=invis, weight=1000, arrowhead=none];
+  guide_syllable_6 -> guide_mora_6 [style=invis, weight=1000, arrowhead=none];
+  guide_mora_6 -> guide_segment_6 [style=invis, weight=1000, arrowhead=none];
+  guide_segment_6 -> guide_boundary_6 [style=invis, weight=1000, arrowhead=none];
+
+  // Trigger every event from the clock position it occupies.
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_syllable_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_syllable_2f_1 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0_gap_1 -> event__2f_clock_2f_0_2f_mora_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0_gap_0 -> event__2f_clock_2f_0_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1_gap_0 -> event__2f_clock_2f_1_2f_boundary_2f_1 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_2_gap_0 -> event__2f_clock_2f_2_2f_boundary_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+}
+"""
+
+
+GOLDEN_TODOT_HIERARCHY = """digraph tiergraph {
+  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // The clock spine is the total order.
+  { rank=same;
+    score_start_clock [shape=plaintext, label="clock"];
+    clock_0 [shape=circle, width=0.46, fixedsize=true, group="time_0", label="0"];
+    clock_1 [shape=circle, width=0.46, fixedsize=true, group="time_1", label="1"];
+    clock_2 [shape=circle, width=0.46, fixedsize=true, group="time_2", label="2"];
+    clock_3 [shape=circle, width=0.46, fixedsize=true, group="time_3", label="3"];
+    clock_0 -> clock_1 [weight=100];
+    clock_1 -> clock_2 [weight=100];
+    clock_2 -> clock_3 [weight=100];
+  }
+
+  subgraph tier_utterance {
+    rank=same;
+    tier_label_utterance [shape=plaintext, label="utterance"];
+    event__2f_clock_2f_0_2f_utterance_2f_0 [shape=box, group="time_0", label="utterance"];
+    guide_utterance_1 [shape=point, width=0.01, label="", group="time_1", style=invis];
+    guide_utterance_2 [shape=point, width=0.01, label="", group="time_2", style=invis];
+    guide_utterance_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    event__2f_clock_2f_0_2f_utterance_2f_0 -> guide_utterance_1 [style=invis, weight=100];
+    guide_utterance_1 -> guide_utterance_2 [style=invis, weight=100];
+    guide_utterance_2 -> guide_utterance_3 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_utterance_2f_0 -> guide_utterance_3 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  subgraph tier_segment {
+    rank=same;
+    tier_label_segment [shape=plaintext, label="segment"];
+    event__2f_clock_2f_0_2f_segment_2f_0 [shape=box, group="time_0", label="k"];
+    event__2f_clock_2f_1_2f_segment_2f_0 [shape=box, group="time_1", label="æ"];
+    event__2f_clock_2f_2_2f_segment_2f_0 [shape=box, group="time_2", label="t"];
+    guide_segment_3 [shape=point, width=0.01, label="", group="time_3", style=invis];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [style=invis, weight=100];
+    event__2f_clock_2f_2_2f_segment_2f_0 -> guide_segment_3 [style=invis, weight=100];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];
+    event__2f_clock_2f_0_2f_segment_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_1_2f_segment_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+    event__2f_clock_2f_2_2f_segment_2f_0 -> guide_segment_3 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+  }
+
+  // The score brace joins lane starts in declaration order.
+  score_start_clock -> tier_label_utterance [dir=none, color="#333333", penwidth=2.4, weight=100];
+  tier_label_utterance -> tier_label_segment [dir=none, color="#333333", penwidth=2.4, weight=100];
+
+  // Register every lane to the clock's time columns.
+  clock_0 -> event__2f_clock_2f_0_2f_utterance_2f_0 [style=invis, weight=1000, arrowhead=none];
+  event__2f_clock_2f_0_2f_utterance_2f_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_1 -> guide_utterance_1 [style=invis, weight=1000, arrowhead=none];
+  guide_utterance_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_2 -> guide_utterance_2 [style=invis, weight=1000, arrowhead=none];
+  guide_utterance_2 -> event__2f_clock_2f_2_2f_segment_2f_0 [style=invis, weight=1000, arrowhead=none];
+  clock_3 -> guide_utterance_3 [style=invis, weight=1000, arrowhead=none];
+  guide_utterance_3 -> guide_segment_3 [style=invis, weight=1000, arrowhead=none];
+
+  // Trigger every event from the clock position it occupies.
+  clock_0 -> event__2f_clock_2f_0_2f_utterance_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_1 -> event__2f_clock_2f_1_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+  clock_2 -> event__2f_clock_2f_2_2f_segment_2f_0 [color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];
+
+  // Declared relations.
+  event__2f_clock_2f_0_2f_utterance_2f_0 -> event__2f_clock_2f_0_2f_segment_2f_0 [label="contains", color="#5555aa", constraint=false];
+  event__2f_clock_2f_0_2f_utterance_2f_0 -> event__2f_clock_2f_1_2f_segment_2f_0 [label="contains", color="#5555aa", constraint=false];
+  event__2f_clock_2f_0_2f_utterance_2f_0 -> event__2f_clock_2f_2_2f_segment_2f_0 [label="contains", color="#5555aa", constraint=false];
+}
+"""
+
+
+def test_occupied_spine_reproduces_ipakit_held_golden() -> None:
+    """dumps() reproduces ipakit's held golden: gap-refined placement + ordering."""
+    rendered = _render_ipakit(_held_graph())
+    assert rendered == GOLDEN_TODOT_HELD
+    assert_graphviz_accepts(rendered)
+
+
+def test_occupied_spine_reproduces_ipakit_hierarchy_golden() -> None:
+    """dumps() reproduces ipakit's hierarchy golden: bipartite-styled containment."""
+    rendered = _render_ipakit(_hierarchy_graph())
+    assert rendered == GOLDEN_TODOT_HIERARCHY
+    assert_graphviz_accepts(rendered)
+
+
+def test_trigger_edges_order_by_coarse_tick_then_declaration_then_event() -> None:
+    """A gap-refined item sorts by its coarse tick, not its collapsed column."""
+    rendered = _render_ipakit(_held_graph())
+    trigger = rendered.split(
+        "// Trigger every event from the clock position it occupies."
+    )[1]
+    mora = _ipakit_node_id("/clock/0/mora/0")
+    seg0 = _ipakit_node_id("/clock/0/segment/0")
+    syllable0 = _ipakit_node_id("/clock/0/syllable/0")
+    # mora starts at (0, gap1): its edge source is the refined column clock_0_gap_1,
+    # but it sorts within coarse tick 0, after syllable (decl 0) and before
+    # segment (decl 7).
+    assert f"clock_0_gap_1 -> {mora} [color=" in trigger
+    assert trigger.index(syllable0) < trigger.index(mora) < trigger.index(seg0)
+
+
+def test_bipartite_styled_polyadic_renders_as_parent_child_edges() -> None:
+    """contains-* is drawn as labeled parent->child edges under one header."""
+    rendered = _render_ipakit(_hierarchy_graph())
+    assert "// Declared relations." in rendered
+    assert "// Declared polyadic relations." not in rendered
+    assert "// Declared bipartite relations." not in rendered
+    parent = _ipakit_node_id("/clock/0/utterance/0")
+    for child in ("0", "1", "2"):
+        target = _ipakit_node_id(f"/clock/{child}/segment/0")
+        assert (
+            f'{parent} -> {target} [label="contains", color="#5555aa", '
+            "constraint=false];" in rendered
+        )
+    # The empty 'roots' polyadic emits nothing.
+    assert "roots" not in rendered
+
+
 def test_same_tier_colocated_items_share_one_column_anchor() -> None:
     """Two items of one tier at a tick: both drawn/adjacent/triggered, one anchor."""
     rendered = _render_ipakit(_degenerate_graph())
@@ -1515,3 +1914,49 @@ def test_structural_non_monotonic_placement_is_refused() -> None:
     _, binding = ipakit_hooks_and_binding(graph)
     with pytest.raises(ValueError, match="non-decreasing clock order"):
         tiergraph_dot.dumps(graph, clock=_structural_clock(graph), binding=binding)
+
+
+def test_bipartite_relation_label_falls_back_to_local_name() -> None:
+    """A bipartite edge falls back to the local name with no or None relation_name."""
+    graph = _hierarchy_graph()
+    base_presentation, binding = ipakit_hooks_and_binding(graph)
+    for relation_name in (None, lambda relation: None):
+        presentation = replace(base_presentation, relation_name=relation_name)
+        rendered = tiergraph_dot.dumps(
+            graph,
+            clock=_structural_clock(graph),
+            presentation=presentation,
+            binding=binding,
+        )
+        assert 'label="contains-0"' in rendered
+
+
+def test_structural_polyadic_without_presentation_uses_default_rendering() -> None:
+    """With no presentation, a non-empty polyadic fans out under the default header."""
+    base = _kat_graph()
+    segment = _ik("tier-0")
+    choose, seg_type = _ik("choose"), _ik("seg-type")
+    graph = replace(
+        base,
+        relation_declarations=(
+            *base.relation_declarations,
+            SimpleRelationDeclaration(_ik("seg-members"), segment, seg_type),
+            PolyadicRelationDeclaration(
+                choose,
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (segment,)),
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (segment,)),
+            ),
+        ),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                choose, (ItemRef(segment, 0),), (ItemRef(segment, 1),)
+            ),
+        ),
+    )
+    _, binding = ipakit_hooks_and_binding(graph)
+    rendered = tiergraph_dot.dumps(
+        graph, clock=_structural_clock(graph), binding=binding
+    )
+    assert "// Declared polyadic relations." in rendered
+    assert '[label="choose"' in rendered
+    assert "// Declared relations." not in rendered

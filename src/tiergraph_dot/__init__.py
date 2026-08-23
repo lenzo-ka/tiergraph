@@ -55,11 +55,24 @@ class DotPresentation:
     label. When ``item_label`` is absent or returns ``None`` the default label
     is built from the item's durable id and attributes without querying clock
     timing, so the default holds under a structural clock as well.
+
+    Two further hooks shape relation rendering on the occupied-spine path.
+    ``relation_style`` is called as ``relation_style(relation)`` with the
+    relation instance; when it returns ``"bipartite"`` for a polyadic relation
+    that relation is drawn as individual parent-to-child edges (one per
+    source-target pair) under a ``// Declared relations.`` header rather than as
+    the default polyadic fan-out. ``relation_name`` is called as
+    ``relation_name(relation)`` and supplies each such edge's label, defaulting
+    to the relation's local name. Both are per-relation: absent hooks, a ``None``
+    return, or any non-``"bipartite"`` style leave relations rendered exactly as
+    before.
     """
 
     tier_name: Callable[..., str | None] | None = None
     node_id: Callable[..., str | None] | None = None
     item_label: Callable[..., str | None] | None = None
+    relation_name: Callable[..., str | None] | None = None
+    relation_style: Callable[..., str | None] | None = None
 
 
 def dumps(
@@ -388,44 +401,107 @@ def _structural_endpoint_id(
     )
 
 
+def _relation_style(
+    presentation: DotPresentation | None, relation: PolyadicRelationInstance
+) -> str | None:
+    if presentation is not None and presentation.relation_style is not None:
+        return presentation.relation_style(relation)
+    return None
+
+
+def _relation_label(
+    presentation: DotPresentation | None, relation: PolyadicRelationInstance
+) -> str:
+    if presentation is not None and presentation.relation_name is not None:
+        override = presentation.relation_name(relation)
+        if override is not None:
+            return override
+    return str(relation.declaration.local_name)
+
+
+def _arc_labeled(left: str, right: str, label: str) -> str:
+    return (
+        f"  {left} -> {right} "
+        f'[label="{_quote(label, "relation name")}", '
+        'color="#5555aa", constraint=false];'
+    )
+
+
 def _structural_relation_lines(
     lines: list[str],
     graph: Graph,
     clock: ClockProfile,
     item_nodes: dict[ItemRef, str],
+    presentation: DotPresentation | None,
 ) -> None:
     """Emit relations for the occupied-spine view, refusing unrenderable ones.
 
     Boundary endpoints and clock-tier targets are refused (they have no drawn
-    node), and a declared polyadic relation with no endpoints emits nothing.
+    node), and a declared polyadic relation with no endpoints emits nothing. A
+    polyadic relation the ``relation_style`` hook marks ``"bipartite"`` is drawn
+    as individual parent-to-child edges under a ``// Declared relations.``
+    header, labeled by ``relation_name``; every other relation renders as
+    before.
     """
+
+    def _endpoint(
+        endpoint_ref: ItemRef | DurableItemRef | DurablePositionRef,
+        declaration: QualifiedName,
+    ) -> str:
+        return _structural_endpoint_id(
+            graph, clock, endpoint_ref, item_nodes, declaration
+        )
+
     if graph.relations:
         lines.extend(("", "  // Declared bipartite relations."))
         for relation in graph.relations:
-            left = _structural_endpoint_id(
-                graph, clock, relation.left, item_nodes, relation.declaration
+            lines.append(
+                _arc(
+                    _endpoint(relation.left, relation.declaration),
+                    _endpoint(relation.right, relation.declaration),
+                    relation.declaration,
+                )
             )
-            right = _structural_endpoint_id(
-                graph, clock, relation.right, item_nodes, relation.declaration
-            )
-            lines.append(_arc(left, right, relation.declaration))
-    polyadic = tuple(
-        polyadic_relation
-        for polyadic_relation in graph.polyadic_relations
-        if polyadic_relation.sources and polyadic_relation.targets
+    nonempty = tuple(
+        polyadic
+        for polyadic in graph.polyadic_relations
+        if polyadic.sources and polyadic.targets
     )
-    if polyadic:
+    fanned = tuple(
+        polyadic
+        for polyadic in nonempty
+        if _relation_style(presentation, polyadic) != "bipartite"
+    )
+    bipartite = tuple(
+        polyadic
+        for polyadic in nonempty
+        if _relation_style(presentation, polyadic) == "bipartite"
+    )
+    if fanned:
         lines.extend(("", "  // Declared polyadic relations."))
-        for polyadic_relation in polyadic:
-            for source in polyadic_relation.sources:
-                for target in polyadic_relation.targets:
-                    left = _structural_endpoint_id(
-                        graph, clock, source, item_nodes, polyadic_relation.declaration
+        for polyadic in fanned:
+            for source in polyadic.sources:
+                for target in polyadic.targets:
+                    lines.append(
+                        _arc(
+                            _endpoint(source, polyadic.declaration),
+                            _endpoint(target, polyadic.declaration),
+                            polyadic.declaration,
+                        )
                     )
-                    right = _structural_endpoint_id(
-                        graph, clock, target, item_nodes, polyadic_relation.declaration
+    if bipartite:
+        lines.extend(("", "  // Declared relations."))
+        for polyadic in bipartite:
+            label = _relation_label(presentation, polyadic)
+            for source in polyadic.sources:
+                for target in polyadic.targets:
+                    lines.append(
+                        _arc_labeled(
+                            _endpoint(source, polyadic.declaration),
+                            _endpoint(target, polyadic.declaration),
+                            label,
+                        )
                     )
-                    lines.append(_arc(left, right, polyadic_relation.declaration))
 
 
 def _dumps_occupied_spine(
@@ -586,16 +662,33 @@ def _dumps_occupied_spine(
             )
 
     lines.extend(("", "  // Trigger every event from the clock position it occupies."))
-    for column in range(column_count):
-        for (_tier_index, tier), starts_at in zip(visible, tier_starts, strict=True):
+    # ipakit orders trigger edges by (coarse tick, tier declaration index, event
+    # index) -- the coarse tick, not the collapsed column, so an item placed in a
+    # refined gap still sorts with its tick. The edge source stays the item's own
+    # collapsed column.
+    triggers: list[tuple[int, int, int, str, str]] = []
+    for (tier_index, tier), starts_at in zip(visible, tier_starts, strict=True):
+        for column in range(column_count):
+            coarse_tick = clock_positions[column].tick
             for item_index in starts_at[column]:
                 reference = ItemRef(tier.declaration.name, item_index)
-                lines.append(
-                    f"  {clock_ids[column]} -> {item_nodes[reference]} "
-                    '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+                triggers.append(
+                    (
+                        coarse_tick,
+                        tier_index,
+                        item_index,
+                        clock_ids[column],
+                        item_nodes[reference],
+                    )
                 )
+    triggers.sort(key=lambda trigger: (trigger[0], trigger[1], trigger[2]))
+    for _tick, _tier_index, _item_index, source, node in triggers:
+        lines.append(
+            f"  {source} -> {node} "
+            '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+        )
 
-    _structural_relation_lines(lines, graph, clock, item_nodes)
+    _structural_relation_lines(lines, graph, clock, item_nodes, presentation)
     lines.append("}")
     return "\n".join(lines) + "\n"
 
