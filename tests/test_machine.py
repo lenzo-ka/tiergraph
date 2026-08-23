@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+import tiergraph.machine as machine
 from tests.conformance.machine import MachineLawSuite
 from tiergraph import (
     MACHINE_VERSION,
@@ -64,6 +65,33 @@ def build_program(opcodes: tuple[Opcode, ...]) -> Program:
 
 
 LAWS = MachineLawSuite(build_program)
+
+
+def test_checked_build_returns_the_agreeing_linear_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept-side verification preserves the linear result when both builds agree."""
+    linear = Graph((), (), ())
+    reference = Graph((), (), ())
+    monkeypatch.setattr(machine, "_build", lambda _trace: linear)
+    monkeypatch.setattr(machine, "execute", lambda _trace: reference)
+
+    assert machine._build_checked(()) is linear
+
+
+def test_checked_build_catches_accept_side_divergence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two successful but structurally different builds expose a builder defect."""
+    linear = Graph((), (), ())
+    reference = Graph((NamespaceDeclaration("r", "urn:reference"),), (), ())
+    monkeypatch.setattr(machine, "_build", lambda _trace: linear)
+    monkeypatch.setattr(machine, "execute", lambda _trace: reference)
+
+    with pytest.raises(
+        RuntimeError, match="linear and reference graph builds diverged"
+    ):
+        machine._build_checked(())
 
 
 @pytest.mark.parametrize(
@@ -977,10 +1005,10 @@ def test_valid_tier_anchored_relation_uses_identical_reference_graph() -> None:
     assert wire.dumps(program.unroll().graph) == wire.dumps(execute(trace))
 
 
-def test_unroll_constructs_one_full_graph_independent_of_trace_size(
+def test_linear_builder_constructs_one_full_graph_independent_of_trace_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Authoritative construction performs one full validation, not one per opcode."""
+    """Linear construction performs one full validation, not one per opcode."""
     original = Graph.__post_init__
     constructions = 0
 
@@ -993,7 +1021,8 @@ def test_unroll_constructs_one_full_graph_independent_of_trace_size(
     prefix = LAWS.declarations()
     for count in (50, 100, 200, 400):
         constructions = 0
-        Program((*prefix, Repeat(count, (AddItem(LAWS.name("events")),)))).unroll()
+        trace = _flatten((*prefix, Repeat(count, (AddItem(LAWS.name("events")),))))
+        machine._build(trace)
         assert constructions == 1
 
     constructions = 0
