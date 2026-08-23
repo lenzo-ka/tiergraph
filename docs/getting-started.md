@@ -1,8 +1,52 @@
 # Getting started
 
-This walkthrough goes from a first graph to a first fold. Install the package on
-Python 3.12 or later, then follow the steps in order; each one builds on the
-graph from the step before.
+Start with an alignment whose answer you can check by eye, then build out the
+same ideas into selection, traversal, folding, and serialization. The package
+requires Python 3.12 or later.
+
+## Align words and phones
+
+The convenience builder declares two ordered tiers and the links between them.
+Selecting `cat` and walking forward across `aligns` reaches phone positions 1,
+2, and 3: `K`, `AE`, `T`.
+
+```python
+from tiergraph import ItemSelector, Walk, WalkDirection, select
+from tiergraph.build import document
+
+caption = document("https://example.com/captions", prefix="caption")
+caption_words = caption.tier(
+    "words",
+    ("a", "cat", "sat"),
+    item_type="word",
+    membership="word-membership",
+)
+caption_phones = caption.tier(
+    "phones",
+    ("AH", "K", "AE", "T", "S", "AE-2", "T-2"),
+    item_type="phone",
+    membership="phone-membership",
+)
+caption_aligns = caption.link(
+    "aligns",
+    caption_words,
+    caption_phones,
+    ((0, 0), (1, 1), (1, 2), (1, 3), (2, 4), (2, 5), (2, 6)),
+    acyclic=True,
+)
+caption_graph = caption.build()
+
+cat = select(caption_graph, (ItemSelector(caption_graph, caption_words.ref(1)),))
+cat_phones = Walk(cat, caption_aligns.name, WalkDirection.FORWARD).evaluate().nodes
+assert [node.reference for node in cat_phones.nodes] == [
+    caption_phones.ref(1),
+    caption_phones.ref(2),
+    caption_phones.ref(3),
+]
+```
+
+The runnable [caption alignment example](../examples/caption_alignment.py) keeps
+display labels separate from durable ids and prints `['K', 'AE', 'T']`.
 
 ## Use the command line
 
@@ -17,36 +61,6 @@ files:
 Machine programs use JSONL rather than the graph document format: the first
 line is `{"machine_version":"1"}`, followed by one public opcode `to_data()`
 object per line. Run one with `tiergraph run program.jsonl --to json`.
-
-## A first graph
-
-The smallest useful graph is one namespace and one tier with an item. `Graph`
-validates everything when you construct it, so an ill-formed graph raises
-immediately rather than failing later inside a view.
-
-```python
-from tiergraph import (
-    Graph,
-    Item,
-    NamespaceDeclaration,
-    QualifiedName,
-    Tier,
-    TierDeclaration,
-)
-
-ns = "https://example.com/pipeline"
-steps = QualifiedName(ns, "steps")
-graph = Graph(
-    (NamespaceDeclaration("pl", ns),),
-    (Tier(TierDeclaration(steps, "Steps"), (Item("fetch"),)),),
-    (),
-)
-assert graph.tiers[0].items[0].durable_id == "fetch"
-```
-
-Each item here carries a durable id (`"fetch"`), a stable name that survives
-edits. Items do not require one, but the ids make later references and output
-readable.
 
 ## A graph with types, attributes, and a relation
 
