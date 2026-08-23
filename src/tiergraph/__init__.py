@@ -139,7 +139,7 @@ from tiergraph.wire import (
     to_data,
 )
 
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 __all__ = [
     "ActionDeclaration",
