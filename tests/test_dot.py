@@ -1960,3 +1960,37 @@ def test_structural_polyadic_without_presentation_uses_default_rendering() -> No
     assert "// Declared polyadic relations." in rendered
     assert '[label="choose"' in rendered
     assert "// Declared relations." not in rendered
+
+
+def test_relation_style_hook_is_evaluated_exactly_once_per_relation() -> None:
+    """A stateful relation_style is called once; the relation lands in one section.
+
+    Regression: with two evaluations a hook returning "bipartite" then None would
+    exclude the relation from both sections, silently dropping it.
+    """
+    graph = _hierarchy_graph()  # one non-empty polyadic (contains) + empty roots
+    base_presentation, binding = ipakit_hooks_and_binding(graph)
+    calls: list[str] = []
+    styles = iter(("bipartite", None, None))
+
+    def relation_style(relation: PolyadicRelationInstance) -> str | None:
+        calls.append(str(relation.declaration.local_name))
+        return next(styles)
+
+    presentation = replace(base_presentation, relation_style=relation_style)
+    rendered = tiergraph_dot.dumps(
+        graph,
+        clock=_structural_clock(graph),
+        presentation=presentation,
+        binding=binding,
+    )
+    # Exactly one evaluation for the single non-empty polyadic (roots is filtered).
+    assert calls == ["contains-0"]
+    # The relation neither vanishes nor duplicates: it lands in exactly one section.
+    assert "// Declared relations." in rendered
+    assert "// Declared polyadic relations." not in rendered
+    edge = (
+        f"{_ipakit_node_id('/clock/0/utterance/0')} -> "
+        f'{_ipakit_node_id("/clock/0/segment/0")} [label="contains"'
+    )
+    assert rendered.count(edge) == 1

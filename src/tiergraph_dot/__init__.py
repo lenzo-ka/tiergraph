@@ -462,21 +462,16 @@ def _structural_relation_lines(
                     relation.declaration,
                 )
             )
-    nonempty = tuple(
-        polyadic
+    # Evaluate relation_style exactly once per non-empty polyadic relation and
+    # cache it, so a stateful or non-deterministic hook cannot place a relation
+    # in neither section (or both) across two separate evaluations.
+    styled = tuple(
+        (polyadic, _relation_style(presentation, polyadic))
         for polyadic in graph.polyadic_relations
         if polyadic.sources and polyadic.targets
     )
-    fanned = tuple(
-        polyadic
-        for polyadic in nonempty
-        if _relation_style(presentation, polyadic) != "bipartite"
-    )
-    bipartite = tuple(
-        polyadic
-        for polyadic in nonempty
-        if _relation_style(presentation, polyadic) == "bipartite"
-    )
+    fanned = tuple(polyadic for polyadic, style in styled if style != "bipartite")
+    bipartite = tuple(polyadic for polyadic, style in styled if style == "bipartite")
     if fanned:
         lines.extend(("", "  // Declared polyadic relations."))
         for polyadic in fanned:
