@@ -25,7 +25,8 @@ The guides cover work by concern:
 - [Construction](guide/construction.md)
 - [Selection and traversal](guide/selection-and-traversal.md)
 - [Folding](guide/folding.md)
-- [Recognize and act](guide/recognize-and-act.md), including the mixing example
+- [Recognize and act](guide/recognize-and-act.md), including the advanced mixing
+  example
 - [Timing](guide/timing.md)
 - [Serialization](guide/serialization.md)
 - [Span views](guide/span-views.md)
