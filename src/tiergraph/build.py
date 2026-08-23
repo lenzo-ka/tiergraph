@@ -1,4 +1,9 @@
-"""Convenience construction that lowers directly to the tiergraph kernel."""
+"""Convenience construction that lowers directly to the tiergraph kernel.
+
+Ergonomic choice, alternatives, and selection helpers are deferred pending the
+downstream gesture subsystem's canonical-byte goldens.  ``declare()``,
+``relate()``, and ``add()`` provide those operations in the meantime.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundarySide,
     DurableItemRef,
     DurablePositionRef,
     Graph,
@@ -42,6 +48,9 @@ type AttributeTarget = (
     | int
 )
 type AttributeInput = Mapping[Name, object] | None
+type AttributeDeclarationInput = (
+    XsdType | str | tuple[XsdType | str, AttributeDomain | str]
+)
 
 
 class BuilderError(ValueError):
@@ -68,6 +77,22 @@ class TierHandle:
     def ref(self, index: int) -> ItemRef:
         """Return a checked structural reference into this tier."""
         return self._document._tier_ref(self, index)
+
+    def start(self) -> DurablePositionRef:
+        """Return the durable boundary at the start of this tier."""
+        return self._document._tier_edge_ref(self, BoundarySide.BEFORE)
+
+    def end(self) -> DurablePositionRef:
+        """Return the durable boundary at the end of this tier."""
+        return self._document._tier_edge_ref(self, BoundarySide.AFTER)
+
+    def before(self, index: int) -> DurablePositionRef:
+        """Return the durable boundary immediately before one tier item."""
+        return self._document._item_boundary_ref(self, index, BoundarySide.BEFORE)
+
+    def after(self, index: int) -> DurablePositionRef:
+        """Return the durable boundary immediately after one tier item."""
+        return self._document._item_boundary_ref(self, index, BoundarySide.AFTER)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +169,50 @@ class Document:
         self._attribute_declarations.append(
             AttributeDeclaration(self._name(name), declared_domain, declared_type)
         )
+
+    def attributes(
+        self,
+        declarations: Mapping[Name, AttributeDeclarationInput],
+        *,
+        domain: AttributeDomain | str = AttributeDomain.ITEM,
+    ) -> None:
+        """Declare mapped attributes, with an optional domain on each entry."""
+        if not isinstance(declarations, Mapping):
+            raise BuilderError("attributes: expected a mapping")
+        try:
+            default_domain = AttributeDomain(domain)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"attributes: invalid default domain: {error}"
+            ) from error
+        lowered: list[AttributeDeclaration] = []
+        existing = {declaration.name for declaration in self._attribute_declarations}
+        for name, specification in declarations.items():
+            operation = f"attributes {self._local(name)}"
+            if isinstance(specification, tuple):
+                if len(specification) != 2:
+                    raise BuilderError(
+                        f"{operation}: expected XsdType or (XsdType, domain)"
+                    )
+                value_type, declared_domain = specification
+            else:
+                value_type = specification
+                declared_domain = default_domain
+            try:
+                qualified = self._name(name)
+                normalized_type = XsdType(value_type)
+                normalized_domain = AttributeDomain(declared_domain)
+            except (TypeError, ValueError) as error:
+                raise BuilderError(f"{operation}: {error}") from error
+            if qualified in existing:
+                raise BuilderError(
+                    f"{operation}: duplicate attribute declaration {qualified.local_name}"
+                )
+            existing.add(qualified)
+            lowered.append(
+                AttributeDeclaration(qualified, normalized_domain, normalized_type)
+            )
+        self._attribute_declarations.extend(lowered)
 
     def tier(
         self,
@@ -286,6 +355,83 @@ class Document:
         self._instances.extend(instances)
         return LinkHandle(relation_name, self)
 
+    def relation(
+        self,
+        name: Name,
+        source: TierHandle | Name,
+        target: TierHandle | Name,
+        pairs: Iterable[tuple[object, object]],
+        *,
+        left_endpoint: RelationEndpointKind | str,
+        right_endpoint: RelationEndpointKind | str,
+        source_type: Name | None = None,
+        target_type: Name | None = None,
+        single_parent: bool = False,
+        acyclic: bool = False,
+        attributes: AttributeInput = None,
+    ) -> LinkHandle:
+        """Declare a relation whose ordered pairs may contain boundary anchors."""
+        relation_name = self._name(name)
+        local = relation_name.local_name
+        try:
+            left_kind = RelationEndpointKind(left_endpoint)
+            right_kind = RelationEndpointKind(right_endpoint)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"relation {local}: invalid endpoint kind: {error}"
+            ) from error
+        source_handle = self._tier(source, f"relation {local} source")
+        target_handle = self._tier(target, f"relation {local} target")
+        left_type = self._endpoint_type(
+            local, "source", source_handle, source_type, left_kind, operation="relation"
+        )
+        right_type = self._endpoint_type(
+            local,
+            "target",
+            target_handle,
+            target_type,
+            right_kind,
+            operation="relation",
+        )
+        declaration = BipartiteRelationDeclaration(
+            relation_name,
+            left_type,
+            right_type,
+            left_kind,
+            right_kind,
+            single_parent,
+            acyclic,
+            self._mapping_values(attributes, f"relation {local}"),
+        )
+        if isinstance(pairs, Set | Mapping):
+            raise BuilderError(f"relation {local}: pairs must be an ordered iterable")
+        try:
+            pair_values = tuple(pairs)
+        except TypeError as error:
+            raise BuilderError(f"relation {local}: pairs must be iterable") from error
+        instances: list[RelationInstance] = []
+        for index, pair in enumerate(pair_values):
+            try:
+                left, right = pair
+            except (TypeError, ValueError) as error:
+                raise BuilderError(
+                    f"relation {local} pair {index}: expected two endpoints"
+                ) from error
+            instances.append(
+                RelationInstance(
+                    relation_name,
+                    self._relation_endpoint(
+                        local, "source", source_handle, left, left_kind
+                    ),
+                    self._relation_endpoint(
+                        local, "target", target_handle, right, right_kind
+                    ),
+                )
+            )
+        self._relations.append(declaration)
+        self._instances.extend(instances)
+        return LinkHandle(relation_name, self)
+
     def declare(self, declaration: RelationDeclaration) -> None:
         """Add an already-constructed kernel relation declaration as-is."""
         if not isinstance(
@@ -384,6 +530,30 @@ class Document:
         self._checked_item_index(tier, index, f"tier ref {handle.name.local_name}")
         return ItemRef(handle.name, index)
 
+    def _owned_tier(self, handle: TierHandle, operation: str) -> Tier:
+        self._tier(handle, operation)
+        return next(
+            tier for tier in self._tiers if tier.declaration.name == handle.name
+        )
+
+    def _tier_edge_ref(
+        self, handle: TierHandle, side: BoundarySide
+    ) -> DurablePositionRef:
+        self._owned_tier(handle, f"tier boundary {handle.name.local_name}")
+        return DurablePositionRef(handle.name, side)
+
+    def _item_boundary_ref(
+        self, handle: TierHandle, index: int, side: BoundarySide
+    ) -> DurablePositionRef:
+        reference = self._tier_ref(handle, index)
+        tier = self._owned_tier(handle, f"tier boundary {handle.name.local_name}")
+        durable_id = tier.items[reference.index].durable_id
+        if durable_id is None:
+            raise BuilderError(
+                f"tier boundary {handle.name.local_name}: item {index} has no durable id"
+            )
+        return DurablePositionRef(DurableItemRef(durable_id), side)
+
     def _memberships(self, tier: QualifiedName) -> tuple[QualifiedName, ...]:
         return tuple(
             declaration.item_type
@@ -399,12 +569,14 @@ class Document:
         tier: TierHandle,
         explicit: Name | None,
         kind: RelationEndpointKind,
+        *,
+        operation: str = "link",
     ) -> QualifiedName:
         supplied = None if explicit is None else self._name(explicit)
         if kind is RelationEndpointKind.BOUNDARY:
             if supplied is None:
                 raise BuilderError(
-                    f"link {link} {side}: boundary endpoint needs explicit {side}_type"
+                    f"{operation} {link} {side}: boundary endpoint needs explicit {side}_type"
                 )
             return supplied
         memberships = self._memberships(tier.name)
@@ -423,6 +595,46 @@ class Document:
                 f"tier {tier.name.local_name} type {inferred}"
             )
         return supplied
+
+    def _relation_endpoint(
+        self,
+        relation: str,
+        side: str,
+        tier: TierHandle,
+        value: object,
+        kind: RelationEndpointKind,
+    ) -> ItemRef | DurablePositionRef:
+        operation = f"relation {relation} {side}"
+        if kind is RelationEndpointKind.ITEM:
+            return self._endpoint(relation, side, tier, value, kind)
+        if isinstance(value, int):
+            raise BuilderError(
+                f"{operation}: boundary endpoint refuses numeric coordinate; "
+                "use an explicit tier anchor"
+            )
+        if not isinstance(value, DurablePositionRef):
+            raise BuilderError(
+                f"{operation}: boundary endpoint needs DurablePositionRef anchor"
+            )
+        expected = self._owned_tier(tier, operation)
+        if isinstance(value.anchor, QualifiedName):
+            if value.anchor != expected.declaration.name:
+                raise BuilderError(f"{operation}: foreign boundary tier anchor")
+        elif isinstance(value.anchor, DurableItemRef):
+            matches = [
+                item
+                for item in expected.items
+                if item.durable_id == value.anchor.durable_id
+            ]
+            if len(matches) != 1:
+                raise BuilderError(
+                    f"{operation}: foreign or missing boundary item anchor"
+                )
+        else:
+            raise BuilderError(f"{operation}: malformed boundary anchor")
+        if not isinstance(value.side, BoundarySide):
+            raise BuilderError(f"{operation}: malformed boundary side")
+        return value
 
     def _endpoint(
         self,

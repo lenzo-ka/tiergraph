@@ -133,6 +133,261 @@ def test_caption_builder_is_byte_identical_to_direct_construction() -> None:
     assert doc.build() is not built
 
 
+def test_bulk_attributes_are_byte_identical_to_single_declarations() -> None:
+    """Bulk declarations preserve the exact single-declaration graph bytes."""
+    ns = "urn:bulk"
+    bulk = document(ns, prefix="b")
+    bulk.attributes(
+        {
+            "text": XsdType.STRING,
+            "score": ("decimal", AttributeDomain.ITEM),
+            "note": (XsdType.STRING, "document"),
+        }
+    )
+    bulk.tier("items", (item(text="word", score=Decimal("1.25")),))
+    bulk.attach(AttributeDomain.DOCUMENT, None, {"note": "graph"})
+
+    singles = document(ns, prefix="b")
+    singles.attribute("text", XsdType.STRING)
+    singles.attribute("score", "decimal", domain=AttributeDomain.ITEM)
+    singles.attribute("note", XsdType.STRING, domain="document")
+    singles.tier("items", (item(text="word", score=Decimal("1.25")),))
+    singles.attach(AttributeDomain.DOCUMENT, None, {"note": "graph"})
+
+    assert bulk.build() == singles.build()
+    assert dump_bytes(bulk.build()) == dump_bytes(singles.build())
+
+
+def test_bulk_attribute_refusals_are_clear_and_atomic() -> None:
+    """Bad bulk shapes, types, domains, and duplicate names fail before mutation."""
+    doc = document("urn:bulk-errors", prefix="b")
+    doc.attribute("existing", XsdType.STRING)
+    with pytest.raises(BuilderError, match="expected a mapping"):
+        doc.attributes(cast(object, ()))  # type: ignore[arg-type]
+    with pytest.raises(BuilderError, match="invalid default domain"):
+        doc.attributes({}, domain="bad")
+    with pytest.raises(BuilderError, match="expected XsdType"):
+        doc.attributes({"bad-shape": (XsdType.STRING,)})  # type: ignore[dict-item]
+    with pytest.raises(BuilderError, match="attributes bad-type"):
+        doc.attributes({"bad-type": cast(XsdType, object())})
+    with pytest.raises(BuilderError, match="attributes bad-domain"):
+        doc.attributes({"bad-domain": (XsdType.STRING, "bad")})
+    with pytest.raises(BuilderError, match="duplicate attribute declaration existing"):
+        doc.attributes({"new": XsdType.STRING, "existing": XsdType.STRING})
+    assert [value.name.local_name for value in doc.build().attribute_declarations] == [
+        "existing"
+    ]
+
+
+def test_boundary_relation_and_anchor_helpers_are_byte_identical() -> None:
+    """Anchored relation notation lowers exactly like direct kernel construction."""
+    ns = "urn:boundary-builder"
+
+    def q(local: str) -> QualifiedName:
+        return QualifiedName(ns, local)
+
+    ergonomic = document(ns, prefix="b")
+    left = ergonomic.tier(
+        "left", ("left-0", "left-1"), item_type="thing", membership="left-members"
+    )
+    right = ergonomic.tier(
+        "right", ("right-0",), item_type="thing", membership="right-members"
+    )
+    assert left.start() == DurablePositionRef(left.name, BoundarySide.BEFORE)
+    assert left.end() == DurablePositionRef(left.name, BoundarySide.AFTER)
+    assert left.before(1) == DurablePositionRef(
+        DurableItemRef("left-1"), BoundarySide.BEFORE
+    )
+    assert left.after(0) == DurablePositionRef(
+        DurableItemRef("left-0"), BoundarySide.AFTER
+    )
+    ergonomic.relation(
+        "aligned-boundaries",
+        left,
+        right,
+        ((left.start(), right.end()), (left.after(0), right.before(0))),
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+        right_endpoint=RelationEndpointKind.BOUNDARY,
+        source_type="thing",
+        target_type="thing",
+        acyclic=True,
+    )
+
+    direct = document(ns, prefix="b")
+    direct.tier(
+        "left", ("left-0", "left-1"), item_type="thing", membership="left-members"
+    )
+    direct.tier("right", ("right-0",), item_type="thing", membership="right-members")
+    direct.declare(
+        BipartiteRelationDeclaration(
+            q("aligned-boundaries"),
+            q("thing"),
+            q("thing"),
+            RelationEndpointKind.BOUNDARY,
+            RelationEndpointKind.BOUNDARY,
+            acyclic=True,
+        )
+    )
+    direct.add(
+        RelationInstance(
+            q("aligned-boundaries"),
+            DurablePositionRef(q("left"), BoundarySide.BEFORE),
+            DurablePositionRef(q("right"), BoundarySide.AFTER),
+        )
+    )
+    direct.add(
+        RelationInstance(
+            q("aligned-boundaries"),
+            DurablePositionRef(DurableItemRef("left-0"), BoundarySide.AFTER),
+            DurablePositionRef(DurableItemRef("right-0"), BoundarySide.BEFORE),
+        )
+    )
+    assert ergonomic.build() == direct.build()
+    assert dump_bytes(ergonomic.build()) == dump_bytes(direct.build())
+
+
+def test_boundary_relation_refusals() -> None:
+    """Boundary relations require explicit types and owned durable anchors."""
+    doc = document("urn:boundary-errors", prefix="b")
+    left = doc.tier("left", ("left-0",), item_type="thing", membership="left-members")
+    right = doc.tier(
+        "right", ("right-0",), item_type="thing", membership="right-members"
+    )
+    with pytest.raises(BuilderError, match="needs explicit source_type"):
+        doc.relation(
+            "missing-type",
+            left,
+            right,
+            (),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+        )
+    with pytest.raises(BuilderError, match="refuses numeric coordinate"):
+        doc.relation(
+            "numeric",
+            left,
+            right,
+            ((0, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+    with pytest.raises(BuilderError, match="foreign boundary tier anchor"):
+        doc.relation(
+            "foreign-tier",
+            left,
+            right,
+            ((right.start(), right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+    with pytest.raises(BuilderError, match="foreign or missing boundary item anchor"):
+        doc.relation(
+            "foreign-item",
+            left,
+            right,
+            ((right.before(0), right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+    with pytest.raises(BuilderError, match="needs DurablePositionRef"):
+        doc.relation(
+            "malformed",
+            left,
+            right,
+            ((object(), right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+    no_id = doc.tier("no-id", (None,))
+    with pytest.raises(BuilderError, match="item 0 has no durable id"):
+        no_id.before(0)
+
+    malformed_anchor = object.__new__(DurablePositionRef)
+    object.__setattr__(malformed_anchor, "anchor", object())
+    object.__setattr__(malformed_anchor, "side", BoundarySide.BEFORE)
+    with pytest.raises(BuilderError, match="malformed boundary anchor"):
+        doc.relation(
+            "malformed-anchor",
+            left,
+            right,
+            ((malformed_anchor, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+
+    malformed_side = object.__new__(DurablePositionRef)
+    object.__setattr__(malformed_side, "anchor", left.name)
+    object.__setattr__(malformed_side, "side", "before")
+    with pytest.raises(BuilderError, match="malformed boundary side"):
+        doc.relation(
+            "malformed-side",
+            left,
+            right,
+            ((malformed_side, right.ref(0)),),
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.ITEM,
+            source_type="thing",
+        )
+
+
+def test_relation_surface_shape_refusals_and_item_endpoint() -> None:
+    """The general relation surface checks kinds, pair order, and pair arity."""
+    doc = document("urn:relation-errors", prefix="r")
+    left = doc.tier("left", ("left-0",), item_type="thing", membership="left-members")
+    right = doc.tier(
+        "right", ("right-0",), item_type="thing", membership="right-members"
+    )
+    doc.relation(
+        "items",
+        left,
+        right,
+        ((0, right.ref(0)),),
+        left_endpoint=RelationEndpointKind.ITEM,
+        right_endpoint=RelationEndpointKind.ITEM,
+    )
+    with pytest.raises(BuilderError, match="invalid endpoint kind"):
+        doc.relation(
+            "kind",
+            left,
+            right,
+            (),
+            left_endpoint="bad",
+            right_endpoint=RelationEndpointKind.ITEM,
+        )
+    with pytest.raises(BuilderError, match="ordered iterable"):
+        doc.relation(
+            "set",
+            left,
+            right,
+            {(0, 0)},
+            left_endpoint=RelationEndpointKind.ITEM,
+            right_endpoint=RelationEndpointKind.ITEM,
+        )
+    with pytest.raises(BuilderError, match="pairs must be iterable"):
+        doc.relation(
+            "noniterable",
+            left,
+            right,
+            cast(object, 1),  # type: ignore[arg-type]
+            left_endpoint=RelationEndpointKind.ITEM,
+            right_endpoint=RelationEndpointKind.ITEM,
+        )
+    with pytest.raises(BuilderError, match="expected two endpoints"):
+        doc.relation(
+            "arity",
+            left,
+            right,
+            ((0,),),  # type: ignore[arg-type]
+            left_endpoint=RelationEndpointKind.ITEM,
+            right_endpoint=RelationEndpointKind.ITEM,
+        )
+
+
 def test_required_refusals_and_empty_pairs() -> None:
     """Ambiguous identity, invalid scalar notation, and ownership fail early."""
     doc = document("urn:test", prefix="t")
