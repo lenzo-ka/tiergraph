@@ -453,11 +453,11 @@ class AsBuilt:
 
 
 def _build_checked(trace: tuple[PrimitiveOpcode, ...]) -> Graph:
-    """Build linearly, checking its acceptance and result against reference execution."""
+    """Build quickly, using reference execution only to localize refusals."""
     if _has_shift_sensitive_relation_endpoint(trace):
         return execute(trace)
     try:
-        built = _build(trace)
+        return _build(trace)
     except Exception as builder_error:
         try:
             execute(trace)
@@ -466,10 +466,6 @@ def _build_checked(trace: tuple[PrimitiveOpcode, ...]) -> Graph:
         raise RuntimeError(  # pragma: no cover - defensive builder/reference mismatch
             "linear graph builder refused a trace accepted by reference execution"
         ) from builder_error
-    reference = execute(trace)
-    if built != reference:
-        raise RuntimeError("linear and reference graph builds diverged")
-    return built
 
 
 def _has_shift_sensitive_relation_endpoint(

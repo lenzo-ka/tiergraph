@@ -67,37 +67,24 @@ def build_program(opcodes: tuple[Opcode, ...]) -> Program:
 LAWS = MachineLawSuite(build_program)
 
 
-def test_checked_build_returns_the_agreeing_linear_graph(
+def test_normal_unroll_does_not_run_reference_after_linear_acceptance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Accept-side verification preserves the linear result when both builds agree."""
-    linear = Graph((), (), ())
-    reference = Graph((), (), ())
-    monkeypatch.setattr(machine, "_build", lambda _trace: linear)
-    monkeypatch.setattr(machine, "execute", lambda _trace: reference)
+    """Successful production lowering pays only for the linear builder."""
 
-    assert machine._build_checked(()) is linear
+    def unexpected_reference(_trace: object) -> Graph:
+        raise AssertionError("reference execution ran after linear acceptance")
 
-
-def test_checked_build_catches_accept_side_divergence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Two successful but structurally different builds expose a builder defect."""
-    linear = Graph((), (), ())
-    reference = Graph((NamespaceDeclaration("r", "urn:reference"),), (), ())
-    monkeypatch.setattr(machine, "_build", lambda _trace: linear)
-    monkeypatch.setattr(machine, "execute", lambda _trace: reference)
-
-    with pytest.raises(
-        RuntimeError, match="linear and reference graph builds diverged"
-    ):
-        machine._build_checked(())
+    monkeypatch.setattr(machine, "execute", unexpected_reference)
+    outcome = Program((*LAWS.declarations(), AddItem(LAWS.name("events")))).unroll()
+    assert len(outcome.graph.tiers[0].items) == 1
 
 
 @pytest.mark.parametrize(
     "law",
     [
         LAWS.check_primitive_trace_executes,
+        LAWS.check_linear_builder_matches_reference_on_acceptance,
         LAWS.check_as_built_is_fixed_point,
         LAWS.check_procedures_lower_identically,
         LAWS.check_deep_procedure_terminates,
@@ -1005,10 +992,10 @@ def test_valid_tier_anchored_relation_uses_identical_reference_graph() -> None:
     assert wire.dumps(program.unroll().graph) == wire.dumps(execute(trace))
 
 
-def test_linear_builder_constructs_one_full_graph_independent_of_trace_size(
+def test_unroll_constructs_one_full_graph_independent_of_trace_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Linear construction performs one full validation, not one per opcode."""
+    """Authoritative construction performs one full validation, not one per opcode."""
     original = Graph.__post_init__
     constructions = 0
 
@@ -1021,8 +1008,7 @@ def test_linear_builder_constructs_one_full_graph_independent_of_trace_size(
     prefix = LAWS.declarations()
     for count in (50, 100, 200, 400):
         constructions = 0
-        trace = _flatten((*prefix, Repeat(count, (AddItem(LAWS.name("events")),))))
-        machine._build(trace)
+        Program((*prefix, Repeat(count, (AddItem(LAWS.name("events")),)))).unroll()
         assert constructions == 1
 
     constructions = 0
