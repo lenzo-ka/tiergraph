@@ -138,6 +138,8 @@ def test_selection_query_set_algebra_and_nesting() -> None:
             {"select": "attribute", "attribute": _name("mark"), "domain": "bad"},
             "invalid attribute domain",
         ),
+        ({"op": 5, "args": [{}]}, r"\.op must be a string"),
+        ({"select": "item", "path": 5}, r"\.path must be a string"),
     ],
 )
 def test_selection_query_strict_refusals(source: object, match: str) -> None:

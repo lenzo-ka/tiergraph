@@ -74,27 +74,23 @@ UNIT_WEIGHT = AttributeValue(
 
 
 def _decode_qname(value: object, path: str) -> QualifiedName:
-    try:
-        name = _machine_decode_qname(value, path)
-    except TypeError as error:  # pragma: no cover - defensive
-        raise ValueError(f"{path} has invalid field types") from error
-    if not isinstance(name.namespace, str) or not isinstance(name.local_name, str):
+    obj = _decode_object(value, path, {"namespace", "local_name"})
+    if not isinstance(obj["namespace"], str) or not isinstance(obj["local_name"], str):
         raise ValueError(f"{path} has invalid field types")
-    return name
+    return _machine_decode_qname(value, path)
 
 
 def _decode_attribute_value(value: object, path: str) -> AttributeValue:
-    try:
-        attribute = _machine_decode_attribute_value(value, path)
-    except TypeError as error:  # pragma: no cover - defensive
-        raise ValueError(f"{path} has invalid field types") from error
+    obj = _decode_object(value, path, {"name", "value_type", "lexical"})
+    name = _decode_object(obj["name"], f"{path}.name", {"namespace", "local_name"})
     if (
-        not isinstance(attribute.name.namespace, str)
-        or not isinstance(attribute.name.local_name, str)
-        or not isinstance(attribute.lexical, str)
+        not isinstance(name["namespace"], str)
+        or not isinstance(name["local_name"], str)
+        or not isinstance(obj["value_type"], str)
+        or not isinstance(obj["lexical"], str)
     ):
         raise ValueError(f"{path} has invalid field types")
-    return attribute
+    return _machine_decode_attribute_value(value, path)
 
 
 def _string_value(value: AttributeValue, subject: str) -> None:

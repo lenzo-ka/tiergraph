@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from tiergraph.core import AttributeDomain, Graph, JsonValue, QualifiedName
+from tiergraph.machine import _decode_qname
 from tiergraph.path import (
     PathProfile,
     ResolvedItem,
@@ -211,11 +212,7 @@ def _string(value: JsonValue, path: str) -> str:
 
 
 def _qualified_name(value: JsonValue, path: str) -> QualifiedName:
-    data = _object(value, path)
-    _keys(data, {"namespace", "local_name"}, path)
-    namespace = _string(data["namespace"], f"{path}.namespace")
-    local_name = _string(data["local_name"], f"{path}.local_name")
-    return QualifiedName(namespace, local_name)
+    return _decode_qname(value, path)
 
 
 def evaluate_selection(

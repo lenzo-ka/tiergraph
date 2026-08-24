@@ -45,11 +45,7 @@ class SpanViewProfile:
         obj = _decode_object(data, "span profile", keys)
 
         def qualified_name(value: object, path: str) -> QualifiedName:
-            """Decode one QName after validating both string-valued members."""
-            members = _decode_object(value, path, {"namespace", "local_name"})
-            for member in ("namespace", "local_name"):
-                if not isinstance(members[member], str):
-                    raise ValueError(f"{path}.{member} must be a string")
+            """Decode one QName with path-specific validation."""
             return _decode_qname(value, path)
 
         def required(name: str) -> QualifiedName:

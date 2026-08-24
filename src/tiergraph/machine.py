@@ -446,7 +446,13 @@ def _decode_object(value: object, path: str, keys: set[str]) -> dict[str, object
 
 def _decode_qname(value: object, path: str) -> QualifiedName:
     obj = _decode_object(value, path, {"namespace", "local_name"})
-    return QualifiedName(cast(str, obj["namespace"]), cast(str, obj["local_name"]))
+    namespace = obj["namespace"]
+    local_name = obj["local_name"]
+    if not isinstance(namespace, str):
+        raise ValueError(f"{path}.namespace must be a string")
+    if not isinstance(local_name, str):
+        raise ValueError(f"{path}.local_name must be a string")
+    return QualifiedName(namespace, local_name)
 
 
 def _decode_namespace(value: object, path: str) -> NamespaceDeclaration:
@@ -472,10 +478,17 @@ def _decode_attribute_declaration(value: object, path: str) -> AttributeDeclarat
 
 def _decode_attribute_value(value: object, path: str) -> AttributeValue:
     obj = _decode_object(value, path, {"name", "value_type", "lexical"})
+    name = _decode_qname(obj["name"], f"{path}.name")
+    value_type = obj["value_type"]
+    lexical = obj["lexical"]
+    if not isinstance(value_type, str):
+        raise ValueError(f"{path}.value_type must be a string")
+    if not isinstance(lexical, str):
+        raise ValueError(f"{path}.lexical must be a string")
     return AttributeValue(
-        _decode_qname(obj["name"], f"{path}.name"),
-        XsdType(cast(str, obj["value_type"])),
-        cast(str, obj["lexical"]),
+        name,
+        XsdType(value_type),
+        lexical,
     )
 
 
