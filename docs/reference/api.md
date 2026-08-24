@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 137 top-level `tiergraph` exports exactly once.
+It covers 138 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -987,6 +987,16 @@ GrammarDeclaration.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the grammar declaration as JSON-serializable data.
 
+#### `GrammarDeclaration.from_data`
+
+Class method.
+
+```text
+GrammarDeclaration.from_data(cls, data: 'object') -> 'GrammarDeclaration'
+```
+
+Decode one strict grammar declaration from JSON-compatible data.
+
 ### `GrammarHole`
 
 ```text
@@ -1005,6 +1015,16 @@ GrammarHole.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the hole declaration as JSON-serializable data.
 
+#### `GrammarHole.from_data`
+
+Class method.
+
+```text
+GrammarHole.from_data(cls, data: 'object') -> 'GrammarHole'
+```
+
+Decode one strict hole declaration from JSON-compatible data.
+
 ### `GrammarRule`
 
 ```text
@@ -1022,6 +1042,16 @@ GrammarRule.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the directional rule as JSON-serializable data.
+
+#### `GrammarRule.from_data`
+
+Class method.
+
+```text
+GrammarRule.from_data(cls, data: 'object') -> 'GrammarRule'
+```
+
+Decode one strict directional rule from JSON-compatible data.
 
 #### `GrammarRule.effective_weight`
 
@@ -1050,6 +1080,16 @@ GrammarTerminal.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the terminal declaration as JSON-serializable data.
+
+#### `GrammarTerminal.from_data`
+
+Class method.
+
+```text
+GrammarTerminal.from_data(cls, data: 'object') -> 'GrammarTerminal'
+```
+
+Decode one strict terminal declaration from JSON-compatible data.
 
 ### `LoweredGrammar`
 
@@ -1148,6 +1188,14 @@ count(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | No
 ```
 
 Return the derivation count from a new or previously built forest.
+
+### `grammar_loads`
+
+```text
+grammar_loads(source: 'str | bytes') -> 'GrammarDeclaration'
+```
+
+Decode a strict grammar declaration from UTF-8 JSON text or bytes.
 
 ### `lower_grammar`
 

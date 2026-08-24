@@ -28,6 +28,10 @@ from tiergraph import (
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    GrammarDeclaration,
+    GrammarHole,
+    GrammarRule,
+    GrammarTerminal,
     Item,
     ItemRef,
     NamespaceDeclaration,
@@ -75,6 +79,131 @@ def _program(path: Path, *opcodes: object, newline: bytes = b"\n") -> None:
     path.write_bytes(newline.join(json.dumps(record).encode() for record in records))
 
 
+def _grammar(path: Path, *, unit: bool = False) -> GrammarDeclaration:
+    namespace = "urn:test:grammar-cli"
+    sentence = QualifiedName(namespace, "S")
+    choice = QualifiedName(namespace, "A")
+    text_name = QualifiedName(namespace, "text")
+    variable_name = QualifiedName(namespace, "variable")
+    weight_name = QualifiedName(namespace, "weight")
+
+    def terminal(value: str) -> GrammarTerminal:
+        return GrammarTerminal(AttributeValue(text_name, XsdType.STRING, value))
+
+    def hole(value: str) -> GrammarHole:
+        return GrammarHole(AttributeValue(variable_name, XsdType.STRING, value), choice)
+
+    def weight(value: str) -> AttributeValue:
+        return AttributeValue(weight_name, XsdType.DECIMAL, value)
+
+    rules = (
+        (GrammarRule(sentence, (hole("a"),), (hole("a"),)),)
+        if unit
+        else (
+            GrammarRule(
+                sentence, (terminal("x"),), (terminal("x"),), weight=weight("1.5")
+            ),
+            GrammarRule(
+                sentence, (terminal("x"),), (terminal("x"),), weight=weight("2.5")
+            ),
+        )
+    )
+    declaration = GrammarDeclaration((sentence, choice), sentence, rules)
+    path.write_text(json.dumps(declaration.to_data()), encoding="utf-8")
+    return declaration
+
+
+def test_grammar_commands_recognize_count_and_best(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nested grammar commands emit their exact deterministic JSON objects."""
+    source = tmp_path / "grammar.json"
+    _grammar(source)
+    assert main(["grammar", "recognize", str(source), "--tokens-json", '["x"]']) == 0
+    assert json.loads(capsys.readouterr().out) == {"recognized": True}
+    assert main(["grammar", "count", str(source), "--tokens-json", '["x"]']) == 0
+    assert json.loads(capsys.readouterr().out) == {"count": 2}
+    assert main(["grammar", "best", str(source), "--tokens-json", '["x"]']) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "derivations": [
+            {
+                "weight": "1.5",
+                "witness": [
+                    "urn:tiergraph:grammar:chart:chart-items:4",
+                    "urn:tiergraph:grammar:chart:applications:4",
+                ],
+            }
+        ]
+    }
+    assert (
+        main(["grammar", "best", str(source), "--tokens-json", '["x"]', "--count", "2"])
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "derivations": [
+            {
+                "weight": "1.5",
+                "witness": [
+                    "urn:tiergraph:grammar:chart:chart-items:4",
+                    "urn:tiergraph:grammar:chart:applications:4",
+                ],
+            },
+            {
+                "weight": "2.5",
+                "witness": [
+                    "urn:tiergraph:grammar:chart:chart-items:4",
+                    "urn:tiergraph:grammar:chart:applications:5",
+                ],
+            },
+        ]
+    }
+
+
+@pytest.mark.parametrize("tokens", ("wat", "{}", '["x", 1]'))
+def test_grammar_command_refuses_bad_tokens_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], tokens: str
+) -> None:
+    """Invalid JSON and non-string arrays use the normal exit-one diagnostic."""
+    source = tmp_path / "grammar.json"
+    _grammar(source)
+    assert main(["grammar", "recognize", str(source), "--tokens-json", tokens]) == 1
+    assert "tiergraph: grammar: ValueError:" in capsys.readouterr().err
+
+
+def test_grammar_command_reports_bad_grammar_unit_folds_and_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Malformed grammar, unsupported folds, and nonpositive caps exit one."""
+    malformed = tmp_path / "bad.json"
+    malformed.write_text("{}", encoding="utf-8")
+    assert main(["grammar", "recognize", str(malformed), "--tokens-json", "[]"]) == 1
+    assert "grammar fields" in capsys.readouterr().err
+
+    unit = tmp_path / "unit.json"
+    _grammar(unit, unit=True)
+    for command in ("count", "best"):
+        assert main(["grammar", command, str(unit), "--tokens-json", '["x"]']) == 1
+        assert "is a unit production" in capsys.readouterr().err
+
+    source = tmp_path / "grammar.json"
+    _grammar(source)
+    assert (
+        main(
+            [
+                "grammar",
+                "best",
+                str(source),
+                "--tokens-json",
+                '["x"]',
+                "--count",
+                "0",
+            ]
+        )
+        == 1
+    )
+    assert "must be positive" in capsys.readouterr().err
+
+
 def test_version_default_help_and_every_command_help(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -82,7 +211,7 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,path}"
+        "{validate,render,inspect,convert,schema,run,step,path,grammar}"
         in capsys.readouterr().out
     )
     for command in (
@@ -94,6 +223,7 @@ def test_version_default_help_and_every_command_help(
         "run",
         "step",
         "path",
+        "grammar",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -113,6 +243,7 @@ def test_version_default_help_and_every_command_help(
         "run",
         "step",
         "path",
+        "grammar",
     ]
 
 

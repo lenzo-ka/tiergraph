@@ -102,6 +102,28 @@ def build_parser() -> argparse.ArgumentParser:
     spell.add_argument(
         "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
     )
+
+    grammar = subparsers.add_parser("grammar", help="recognize with tiergraph grammars")
+    grammar_subparsers = grammar.add_subparsers(dest="grammar_command", required=True)
+    for grammar_command, help_text in (
+        ("recognize", "recognize a token sequence"),
+        ("count", "count token-sequence derivations"),
+        ("best", "find best token-sequence derivations"),
+    ):
+        grammar_parser = grammar_subparsers.add_parser(grammar_command, help=help_text)
+        grammar_parser.add_argument(
+            "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
+        )
+        grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
+        if grammar_command == "best":
+            grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
+        grammar_parser.add_argument(
+            "-o",
+            "--output",
+            default="-",
+            metavar="FILE",
+            help="output file (default: -)",
+        )
     return parser
 
 
@@ -173,6 +195,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 binding = _path_binding(args)
                 value = {"path": str(profile.spell(binding, graph))}
             _write_output(args.file, args.output, _json_bytes(value))
+        elif args.command == "grammar":
+            declaration = tiergraph.grammar_loads(_read_bytes(args.file))
+            lowered = tiergraph.lower_grammar(declaration)
+            tokens = _tokens_json(args.tokens_json)
+            if args.grammar_command == "recognize":
+                grammar_value: object = {
+                    "recognized": tiergraph.recognize(lowered, tokens).recognized()
+                }
+            elif args.grammar_command == "count":
+                grammar_value = {"count": tiergraph.count(lowered, tokens)}
+            else:
+                if args.count < 1:
+                    raise ValueError(
+                        f"best derivation count {args.count!r} must be positive"
+                    )
+                grammar_value = {
+                    "derivations": [
+                        derivation.to_data()
+                        for derivation in tiergraph.best(lowered, tokens, args.count)
+                    ]
+                }
+            _write_output(args.file, args.output, _json_bytes(grammar_value))
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -213,6 +257,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         _diagnostic(args.command, type(error).__name__, error)
         return 3
     return 0
+
+
+def _tokens_json(source: str) -> tuple[str, ...]:
+    """Decode a JSON array of token strings without shell splitting."""
+    value = json.loads(source)
+    if not isinstance(value, list) or not all(
+        isinstance(token, str) for token in value
+    ):
+        raise ValueError("--tokens-json must be a JSON array of strings")
+    return tuple(value)
 
 
 def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:

@@ -65,6 +65,7 @@ from tiergraph.grammar import (
     ParseForest,
     best,
     count,
+    grammar_loads,
     lower_grammar,
     recognize,
 )
@@ -285,6 +286,7 @@ __all__ = [
     "anchored_position",
     "best",
     "count",
+    "grammar_loads",
     "select",
     "span_view",
     "to_html",

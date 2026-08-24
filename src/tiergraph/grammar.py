@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -47,6 +48,11 @@ from tiergraph.machine import (
     Program,
     Relate,
 )
+from tiergraph.machine import (
+    _decode_attribute_value as _machine_decode_attribute_value,
+)
+from tiergraph.machine import _decode_object as _decode_object
+from tiergraph.machine import _decode_qname as _machine_decode_qname
 from tiergraph.path import (
     AlternativeRef,
     CanonicalPath,
@@ -65,6 +71,30 @@ COMPLETE_BOUNDARY = AttributeValue(
 UNIT_WEIGHT = AttributeValue(
     QualifiedName(GRAMMAR_NAMESPACE, "weight"), XsdType.DECIMAL, "1"
 )
+
+
+def _decode_qname(value: object, path: str) -> QualifiedName:
+    try:
+        name = _machine_decode_qname(value, path)
+    except TypeError as error:  # pragma: no cover - defensive
+        raise ValueError(f"{path} has invalid field types") from error
+    if not isinstance(name.namespace, str) or not isinstance(name.local_name, str):
+        raise ValueError(f"{path} has invalid field types")
+    return name
+
+
+def _decode_attribute_value(value: object, path: str) -> AttributeValue:
+    try:
+        attribute = _machine_decode_attribute_value(value, path)
+    except TypeError as error:  # pragma: no cover - defensive
+        raise ValueError(f"{path} has invalid field types") from error
+    if (
+        not isinstance(attribute.name.namespace, str)
+        or not isinstance(attribute.name.local_name, str)
+        or not isinstance(attribute.lexical, str)
+    ):
+        raise ValueError(f"{path} has invalid field types")
+    return attribute
 
 
 def _string_value(value: AttributeValue, subject: str) -> None:
@@ -88,6 +118,16 @@ class GrammarTerminal:
         """Return the terminal declaration as JSON-serializable data."""
         return {"kind": "terminal", "text": self.text.to_data()}
 
+    @classmethod
+    def from_data(cls, data: object) -> GrammarTerminal:
+        """Decode one strict terminal declaration from JSON-compatible data."""
+        obj = _decode_object(data, "grammar terminal", {"kind", "text"})
+        if obj["kind"] != "terminal":
+            raise ValueError(
+                f"grammar terminal.kind {obj['kind']!r} must be 'terminal'"
+            )
+        return cls(_decode_attribute_value(obj["text"], "grammar terminal.text"))
+
 
 @dataclass(frozen=True, slots=True)
 class GrammarHole:
@@ -108,9 +148,38 @@ class GrammarHole:
             "nonterminal": self.nonterminal.to_data(),
         }
 
+    @classmethod
+    def from_data(cls, data: object) -> GrammarHole:
+        """Decode one strict hole declaration from JSON-compatible data."""
+        obj = _decode_object(data, "grammar hole", {"kind", "variable", "nonterminal"})
+        if obj["kind"] != "hole":
+            raise ValueError(f"grammar hole.kind {obj['kind']!r} must be 'hole'")
+        return cls(
+            _decode_attribute_value(obj["variable"], "grammar hole.variable"),
+            _decode_qname(obj["nonterminal"], "grammar hole.nonterminal"),
+        )
+
 
 type GrammarPatternElement = GrammarTerminal | GrammarHole
 type GrammarPattern = tuple[GrammarPatternElement, ...]
+
+
+def _decode_pattern(data: object, path: str) -> GrammarPattern:
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must be an array")
+    elements: list[GrammarPatternElement] = []
+    for index, value in enumerate(data):
+        element_path = f"{path}[{index}]"
+        if not isinstance(value, dict):
+            raise ValueError(f"{element_path} must be an object")
+        kind = value.get("kind")
+        if kind == "terminal":
+            elements.append(GrammarTerminal.from_data(value))
+        elif kind == "hole":
+            elements.append(GrammarHole.from_data(value))
+        else:
+            raise ValueError(f"{element_path}.kind {kind!r} is unknown")
+    return tuple(elements)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +220,42 @@ class GrammarRule:
             ],
             "weight": None if self.weight is None else self.weight.to_data(),
         }
+
+    @classmethod
+    def from_data(cls, data: object) -> GrammarRule:
+        """Decode one strict directional rule from JSON-compatible data."""
+        path = "grammar rule"
+        obj = _decode_object(
+            data,
+            path,
+            {
+                "left",
+                "source",
+                "target",
+                "boundary",
+                "awaited_variables",
+                "weight",
+            },
+        )
+        awaited = obj["awaited_variables"]
+        if not isinstance(awaited, list):
+            raise ValueError(f"{path}.awaited_variables must be an array")
+        weight = obj["weight"]
+        if weight is not None and not isinstance(weight, dict):
+            raise ValueError(f"{path}.weight must be an attribute value or null")
+        return cls(
+            _decode_qname(obj["left"], f"{path}.left"),
+            _decode_pattern(obj["source"], f"{path}.source"),
+            _decode_pattern(obj["target"], f"{path}.target"),
+            _decode_attribute_value(obj["boundary"], f"{path}.boundary"),
+            tuple(
+                _decode_attribute_value(value, f"{path}.awaited_variables[{index}]")
+                for index, value in enumerate(awaited)
+            ),
+            None
+            if weight is None
+            else _decode_attribute_value(weight, f"{path}.weight"),
+        )
 
     @property
     def effective_weight(self) -> AttributeValue:
@@ -228,6 +333,30 @@ class GrammarDeclaration:
             "start": self.start.to_data(),
             "rules": [rule.to_data() for rule in self.rules],
         }
+
+    @classmethod
+    def from_data(cls, data: object) -> GrammarDeclaration:
+        """Decode one strict grammar declaration from JSON-compatible data."""
+        obj = _decode_object(data, "grammar", {"nonterminals", "start", "rules"})
+        nonterminals = obj["nonterminals"]
+        rules = obj["rules"]
+        if not isinstance(nonterminals, list):
+            raise ValueError("grammar.nonterminals must be an array")
+        if not isinstance(rules, list):
+            raise ValueError("grammar.rules must be an array")
+        return cls(
+            tuple(
+                _decode_qname(value, f"grammar.nonterminals[{index}]")
+                for index, value in enumerate(nonterminals)
+            ),
+            _decode_qname(obj["start"], "grammar.start"),
+            tuple(GrammarRule.from_data(value) for value in rules),
+        )
+
+
+def grammar_loads(source: str | bytes) -> GrammarDeclaration:
+    """Decode a strict grammar declaration from UTF-8 JSON text or bytes."""
+    return GrammarDeclaration.from_data(json.loads(source))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1155,6 +1284,7 @@ __all__ = [
     "ParseForest",
     "best",
     "count",
+    "grammar_loads",
     "lower_grammar",
     "recognize",
 ]
