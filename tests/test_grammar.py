@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from decimal import Decimal
 from typing import cast
@@ -21,6 +22,7 @@ from tiergraph import (
     XsdType,
     best,
     count,
+    grammar_loads,
     lower_grammar,
     recognize,
 )
@@ -110,6 +112,101 @@ def test_declaration_is_directional_and_json_serializable() -> None:
     assert forward != reverse
     assert hash(forward) != hash(reverse)
     assert declaration.to_data()["rules"] == [forward.to_data()]
+
+
+def test_declaration_strict_json_round_trip() -> None:
+    """Every declarative component decodes through the canonical value codec."""
+    declaration = diamond()
+    assert GrammarDeclaration.from_data(declaration.to_data()) == declaration
+    assert grammar_loads(json.dumps(declaration.to_data())) == declaration
+    assert grammar_loads(json.dumps(declaration.to_data()).encode()) == declaration
+    rule = declaration.rules[0]
+    assert GrammarRule.from_data(rule.to_data()) == rule
+    assert GrammarTerminal.from_data(terminal("x").to_data()) == terminal("x")
+    assert GrammarHole.from_data(hole("x", name("S")).to_data()) == hole("x", name("S"))
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    (
+        (None, "grammar must be an object"),
+        ({"nonterminals": [], "start": name("S").to_data()}, "grammar fields"),
+        (
+            {"nonterminals": None, "start": name("S").to_data(), "rules": []},
+            "nonterminals must be an array",
+        ),
+        (
+            {"nonterminals": [], "start": name("S").to_data(), "rules": None},
+            "rules must be an array",
+        ),
+    ),
+)
+def test_declaration_decoder_refuses_bad_shapes(data: object, message: str) -> None:
+    """The declaration decoder rejects nonobjects, fields, and array shapes."""
+    with pytest.raises(ValueError, match=message):
+        GrammarDeclaration.from_data(data)
+
+
+def test_component_decoders_refuse_every_malformed_branch() -> None:
+    """Component errors identify discriminators, arrays, values, and weights."""
+    terminal_data = terminal("x").to_data()
+    hole_data = hole("x", name("S")).to_data()
+    with pytest.raises(ValueError, match="terminal.kind"):
+        GrammarTerminal.from_data({**terminal_data, "kind": "hole"})
+    with pytest.raises(ValueError, match="hole.kind"):
+        GrammarHole.from_data({**hole_data, "kind": "terminal"})
+
+    rule_data = GrammarRule(name("S"), (terminal("x"),), (terminal("x"),)).to_data()
+    for field in ("source", "target"):
+        with pytest.raises(ValueError, match=f"{field} must be an array"):
+            GrammarRule.from_data({**rule_data, field: None})
+    for value, message in ((None, "must be an object"), ({}, "kind None.*unknown")):
+        with pytest.raises(ValueError, match=message):
+            GrammarRule.from_data({**rule_data, "source": [value]})
+    with pytest.raises(ValueError, match="awaited_variables must be an array"):
+        GrammarRule.from_data({**rule_data, "awaited_variables": None})
+    with pytest.raises(ValueError, match="weight must be an attribute value or null"):
+        GrammarRule.from_data({**rule_data, "weight": "1"})
+    with pytest.raises(ValueError, match="weight.*xsd:decimal"):
+        GrammarRule.from_data({**rule_data, "weight": string("weight", "1").to_data()})
+    with pytest.raises(ValueError, match="not a valid XsdType"):
+        GrammarTerminal.from_data(
+            {
+                **terminal_data,
+                "text": {
+                    **cast(dict[str, object], terminal_data["text"]),
+                    "value_type": "wat",
+                },
+            }
+        )
+    with pytest.raises(ValueError, match=r"nonterminals\[0\].*invalid field types"):
+        GrammarDeclaration.from_data(
+            {
+                "nonterminals": [{"namespace": 1, "local_name": "S"}],
+                "start": name("S").to_data(),
+                "rules": [],
+            }
+        )
+    with pytest.raises(ValueError, match="terminal.text has invalid field types"):
+        GrammarTerminal.from_data(
+            {
+                **terminal_data,
+                "text": {
+                    **cast(dict[str, object], terminal_data["text"]),
+                    "lexical": 1,
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="terminal.text has invalid field types"):
+        GrammarTerminal.from_data(
+            {
+                **terminal_data,
+                "text": {
+                    **cast(dict[str, object], terminal_data["text"]),
+                    "name": {"namespace": 1, "local_name": "text"},
+                },
+            }
+        )
 
 
 def test_declaration_refuses_undeclared_nonterminals() -> None:

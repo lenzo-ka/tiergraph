@@ -33,10 +33,11 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,schema,run,step,path} ...
+                 {validate,render,inspect,convert,schema,run,step,path,grammar}
+                 ...
 
 positional arguments:
-  {validate,render,inspect,convert,schema,run,step,path}
+  {validate,render,inspect,convert,schema,run,step,path,grammar}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
@@ -45,6 +46,7 @@ positional arguments:
     run                 execute a JSONL machine program
     step                step through a JSONL machine program
     path                resolve and spell tiergraph paths
+    grammar             recognize with tiergraph grammars
 
 options:
   -h, --help            show this help message and exit
@@ -168,4 +170,19 @@ positional arguments:
 
 options:
   -h, --help       show this help message and exit
+```
+
+### `tiergraph grammar`
+
+```text
+usage: tiergraph grammar [-h] {recognize,count,best} ...
+
+positional arguments:
+  {recognize,count,best}
+    recognize           recognize a token sequence
+    count               count token-sequence derivations
+    best                find best token-sequence derivations
+
+options:
+  -h, --help            show this help message and exit
 ```
