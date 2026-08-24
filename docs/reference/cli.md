@@ -33,14 +33,15 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,run,step} ...
+                 {validate,render,inspect,convert,schema,run,step} ...
 
 positional arguments:
-  {validate,render,inspect,convert,run,step}
+  {validate,render,inspect,convert,schema,run,step}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
     convert             canonicalize a graph document
+    schema              print the graph document schema
     run                 execute a JSONL machine program
     step                step through a JSONL machine program
 
@@ -104,6 +105,19 @@ options:
   -o FILE, --output FILE
                         output file (default: -)
   --to {json,json-compact,bytes}
+```
+
+### `tiergraph schema`
+
+```text
+usage: tiergraph schema [-h] [--format-version N] [--hash] [-o FILE]
+
+options:
+  -h, --help            show this help message and exit
+  --format-version N
+  --hash                print the shape hash
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph run`
