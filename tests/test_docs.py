@@ -50,6 +50,42 @@ def test_entry_fallbacks_cover_undocumented_objects() -> None:
     assert generate_docs._signature(object()) == ""
 
 
+def test_class_entries_include_public_members_once_in_definition_order() -> None:
+    """Methods, classmethods, and properties are class reference entries."""
+
+    class Example:
+        """Example class."""
+
+        def method(self, value: int) -> int:
+            """Return one value."""
+            return value
+
+        @classmethod
+        def create(cls) -> Example:
+            """Create an example."""
+            return cls()
+
+        @property
+        def ready(self) -> bool:
+            """Report readiness."""
+            return True
+
+        def _private(self) -> None:
+            """Stay out of the public reference."""
+
+    rendered = generate_docs._entry(SimpleNamespace(Example=Example), "Example", {})
+    headings = [
+        rendered.index("#### `Example.method`"),
+        rendered.index("#### `Example.create`"),
+        rendered.index("#### `Example.ready`"),
+    ]
+    assert headings == sorted(headings)
+    assert rendered.count("#### `Example.method`") == 1
+    assert rendered.count("#### `Example.create`") == 1
+    assert rendered.count("#### `Example.ready`") == 1
+    assert "Example._private" not in rendered
+
+
 def test_missing_generated_directive_is_rejected() -> None:
     with pytest.raises(ValueError, match="expected one 'copy-example' directive"):
         generate_docs._replace_directive("plain text", "copy-example", "body")
@@ -222,6 +258,15 @@ def test_semiring_export_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) -
         tiergraph.semiring, "__all__", [*tiergraph.semiring.__all__, "x"]
     )
     with pytest.raises(ValueError, match="tiergraph.semiring export mismatch"):
+        validate_manifest(load_manifest())
+
+
+def test_build_export_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The builder's supported surface has exact export coverage."""
+    import tiergraph.build
+
+    monkeypatch.setattr(tiergraph.build, "__all__", [*tiergraph.build.__all__, "x"])
+    with pytest.raises(ValueError, match="tiergraph.build export mismatch"):
         validate_manifest(load_manifest())
 
 

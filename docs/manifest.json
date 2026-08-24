@@ -64,6 +64,7 @@
     "docs/reference/cli.md"
   ],
   "secondary": {
+    "tiergraph.build": ["Document", "document", "item"],
     "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "ProductSemiring", "Semiring", "TropicalSemiring"],
     "tiergraph.schema": ["json_schema", "shape_hash"],
     "tiergraph.cli": ["build_parser", "main"],
