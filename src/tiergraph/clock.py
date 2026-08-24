@@ -20,6 +20,7 @@ from tiergraph.core import (
     RelationEndpointKind,
     XsdType,
 )
+from tiergraph.machine import _decode_object, _decode_qname
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -97,6 +98,61 @@ class ClockProfile:
     _timings: dict[ItemRef, PhysicalTiming] = field(init=False, repr=False)
     _untimed_tiers: frozenset[QualifiedName] = field(init=False, repr=False)
     _structural: bool = field(init=False, repr=False, default=False)
+
+    @classmethod
+    def from_data(cls, graph: Graph, data: object) -> ClockProfile:
+        """Decode a strict declarative clock profile for ``graph``.
+
+        Every field is required. Optional qualified-name roles are represented
+        by JSON null, while the clock tier, binding relation, and unit attribute
+        must be qualified-name objects.
+        """
+        keys = {
+            "clock_tier",
+            "binding_relation",
+            "rate_attribute",
+            "unit_attribute",
+            "tick_attribute",
+            "gap_attribute",
+            "untimed_attribute",
+            "start_attribute",
+            "duration_attribute",
+        }
+        obj = _decode_object(data, "clock profile", keys)
+
+        def qualified_name(name: str, value: object) -> QualifiedName:
+            """Decode one QName after validating both string-valued members."""
+            path = f"clock profile.{name}"
+            members = _decode_object(value, path, {"namespace", "local_name"})
+            for member in ("namespace", "local_name"):
+                if not isinstance(members[member], str):
+                    raise ValueError(f"{path}.{member} must be a string")
+            return _decode_qname(value, path)
+
+        def required(name: str) -> QualifiedName:
+            """Decode one required non-null QName field."""
+            value = obj[name]
+            if value is None:
+                raise ValueError(f"clock profile.{name} must be an object")
+            return qualified_name(name, value)
+
+        def optional(name: str) -> QualifiedName | None:
+            """Decode one explicitly nullable QName field."""
+            value = obj[name]
+            return None if value is None else qualified_name(name, value)
+
+        return cls(
+            graph,
+            required("clock_tier"),
+            required("binding_relation"),
+            optional("rate_attribute"),
+            required("unit_attribute"),
+            optional("tick_attribute"),
+            optional("gap_attribute"),
+            optional("untimed_attribute"),
+            optional("start_attribute"),
+            optional("duration_attribute"),
+        )
 
     def __post_init__(self) -> None:
         """Validate declarations, totality, refinement, and timing agreement."""

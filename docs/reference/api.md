@@ -157,6 +157,20 @@ does not infer refinement: without refinement attributes each integral
 clock boundary is the unrefined position ``(index, 0)``.  Partial document
 extents remain valid, and trailing silence still needs an explicit item.
 
+#### `ClockProfile.from_data`
+
+Class method.
+
+```text
+ClockProfile.from_data(cls, graph: 'Graph', data: 'object') -> 'ClockProfile'
+```
+
+Decode a strict declarative clock profile for ``graph``.
+
+Every field is required. Optional qualified-name roles are represented
+by JSON null, while the clock tier, binding relation, and unit attribute
+must be qualified-name objects.
+
 #### `ClockProfile.from_position_values`
 
 Class method.

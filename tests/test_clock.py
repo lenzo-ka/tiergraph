@@ -491,6 +491,64 @@ def advanced_profile(graph: Graph, rate: QualifiedName | None = None) -> ClockPr
     )
 
 
+def clock_profile_data(rate: QualifiedName | None = None) -> dict[str, object]:
+    """Encode the declarative profile used by the advanced fixture."""
+    return {
+        "clock_tier": CLOCK.to_data(),
+        "binding_relation": BINDING.to_data(),
+        "rate_attribute": None if rate is None else rate.to_data(),
+        "unit_attribute": UNIT.to_data(),
+        "tick_attribute": TICK.to_data(),
+        "gap_attribute": GAP.to_data(),
+        "untimed_attribute": UNTIMED.to_data(),
+        "start_attribute": START.to_data(),
+        "duration_attribute": DURATION.to_data(),
+    }
+
+
+def test_clock_profile_from_data_is_strict_and_constructs_full_profile() -> None:
+    """Declarative profiles use exact fields and explicit nullable roles."""
+    graph = ipakit_shape()
+    decoded = ClockProfile.from_data(graph, clock_profile_data())
+    expected = advanced_profile(graph)
+    assert decoded.positions == expected.positions
+    assert decoded.structural_span(SEGMENT, 1) == expected.structural_span(SEGMENT, 1)
+    assert decoded.timing(SEGMENT, 1) == expected.timing(SEGMENT, 1)
+
+    missing = clock_profile_data()
+    del missing["gap_attribute"]
+    with pytest.raises(ValueError, match="clock profile fields"):
+        ClockProfile.from_data(graph, missing)
+    malformed = clock_profile_data()
+    malformed["clock_tier"] = None
+    with pytest.raises(
+        ValueError, match=r"clock profile\.clock_tier must be an object"
+    ):
+        ClockProfile.from_data(graph, malformed)
+    malformed = clock_profile_data()
+    malformed["rate_attribute"] = "rate"
+    with pytest.raises(
+        ValueError, match=r"clock profile\.rate_attribute must be an object"
+    ):
+        ClockProfile.from_data(graph, malformed)
+    malformed = clock_profile_data()
+    malformed["clock_tier"] = {"namespace": [NS], "local_name": "clock"}
+    with pytest.raises(
+        ValueError, match=r"clock profile\.clock_tier\.namespace must be a string"
+    ):
+        ClockProfile.from_data(graph, malformed)
+    malformed = clock_profile_data()
+    malformed["unit_attribute"] = {"namespace": 12, "local_name": "timing-unit"}
+    with pytest.raises(
+        ValueError, match=r"clock profile\.unit_attribute\.namespace must be a string"
+    ):
+        ClockProfile.from_data(graph, malformed)
+    extra = clock_profile_data()
+    extra["surprise"] = None
+    with pytest.raises(ValueError, match="clock profile fields"):
+        ClockProfile.from_data(graph, extra)
+
+
 def with_stored_timing(
     graph: Graph,
     tier_name: QualifiedName,
@@ -884,6 +942,19 @@ def test_from_position_values_collapse_folds_each_tick_trailing_gap() -> None:
     )
     # Sanity: sum(R_t) - num_ticks == 10 - 3 == 7.
     assert len(collapsed.positions) == len(raw) - 3
+
+
+def test_from_position_values_collapse_refuses_single_boundary_tick() -> None:
+    """A tick with one raw boundary cannot be collapsed away."""
+    graph = spine_fixture(((0, 0), (1, 0), (1, 1)))
+    with pytest.raises(ValueError, match="single raw boundary"):
+        ClockProfile.from_position_values(
+            graph,
+            CLOCK,
+            tick_attribute=SPINE_TICK,
+            gap_attribute=SPINE_GAP,
+            collapse_shared_boundaries=True,
+        )
 
 
 def test_structural_profile_refuses_every_non_spine_timing_query() -> None:

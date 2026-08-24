@@ -9,12 +9,14 @@ import sys
 import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import BinaryIO, cast
 
 import tiergraph
 import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program
+from tiergraph import core as _core
 from tiergraph import machine as _machine_codec
 from tiergraph.schema import json_schema, shape_hash
 
@@ -135,6 +137,34 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="FILE",
             help="output file (default: -)",
         )
+
+    clock = subparsers.add_parser("clock", help="query declarative clock timing")
+    clock_subparsers = clock.add_subparsers(dest="clock_command", required=True)
+    for clock_command, help_text in (
+        ("positions", "list refined clock positions"),
+        ("position", "query one tier position"),
+        ("extent", "query a timed tier extent"),
+        ("item", "query one timed item"),
+    ):
+        clock_parser = clock_subparsers.add_parser(clock_command, help=help_text)
+        clock_parser.add_argument(
+            "file", metavar="GRAPH", help="graph file, or - for stdin"
+        )
+        clock_parser.add_argument("--profile", required=True, metavar="FILE")
+        if clock_command == "position":
+            clock_parser.add_argument("--position", required=True, metavar="PATH")
+        elif clock_command == "extent":
+            clock_parser.add_argument("--tier-namespace", required=True, metavar="NS")
+            clock_parser.add_argument("--tier-local", required=True, metavar="LOCAL")
+        elif clock_command == "item":
+            clock_parser.add_argument("--item", required=True, metavar="PATH")
+        clock_parser.add_argument(
+            "-o",
+            "--output",
+            default="-",
+            metavar="FILE",
+            help="output file (default: -)",
+        )
     return parser
 
 
@@ -246,6 +276,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ]
                 }
             _write_output(args.file, args.output, _json_bytes(grammar_value))
+        elif args.command == "clock":
+            graph = tiergraph.loads(_read_bytes(args.file))
+            clock_profile = tiergraph.ClockProfile.from_data(
+                graph, json.loads(_read_bytes(args.profile))
+            )
+            _check_distinct(args.profile, args.output)
+            clock_value = _clock_query(graph, clock_profile, args)
+            _write_output(args.file, args.output, _json_bytes(clock_value))
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -286,6 +324,92 @@ def main(argv: Sequence[str] | None = None) -> int:
         _diagnostic(args.command, type(error).__name__, error)
         return 3
     return 0
+
+
+def _clock_position_data(position: tiergraph.ClockPosition) -> dict[str, int]:
+    """Encode one refined clock position without inventing a public codec."""
+    return {"tick": position.tick, "gap": position.gap}
+
+
+def _clock_decimal(value: Decimal) -> str:
+    """Encode a Decimal with the graph codec's canonical XSD lexical form."""
+    return _core._canonical_lexical(tiergraph.XsdType.DECIMAL, format(value, "f"))
+
+
+def _clock_resolved(
+    graph: tiergraph.Graph, text: str, kind: str
+) -> tiergraph.ItemRef | tiergraph.PositionRef:
+    """Resolve one structural path and require the requested reference kind."""
+    resolved = tiergraph.resolve_path(graph, tiergraph.StructuralPathProfile(), text)
+    if kind == "item" and isinstance(resolved, tiergraph.ResolvedItem):
+        return resolved.current
+    if kind == "position" and isinstance(resolved, tiergraph.ResolvedPosition):
+        return resolved.current
+    article = "an" if kind == "item" else "a"
+    raise ValueError(f"clock {kind} path {text!r} did not resolve to {article} {kind}")
+
+
+def _clock_query(
+    graph: tiergraph.Graph,
+    profile: tiergraph.ClockProfile,
+    args: argparse.Namespace,
+) -> object:
+    """Evaluate one parsed clock query and return JSON-compatible data."""
+    if args.clock_command == "positions":
+        return {
+            "clock_tier": profile.clock_tier.to_data(),
+            "positions": [
+                {"index": index, **_clock_position_data(position)}
+                for index, position in enumerate(profile.positions)
+            ],
+        }
+    if args.clock_command == "position":
+        position_reference = cast(
+            tiergraph.PositionRef,
+            _clock_resolved(graph, args.position, "position"),
+        )
+        return {
+            "position": position_reference.to_data(),
+            "clock_index": profile.clock_position(position_reference),
+            "refined": _clock_position_data(
+                profile.refined_position(position_reference)
+            ),
+        }
+    if args.clock_command == "extent":
+        tier = tiergraph.QualifiedName(args.tier_namespace, args.tier_local)
+        start, end = profile.extent(tier)
+        return {
+            "tier": tier.to_data(),
+            "start": _clock_position_data(start),
+            "end": _clock_position_data(end),
+        }
+    item_reference = cast(tiergraph.ItemRef, _clock_resolved(graph, args.item, "item"))
+    start, end = profile.structural_span(item_reference.tier, item_reference.index)
+    physical = profile.timing(item_reference.tier, item_reference.index)
+    try:
+        ticks, rate = profile.duration(item_reference.tier, item_reference.index)
+        exact_duration: object = {"ticks": ticks, "rate": _clock_decimal(rate)}
+    except ValueError as error:
+        if str(error) != "clock has no uniform rate":
+            raise
+        exact_duration = None
+    return {
+        "item": item_reference.to_data(),
+        "structural": {
+            "start": _clock_position_data(start),
+            "end": _clock_position_data(end),
+        },
+        "physical": (
+            None
+            if physical is None
+            else {
+                "start": _clock_decimal(physical.start),
+                "duration": _clock_decimal(physical.duration),
+                "unit": physical.unit,
+            }
+        ),
+        "exact_duration": exact_duration,
+    }
 
 
 def _walk_source(
