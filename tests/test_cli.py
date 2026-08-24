@@ -49,6 +49,7 @@ from tiergraph import (
     XsdType,
 )
 from tiergraph.cli import build_parser, main
+from tiergraph.schema import json_schema, shape_hash
 
 
 def _empty(path: Path) -> tiergraph.Graph:
@@ -69,8 +70,18 @@ def test_version_default_help_and_every_command_help(
     assert main(["--version"]) == 0
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
-    assert "{validate,render,inspect,convert,run,step}" in capsys.readouterr().out
-    for command in ("validate", "render", "inspect", "convert", "run", "step"):
+    assert (
+        "{validate,render,inspect,convert,schema,run,step}" in capsys.readouterr().out
+    )
+    for command in (
+        "validate",
+        "render",
+        "inspect",
+        "convert",
+        "schema",
+        "run",
+        "step",
+    ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
         assert raised.value.code == 0
@@ -85,6 +96,7 @@ def test_version_default_help_and_every_command_help(
         "render",
         "inspect",
         "convert",
+        "schema",
         "run",
         "step",
     ]
@@ -133,6 +145,30 @@ def test_validate_and_graph_output_commands(
     ).encode("utf-8")
     assert b"\n  " in (tmp_path / "json").read_bytes()
     assert b"\n  " not in (tmp_path / "json-compact").read_bytes()
+
+
+def test_schema_outputs_current_selected_version_and_hash(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["schema"]) == 0
+    current_output = capsys.readouterr().out
+    current = json.loads(current_output)
+    assert current["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert current["$id"].endswith(f"format-{tiergraph.FORMAT_VERSION}.json")
+    assert current["properties"]["format_version"] == {
+        "const": tiergraph.FORMAT_VERSION
+    }
+    assert current_output.encode("utf-8") == cli._json_bytes(
+        json_schema(tiergraph.FORMAT_VERSION)
+    )
+
+    output = tmp_path / "schema.json"
+    assert main(["schema", "--format-version", "6", "-o", str(output)]) == 0
+    selected = json.loads(output.read_text())
+    assert selected["properties"]["format_version"] == {"const": "6"}
+
+    assert main(["schema", "--hash"]) == 0
+    assert capsys.readouterr().out == f"{shape_hash()}\n"
 
 
 def test_inspect_uses_canonical_relation_order(tmp_path: Path) -> None:

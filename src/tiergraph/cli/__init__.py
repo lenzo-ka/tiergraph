@@ -16,6 +16,7 @@ import tiergraph
 import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program
 from tiergraph import machine as _machine_codec
+from tiergraph.schema import json_schema, shape_hash
 
 _attributes = _machine_codec._decode_attributes
 _endpoint = _machine_codec._decode_endpoint
@@ -48,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
     _document_arguments(convert)
     convert.add_argument(
         "--to", choices=("json", "json-compact", "bytes"), required=True
+    )
+
+    schema = subparsers.add_parser("schema", help="print the graph document schema")
+    schema.add_argument(
+        "--format-version", default=tiergraph.FORMAT_VERSION, metavar="N"
+    )
+    schema.add_argument("--hash", action="store_true", help="print the shape hash")
+    schema.add_argument(
+        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
     )
 
     run = subparsers.add_parser("run", help="execute a JSONL machine program")
@@ -92,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     try:
         if hasattr(args, "output"):
-            _check_distinct(args.file, args.output)
+            _check_distinct(getattr(args, "file", "-"), args.output)
         if args.command == "validate":
             graph = tiergraph.loads(_read_bytes(args.file))
             del graph
@@ -107,6 +117,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "convert":
             graph = tiergraph.loads(_read_bytes(args.file))
             _write_output(args.file, args.output, _graph_bytes(graph, args.to))
+        elif args.command == "schema":
+            encoded = (
+                (shape_hash() + "\n").encode("utf-8")
+                if args.hash
+                else _json_bytes(json_schema(args.format_version))
+            )
+            _write_output("-", args.output, encoded)
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -207,8 +224,21 @@ def _graph_bytes(graph: tiergraph.Graph, target: str) -> bytes:
     if target == "bytes":
         return tiergraph.dump_bytes(graph)
     if target == "json":
-        return tiergraph.dumps(graph).encode("utf-8")
+        return _json_bytes(tiergraph.to_data(graph))
     return tiergraph.dump_compact(graph).encode("utf-8")
+
+
+def _json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
 
 
 def _step_bytes(step: Step) -> bytes:
