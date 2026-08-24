@@ -432,6 +432,40 @@ def _arc_labeled(left: str, right: str, label: str) -> str:
     )
 
 
+type _RenderedRelation = RelationInstance | PolyadicRelationInstance
+type _RelationEndpoint = ItemRef | DurablePositionRef
+
+
+def _emit_relation_edges(
+    lines: list[str],
+    relations: Iterable[_RenderedRelation],
+    endpoint: Callable[[_RelationEndpoint, QualifiedName], str],
+    arc: Callable[[_RenderedRelation, str, str], str],
+    prepare: Callable[[_RenderedRelation], None] | None = None,
+) -> None:
+    """Emit relation edges in declaration and source-target order."""
+    for relation in relations:
+        if prepare is not None:
+            prepare(relation)
+        pairs: Iterable[tuple[_RelationEndpoint, _RelationEndpoint]]
+        if isinstance(relation, RelationInstance):
+            pairs = ((relation.left, relation.right),)
+        else:
+            pairs = (
+                (source, target)
+                for source in relation.sources
+                for target in relation.targets
+            )
+        for left, right in pairs:
+            lines.append(
+                arc(
+                    relation,
+                    endpoint(left, relation.declaration),
+                    endpoint(right, relation.declaration),
+                )
+            )
+
+
 def _structural_relation_lines(
     lines: list[str],
     graph: Graph,
@@ -459,14 +493,12 @@ def _structural_relation_lines(
 
     if graph.relations:
         lines.extend(("", "  // Declared bipartite relations."))
-        for relation in graph.relations:
-            lines.append(
-                _arc(
-                    _endpoint(relation.left, relation.declaration),
-                    _endpoint(relation.right, relation.declaration),
-                    relation.declaration,
-                )
-            )
+        _emit_relation_edges(
+            lines,
+            graph.relations,
+            _endpoint,
+            lambda relation, left, right: _arc(left, right, relation.declaration),
+        )
     # Evaluate relation_style exactly once per non-empty polyadic relation and
     # cache it, so a stateful or non-deterministic hook cannot place a relation
     # in neither section (or both) across two separate evaluations.
@@ -479,29 +511,30 @@ def _structural_relation_lines(
     bipartite = tuple(polyadic for polyadic, style in styled if style == "bipartite")
     if fanned:
         lines.extend(("", "  // Declared polyadic relations."))
-        for polyadic in fanned:
-            for source in polyadic.sources:
-                for target in polyadic.targets:
-                    lines.append(
-                        _arc(
-                            _endpoint(source, polyadic.declaration),
-                            _endpoint(target, polyadic.declaration),
-                            polyadic.declaration,
-                        )
-                    )
+        _emit_relation_edges(
+            lines,
+            fanned,
+            _endpoint,
+            lambda relation, left, right: _arc(left, right, relation.declaration),
+        )
     if bipartite:
         lines.extend(("", "  // Declared relations."))
-        for polyadic in bipartite:
-            label = _relation_label(presentation, polyadic)
-            for source in polyadic.sources:
-                for target in polyadic.targets:
-                    lines.append(
-                        _arc_labeled(
-                            _endpoint(source, polyadic.declaration),
-                            _endpoint(target, polyadic.declaration),
-                            label,
-                        )
-                    )
+        labels: dict[int, str] = {}
+
+        def _prepare_labeled(relation: _RenderedRelation) -> None:
+            assert isinstance(relation, PolyadicRelationInstance)
+            labels[id(relation)] = _relation_label(presentation, relation)
+
+        def _labeled(relation: _RenderedRelation, left: str, right: str) -> str:
+            return _arc_labeled(left, right, labels[id(relation)])
+
+        _emit_relation_edges(
+            lines,
+            bipartite,
+            _endpoint,
+            _labeled,
+            _prepare_labeled,
+        )
 
 
 def _dumps_occupied_spine(
@@ -880,40 +913,19 @@ def _relation_lines(
     items: dict[ItemRef, str],
     boundaries: dict[PositionRef, str],
 ) -> None:
+    def _endpoint(endpoint_ref: _RelationEndpoint, declaration: QualifiedName) -> str:
+        del declaration
+        return _endpoint_id(graph, endpoint_ref, items, boundaries)
+
+    def _render(relation: _RenderedRelation, left: str, right: str) -> str:
+        return _arc(left, right, relation.declaration)
+
     if graph.relations:
         lines.extend(("", "  // Declared bipartite relations."))
-    for relation in graph.relations:
-        lines.append(_bipartite_line(graph, relation, items, boundaries))
+    _emit_relation_edges(lines, graph.relations, _endpoint, _render)
     if graph.polyadic_relations:
         lines.extend(("", "  // Declared polyadic relations."))
-    for polyadic_relation in graph.polyadic_relations:
-        lines.extend(_polyadic_lines(graph, polyadic_relation, items, boundaries))
-
-
-def _bipartite_line(
-    graph: Graph,
-    relation: RelationInstance,
-    items: dict[ItemRef, str],
-    boundaries: dict[PositionRef, str],
-) -> str:
-    left = _endpoint_id(graph, relation.left, items, boundaries)
-    right = _endpoint_id(graph, relation.right, items, boundaries)
-    return _arc(left, right, relation.declaration)
-
-
-def _polyadic_lines(
-    graph: Graph,
-    relation: PolyadicRelationInstance,
-    items: dict[ItemRef, str],
-    boundaries: dict[PositionRef, str],
-) -> Iterable[str]:
-    for source in relation.sources:
-        for target in relation.targets:
-            yield _arc(
-                _endpoint_id(graph, source, items, boundaries),
-                _endpoint_id(graph, target, items, boundaries),
-                relation.declaration,
-            )
+    _emit_relation_edges(lines, graph.polyadic_relations, _endpoint, _render)
 
 
 def _endpoint_id(

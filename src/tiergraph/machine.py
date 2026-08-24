@@ -27,10 +27,13 @@ from tiergraph.core import (
     PositionRef,
     QualifiedName,
     RelationDeclaration,
+    RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    XsdType,
     _GraphBuilder,
     _MutableTier,
     _resolve_relation_endpoint,
@@ -39,6 +42,7 @@ from tiergraph.core import (
     _validate_endpoint,
     _validate_polyadic_instance,
 )
+from tiergraph.wire import MAX_JSON_DEPTH
 
 MACHINE_VERSION = "1"
 MAX_REPEAT_COUNT = 10_000
@@ -353,6 +357,357 @@ _PRIMITIVE_OPCODE_TYPES = (
     Relate,
     AttachValue,
 )
+
+
+def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
+    """Decode one JSON-value opcode with path-aware shape diagnostics."""
+    if depth > MAX_JSON_DEPTH:
+        raise ValueError(f"{path}: JSON nesting depth exceeds limit {MAX_JSON_DEPTH}")
+    if not isinstance(value, dict) or not isinstance(value.get("opcode"), str):
+        raise ValueError(f"{path} must be an opcode object")
+    name = value["opcode"]
+    decoders: dict[str, tuple[set[str], Callable[[dict[str, object]], Opcode]]] = {
+        "declare_namespace": (
+            {"opcode", "declaration"},
+            lambda v: DeclareNamespace(
+                _decode_namespace(v["declaration"], f"{path}.declaration")
+            ),
+        ),
+        "declare_tier": (
+            {"opcode", "declaration"},
+            lambda v: DeclareTier(
+                _decode_tier(v["declaration"], f"{path}.declaration")
+            ),
+        ),
+        "declare_relation": (
+            {"opcode", "declaration"},
+            lambda v: DeclareRelation(
+                _decode_relation_declaration(v["declaration"], f"{path}.declaration")
+            ),
+        ),
+        "declare_attribute": (
+            {"opcode", "declaration"},
+            lambda v: DeclareAttribute(
+                _decode_attribute_declaration(v["declaration"], f"{path}.declaration")
+            ),
+        ),
+        "add_item": (
+            {"opcode", "tier", "item"},
+            lambda v: AddItem(
+                _decode_qname(v["tier"], f"{path}.tier"),
+                _decode_item(v["item"], f"{path}.item"),
+            ),
+        ),
+        "promote_item": (
+            {"opcode", "reference", "durable_id"},
+            lambda v: PromoteItem(
+                _decode_item_ref(v["reference"], f"{path}.reference"),
+                cast(str, v["durable_id"]),
+            ),
+        ),
+        "promote_position": (
+            {"opcode", "reference", "durable_id"},
+            lambda v: PromotePosition(
+                _decode_position_ref(v["reference"], f"{path}.reference"),
+                cast(str, v["durable_id"]),
+            ),
+        ),
+        "relate": (
+            {"opcode", "relation"},
+            lambda v: Relate(
+                _decode_relation_instance(v["relation"], f"{path}.relation")
+            ),
+        ),
+        "attach_value": (
+            {"opcode", "domain", "target", "value"},
+            lambda v: _decode_attach(v, path),
+        ),
+        "repeat": (
+            {"opcode", "count", "body"},
+            lambda v: _decode_repeat(v, path, depth),
+        ),
+    }
+    if name not in decoders:
+        raise ValueError(f"{path}.opcode {name!r} is unknown")
+    keys, decoder = decoders[name]
+    return decoder(_decode_object(value, path, keys))
+
+
+def _decode_object(value: object, path: str, keys: set[str]) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    actual = set(value)
+    if actual != keys:
+        raise ValueError(
+            f"{path} fields must be {sorted(keys)!r}; got {sorted(actual)!r}"
+        )
+    return cast(dict[str, object], value)
+
+
+def _decode_qname(value: object, path: str) -> QualifiedName:
+    obj = _decode_object(value, path, {"namespace", "local_name"})
+    return QualifiedName(cast(str, obj["namespace"]), cast(str, obj["local_name"]))
+
+
+def _decode_namespace(value: object, path: str) -> NamespaceDeclaration:
+    obj = _decode_object(value, path, {"prefix", "namespace"})
+    return NamespaceDeclaration(cast(str, obj["prefix"]), cast(str, obj["namespace"]))
+
+
+def _decode_tier(value: object, path: str) -> TierDeclaration:
+    obj = _decode_object(value, path, {"name", "long_name"})
+    return TierDeclaration(
+        _decode_qname(obj["name"], f"{path}.name"), cast(str, obj["long_name"])
+    )
+
+
+def _decode_attribute_declaration(value: object, path: str) -> AttributeDeclaration:
+    obj = _decode_object(value, path, {"name", "domain", "value_type"})
+    return AttributeDeclaration(
+        _decode_qname(obj["name"], f"{path}.name"),
+        AttributeDomain(cast(str, obj["domain"])),
+        XsdType(cast(str, obj["value_type"])),
+    )
+
+
+def _decode_attribute_value(value: object, path: str) -> AttributeValue:
+    obj = _decode_object(value, path, {"name", "value_type", "lexical"})
+    return AttributeValue(
+        _decode_qname(obj["name"], f"{path}.name"),
+        XsdType(cast(str, obj["value_type"])),
+        cast(str, obj["lexical"]),
+    )
+
+
+def _decode_attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array")
+    return tuple(
+        _decode_attribute_value(item, f"{path}[{index}]")
+        for index, item in enumerate(value)
+    )
+
+
+def _decode_item(value: object, path: str) -> Item:
+    obj = _decode_object(value, path, {"durable_id", "attributes"})
+    return Item(
+        cast(str | None, obj["durable_id"]),
+        _decode_attributes(obj["attributes"], f"{path}.attributes"),
+    )
+
+
+def _decode_item_ref(value: object, path: str) -> ItemRef:
+    obj = _decode_object(value, path, {"tier", "index"})
+    return ItemRef(_decode_qname(obj["tier"], f"{path}.tier"), cast(int, obj["index"]))
+
+
+def _decode_position_ref(value: object, path: str) -> PositionRef:
+    obj = _decode_object(value, path, {"tier", "index"})
+    return PositionRef(
+        _decode_qname(obj["tier"], f"{path}.tier"), cast(int, obj["index"])
+    )
+
+
+def _decode_endpoint(value: object, path: str) -> object:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an endpoint object")
+    if set(value) == {"tier", "index"}:
+        return _decode_item_ref(value, path)
+    if set(value) == {"durable_id"}:
+        return DurableItemRef(value["durable_id"])
+    if set(value) == {"anchor", "side"}:
+        anchor_value = value["anchor"]
+        anchor = _decode_object(
+            anchor_value,
+            f"{path}.anchor",
+            set(cast(dict[str, object], anchor_value)),
+        )
+        if set(anchor) == {"kind", "durable_id"} and anchor["kind"] == "item":
+            decoded_anchor: DurableItemRef | QualifiedName = DurableItemRef(
+                cast(str, anchor["durable_id"])
+            )
+        elif set(anchor) == {"kind", "tier"} and anchor["kind"] == "tier":
+            decoded_anchor = _decode_qname(anchor["tier"], f"{path}.anchor.tier")
+        else:
+            raise ValueError(f"{path}.anchor has an unknown shape")
+        return DurablePositionRef(
+            decoded_anchor, BoundarySide(cast(str, value["side"]))
+        )
+    raise ValueError(f"{path} has an unknown reference shape")
+
+
+def _decode_relation_instance(
+    value: object, path: str
+) -> RelationInstance | PolyadicRelationInstance:
+    if isinstance(value, dict) and "sources" in value:
+        obj = _decode_object(
+            value,
+            path,
+            {"declaration", "sources", "targets", "durable_id", "attributes"},
+        )
+        sources, targets = obj["sources"], obj["targets"]
+        if not isinstance(sources, list) or not isinstance(targets, list):
+            raise ValueError(f"{path} sources and targets must be arrays")
+        return PolyadicRelationInstance(
+            _decode_qname(obj["declaration"], f"{path}.declaration"),
+            tuple(
+                cast(
+                    ItemRef | DurablePositionRef,
+                    _decode_endpoint(endpoint, f"{path}.sources[{index}]"),
+                )
+                for index, endpoint in enumerate(sources)
+            ),
+            tuple(
+                cast(
+                    ItemRef | DurablePositionRef,
+                    _decode_endpoint(endpoint, f"{path}.targets[{index}]"),
+                )
+                for index, endpoint in enumerate(targets)
+            ),
+            cast(str | None, obj["durable_id"]),
+            _decode_attributes(obj["attributes"], f"{path}.attributes"),
+        )
+    obj = _decode_object(
+        value, path, {"declaration", "left", "right", "durable_id", "attributes"}
+    )
+    return RelationInstance(
+        _decode_qname(obj["declaration"], f"{path}.declaration"),
+        cast(
+            ItemRef | DurablePositionRef,
+            _decode_endpoint(obj["left"], f"{path}.left"),
+        ),
+        cast(
+            ItemRef | DurablePositionRef,
+            _decode_endpoint(obj["right"], f"{path}.right"),
+        ),
+        cast(str | None, obj["durable_id"]),
+        _decode_attributes(obj["attributes"], f"{path}.attributes"),
+    )
+
+
+def _decode_side(value: object, path: str) -> RelationSideDeclaration:
+    obj = _decode_object(
+        value, path, {"endpoint_kinds", "tiers", "minimum", "maximum", "allow_empty"}
+    )
+    kinds, tiers = obj["endpoint_kinds"], obj["tiers"]
+    if not isinstance(kinds, list) or not isinstance(tiers, list):
+        raise ValueError(f"{path} endpoint_kinds and tiers must be arrays")
+    maximum = obj["maximum"]
+    return RelationSideDeclaration(
+        tuple(RelationEndpointKind(cast(str, item)) for item in kinds),
+        None
+        if not tiers
+        else tuple(_decode_qname(item, f"{path}.tiers") for item in tiers),
+        cast(int, obj["minimum"]),
+        None if maximum == -1 else cast(int, maximum),
+        cast(bool, obj["allow_empty"]),
+    )
+
+
+def _decode_relation_declaration(value: object, path: str) -> RelationDeclaration:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    kind = value.get("kind")
+    if kind == "simple":
+        obj = _decode_object(
+            value, path, {"kind", "name", "tier", "item_type", "attributes"}
+        )
+        return SimpleRelationDeclaration(
+            _decode_qname(obj["name"], f"{path}.name"),
+            _decode_qname(obj["tier"], f"{path}.tier"),
+            _decode_qname(obj["item_type"], f"{path}.item_type"),
+            _decode_attributes(obj["attributes"], f"{path}.attributes"),
+        )
+    if kind == "bipartite":
+        obj = _decode_object(
+            value,
+            path,
+            {
+                "kind",
+                "name",
+                "left_type",
+                "right_type",
+                "left_endpoint",
+                "right_endpoint",
+                "single_parent",
+                "acyclic",
+                "attributes",
+            },
+        )
+        return BipartiteRelationDeclaration(
+            _decode_qname(obj["name"], f"{path}.name"),
+            _decode_qname(obj["left_type"], f"{path}.left_type"),
+            _decode_qname(obj["right_type"], f"{path}.right_type"),
+            RelationEndpointKind(cast(str, obj["left_endpoint"])),
+            RelationEndpointKind(cast(str, obj["right_endpoint"])),
+            cast(bool, obj["single_parent"]),
+            cast(bool, obj["acyclic"]),
+            _decode_attributes(obj["attributes"], f"{path}.attributes"),
+        )
+    if kind == "polyadic":
+        obj = _decode_object(
+            value,
+            path,
+            {
+                "kind",
+                "name",
+                "sources",
+                "targets",
+                "unique_sources",
+                "distinct_targets",
+                "single_parent",
+                "acyclic",
+                "targets_subset_of",
+                "attributes",
+            },
+        )
+        subset = obj["targets_subset_of"]
+        if not isinstance(subset, list) or len(subset) > 1:
+            raise ValueError(f"{path}.targets_subset_of must contain at most one name")
+        return PolyadicRelationDeclaration(
+            _decode_qname(obj["name"], f"{path}.name"),
+            _decode_side(obj["sources"], f"{path}.sources"),
+            _decode_side(obj["targets"], f"{path}.targets"),
+            cast(bool, obj["unique_sources"]),
+            cast(bool, obj["distinct_targets"]),
+            cast(bool, obj["single_parent"]),
+            cast(bool, obj["acyclic"]),
+            None
+            if not subset
+            else _decode_qname(subset[0], f"{path}.targets_subset_of[0]"),
+            _decode_attributes(obj["attributes"], f"{path}.attributes"),
+        )
+    raise ValueError(f"{path}.kind {kind!r} is unknown")
+
+
+def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
+    domain = AttributeDomain(cast(str, value["domain"]))
+    target: object = value["target"]
+    if isinstance(target, dict):
+        if domain in {AttributeDomain.TIER, AttributeDomain.RELATION_DECLARATION}:
+            target = _decode_qname(target, f"{path}.target")
+        elif domain is AttributeDomain.POSITION and set(target) == {"tier", "index"}:
+            target = _decode_position_ref(target, f"{path}.target")
+        else:
+            target = _decode_endpoint(target, f"{path}.target")
+    return AttachValue(
+        domain,
+        cast(AttributeTarget, target),
+        _decode_attribute_value(value["value"], f"{path}.value"),
+    )
+
+
+def _decode_repeat(value: dict[str, object], path: str, depth: int) -> Repeat:
+    body = value["body"]
+    if not isinstance(body, list):
+        raise ValueError(f"{path}.body must be an array")
+    return Repeat(
+        cast(int, value["count"]),
+        tuple(
+            _decode_opcode(item, f"{path}.body[{index}]", depth + 2)
+            for index, item in enumerate(body)
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1040,36 +1395,7 @@ def _attach_relation_declaration(
     for declaration in graph.relation_declarations:
         if declaration.name == target:
             found = True
-            if isinstance(declaration, SimpleRelationDeclaration):
-                declaration = SimpleRelationDeclaration(
-                    declaration.name,
-                    declaration.tier,
-                    declaration.item_type,
-                    (*declaration.attributes, value),
-                )
-            elif isinstance(declaration, BipartiteRelationDeclaration):
-                declaration = BipartiteRelationDeclaration(
-                    declaration.name,
-                    declaration.left_type,
-                    declaration.right_type,
-                    declaration.left_endpoint,
-                    declaration.right_endpoint,
-                    declaration.single_parent,
-                    declaration.acyclic,
-                    (*declaration.attributes, value),
-                )
-            else:
-                declaration = PolyadicRelationDeclaration(
-                    declaration.name,
-                    declaration.sources,
-                    declaration.targets,
-                    declaration.unique_sources,
-                    declaration.distinct_targets,
-                    declaration.single_parent,
-                    declaration.acyclic,
-                    declaration.targets_subset_of,
-                    (*declaration.attributes, value),
-                )
+            declaration = _relation_with_value(declaration, value)
         declarations.append(declaration)
     if not found:
         raise ValueError(
