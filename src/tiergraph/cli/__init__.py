@@ -79,6 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="use the interactive debugger (also enabled when stdin is a TTY)",
     )
 
+    walk = subparsers.add_parser("walk", help="traverse a transitive relation")
+    walk.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    walk.add_argument("--source", action="append", required=True, metavar="PATH")
+    walk.add_argument("--relation-namespace", required=True, metavar="NS")
+    walk.add_argument("--relation-local", required=True, metavar="LOCAL")
+    walk.add_argument("--direction", choices=("forward", "inverse"), default="forward")
+    walk.add_argument("--cap", type=int, metavar="N")
+    walk.add_argument(
+        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
+    )
+
     path = subparsers.add_parser("path", help="resolve and spell tiergraph paths")
     path_subparsers = path.add_subparsers(dest="path_command", required=True)
     resolve = path_subparsers.add_parser("resolve", help="resolve a tiergraph path")
@@ -170,6 +181,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else _json_bytes(json_schema(args.format_version))
             )
             _write_output("-", args.output, encoded)
+        elif args.command == "walk":
+            graph = tiergraph.loads(_read_bytes(args.file))
+            if args.cap is not None and args.cap < 1:
+                raise ValueError(f"walk cap {args.cap!r} must be positive")
+            profile = tiergraph.StructuralPathProfile()
+            sources = [
+                _walk_source(graph, profile, source_text) for source_text in args.source
+            ]
+            source = sources[0]
+            for selection in sources[1:]:
+                source = source | selection
+            result = tiergraph.Walk(
+                source,
+                tiergraph.QualifiedName(args.relation_namespace, args.relation_local),
+                tiergraph.WalkDirection(args.direction),
+                args.cap,
+            ).evaluate()
+            _write_output(args.file, args.output, _json_bytes(result.to_data()))
         elif args.command == "path":
             graph = tiergraph.loads(_read_bytes(args.file))
             profile = tiergraph.StructuralPathProfile()
@@ -257,6 +286,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         _diagnostic(args.command, type(error).__name__, error)
         return 3
     return 0
+
+
+def _walk_source(
+    graph: tiergraph.Graph,
+    profile: tiergraph.StructuralPathProfile,
+    source_text: str,
+) -> tiergraph.NodeSet:
+    """Resolve one walk source path as a single-node selection."""
+    resolved = tiergraph.resolve_path(graph, profile, source_text)
+    if isinstance(resolved, tiergraph.ResolvedItem):
+        return tiergraph.ItemSelector(graph, resolved.current).evaluate()
+    if isinstance(resolved, tiergraph.ResolvedPosition):
+        return tiergraph.BoundarySelector(graph, resolved.current).evaluate()
+    raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
+        "structural path profile returned an alternative"
+    )
 
 
 def _tokens_json(source: str) -> tuple[str, ...]:
