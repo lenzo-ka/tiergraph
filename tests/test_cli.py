@@ -1384,6 +1384,41 @@ def test_run_bad_envelopes(
     assert "tiergraph: run: ValueError:" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("command", "member", "value"),
+    [("run", "namespace", ["urn:bad"]), ("step", "local_name", 7)],
+)
+def test_machine_commands_cleanly_reject_non_string_qname_members(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    member: str,
+    value: object,
+) -> None:
+    """Malformed machine QNames produce the normal exit-one diagnostic."""
+    source = tmp_path / "bad-qname.jsonl"
+    qname: dict[str, object] = {"namespace": "urn:bad", "local_name": "tier"}
+    qname[member] = value
+    records = [
+        {"machine_version": tiergraph.MACHINE_VERSION},
+        {
+            "opcode": "declare_tier",
+            "declaration": {"name": qname, "long_name": "Tier"},
+        },
+    ]
+    source.write_text("".join(f"{json.dumps(record)}\n" for record in records))
+
+    arguments = [command, str(source)]
+    if command == "run":
+        arguments.extend(("--to", "json"))
+    assert main(arguments) == 1
+    error = capsys.readouterr().err
+    assert f"tiergraph: {command}: ValueError:" in error
+    assert f"line 2.declaration.name.{member} must be a string" in error
+    assert "TypeError" not in error
+    assert "Traceback" not in error
+
+
 def test_clean_domain_io_and_same_path_errors(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

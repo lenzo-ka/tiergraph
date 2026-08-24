@@ -121,12 +121,8 @@ class ClockProfile:
         obj = _decode_object(data, "clock profile", keys)
 
         def qualified_name(name: str, value: object) -> QualifiedName:
-            """Decode one QName after validating both string-valued members."""
+            """Decode one QName with path-specific validation."""
             path = f"clock profile.{name}"
-            members = _decode_object(value, path, {"namespace", "local_name"})
-            for member in ("namespace", "local_name"):
-                if not isinstance(members[member], str):
-                    raise ValueError(f"{path}.{member} must be a string")
             return _decode_qname(value, path)
 
         def required(name: str) -> QualifiedName:

@@ -18,6 +18,7 @@ from tiergraph import (
     Repeat,
     TierDeclaration,
     load_program,
+    machine,
     machine_codec,
     program_dumps,
     program_loads,
@@ -74,6 +75,43 @@ def test_program_loads_normalizes_malformed_records(
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(message)):
         program_loads(source)
+
+
+@pytest.mark.parametrize(
+    "value,path,message",
+    [
+        ({"namespace": [], "local_name": "tier"}, "name", "name.namespace"),
+        ({"namespace": "urn:test", "local_name": 3}, "name", "name.local_name"),
+    ],
+)
+def test_qname_decoder_rejects_non_string_members(
+    value: object, path: str, message: str
+) -> None:
+    """QName members are strings before a core value is constructed."""
+    with pytest.raises(ValueError, match=rf"^{re.escape(message)} must be a string$"):
+        machine._decode_qname(value, path)
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("name", {"namespace": [], "local_name": "value"}, "attribute.name.namespace"),
+        ("value_type", 4, "attribute.value_type"),
+        ("lexical", ["x"], "attribute.lexical"),
+    ],
+)
+def test_attribute_value_decoder_rejects_non_string_members(
+    field: str, value: object, message: str
+) -> None:
+    """Attribute values reject every non-string member with its precise path."""
+    data: dict[str, object] = {
+        "name": {"namespace": "urn:test", "local_name": "value"},
+        "value_type": "string",
+        "lexical": "x",
+    }
+    data[field] = value
+    with pytest.raises(ValueError, match=rf"^{re.escape(message)} must be a string$"):
+        machine._decode_attribute_value(data, "attribute")
 
 
 def test_program_loads_preserves_all_limit_diagnostics(
