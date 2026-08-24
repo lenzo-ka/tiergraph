@@ -1,17 +1,32 @@
 # Construction
 
-There are two ways to make a graph. Direct constructors build an immutable value
-in one step, which suits data already held in memory. The build machine records
-an ordered stream of edits as a `Program`, which suits input where the sequence
-of declarations and additions is itself part of the contract, such as a
-deserialized or generated document.
+There are three ways to make a graph. Most newcomers should start with the
+ergonomic `tiergraph.build` builder used in [Getting started](../getting-started.md).
+Direct constructors build an immutable value in one step, which suits data
+already held in memory. The build machine records an ordered stream of edits as
+a `Program`, which suits input where the sequence of declarations and additions
+is itself part of the contract, such as a deserialized or generated document.
+
+## The ergonomic builder
+
+Create a mutable `Document` with `tiergraph.build.document()`, add ordered tiers
+and relations, then call `build()` to cross the immutable graph-validation
+boundary. `Document.attributes()` declares several typed attributes at once;
+`Document.tier()` returns a `TierHandle` whose `ref()`, `start()`, `end()`,
+`before()`, and `after()` methods provide checked item and boundary anchors.
+`Document.relation()` accepts those anchors using concise builder notation.
+The `item()` helper describes an item before declared attribute types are
+lowered. Invalid builder notation raises `tiergraph.build.BuilderError`, while
+`build()` may expose graph-wide validation errors. See the
+[generated API reference](../reference/api.md#tiergraphbuild) for the supported
+secondary surface.
 
 ## Direct construction
 
 Pass namespaces, tiers, relation declarations, and the rest to `Graph`. Declare
 a name before referring to it, because `Graph` performs the cross-object
-validation when it is constructed. The [getting started](../getting-started.md)
-walkthrough builds graphs this way.
+validation when it is constructed. Use this lower-level path when the complete
+immutable content is already available to the caller.
 
 ## The build machine
 
@@ -115,3 +130,13 @@ refused at opcode 0
 The tier `missing` was never declared, so the `AddItem` at position 0 cannot
 make its transition. Because each step is validated in full, a program either
 produces a valid graph or stops at the exact opcode that broke.
+
+## Error boundary
+
+Invalid declarations or graph content at a graph-construction boundary raise
+`GraphValidationError`, a subclass of `ValueError`. This includes validation
+performed while decoding a serialized document into a graph. Once a `Graph` is
+valid, invalid arguments to lookup and mutation-style methods such as
+`resolve_item()`, `positions()`, and `promote_item()` deliberately remain plain
+`ValueError`; wrong Python argument kinds may raise `TypeError`. The build
+machine reports a refused opcode as `ExecutionError` and retains its cause.

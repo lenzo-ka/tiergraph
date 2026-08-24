@@ -1,7 +1,8 @@
 # Documentation
 
 Read [Concepts](concepts.md) for the model, then [Getting started](getting-started.md)
-for a small graph built two ways.
+for a small graph built with the ergonomic builder and then queried through the
+immutable API.
 
 ## How do I…
 

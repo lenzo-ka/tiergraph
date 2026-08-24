@@ -73,6 +73,13 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             "tiergraph.semiring export mismatch; "
             f"manifest={list(semiring)!r}; package={list(semiring_module.__all__)!r}"
         )
+    build = manifest.get("secondary", {}).get("tiergraph.build", [])
+    build_module = __import__("tiergraph.build", fromlist=["*"])
+    if list(build_module.__all__) != list(build):
+        raise ValueError(
+            "tiergraph.build export mismatch; "
+            f"manifest={list(build)!r}; package={list(build_module.__all__)!r}"
+        )
 
 
 def _signature(value: object) -> str:
@@ -93,7 +100,48 @@ def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
         return f"{heading}\n\nModule-level {kind}: `{type(value).__name__}`."
     signature = _signature(value)
     declaration = f"```text\n{name}{signature}\n```\n\n" if signature else ""
-    return f"{heading}\n\n{declaration}{doc}"
+    members = _class_members(value, name) if inspect.isclass(value) else ""
+    return f"{heading}\n\n{declaration}{doc}{members}"
+
+
+def _class_members(value: type[object], class_name: str) -> str:
+    """Render documented public members in deterministic definition order."""
+    parts: list[str] = []
+    for member_name in value.__dict__:
+        if member_name.startswith("_"):
+            continue
+        member = inspect.getattr_static(value, member_name)
+        target: object
+        kind: str
+        if isinstance(member, classmethod):
+            target = member.__func__
+            kind = "Class method."
+        elif isinstance(member, staticmethod):
+            target = member.__func__
+            kind = "Static method."
+        elif isinstance(member, property):
+            if member.fget is None:
+                continue
+            target = member.fget
+            kind = "Property."
+        elif inspect.isfunction(member):
+            target = member
+            kind = "Method."
+        else:
+            continue
+        doc = inspect.getdoc(target)
+        if not doc:
+            continue
+        signature = _signature(target)
+        declaration = (
+            f"\n\n```text\n{class_name}.{member_name}{signature}\n```"
+            if signature
+            else ""
+        )
+        parts.append(
+            f"#### `{class_name}.{member_name}`\n\n{kind}{declaration}\n\n{doc}"
+        )
+    return "\n\n" + "\n\n".join(parts) if parts else ""
 
 
 def api_bytes(manifest: Mapping[str, Any]) -> bytes:
@@ -120,6 +168,15 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
             f"API-stability promise at version {tiergraph.__version__}."
         )
         parts.extend((f"### `{module_name}`", "", stability, ""))
+        if module_name == "tiergraph.build":
+            parts.extend(
+                (
+                    "Builder notation errors raise the directly importable "
+                    "`tiergraph.build.BuilderError`, a `ValueError` subclass. "
+                    "It is not part of the module's star-exported surface.",
+                    "",
+                )
+            )
         parts.append("\n\n".join(_entry(module, name, {}) for name in names))
     parts.extend(("", "## Companion package", ""))
     parts.append(

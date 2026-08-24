@@ -6,6 +6,12 @@ strict: it validates structure and every reference on read, and it refuses a
 document whose `format_version` it does not implement rather than migrating it
 silently.
 
+Graph-contract validation performed while `loads()` reconstructs an immutable
+graph raises `GraphValidationError`, a `ValueError` subclass. This construction
+boundary is intentionally narrower than all graph operations: invalid lookup,
+resolution, profile, or mutation arguments against an already-valid `Graph`
+remain plain `ValueError`, and wrong Python argument kinds may raise `TypeError`.
+
 ## JSON round-trip
 
 `dumps` returns the canonical JSON text, `dump_bytes` returns its UTF-8 bytes,
