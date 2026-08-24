@@ -15,6 +15,7 @@ import pytest
 
 import tiergraph
 import tiergraph.cli as cli
+import tiergraph.machine_codec as machine_codec
 from tiergraph import (
     AddItem,
     AttachValue,
@@ -688,10 +689,10 @@ def test_stdin_stdout_limits_and_type_normalization(
 
     source = tmp_path / "large"
     source.write_bytes(b'{"machine_version":"1"}\n{}')
-    monkeypatch.setattr(cli, "_JSONL_LINE_BYTES", 2)
+    monkeypatch.setattr(machine_codec, "_JSONL_LINE_BYTES", 2)
     assert main(["run", str(source), "--to", "json"]) == 1
-    monkeypatch.setattr(cli, "_JSONL_LINE_BYTES", 1024)
-    monkeypatch.setattr(tiergraph, "MAX_DOCUMENT_BYTES", 2)
+    monkeypatch.setattr(machine_codec, "_JSONL_LINE_BYTES", 1024)
+    monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 2)
     assert main(["run", str(source), "--to", "json"]) == 1
 
     typed = tmp_path / "typed"
@@ -700,7 +701,7 @@ def test_stdin_stdout_limits_and_type_normalization(
         b'{"opcode":"add_item","tier":{"namespace":1,"local_name":"x"},'
         b'"item":{"durable_id":null,"attributes":[]}}'
     )
-    monkeypatch.setattr(tiergraph, "MAX_DOCUMENT_BYTES", 1024)
+    monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 1024)
     assert main(["run", str(typed), "--to", "json"]) == 1
 
 
@@ -740,7 +741,9 @@ def test_secondary_cleanup_and_decoder_type_normalization(
     program = tmp_path / "program"
     program.write_bytes(b'{"machine_version":"1"}\n{"opcode":"anything"}')
     monkeypatch.setattr(
-        cli, "_opcode", lambda value, path: (_ for _ in ()).throw(TypeError("typed"))
+        machine_codec,
+        "_decode_opcode",
+        lambda value, path: (_ for _ in ()).throw(TypeError("typed")),
     )
     with pytest.raises(ValueError, match="typed"):
         cli._read_program(str(program))
@@ -766,8 +769,7 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
     program = tmp_path / "program"
     program.write_bytes(b'{"machine_version":"1"}')
     monkeypatch.setattr(
-        json,
-        "loads",
+        "tiergraph.machine_codec.json.loads",
         lambda line: (_ for _ in ()).throw(RecursionError("parser recursion")),
     )
     with pytest.raises(
@@ -777,6 +779,8 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
         cli._read_program(str(program))
 
     # An escaped quote exercises both escape-state transitions in the byte scanner.
-    cli._check_jsonl_depth(bytes((ord('"'), ord("\\"), ord('"'), ord('"'))), 1)
+    machine_codec._check_jsonl_depth(
+        bytes((ord('"'), ord("\\"), ord('"'), ord('"'))), 1
+    )
     with pytest.raises(ValueError, match="JSON nesting depth exceeds limit"):
         cli._opcode({}, "line 2", tiergraph.MAX_JSON_DEPTH + 1)

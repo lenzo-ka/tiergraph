@@ -90,6 +90,7 @@ from tiergraph.machine import (
     execute,
     steps,
 )
+from tiergraph.machine_codec import load_program, program_dumps, program_loads
 from tiergraph.path import (
     AlternativeRef,
     CanonicalPath,
@@ -230,6 +231,9 @@ __all__ = [
     "PolyadicRelationInstance",
     "PolyadicSide",
     "Program",
+    "load_program",
+    "program_dumps",
+    "program_loads",
     "PromoteItem",
     "PromotePosition",
     "QualifiedName",

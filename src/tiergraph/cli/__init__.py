@@ -10,11 +10,11 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import BinaryIO, cast
 
 import tiergraph
 import tiergraph_dot
-from tiergraph import ExecutionError, Program, Step
+from tiergraph import ExecutionError, Program, Step, load_program
 from tiergraph import machine as _machine_codec
 
 _attributes = _machine_codec._decode_attributes
@@ -24,8 +24,6 @@ _relation_declaration = _machine_codec._decode_relation_declaration
 _relation_instance = _machine_codec._decode_relation_instance
 _side = _machine_codec._decode_side
 _opcode = _machine_codec._decode_opcode
-
-_JSONL_LINE_BYTES = 1024 * 1024
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -349,76 +347,12 @@ def _inspect(graph: tiergraph.Graph) -> str:
 def _read_program(filename: str) -> Program:
     stream: BinaryIO
     close = filename != "-"
-    stream = open(filename, "rb") if close else sys.stdin.buffer
+    stream = Path(filename).open("rb") if close else sys.stdin.buffer
     try:
-        records: list[Any] = []
-        total = 0
-        for number, line in enumerate(stream, 1):
-            total += len(line)
-            if total > tiergraph.MAX_DOCUMENT_BYTES:
-                raise ValueError(
-                    f"JSONL program exceeds {tiergraph.MAX_DOCUMENT_BYTES} bytes"
-                )
-            if len(line) > _JSONL_LINE_BYTES:
-                raise ValueError(
-                    f"JSONL line {number} exceeds {_JSONL_LINE_BYTES} bytes"
-                )
-            if not line.strip():
-                raise ValueError(f"JSONL line {number} is whitespace-only")
-            try:
-                _check_jsonl_depth(line, number)
-                records.append(json.loads(line))
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                raise ValueError(f"JSONL line {number}: {error}") from error
-            except RecursionError as error:
-                raise ValueError(
-                    f"JSONL line {number}: JSON nesting depth exceeds limit "
-                    f"{tiergraph.MAX_JSON_DEPTH}"
-                ) from error
+        return load_program(stream)
     finally:
         if close:
             stream.close()
-    if not records:
-        raise ValueError("JSONL program is missing its header line")
-    header = _object(records[0], "header", {"machine_version"})
-    if header["machine_version"] != tiergraph.MACHINE_VERSION:
-        raise ValueError(
-            f"header machine_version must be {tiergraph.MACHINE_VERSION!r}"
-        )
-    try:
-        opcodes = tuple(
-            _opcode(record, f"line {number}")
-            for number, record in enumerate(records[1:], 2)
-        )
-        return Program(opcodes)
-    except TypeError as error:
-        raise ValueError(str(error)) from error
-
-
-def _check_jsonl_depth(line: bytes, number: int) -> None:
-    """Refuse excessive JSON container nesting before invoking the parser."""
-    depth = 0
-    in_string = False
-    escaped = False
-    for byte in line:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif byte == ord("\\"):
-                escaped = True
-            elif byte == ord('"'):
-                in_string = False
-        elif byte == ord('"'):
-            in_string = True
-        elif byte in (ord("["), ord("{")):
-            depth += 1
-            if depth > tiergraph.MAX_JSON_DEPTH:
-                raise ValueError(
-                    f"JSONL line {number}: JSON nesting depth exceeds limit "
-                    f"{tiergraph.MAX_JSON_DEPTH}"
-                )
-        elif byte in (ord("]"), ord("}")):
-            depth -= 1
 
 
 __all__ = ["build_parser", "main"]

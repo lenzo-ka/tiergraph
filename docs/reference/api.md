@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 134 top-level `tiergraph` exports exactly once.
+It covers 137 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2320,6 +2320,14 @@ dumps(graph: 'Graph') -> 'str'
 
 Return the sole canonical JSON spelling, including its final newline.
 
+### `load_program`
+
+```text
+load_program(stream: 'BinaryIO') -> 'Program'
+```
+
+Read a versioned JSONL machine program incrementally from a binary stream.
+
 ### `loads`
 
 ```text
@@ -2330,6 +2338,22 @@ Parse the current format without implicitly migrating older documents.
 
 Migration is refused because choosing a loss-aware conversion belongs in an
 explicit version-to-version tool, not in the primitive codec.
+
+### `program_dumps`
+
+```text
+program_dumps(program: 'Program') -> 'str'
+```
+
+Return canonical JSONL for a machine program, including a final newline.
+
+### `program_loads`
+
+```text
+program_loads(source: 'str | bytes') -> 'Program'
+```
+
+Parse a versioned JSONL machine program under the public wire limits.
 
 ### `to_data`
 
