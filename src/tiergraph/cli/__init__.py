@@ -165,6 +165,21 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="FILE",
             help="output file (default: -)",
         )
+
+    span = subparsers.add_parser("span", help="render declarative span views")
+    span_subparsers = span.add_subparsers(dest="span_command", required=True)
+    span_render = span_subparsers.add_parser("render", help="render a span view")
+    span_render.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    span_render.add_argument("--profile", required=True, metavar="FILE")
+    span_render.add_argument(
+        "--format", choices=("text", "json", "jsonl", "html", "dot"), required=True
+    )
+    span_render.add_argument("--alternatives", action="store_true")
+    span_render.add_argument("--jsonl-record", choices=("input", "span"), default=None)
+    span_render.add_argument("--include-empty-tiers", action="store_true")
+    span_render.add_argument(
+        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
+    )
     return parser
 
 
@@ -284,6 +299,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _check_distinct(args.profile, args.output)
             clock_value = _clock_query(graph, clock_profile, args)
             _write_output(args.file, args.output, _json_bytes(clock_value))
+        elif args.command == "span":
+            if args.jsonl_record is not None and args.format != "jsonl":
+                raise ValueError("--jsonl-record requires --format jsonl")
+            if args.include_empty_tiers and args.format != "dot":
+                raise ValueError("--include-empty-tiers requires --format dot")
+            graph = tiergraph.loads(_read_bytes(args.file))
+            span_profile = tiergraph.SpanViewProfile.from_data(
+                json.loads(_read_bytes(args.profile))
+            )
+            _check_distinct(args.profile, args.output)
+            rendered = _span_render(graph, span_profile, args)
+            _write_output(args.file, args.output, rendered.encode("utf-8"))
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -563,6 +590,33 @@ def _render(graph: tiergraph.Graph, include_empty_tiers: bool) -> str:
         return tiergraph_dot.dumps(graph, include_empty_tiers=include_empty_tiers)
     except TypeError as error:
         raise ValueError(str(error)) from error
+
+
+def _span_render(
+    graph: tiergraph.Graph,
+    profile: tiergraph.SpanViewProfile,
+    args: argparse.Namespace,
+) -> str:
+    """Render one graph through a declarative span-view profile."""
+    if args.format == "dot":
+        return tiergraph_dot.dumps_spans(
+            graph,
+            profile,
+            alternatives=args.alternatives,
+            include_empty_tiers=args.include_empty_tiers,
+        )
+    view = tiergraph.span_view(graph, profile, alternatives=args.alternatives)
+    if args.format == "text":
+        return tiergraph.to_text(view, alternatives=args.alternatives)
+    if args.format == "json":
+        return tiergraph.to_json(view, alternatives=args.alternatives)
+    if args.format == "jsonl":
+        return tiergraph.to_jsonl(
+            view,
+            record=args.jsonl_record or "input",
+            alternatives=args.alternatives,
+        )
+    return tiergraph.to_html(view, alternatives=args.alternatives)
 
 
 def _graph_bytes(graph: tiergraph.Graph, target: str) -> bytes:

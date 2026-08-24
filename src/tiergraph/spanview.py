@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from tiergraph.core import Graph, Item, ItemRef, QualifiedName, Tier
+from tiergraph.machine import _decode_object, _decode_qname
 from tiergraph.path import ItemBinding, StructuralPathProfile
 
 SPANVIEW_FORMAT_VERSION = "1"
@@ -27,6 +28,61 @@ class SpanViewProfile:
     base_surface_attribute: QualifiedName
     char_offset_attribute: QualifiedName | None = None
     alternative_relation: QualifiedName | None = None
+
+    @classmethod
+    def from_data(cls, data: object) -> SpanViewProfile:
+        """Decode a strict declarative span-view profile document."""
+        keys = {
+            "base_tier",
+            "span_tiers",
+            "coverage_relation",
+            "score_attribute",
+            "value_attribute",
+            "base_surface_attribute",
+            "char_offset_attribute",
+            "alternative_relation",
+        }
+        obj = _decode_object(data, "span profile", keys)
+
+        def qualified_name(value: object, path: str) -> QualifiedName:
+            """Decode one QName after validating both string-valued members."""
+            members = _decode_object(value, path, {"namespace", "local_name"})
+            for member in ("namespace", "local_name"):
+                if not isinstance(members[member], str):
+                    raise ValueError(f"{path}.{member} must be a string")
+            return _decode_qname(value, path)
+
+        def required(name: str) -> QualifiedName:
+            """Decode one required non-null QName field."""
+            value = obj[name]
+            path = f"span profile.{name}"
+            if value is None:
+                raise ValueError(f"{path} must be an object")
+            return qualified_name(value, path)
+
+        def optional(name: str) -> QualifiedName | None:
+            """Decode one explicitly nullable QName field."""
+            value = obj[name]
+            return (
+                None if value is None else qualified_name(value, f"span profile.{name}")
+            )
+
+        span_tiers = obj["span_tiers"]
+        if not isinstance(span_tiers, list):
+            raise ValueError("span profile.span_tiers must be a list")
+        return cls(
+            required("base_tier"),
+            tuple(
+                qualified_name(value, f"span profile.span_tiers[{index}]")
+                for index, value in enumerate(span_tiers)
+            ),
+            required("coverage_relation"),
+            required("score_attribute"),
+            required("value_attribute"),
+            required("base_surface_attribute"),
+            optional("char_offset_attribute"),
+            optional("alternative_relation"),
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -153,6 +153,61 @@ def fixture(*, offsets: bool = True) -> tuple[Graph, SpanViewProfile]:
     )
 
 
+def profile_data(profile: SpanViewProfile) -> dict[str, object]:
+    """Encode the declarative profile shape used by decoder and CLI tests."""
+    return {
+        "base_tier": profile.base_tier.to_data(),
+        "span_tiers": [name.to_data() for name in profile.span_tiers],
+        "coverage_relation": profile.coverage_relation.to_data(),
+        "score_attribute": profile.score_attribute.to_data(),
+        "value_attribute": profile.value_attribute.to_data(),
+        "base_surface_attribute": profile.base_surface_attribute.to_data(),
+        "char_offset_attribute": (
+            None
+            if profile.char_offset_attribute is None
+            else profile.char_offset_attribute.to_data()
+        ),
+        "alternative_relation": (
+            None
+            if profile.alternative_relation is None
+            else profile.alternative_relation.to_data()
+        ),
+    }
+
+
+def test_profile_from_data_is_strict_and_hardens_every_qname() -> None:
+    """Profile documents have an exact shape and path-specific string errors."""
+    _, profile = fixture()
+    data = profile_data(profile)
+    assert SpanViewProfile.from_data(data) == profile
+    data["char_offset_attribute"] = None
+    data["alternative_relation"] = None
+    assert SpanViewProfile.from_data(data) == replace(
+        profile, char_offset_attribute=None, alternative_relation=None
+    )
+
+    for malformed in (None, {}, {**data, "extra": None}):
+        with pytest.raises(ValueError, match="span profile"):
+            SpanViewProfile.from_data(malformed)
+    with pytest.raises(ValueError, match="span profile.span_tiers must be a list"):
+        SpanViewProfile.from_data({**data, "span_tiers": {}})
+    with pytest.raises(ValueError, match="span profile.base_tier must be an object"):
+        SpanViewProfile.from_data({**data, "base_tier": None})
+    with pytest.raises(
+        ValueError,
+        match=r"span profile\.span_tiers\[0\]\.namespace must be a string",
+    ):
+        SpanViewProfile.from_data(
+            {**data, "span_tiers": [{"namespace": ["x"], "local_name": "x"}]}
+        )
+    with pytest.raises(
+        ValueError, match="span profile.base_tier.local_name must be a string"
+    ):
+        SpanViewProfile.from_data(
+            {**data, "base_tier": {"namespace": NS, "local_name": 12}}
+        )
+
+
 def test_projection_offsets_paths_values_and_ranked_alternatives() -> None:
     """Coverage edges determine contiguous extents and canonical candidate order."""
     graph, profile = fixture()

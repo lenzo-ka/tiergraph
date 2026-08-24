@@ -2026,6 +2026,16 @@ SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ..
 
 Name every graph declaration used to interpret a segmentation.
 
+#### `SpanViewProfile.from_data`
+
+Class method.
+
+```text
+SpanViewProfile.from_data(cls, data: 'object') -> 'SpanViewProfile'
+```
+
+Decode a strict declarative span-view profile document.
+
 ### `json_value_graph`
 
 ```text
@@ -3671,6 +3681,16 @@ SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ..
 ```
 
 Name every graph declaration used to interpret a segmentation.
+
+#### `SpanViewProfile.from_data`
+
+Class method.
+
+```text
+SpanViewProfile.from_data(cls, data: 'object') -> 'SpanViewProfile'
+```
+
+Decode a strict declarative span-view profile document.
 
 ### `SpanView`
 
