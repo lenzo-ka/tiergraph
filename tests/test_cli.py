@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,32 @@ import tiergraph
 import tiergraph.cli as cli
 import tiergraph.machine_codec as machine_codec
 from tests.conformance.traversal import TraversalLawSuite
+from tests.test_clock import (
+    BINDING as CLOCK_BINDING,
+)
+from tests.test_clock import (
+    CLOCK as CLOCK_TIER,
+)
+from tests.test_clock import (
+    RATE as CLOCK_RATE,
+)
+from tests.test_clock import (
+    SEGMENT as CLOCK_SEGMENT,
+)
+from tests.test_clock import (
+    SYNTAX as CLOCK_SYNTAX,
+)
+from tests.test_clock import (
+    UNIT as CLOCK_UNIT,
+)
+from tests.test_clock import (
+    clock_profile_data,
+    ipakit_shape,
+    with_stored_timing,
+)
+from tests.test_clock import (
+    fixture as clock_fixture,
+)
 from tiergraph import (
     AddItem,
     AttachValue,
@@ -94,6 +121,11 @@ def _walk_args(path: Path, *extra: str) -> list[str]:
 
 def _item_path(index: int) -> str:
     return f"/items/structural/urn:test:traversal/nodes/{index}"
+
+
+def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
+    """Spell the fixture's simple structural item or position path."""
+    return f"/{kind}/structural/{namespace}/{local}/{index}"
 
 
 def _program(path: Path, *opcodes: object, newline: bytes = b"\n") -> None:
@@ -227,6 +259,234 @@ def test_grammar_command_reports_bad_grammar_unit_folds_and_count(
     assert "must be positive" in capsys.readouterr().err
 
 
+def test_clock_commands_query_full_declarative_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """All four clock queries emit exact structural and physical JSON data."""
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "clock.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
+    common = [str(graph_path), "--profile", str(profile_path)]
+
+    assert main(["clock", "positions", *common]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "clock_tier": {
+            "namespace": CLOCK_SEGMENT.namespace,
+            "local_name": "clock",
+        },
+        "positions": [
+            {"index": 0, "tick": 0, "gap": 0},
+            {"index": 1, "tick": 1, "gap": 0},
+            {"index": 2, "tick": 1, "gap": 1},
+            {"index": 3, "tick": 2, "gap": 0},
+        ],
+    }
+
+    position_path = _structural_path(
+        "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
+    )
+    assert main(["clock", "position", *common, "--position", position_path]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "position": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
+        "clock_index": 2,
+        "refined": {"tick": 1, "gap": 1},
+    }
+
+    assert (
+        main(
+            [
+                "clock",
+                "extent",
+                *common,
+                "--tier-namespace",
+                CLOCK_SEGMENT.namespace,
+                "--tier-local",
+                CLOCK_SEGMENT.local_name,
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "tier": CLOCK_SEGMENT.to_data(),
+        "start": {"tick": 1, "gap": 0},
+        "end": {"tick": 2, "gap": 0},
+    }
+
+    item_path = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
+    )
+    assert main(["clock", "item", *common, "--item", item_path]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "item": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
+        "structural": {
+            "start": {"tick": 1, "gap": 1},
+            "end": {"tick": 2, "gap": 0},
+        },
+        "physical": {"start": "0.1", "duration": "0.04", "unit": "s"},
+        "exact_duration": None,
+    }
+
+
+def test_clock_commands_report_profile_path_kind_and_untimed_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Clock decoding and query refusals use the ordinary exit-one path."""
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "clock.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    profile_path.write_text("{}", encoding="utf-8")
+    common = [str(graph_path), "--profile", str(profile_path)]
+    assert main(["clock", "positions", *common]) == 1
+    assert "clock profile fields" in capsys.readouterr().err
+
+    malformed = clock_profile_data()
+    malformed["clock_tier"] = {
+        "namespace": [CLOCK_TIER.namespace],
+        "local_name": CLOCK_TIER.local_name,
+    }
+    profile_path.write_text(json.dumps(malformed), encoding="utf-8")
+    assert main(["clock", "positions", *common]) == 1
+    assert (
+        "clock profile.clock_tier.namespace must be a string" in capsys.readouterr().err
+    )
+
+    profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
+    missing = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 99
+    )
+    assert main(["clock", "item", *common, "--item", missing]) == 1
+    assert "tiergraph: clock:" in capsys.readouterr().err
+
+    item = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
+    )
+    assert main(["clock", "position", *common, "--position", item]) == 1
+    assert "did not resolve to a position" in capsys.readouterr().err
+
+    position = _structural_path(
+        "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
+    )
+    assert main(["clock", "item", *common, "--item", position]) == 1
+    assert "did not resolve to an item" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "clock",
+                "extent",
+                *common,
+                "--tier-namespace",
+                CLOCK_SYNTAX.namespace,
+                "--tier-local",
+                CLOCK_SYNTAX.local_name,
+            ]
+        )
+        == 1
+    )
+    assert "is untimed" in capsys.readouterr().err
+
+
+def test_clock_item_emits_uniform_duration_and_reraises_other_refusals(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item queries encode a uniform rate and suppress no unrelated error."""
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "clock.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(clock_fixture()))
+    profile_path.write_text(
+        json.dumps(
+            {
+                "clock_tier": CLOCK_TIER.to_data(),
+                "binding_relation": CLOCK_BINDING.to_data(),
+                "rate_attribute": CLOCK_RATE.to_data(),
+                "unit_attribute": CLOCK_UNIT.to_data(),
+                "tick_attribute": None,
+                "gap_attribute": None,
+                "untimed_attribute": None,
+                "start_attribute": None,
+                "duration_attribute": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    item = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
+    )
+    args = [
+        "clock",
+        "item",
+        str(graph_path),
+        "--profile",
+        str(profile_path),
+        "--item",
+        item,
+    ]
+    assert main(args) == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["physical"] == {"start": "0.1", "duration": "0.1", "unit": "s"}
+    assert value["exact_duration"] == {"ticks": 1, "rate": "10.0"}
+
+    def refuse(
+        self: tiergraph.ClockProfile, tier: QualifiedName, index: int
+    ) -> tuple[int, Any]:
+        del self, tier, index
+        raise ValueError("different duration refusal")
+
+    monkeypatch.setattr(tiergraph.ClockProfile, "duration", refuse)
+    assert main(args) == 1
+    assert "different duration refusal" in capsys.readouterr().err
+
+
+def test_clock_item_encodes_null_and_canonical_small_physical_timing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Absent timing stays null and small decimals use fixed canonical notation."""
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "clock.json"
+    profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
+    item = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
+    )
+    args = [
+        "clock",
+        "item",
+        str(graph_path),
+        "--profile",
+        str(profile_path),
+        "--item",
+        item,
+    ]
+
+    graph = ipakit_shape()
+    tiers = tuple(
+        replace(
+            tier,
+            items=tuple(replace(member, attributes=()) for member in tier.items),
+        )
+        for tier in graph.tiers
+    )
+    graph_path.write_bytes(tiergraph.dump_bytes(replace(graph, tiers=tiers)))
+    assert main(args) == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["physical"] is None
+    assert value["exact_duration"] is None
+
+    graph = with_stored_timing(
+        ipakit_shape(), CLOCK_SEGMENT, 0, "0.0000001", "0.0000001"
+    )
+    graph_path.write_bytes(tiergraph.dump_bytes(graph))
+    assert main(args) == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["physical"] == {
+        "start": "0.0000001",
+        "duration": "0.0000001",
+        "unit": "s",
+    }
+
+
 def test_version_default_help_and_every_command_help(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -234,7 +494,7 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar}"
+        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock}"
         in capsys.readouterr().out
     )
     for command in (
@@ -248,6 +508,7 @@ def test_version_default_help_and_every_command_help(
         "walk",
         "path",
         "grammar",
+        "clock",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -269,6 +530,7 @@ def test_version_default_help_and_every_command_help(
         "walk",
         "path",
         "grammar",
+        "clock",
     ]
 
 
