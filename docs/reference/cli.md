@@ -33,11 +33,11 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,schema,run,step,path,grammar}
+                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar}
                  ...
 
 positional arguments:
-  {validate,render,inspect,convert,schema,run,step,path,grammar}
+  {validate,render,inspect,convert,schema,run,step,walk,path,grammar}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
@@ -45,6 +45,7 @@ positional arguments:
     schema              print the graph document schema
     run                 execute a JSONL machine program
     step                step through a JSONL machine program
+    walk                traverse a transitive relation
     path                resolve and spell tiergraph paths
     grammar             recognize with tiergraph grammars
 
@@ -156,6 +157,28 @@ options:
                         output file (default: -)
   --interactive         use the interactive debugger (also enabled when stdin
                         is a TTY)
+```
+
+### `tiergraph walk`
+
+```text
+usage: tiergraph walk [-h] --source PATH --relation-namespace NS
+                      --relation-local LOCAL [--direction {forward,inverse}]
+                      [--cap N] [-o FILE]
+                      GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --source PATH
+  --relation-namespace NS
+  --relation-local LOCAL
+  --direction {forward,inverse}
+  --cap N
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph path`

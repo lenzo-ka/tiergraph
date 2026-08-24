@@ -16,6 +16,7 @@ import pytest
 import tiergraph
 import tiergraph.cli as cli
 import tiergraph.machine_codec as machine_codec
+from tests.conformance.traversal import TraversalLawSuite
 from tiergraph import (
     AddItem,
     AttachValue,
@@ -71,6 +72,28 @@ def _path_graph(path: Path) -> tiergraph.Graph:
     )
     path.write_bytes(tiergraph.dump_bytes(graph))
     return graph
+
+
+def _walk_graph(path: Path, *, acyclic: bool = True) -> tiergraph.Graph:
+    graph = TraversalLawSuite(tiergraph.Walk).graph(acyclic=acyclic)
+    path.write_bytes(tiergraph.dump_bytes(graph))
+    return graph
+
+
+def _walk_args(path: Path, *extra: str) -> list[str]:
+    return [
+        "walk",
+        str(path),
+        "--relation-namespace",
+        "urn:test:traversal",
+        "--relation-local",
+        "contains",
+        *extra,
+    ]
+
+
+def _item_path(index: int) -> str:
+    return f"/items/structural/urn:test:traversal/nodes/{index}"
 
 
 def _program(path: Path, *opcodes: object, newline: bytes = b"\n") -> None:
@@ -211,7 +234,7 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,path,grammar}"
+        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar}"
         in capsys.readouterr().out
     )
     for command in (
@@ -222,6 +245,7 @@ def test_version_default_help_and_every_command_help(
         "schema",
         "run",
         "step",
+        "walk",
         "path",
         "grammar",
     ):
@@ -242,14 +266,139 @@ def test_version_default_help_and_every_command_help(
         "schema",
         "run",
         "step",
+        "walk",
         "path",
         "grammar",
     ]
 
 
+def test_walk_forward_inverse_capped_and_multiple_sources(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Walk emits exact public result data for both directions and source unions."""
+    source = tmp_path / "diamond.json"
+    _walk_graph(source)
+
+    assert main(_walk_args(source, "--source", _item_path(0))) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "nodes": [
+            {
+                "kind": "item",
+                "reference": {
+                    "tier": {
+                        "namespace": "urn:test:traversal",
+                        "local_name": "nodes",
+                    },
+                    "index": index,
+                },
+            }
+            for index in (1, 2, 3)
+        ],
+        "truncated": False,
+        "cap": None,
+    }
+
+    assert (
+        main(
+            _walk_args(
+                source,
+                "--source",
+                _item_path(3),
+                "--direction",
+                "inverse",
+                "--cap",
+                "1",
+            )
+        )
+        == 0
+    )
+    inverse = json.loads(capsys.readouterr().out)
+    assert [node["reference"]["index"] for node in inverse["nodes"]] == [1, 2]
+    assert inverse["truncated"] is True
+    assert inverse["cap"] == 1
+
+    assert main(_walk_args(source, "--source", _item_path(0), "--cap", "1")) == 0
+    capped = json.loads(capsys.readouterr().out)
+    assert [node["reference"]["index"] for node in capped["nodes"]] == [1, 2]
+    assert capped["truncated"] is True
+    assert capped["cap"] == 1
+
+    assert (
+        main(
+            _walk_args(
+                source,
+                "--source",
+                _item_path(1),
+                "--source",
+                _item_path(2),
+            )
+        )
+        == 0
+    )
+    union = json.loads(capsys.readouterr().out)
+    assert [node["reference"]["index"] for node in union["nodes"]] == [3]
+    assert union["truncated"] is False
+    assert union["cap"] is None
+
+
+def test_walk_failures_use_the_normal_diagnostic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Path, relation, cyclic, and nonpositive-cap refusals exit one cleanly."""
+    source = tmp_path / "diamond.json"
+    _walk_graph(source)
+    assert (
+        main(
+            _walk_args(
+                source,
+                "--source",
+                "/positions/structural/urn:test:traversal/nodes/0",
+            )
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "nodes": [],
+        "truncated": False,
+        "cap": None,
+    }
+    cases = (
+        _walk_args(source, "--source", "/items/durable/missing"),
+        [
+            *_walk_args(source, "--source", _item_path(0)),
+            "--relation-local",
+            "missing",
+        ],
+        _walk_args(source, "--source", _item_path(0), "--cap", "0"),
+    )
+    for arguments in cases:
+        assert main(arguments) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err.startswith("tiergraph: walk:")
+
+    _walk_graph(source, acyclic=False)
+    assert main(_walk_args(source, "--source", _item_path(0))) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tiergraph: walk: ValueError:")
+    assert "not declared acyclic" in captured.err
+
+
 def test_argparse_usage_error() -> None:
     with pytest.raises(SystemExit) as raised:
         main(["convert", "-"])
+    assert raised.value.code == 2
+    with pytest.raises(SystemExit) as raised:
+        main(
+            _walk_args(
+                Path("graph.json"),
+                "--source",
+                _item_path(0),
+                "--cap",
+                "not-an-integer",
+            )
+        )
     assert raised.value.code == 2
 
 
