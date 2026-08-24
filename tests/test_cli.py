@@ -125,6 +125,59 @@ def _item_path(index: int) -> str:
     return f"/items/structural/urn:test:traversal/nodes/{index}"
 
 
+def test_select_query_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The selection command evaluates compounds and diagnoses refused queries."""
+    source = tmp_path / "graph.json"
+    query = tmp_path / "query.json"
+    _path_graph(source)
+    query.write_text(
+        json.dumps(
+            {
+                "op": "difference",
+                "left": {
+                    "op": "union",
+                    "args": [
+                        {
+                            "select": "items",
+                            "tier": {
+                                "namespace": "urn:path",
+                                "local_name": "tokens",
+                            },
+                        },
+                        {"select": "item", "path": "/items/durable/alpha"},
+                    ],
+                },
+                "right": {"select": "item", "path": "/items/durable/beta"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["select", str(source), "--query", str(query)]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "nodes": [
+            {
+                "kind": "item",
+                "reference": {
+                    "tier": {"namespace": "urn:path", "local_name": "tokens"},
+                    "index": 0,
+                },
+            }
+        ]
+    }
+
+    query.write_text('{"op":"union","args":[]}', encoding="utf-8")
+    assert main(["select", str(source), "--query", str(query)]) == 1
+    assert "ValueError" in capsys.readouterr().err
+
+    query.write_text(
+        '{"select":"item","path":"/positions/structural/urn:path/tokens/0"}',
+        encoding="utf-8",
+    )
+    assert main(["select", str(source), "--query", str(query)]) == 1
+    assert "did not resolve to an item" in capsys.readouterr().err
+
+
 def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
     """Spell the fixture's simple structural item or position path."""
     return f"/{kind}/structural/{namespace}/{local}/{index}"
@@ -570,7 +623,7 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}"
+        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select}"
         in capsys.readouterr().out
     )
     for command in (
@@ -586,6 +639,7 @@ def test_version_default_help_and_every_command_help(
         "grammar",
         "clock",
         "span",
+        "select",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -609,6 +663,7 @@ def test_version_default_help_and_every_command_help(
         "grammar",
         "clock",
         "span",
+        "select",
     ]
 
 

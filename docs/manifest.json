@@ -10,7 +10,7 @@
     "paths": ["AlternativeRef", "CanonicalPath", "ItemBinding", "PathBinding", "PathKind", "PathOffender", "PathProfile", "PathRefusal", "PathRefusalCode", "PositionBinding", "ResolvedAlternative", "ResolvedItem", "ResolvedPosition", "StructuralPathProfile", "resolve_path"],
     "profiles": ["JsonValueProfile", "OrderedRootsProfile", "PersistedChoiceProfile", "SpanViewProfile", "json_value_graph", "span_view", "to_json", "to_jsonl", "to_text", "to_html"],
     "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
-    "selection": ["AttributeSelector", "BoundariesSelector", "BoundarySelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "TierSelector", "TypeSelector", "select"],
+    "selection": ["AttributeQuery", "AttributeSelector", "BoundariesQuery", "BoundariesSelector", "BoundaryQuery", "BoundarySelector", "DifferenceQuery", "IntersectionQuery", "ItemQuery", "ItemSelector", "ItemsQuery", "ItemsSelector", "Node", "NodeKind", "NodeSet", "SelectionQuery", "TierQuery", "TierSelector", "TypeQuery", "TypeSelector", "UnionQuery", "evaluate_selection", "select", "selection_query_loads"],
     "semirings": ["BOOLEAN", "COUNTING", "DECIMAL_TROPICAL", "PATH"],
     "serialization": ["dump_bytes", "dump_compact", "dumps", "load_program", "loads", "program_dumps", "program_loads", "to_data"],
     "inspection": ["graph_summary"],

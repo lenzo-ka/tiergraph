@@ -180,6 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
     span_render.add_argument(
         "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
     )
+
+    selection = subparsers.add_parser("select", help="evaluate a selection query")
+    selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    selection.add_argument("--query", required=True, metavar="FILE")
+    selection.add_argument(
+        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
+    )
     return parser
 
 
@@ -311,6 +318,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             _check_distinct(args.profile, args.output)
             rendered = _span_render(graph, span_profile, args)
             _write_output(args.file, args.output, rendered.encode("utf-8"))
+        elif args.command == "select":
+            graph = tiergraph.loads(_read_bytes(args.file))
+            query = tiergraph.selection_query_loads(_read_bytes(args.query))
+            _check_distinct(args.query, args.output)
+            selection_result = tiergraph.evaluate_selection(graph, query)
+            _write_output(
+                args.file,
+                args.output,
+                _json_bytes({"nodes": selection_result.to_data()}),
+            )
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")

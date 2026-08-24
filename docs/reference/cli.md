@@ -33,11 +33,11 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}
+                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select}
                  ...
 
 positional arguments:
-  {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}
+  {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
@@ -50,6 +50,7 @@ positional arguments:
     grammar             recognize with tiergraph grammars
     clock               query declarative clock timing
     span                render declarative span views
+    select              evaluate a selection query
 
 options:
   -h, --help            show this help message and exit
@@ -417,5 +418,19 @@ options:
   --alternatives
   --jsonl-record {input,span}
   --include-empty-tiers
+  -o OUT, --output OUT  output file (default: -)
+```
+
+### `tiergraph select`
+
+```text
+usage: tiergraph select [-h] --query FILE [-o OUT] GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --query FILE
   -o OUT, --output OUT  output file (default: -)
 ```
