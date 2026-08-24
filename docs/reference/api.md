@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 138 top-level `tiergraph` exports exactly once.
+It covers 151 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2166,6 +2166,14 @@ Return the position reference as JSON-serializable data.
 
 ## Selection
 
+### `AttributeQuery`
+
+```text
+AttributeQuery(attribute: 'QualifiedName', domain: 'AttributeDomain') -> None
+```
+
+Select owners carrying one declared attribute on its domain.
+
 ### `AttributeSelector`
 
 ```text
@@ -2183,6 +2191,14 @@ AttributeSelector.evaluate(self) -> 'NodeSet'
 ```
 
 Return owners that carry the named value without following relations.
+
+### `BoundariesQuery`
+
+```text
+BoundariesQuery(tier: 'QualifiedName') -> None
+```
+
+Select every boundary on one declared tier.
 
 ### `BoundariesSelector`
 
@@ -2202,6 +2218,14 @@ BoundariesSelector.evaluate(self) -> 'NodeSet'
 
 Return both outer boundaries and every boundary between items.
 
+### `BoundaryQuery`
+
+```text
+BoundaryQuery(path: 'str') -> None
+```
+
+Select the boundary resolved by one structural path.
+
 ### `BoundarySelector`
 
 ```text
@@ -2220,6 +2244,30 @@ BoundarySelector.evaluate(self) -> 'NodeSet'
 
 Return the resolved boundary identity.
 
+### `DifferenceQuery`
+
+```text
+DifferenceQuery(left: 'SelectionQuery', right: 'SelectionQuery') -> None
+```
+
+Remove the right selection from the left selection.
+
+### `IntersectionQuery`
+
+```text
+IntersectionQuery(args: 'tuple[SelectionQuery, ...]') -> None
+```
+
+Intersect one or more selection queries.
+
+### `ItemQuery`
+
+```text
+ItemQuery(path: 'str') -> None
+```
+
+Select the item resolved by one structural path.
+
 ### `ItemSelector`
 
 ```text
@@ -2237,6 +2285,14 @@ ItemSelector.evaluate(self) -> 'NodeSet'
 ```
 
 Return the resolved item identity.
+
+### `ItemsQuery`
+
+```text
+ItemsQuery(tier: 'QualifiedName') -> None
+```
+
+Select every item on one declared tier.
 
 ### `ItemsSelector`
 
@@ -2304,6 +2360,39 @@ NodeSet.to_data(self) -> 'list[JsonValue]'
 
 Return the ordered set as strict-JSON data.
 
+### `SelectionQuery`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `TierQuery`
+
+```text
+TierQuery(tier: 'QualifiedName') -> None
+```
+
+Select one declared tier.
+
 ### `TierSelector`
 
 ```text
@@ -2321,6 +2410,14 @@ TierSelector.evaluate(self) -> 'NodeSet'
 ```
 
 Return the selected tier.
+
+### `TypeQuery`
+
+```text
+TypeQuery(item_type: 'QualifiedName') -> None
+```
+
+Select items belonging to one declared type.
 
 ### `TypeSelector`
 
@@ -2340,6 +2437,22 @@ TypeSelector.evaluate(self) -> 'NodeSet'
 
 Return all items of the declared type.
 
+### `UnionQuery`
+
+```text
+UnionQuery(args: 'tuple[SelectionQuery, ...]') -> None
+```
+
+Union one or more selection queries.
+
+### `evaluate_selection`
+
+```text
+evaluate_selection(graph: 'Graph', query: 'SelectionQuery', *, path_profile: 'PathProfile' = StructuralPathProfile()) -> 'NodeSet'
+```
+
+Evaluate a declarative query into one canonically ordered node set.
+
 ### `select`
 
 ```text
@@ -2347,6 +2460,14 @@ select(graph: 'Graph', selectors: 'tuple[Selector, ...]') -> 'NodeSet'
 ```
 
 Union validated selector routes into one canonical node set.
+
+### `selection_query_loads`
+
+```text
+selection_query_loads(source: 'str | bytes') -> 'SelectionQuery'
+```
+
+Decode one strict declarative selection query from JSON.
 
 ## Semirings
 
