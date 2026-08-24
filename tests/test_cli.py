@@ -44,6 +44,8 @@ from tests.test_clock import (
 from tests.test_clock import (
     fixture as clock_fixture,
 )
+from tests.test_spanview import fixture as span_fixture
+from tests.test_spanview import profile_data as span_profile_data
 from tiergraph import (
     AddItem,
     AttachValue,
@@ -132,6 +134,80 @@ def _program(path: Path, *opcodes: object, newline: bytes = b"\n") -> None:
     records = [{"machine_version": tiergraph.MACHINE_VERSION}]
     records.extend(opcode.to_data() for opcode in opcodes)  # type: ignore[attr-defined]
     path.write_bytes(newline.join(json.dumps(record).encode() for record in records))
+
+
+def _span_files(
+    tmp_path: Path,
+) -> tuple[Path, Path, tiergraph.Graph, tiergraph.SpanViewProfile]:
+    """Write the shared span-view graph and declarative profile fixture."""
+    graph, profile = span_fixture()
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "profile.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(graph))
+    profile_path.write_text(json.dumps(span_profile_data(profile)), encoding="utf-8")
+    return graph_path, profile_path, graph, profile
+
+
+@pytest.mark.parametrize("format_name", ("text", "json", "jsonl", "html", "dot"))
+def test_span_render_formats(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    format_name: str,
+) -> None:
+    """Every span renderer writes its already-formatted public string."""
+    graph_path, profile_path, graph, profile = _span_files(tmp_path)
+    assert (
+        main(
+            [
+                "span",
+                "render",
+                str(graph_path),
+                "--profile",
+                str(profile_path),
+                "--format",
+                format_name,
+            ]
+        )
+        == 0
+    )
+    view = tiergraph.span_view(graph, profile)
+    expected = {
+        "text": tiergraph.to_text(view),
+        "json": tiergraph.to_json(view),
+        "jsonl": tiergraph.to_jsonl(view),
+        "html": tiergraph.to_html(view),
+        "dot": __import__("tiergraph_dot").dumps_spans(graph, profile),
+    }[format_name]
+    assert capsys.readouterr().out == expected
+
+
+def test_span_render_options_and_misuse_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Span-only flags are forwarded and refused outside their formats."""
+    graph_path, profile_path, graph, profile = _span_files(tmp_path)
+    common = [
+        "span",
+        "render",
+        str(graph_path),
+        "--profile",
+        str(profile_path),
+    ]
+    assert main([*common, "--format", "jsonl", "--jsonl-record", "span"]) == 0
+    assert capsys.readouterr().out == tiergraph.to_jsonl(
+        tiergraph.span_view(graph, profile), record="span"
+    )
+    assert main([*common, "--format", "text", "--alternatives"]) == 0
+    assert capsys.readouterr().out == tiergraph.to_text(
+        tiergraph.span_view(graph, profile, alternatives=True), alternatives=True
+    )
+    assert main([*common, "--format", "dot", "--include-empty-tiers"]) == 0
+    assert capsys.readouterr().out.startswith("digraph tiergraph")
+
+    assert main([*common, "--format", "text", "--jsonl-record", "input"]) == 1
+    assert "--jsonl-record requires --format jsonl" in capsys.readouterr().err
+    assert main([*common, "--format", "html", "--include-empty-tiers"]) == 1
+    assert "--include-empty-tiers requires --format dot" in capsys.readouterr().err
 
 
 def _grammar(path: Path, *, unit: bool = False) -> GrammarDeclaration:
@@ -494,7 +570,7 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock}"
+        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}"
         in capsys.readouterr().out
     )
     for command in (
@@ -509,6 +585,7 @@ def test_version_default_help_and_every_command_help(
         "path",
         "grammar",
         "clock",
+        "span",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -531,6 +608,7 @@ def test_version_default_help_and_every_command_help(
         "path",
         "grammar",
         "clock",
+        "span",
     ]
 
 

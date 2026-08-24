@@ -33,11 +33,11 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock}
+                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}
                  ...
 
 positional arguments:
-  {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock}
+  {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span}
     validate            validate a graph document
     render              render a graph as DOT
     inspect             inspect a graph document
@@ -49,6 +49,7 @@ positional arguments:
     path                resolve and spell tiergraph paths
     grammar             recognize with tiergraph grammars
     clock               query declarative clock timing
+    span                render declarative span views
 
 options:
   -h, --help            show this help message and exit
@@ -196,6 +197,49 @@ options:
   -h, --help       show this help message and exit
 ```
 
+### `tiergraph path resolve`
+
+```text
+usage: tiergraph path resolve [-h] [-o FILE] GRAPH TGPATH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+  TGPATH                tiergraph path to resolve
+
+options:
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph path spell`
+
+```text
+usage: tiergraph path spell [-h] --kind {item,position} [--tier-namespace NS]
+                            [--tier-local LOCAL] [--index N] [--durable-id ID]
+                            [--anchor-item-id ID] [--anchor-tier-namespace NS]
+                            [--anchor-tier-local LOCAL]
+                            [--side {before,after}] [-o FILE]
+                            GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --kind {item,position}
+  --tier-namespace NS
+  --tier-local LOCAL
+  --index N
+  --durable-id ID
+  --anchor-item-id ID
+  --anchor-tier-namespace NS
+  --anchor-tier-local LOCAL
+  --side {before,after}
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
 ### `tiergraph grammar`
 
 ```text
@@ -209,6 +253,53 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+```
+
+### `tiergraph grammar recognize`
+
+```text
+usage: tiergraph grammar recognize [-h] --tokens-json JSON [-o FILE] GRAMMAR
+
+positional arguments:
+  GRAMMAR               grammar JSON file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --tokens-json JSON
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph grammar count`
+
+```text
+usage: tiergraph grammar count [-h] --tokens-json JSON [-o FILE] GRAMMAR
+
+positional arguments:
+  GRAMMAR               grammar JSON file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --tokens-json JSON
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph grammar best`
+
+```text
+usage: tiergraph grammar best [-h] --tokens-json JSON [--count N] [-o FILE]
+                              GRAMMAR
+
+positional arguments:
+  GRAMMAR               grammar JSON file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --tokens-json JSON
+  --count N
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph clock`
@@ -225,4 +316,106 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+```
+
+### `tiergraph clock positions`
+
+```text
+usage: tiergraph clock positions [-h] --profile FILE [-o FILE] GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --profile FILE
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph clock position`
+
+```text
+usage: tiergraph clock position [-h] --profile FILE --position PATH [-o FILE]
+                                GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --profile FILE
+  --position PATH
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph clock extent`
+
+```text
+usage: tiergraph clock extent [-h] --profile FILE --tier-namespace NS
+                              --tier-local LOCAL [-o FILE]
+                              GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --profile FILE
+  --tier-namespace NS
+  --tier-local LOCAL
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph clock item`
+
+```text
+usage: tiergraph clock item [-h] --profile FILE --item PATH [-o FILE] GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --profile FILE
+  --item PATH
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph span`
+
+```text
+usage: tiergraph span [-h] {render} ...
+
+positional arguments:
+  {render}
+    render    render a span view
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `tiergraph span render`
+
+```text
+usage: tiergraph span render [-h] --profile FILE --format
+                             {text,json,jsonl,html,dot} [--alternatives]
+                             [--jsonl-record {input,span}]
+                             [--include-empty-tiers] [-o OUT]
+                             GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --profile FILE
+  --format {text,json,jsonl,html,dot}
+  --alternatives
+  --jsonl-record {input,span}
+  --include-empty-tiers
+  -o OUT, --output OUT  output file (default: -)
 ```

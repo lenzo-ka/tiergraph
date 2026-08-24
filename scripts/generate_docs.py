@@ -197,10 +197,24 @@ def cli_bytes() -> bytes:
         if isinstance(candidate, argparse._SubParsersAction)
     )
     helps = [("tiergraph", parser.format_help().rstrip())]
-    helps.extend(
-        (f"tiergraph {name}", child.format_help().rstrip())
-        for name, child in action.choices.items()
-    )
+    for name, child in action.choices.items():
+        helps.append((f"tiergraph {name}", child.format_help().rstrip()))
+        nested = next(
+            (
+                candidate
+                for candidate in child._actions
+                if isinstance(candidate, argparse._SubParsersAction)
+            ),
+            None,
+        )
+        if nested is not None:
+            helps.extend(
+                (
+                    f"tiergraph {name} {subname}",
+                    subparser.format_help().rstrip(),
+                )
+                for subname, subparser in nested.choices.items()
+            )
     help_text = "\n\n".join(
         f"### `{name}`\n\n```text\n{body}\n```" for name, body in helps
     )
