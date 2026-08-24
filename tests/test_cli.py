@@ -58,6 +58,17 @@ def _empty(path: Path) -> tiergraph.Graph:
     return graph
 
 
+def _path_graph(path: Path) -> tiergraph.Graph:
+    tier = QualifiedName("urn:path", "tokens")
+    graph = tiergraph.Graph(
+        (NamespaceDeclaration("p", "urn:path"),),
+        (Tier(TierDeclaration(tier, "Tokens"), (Item("alpha"), Item("beta"))),),
+        (),
+    )
+    path.write_bytes(tiergraph.dump_bytes(graph))
+    return graph
+
+
 def _program(path: Path, *opcodes: object, newline: bytes = b"\n") -> None:
     records = [{"machine_version": tiergraph.MACHINE_VERSION}]
     records.extend(opcode.to_data() for opcode in opcodes)  # type: ignore[attr-defined]
@@ -71,7 +82,8 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step}" in capsys.readouterr().out
+        "{validate,render,inspect,convert,schema,run,step,path}"
+        in capsys.readouterr().out
     )
     for command in (
         "validate",
@@ -81,6 +93,7 @@ def test_version_default_help_and_every_command_help(
         "schema",
         "run",
         "step",
+        "path",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -99,6 +112,7 @@ def test_version_default_help_and_every_command_help(
         "schema",
         "run",
         "step",
+        "path",
     ]
 
 
@@ -106,6 +120,221 @@ def test_argparse_usage_error() -> None:
     with pytest.raises(SystemExit) as raised:
         main(["convert", "-"])
     assert raised.value.code == 2
+
+
+def test_path_resolve_and_spell(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "graph.json"
+    _path_graph(source)
+
+    expected_item = {
+        "kind": "item",
+        "path": "/items/structural/urn:path/tokens/1",
+        "current": {
+            "tier": {"namespace": "urn:path", "local_name": "tokens"},
+            "index": 1,
+        },
+    }
+    assert (
+        main(
+            [
+                "path",
+                "resolve",
+                str(source),
+                "/items/structural/urn:path/tokens/1",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_item)
+
+    expected_durable = {
+        **expected_item,
+        "path": "/items/durable/beta",
+    }
+    assert main(["path", "resolve", str(source), "/items/durable/beta"]) == 0
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_durable)
+
+    expected_position = {
+        "kind": "position",
+        "path": "/positions/durable/item/beta/after",
+        "current": {
+            "tier": {"namespace": "urn:path", "local_name": "tokens"},
+            "index": 2,
+        },
+    }
+    assert (
+        main(
+            [
+                "path",
+                "resolve",
+                str(source),
+                "/positions/durable/item/beta/after",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_position)
+
+    spell_cases = (
+        (
+            [
+                "--kind",
+                "item",
+                "--tier-namespace",
+                "urn:path",
+                "--tier-local",
+                "tokens",
+                "--index",
+                "1",
+            ],
+            "/items/structural/urn:path/tokens/1",
+        ),
+        (["--kind", "item", "--durable-id", "beta"], "/items/durable/beta"),
+        (
+            [
+                "--kind",
+                "position",
+                "--tier-namespace",
+                "urn:path",
+                "--tier-local",
+                "tokens",
+                "--index",
+                "0",
+            ],
+            "/positions/structural/urn:path/tokens/0",
+        ),
+        (
+            [
+                "--kind",
+                "position",
+                "--anchor-item-id",
+                "beta",
+                "--side",
+                "after",
+            ],
+            "/positions/durable/item/beta/after",
+        ),
+        (
+            [
+                "--kind",
+                "position",
+                "--anchor-tier-namespace",
+                "urn:path",
+                "--anchor-tier-local",
+                "tokens",
+                "--side",
+                "before",
+            ],
+            "/positions/durable/tier/urn:path/tokens/before",
+        ),
+    )
+    for flags, path in spell_cases:
+        assert main(["path", "spell", str(source), *flags]) == 0
+        assert capsys.readouterr().out.encode() == cli._json_bytes({"path": path})
+        assert main(["path", "resolve", str(source), path]) == 0
+        assert json.loads(capsys.readouterr().out)["path"] == path
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (
+            ["--kind", "item", "--durable-id", "alpha", "--side", "after"],
+            "item flags cannot include position anchor flags",
+        ),
+        (
+            [
+                "--kind",
+                "item",
+                "--tier-namespace",
+                "urn:path",
+                "--tier-local",
+                "tokens",
+                "--index",
+                "0",
+                "--anchor-item-id",
+                "alpha",
+            ],
+            "item flags cannot include position anchor flags",
+        ),
+        (
+            ["--kind", "item"],
+            "item requires either --durable-id or --tier-namespace, --tier-local, and --index",
+        ),
+        (
+            ["--kind", "position", "--durable-id", "alpha"],
+            "position flags cannot include --durable-id",
+        ),
+        (
+            [
+                "--kind",
+                "position",
+                "--tier-namespace",
+                "urn:path",
+                "--tier-local",
+                "tokens",
+                "--index",
+                "0",
+                "--anchor-item-id",
+                "alpha",
+            ],
+            "structural position flags cannot include durable anchors",
+        ),
+        (
+            [
+                "--kind",
+                "position",
+                "--tier-namespace",
+                "urn:path",
+                "--tier-local",
+                "tokens",
+                "--index",
+                "0",
+                "--side",
+                "after",
+            ],
+            "structural position flags cannot include --side",
+        ),
+        (
+            ["--kind", "position", "--tier-namespace", "urn:path"],
+            "structural position requires --tier-namespace, --tier-local, and --index",
+        ),
+        (
+            ["--kind", "position", "--anchor-item-id", "alpha"],
+            "durable position requires --side",
+        ),
+        (
+            ["--kind", "position", "--side", "after"],
+            "durable position requires exactly one of --anchor-item-id or --anchor-tier-namespace with --anchor-tier-local",
+        ),
+    ],
+)
+def test_path_spell_rejects_incoherent_flags(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flags: list[str],
+    message: str,
+) -> None:
+    source = tmp_path / "graph.json"
+    _path_graph(source)
+    assert main(["path", "spell", str(source), *flags]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tiergraph: path: ValueError:" in captured.err
+    assert message in captured.err
+
+
+def test_path_failure_is_a_clean_diagnostic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "graph.json"
+    _empty(source)
+    assert main(["path", "resolve", str(source), "not-a-pointer"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tiergraph: path: PathRefusal: malformed_pointer:")
 
 
 def test_validate_and_graph_output_commands(

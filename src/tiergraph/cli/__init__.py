@@ -78,6 +78,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use the interactive debugger (also enabled when stdin is a TTY)",
     )
+
+    path = subparsers.add_parser("path", help="resolve and spell tiergraph paths")
+    path_subparsers = path.add_subparsers(dest="path_command", required=True)
+    resolve = path_subparsers.add_parser("resolve", help="resolve a tiergraph path")
+    resolve.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    resolve.add_argument("tgpath", metavar="TGPATH", help="tiergraph path to resolve")
+    resolve.add_argument(
+        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
+    )
+
+    spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
+    spell.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    spell.add_argument("--kind", choices=("item", "position"), required=True)
+    spell.add_argument("--tier-namespace", metavar="NS")
+    spell.add_argument("--tier-local", metavar="LOCAL")
+    spell.add_argument("--index", type=int, metavar="N")
+    spell.add_argument("--durable-id", metavar="ID")
+    spell.add_argument("--anchor-item-id", metavar="ID")
+    spell.add_argument("--anchor-tier-namespace", metavar="NS")
+    spell.add_argument("--anchor-tier-local", metavar="LOCAL")
+    spell.add_argument("--side", choices=("before", "after"))
+    spell.add_argument(
+        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
+    )
     return parser
 
 
@@ -124,6 +148,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else _json_bytes(json_schema(args.format_version))
             )
             _write_output("-", args.output, encoded)
+        elif args.command == "path":
+            graph = tiergraph.loads(_read_bytes(args.file))
+            profile = tiergraph.StructuralPathProfile()
+            if args.path_command == "resolve":
+                resolved = tiergraph.resolve_path(graph, profile, args.tgpath)
+                if isinstance(resolved, tiergraph.ResolvedItem):
+                    value = {
+                        "kind": "item",
+                        "path": str(resolved.path),
+                        "current": resolved.current.to_data(),
+                    }
+                elif isinstance(resolved, tiergraph.ResolvedPosition):
+                    value = {
+                        "kind": "position",
+                        "path": str(resolved.path),
+                        "current": resolved.current.to_data(),
+                    }
+                else:
+                    raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
+                        "structural path profile returned an alternative"
+                    )
+            else:
+                binding = _path_binding(args)
+                value = {"path": str(profile.spell(binding, graph))}
+            _write_output(args.file, args.output, _json_bytes(value))
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -154,6 +203,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RecursionError as error:
         _diagnostic(args.command, "ValueError", error)
         return 1
+    except tiergraph.PathRefusal as error:
+        _diagnostic(args.command, "PathRefusal", error)
+        return 1
     except ValueError as error:
         _diagnostic(args.command, "ValueError", error)
         return 1
@@ -161,6 +213,76 @@ def main(argv: Sequence[str] | None = None) -> int:
         _diagnostic(args.command, type(error).__name__, error)
         return 3
     return 0
+
+
+def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
+    """Build one unambiguous public path binding from spell flags."""
+    structural = (args.tier_namespace, args.tier_local, args.index)
+    anchor_tier = (args.anchor_tier_namespace, args.anchor_tier_local)
+    if args.kind == "item":
+        if args.durable_id is not None and all(value is None for value in structural):
+            if any(
+                value is not None
+                for value in (*anchor_tier, args.anchor_item_id, args.side)
+            ):
+                raise ValueError("item flags cannot include position anchor flags")
+            return tiergraph.ItemBinding(tiergraph.DurableItemRef(args.durable_id))
+        if all(value is not None for value in structural) and args.durable_id is None:
+            if any(
+                value is not None
+                for value in (*anchor_tier, args.anchor_item_id, args.side)
+            ):
+                raise ValueError("item flags cannot include position anchor flags")
+            return tiergraph.ItemBinding(
+                tiergraph.ItemRef(
+                    tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
+                    args.index,
+                )
+            )
+        raise ValueError(
+            "item requires either --durable-id or "
+            "--tier-namespace, --tier-local, and --index"
+        )
+
+    if args.durable_id is not None:
+        raise ValueError("position flags cannot include --durable-id")
+    if all(value is not None for value in structural):
+        if any(value is not None for value in (*anchor_tier, args.anchor_item_id)):
+            raise ValueError("structural position flags cannot include durable anchors")
+        if args.side is not None:
+            raise ValueError("structural position flags cannot include --side")
+        return tiergraph.PositionBinding(
+            tiergraph.PositionRef(
+                tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
+                args.index,
+            )
+        )
+    if any(value is not None for value in structural):
+        raise ValueError(
+            "structural position requires --tier-namespace, --tier-local, and --index"
+        )
+    if args.side is None:
+        raise ValueError("durable position requires --side")
+    side = tiergraph.BoundarySide(args.side)
+    if args.anchor_item_id is not None and all(value is None for value in anchor_tier):
+        return tiergraph.PositionBinding(
+            tiergraph.DurablePositionRef(
+                tiergraph.DurableItemRef(args.anchor_item_id), side
+            )
+        )
+    if args.anchor_item_id is None and all(value is not None for value in anchor_tier):
+        return tiergraph.PositionBinding(
+            tiergraph.DurablePositionRef(
+                tiergraph.QualifiedName(
+                    args.anchor_tier_namespace, args.anchor_tier_local
+                ),
+                side,
+            )
+        )
+    raise ValueError(
+        "durable position requires exactly one of --anchor-item-id or "
+        "--anchor-tier-namespace with --anchor-tier-local"
+    )
 
 
 def _diagnostic(command: str, category: str, error: BaseException) -> None:
