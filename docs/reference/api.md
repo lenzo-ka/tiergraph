@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 132 top-level `tiergraph` exports exactly once.
+It covers 134 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2304,6 +2304,14 @@ dump_bytes(graph: 'Graph') -> 'bytes'
 
 Encode the canonical document as UTF-8 bytes.
 
+### `dump_compact`
+
+```text
+dump_compact(graph: 'Graph') -> 'str'
+```
+
+Return compact canonical JSON, including its final newline.
+
 ### `dumps`
 
 ```text
@@ -2330,6 +2338,16 @@ to_data(graph: 'Graph') -> 'dict[str, JsonValue]'
 ```
 
 Return the versioned primitive document as strict JSON data.
+
+## Inspection
+
+### `graph_summary`
+
+```text
+graph_summary(graph: 'Graph') -> 'dict[str, object]'
+```
+
+Return stable document counts and per-declaration graph summaries.
 
 ## Traversal
 

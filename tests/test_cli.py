@@ -127,6 +127,9 @@ def test_validate_and_graph_output_commands(
         assert output.read_bytes().endswith(b"\n")
         assert tiergraph.loads(output.read_bytes()) == graph
     assert (tmp_path / "bytes").read_bytes() == tiergraph.dump_bytes(graph)
+    assert (tmp_path / "json-compact").read_bytes() == tiergraph.dump_compact(
+        graph
+    ).encode("utf-8")
     assert b"\n  " in (tmp_path / "json").read_bytes()
     assert b"\n  " not in (tmp_path / "json-compact").read_bytes()
 

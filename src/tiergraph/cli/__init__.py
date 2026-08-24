@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 import tiergraph
 import tiergraph_dot
@@ -210,16 +210,7 @@ def _graph_bytes(graph: tiergraph.Graph, target: str) -> bytes:
         return tiergraph.dump_bytes(graph)
     if target == "json":
         return tiergraph.dumps(graph).encode("utf-8")
-    return (
-        json.dumps(
-            tiergraph.to_data(graph),
-            allow_nan=False,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode("utf-8")
+    return tiergraph.dump_compact(graph).encode("utf-8")
 
 
 def _step_bytes(step: Step) -> bytes:
@@ -330,26 +321,28 @@ def _step_until(
 
 
 def _inspect(graph: tiergraph.Graph) -> str:
+    summary = tiergraph.graph_summary(graph)
     lines = [
-        f"format version: {tiergraph.FORMAT_VERSION}",
-        f"namespaces: {len(graph.namespaces)}",
-        f"tiers: {len(graph.tiers)}",
-        f"items: {sum(len(tier.items) for tier in graph.tiers)}",
-        f"relation declarations: {len(graph.relation_declarations)}",
-        f"binary relation instances: {len(graph.relations)}",
-        f"polyadic relation instances: {len(graph.polyadic_relations)}",
-        f"attribute declarations: {len(graph.attribute_declarations)}",
-        f"populated position values: {len(graph.position_values)}",
-        f"document attributes: {len(graph.attributes)}",
+        f"format version: {summary['format_version']}",
+        f"namespaces: {summary['namespaces']}",
+        f"tiers: {summary['tiers']}",
+        f"items: {summary['items']}",
+        f"relation declarations: {summary['relation_declarations']}",
+        f"binary relation instances: {summary['binary_relation_instances']}",
+        f"polyadic relation instances: {summary['polyadic_relation_instances']}",
+        f"attribute declarations: {summary['attribute_declarations']}",
+        f"populated position values: {summary['populated_position_values']}",
+        f"document attributes: {summary['document_attributes']}",
     ]
-    for tier in graph.tiers:
+    tier_summaries = cast(list[dict[str, object]], summary["tier_summaries"])
+    for tier in tier_summaries:
         lines.append(
-            f"tier: {tier.declaration.name} | {tier.declaration.long_name} | "
-            f"items={len(tier.items)} | attributes={len(tier.attributes)}"
+            f"tier: {tier['name']} | {tier['long_name']} | "
+            f"items={tier['items']} | attributes={tier['attributes']}"
         )
-    for declaration in graph.relation_declarations:
-        kind = declaration.to_data()["kind"]
-        lines.append(f"relation: {declaration.name} | kind={kind}")
+    relation_summaries = cast(list[dict[str, object]], summary["relation_summaries"])
+    for relation in relation_summaries:
+        lines.append(f"relation: {relation['name']} | kind={relation['kind']}")
     return "\n".join(lines) + "\n"
 
 
