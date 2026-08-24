@@ -12,7 +12,7 @@
     "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
     "selection": ["AttributeSelector", "BoundariesSelector", "BoundarySelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "TierSelector", "TypeSelector", "select"],
     "semirings": ["BOOLEAN", "COUNTING", "DECIMAL_TROPICAL", "PATH"],
-    "serialization": ["dump_bytes", "dump_compact", "dumps", "loads", "to_data"],
+    "serialization": ["dump_bytes", "dump_compact", "dumps", "load_program", "loads", "program_dumps", "program_loads", "to_data"],
     "inspection": ["graph_summary"],
     "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
   },
