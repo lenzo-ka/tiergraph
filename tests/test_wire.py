@@ -38,6 +38,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
     dump_bytes,
+    dump_compact,
     dumps,
     loads,
     to_data,
@@ -46,6 +47,11 @@ from tiergraph import (
 
 NS = "urn:wire-test"
 META_NS = "urn:wire-meta"
+
+
+def test_compact_serializer_has_exact_canonical_spelling() -> None:
+    graph = Graph((), (), ())
+    assert dump_compact(graph) == '{"format_version":"6","graph":{}}\n'
 
 
 def test_deep_json_is_cleanly_refused_before_parser_recursion() -> None:

@@ -68,6 +68,7 @@ from tiergraph.grammar import (
     lower_grammar,
     recognize,
 )
+from tiergraph.inspect import graph_summary
 from tiergraph.machine import (
     MACHINE_VERSION,
     MAX_REPEAT_COUNT,
@@ -144,6 +145,7 @@ from tiergraph.wire import (
     MAX_DOCUMENT_BYTES,
     MAX_JSON_DEPTH,
     dump_bytes,
+    dump_compact,
     dumps,
     loads,
     to_data,
@@ -264,8 +266,10 @@ __all__ = [
     "PATH",
     "SpanViewProfile",
     "FORMAT_VERSION",
+    "dump_compact",
     "dump_bytes",
     "dumps",
+    "graph_summary",
     "loads",
     "to_data",
     "execute",

@@ -109,6 +109,20 @@ def dumps(graph: Graph) -> str:
     )
 
 
+def dump_compact(graph: Graph) -> str:
+    """Return compact canonical JSON, including its final newline."""
+    return (
+        json.dumps(
+            to_data(graph),
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+
+
 def dump_bytes(graph: Graph) -> bytes:
     """Encode the canonical document as UTF-8 bytes."""
     return dumps(graph).encode("utf-8")
@@ -598,3 +612,15 @@ def _enum[E](enum_type: Callable[[str], E], value: object, path: str) -> E:
         return enum_type(spelling)
     except ValueError as error:
         raise ValueError(f"{path} has unsupported value {spelling!r}") from error
+
+
+__all__ = [
+    "FORMAT_VERSION",
+    "MAX_DOCUMENT_BYTES",
+    "MAX_JSON_DEPTH",
+    "dump_bytes",
+    "dump_compact",
+    "dumps",
+    "loads",
+    "to_data",
+]
