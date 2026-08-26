@@ -18,14 +18,18 @@ You have this problem already if:
 - you keep a derived index beside the store and must remember to update both; or
 - your serialized format breaks when you add a field.
 
-The package requires Python 3.12 or later. A PyPI release is not yet available;
-install it from a source checkout:
+The package requires Python 3.12 or later. Install it from PyPI:
+
+```console
+python -m pip install tiergraph
+```
+
+For development, install an editable checkout with the development tools:
 
 ```console
 git clone https://github.com/lenzo-ka/tiergraph.git
 cd tiergraph
-python -m pip install .
-tiergraph --version
+python -m pip install -e ".[dev]"
 ```
 
 ## See an alignment
@@ -92,6 +96,20 @@ Downstream migration (ipakit). ipakit is migrating onto tiergraph: Form's timed 
   [serialization](docs/guide/serialization.md).
 - Project segmentation graphs into deterministic span views for JSON, JSON Lines,
   text, HTML, or DOT — see [span views](docs/guide/span-views.md).
+
+## Command line
+
+The `tiergraph` command validates graph documents, renders them, and exposes the
+same span-view machinery as the Python API. For example:
+
+```console
+tiergraph validate graph.json
+tiergraph render graph.json -o graph.dot
+tiergraph span render graph.json --profile span-profile.json --format text
+```
+
+See the generated [CLI reference](docs/reference/cli.md) for all thirteen
+commands and their options.
 
 ## Documentation
 

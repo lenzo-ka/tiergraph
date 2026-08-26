@@ -30,7 +30,7 @@
     }
   ],
   "fences": {
-    "README.md": ["console", "python", "python"],
+    "README.md": ["console", "console", "python", "console", "python"],
     "docs/concepts.md": ["python", "text"],
     "docs/getting-started.md": ["python", "python", "python", "text", "python", "text", "python", "text", "python", "text"],
     "docs/guide/construction.md": ["python", "text", "python", "text"],

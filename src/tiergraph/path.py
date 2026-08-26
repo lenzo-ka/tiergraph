@@ -29,7 +29,11 @@ class PathKind(StrEnum):
 
 
 class PathRefusalCode(StrEnum):
-    """Identify stable classes of path refusal independently of diagnostics."""
+    """Identify stable classes of path refusal independently of diagnostics.
+
+    ``POSITION_NOT_IN_PARENT`` is reserved and is not produced by a current path
+    resolver or profile.
+    """
 
     MALFORMED_POINTER = "malformed_pointer"
     NONCANONICAL_SEGMENT = "noncanonical_segment"
@@ -54,7 +58,7 @@ class CanonicalPath:
 
     @classmethod
     def parse(cls, text: str) -> CanonicalPath:
-        """Parse a strict JSON Pointer, refusing empty and malformed spellings."""
+        """Parse a strict JSON Pointer, accepting empty and refusing malformed spellings."""
         if text == "":
             return cls(())
         if not text.startswith("/"):
