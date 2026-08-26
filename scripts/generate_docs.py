@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
@@ -107,6 +108,11 @@ def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
 def _class_members(value: type[object], class_name: str) -> str:
     """Render documented public members in deterministic definition order."""
     parts: list[str] = []
+    if issubclass(value, Enum):
+        rendered = "\n".join(
+            f"- `{member.name}` = `{member.value}`" for member in value
+        )
+        parts.append(f"#### `{class_name}` members\n\n{rendered}")
     for member_name in value.__dict__:
         if member_name.startswith("_"):
             continue

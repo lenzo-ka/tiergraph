@@ -72,6 +72,11 @@ ReactMode(*values)
 
 Choose per-recognition or complete-batch action application.
 
+#### `ReactMode` members
+
+- `ONE_FOR_ONE` = `one-for-one`
+- `TRANSACTIONAL` = `transactional`
+
 ### `Semimodule`
 
 ```text
@@ -766,6 +771,11 @@ ChildCombination(*values)
 
 Declare whether one relation's incident children are alternatives or requirements.
 
+#### `ChildCombination` members
+
+- `OR` = `or`
+- `AND` = `and`
+
 ### `FoldCost`
 
 ```text
@@ -920,6 +930,11 @@ TiePolicy(*values)
 
 Supported, executable policies for equal-valued alternatives.
 
+#### `TiePolicy` members
+
+- `ALL` = `all`
+- `CHOOSE_FIRST` = `choose-first`
+
 ## Grammar
 
 ### `BestDerivation`
@@ -981,7 +996,7 @@ Method.
 GrammarChartProfile.alternatives(self, owner: 'ItemRef', relation: 'QualifiedName', graph: 'Graph') -> 'tuple[object, ...]'
 ```
 
-Order applications by rule ordinal and ordered child spans.
+Order by application start, ordered child spans, then application index.
 
 ### `GrammarDeclaration`
 
@@ -1261,6 +1276,15 @@ AttributeDomain(*values)
 
 The closed set of places where a declared attribute may occur.
 
+#### `AttributeDomain` members
+
+- `ITEM` = `item`
+- `TIER` = `tier`
+- `RELATION_DECLARATION` = `relation_declaration`
+- `RELATION_INSTANCE` = `relation_instance`
+- `POSITION` = `position`
+- `DOCUMENT` = `document`
+
 ### `AttributeValue`
 
 ```text
@@ -1304,6 +1328,11 @@ BoundarySide(*values)
 ```
 
 Choose the boundary immediately before or after an anchor.
+
+#### `BoundarySide` members
+
+- `BEFORE` = `before`
+- `AFTER` = `after`
 
 ### `Graph`
 
@@ -1542,6 +1571,11 @@ RelationEndpointKind(*values)
 
 Declare whether one relation endpoint is an item or a boundary.
 
+#### `RelationEndpointKind` members
+
+- `ITEM` = `item`
+- `BOUNDARY` = `boundary`
+
 ### `RelationInstance`
 
 ```text
@@ -1650,6 +1684,14 @@ XsdType(*values)
 
 The growable XSD datatype subset admitted for attribute values.
 
+#### `XsdType` members
+
+- `STRING` = `string`
+- `BOOLEAN` = `boolean`
+- `INTEGER` = `integer`
+- `DECIMAL` = `decimal`
+- `DOUBLE` = `double`
+
 ## Metadata
 
 ### `FORMAT_VERSION`
@@ -1718,7 +1760,7 @@ Class method.
 CanonicalPath.parse(cls, text: 'str') -> 'CanonicalPath'
 ```
 
-Parse a strict JSON Pointer, refusing empty and malformed spellings.
+Parse a strict JSON Pointer, accepting empty and refusing malformed spellings.
 
 ### `ItemBinding`
 
@@ -1760,6 +1802,12 @@ PathKind(*values)
 ```
 
 Classify the graph reference produced by a path profile.
+
+#### `PathKind` members
+
+- `ITEM` = `item`
+- `POSITION` = `position`
+- `ALTERNATIVE` = `alternative`
 
 ### `PathOffender`
 
@@ -1822,6 +1870,25 @@ PathRefusalCode(*values)
 ```
 
 Identify stable classes of path refusal independently of diagnostics.
+
+``POSITION_NOT_IN_PARENT`` is reserved and is not produced by a current path
+resolver or profile.
+
+#### `PathRefusalCode` members
+
+- `MALFORMED_POINTER` = `malformed_pointer`
+- `NONCANONICAL_SEGMENT` = `noncanonical_segment`
+- `UNKNOWN_FORM` = `unknown_form`
+- `INVALID_SEGMENT` = `invalid_segment`
+- `WRONG_KIND` = `wrong_kind`
+- `UNKNOWN_TIER` = `unknown_tier`
+- `OUT_OF_RANGE` = `out_of_range`
+- `UNKNOWN_DURABLE_ITEM` = `unknown_durable_item`
+- `UNKNOWN_DURABLE_ANCHOR` = `unknown_durable_anchor`
+- `POSITION_NOT_IN_PARENT` = `position_not_in_parent`
+- `UNSPELLABLE` = `unspellable`
+- `PROFILE_REFUSED` = `profile_refused`
+- `ALTERNATIVE_OUT_OF_RANGE` = `alternative_out_of_range`
 
 ### `PositionBinding`
 
@@ -2342,6 +2409,15 @@ NodeKind(*values)
 
 Distinguish identities belonging to different graph node classes.
 
+#### `NodeKind` members
+
+- `DOCUMENT` = `document`
+- `TIER` = `tier`
+- `ITEM` = `item`
+- `POSITION` = `position`
+- `RELATION_DECLARATION` = `relation_declaration`
+- `RELATION_INSTANCE` = `relation_instance`
+
 ### `NodeSet`
 
 ```text
@@ -2349,6 +2425,10 @@ NodeSet(graph: 'Graph', nodes: 'tuple[Node, ...]') -> None
 ```
 
 Hold unique nodes in the graph's canonical mixed-node order.
+
+Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
+declaration index, then item or position index, so reproducible selection
+output depends on the graph's tier declaration order.
 
 #### `NodeSet.to_data`
 
@@ -2714,6 +2794,11 @@ PolyadicSide(*values)
 
 Choose one stored side of a polyadic relation declaration.
 
+#### `PolyadicSide` members
+
+- `SOURCES` = `sources`
+- `TARGETS` = `targets`
+
 ### `Walk`
 
 ```text
@@ -2746,6 +2831,11 @@ WalkDirection(*values)
 ```
 
 Choose the declared descending direction or its computed inverse view.
+
+#### `WalkDirection` members
+
+- `FORWARD` = `forward`
+- `INVERSE` = `inverse`
 
 ### `WalkResult`
 
@@ -3331,6 +3421,11 @@ LawCheck(*values)
 ```
 
 The mandatory comparison used to check a semiring law.
+
+#### `LawCheck` members
+
+- `EXACT` = `exact`
+- `APPROXIMATE` = `approximate`
 
 ### `Path`
 

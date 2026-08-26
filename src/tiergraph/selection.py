@@ -52,7 +52,12 @@ class Node:
 
 @dataclass(frozen=True, slots=True)
 class NodeSet:
-    """Hold unique nodes in the graph's canonical mixed-node order."""
+    """Hold unique nodes in the graph's canonical mixed-node order.
+
+    Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
+    declaration index, then item or position index, so reproducible selection
+    output depends on the graph's tier declaration order.
+    """
 
     graph: Graph
     nodes: tuple[Node, ...]

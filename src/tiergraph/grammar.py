@@ -657,7 +657,7 @@ class GrammarChartProfile:
     def alternatives(
         self, owner: ItemRef, relation: QualifiedName, graph: Graph
     ) -> tuple[object, ...]:
-        """Order applications by rule ordinal and ordered child spans."""
+        """Order by application start, ordered child spans, then application index."""
         names = _forest_names(self.forest)
         if graph is not self.forest.graph or relation != names["alternatives"]:
             raise PathRefusal(
@@ -695,7 +695,7 @@ class GrammarChartProfile:
                 )
                 for child in production.targets
             )
-            # (rule ordinal, child spans) is the semantic order; the application's
+            # (application start, child spans) is the semantic order; the application's
             # own tier index is a canonical, unique tiebreak so genuinely colliding
             # variants (e.g. two nullable expansions that project to the identical
             # (production, children)) get a stable order rather than falling back
