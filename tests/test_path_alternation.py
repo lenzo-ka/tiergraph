@@ -24,6 +24,8 @@ from tiergraph import (
     ResolvedAlternative,
     StructuralPathProfile,
     XsdType,
+    best,
+    count,
     lower_grammar,
     recognize,
     resolve_path,
@@ -123,14 +125,19 @@ def addressed_value(profile: GrammarChartProfile, text: str) -> object:
 
 def test_real_forest_alternatives_use_stable_key_not_discovery_or_weight() -> None:
     """Rule ordinal and child spans govern k while best-cost order can change."""
-    low_rule_zero = recognize(
-        lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x")
+    first_grammar = lower_grammar(ambiguous_grammar("1", "9"))
+    second_grammar = lower_grammar(ambiguous_grammar("9", "1"))
+    low_rule_zero = recognize(first_grammar, ("x", "x", "x"))
+    low_rule_one = recognize(second_grammar, ("x", "x", "x"))
+    assert (
+        count(first_grammar, ("x", "x", "x"))
+        == count(second_grammar, ("x", "x", "x"))
+        == 3
     )
-    low_rule_one = recognize(
-        lower_grammar(ambiguous_grammar("9", "1")), ("x", "x", "x")
+    assert (
+        best(first_grammar, ("x", "x", "x"))[0].weight
+        != best(second_grammar, ("x", "x", "x"))[0].weight
     )
-    assert low_rule_zero.count() == low_rule_one.count() == 3
-    assert low_rule_zero.best(1)[0].weight != low_rule_one.best(1)[0].weight
 
     path = f"/chart/{S}/0/3/alternatives/"
     first_profile = GrammarChartProfile(low_rule_zero)

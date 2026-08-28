@@ -40,6 +40,7 @@ from tiergraph.semiring import (
     PATH,
     PathValue,
     Semiring,
+    ZeroClosedStar,
 )
 
 FIXTURE = FoldFixture()
@@ -273,8 +274,8 @@ def test_deep_dependency_chain_folds_without_python_recursion() -> None:
     assert result.values[-1][1] == Decimal(1)
 
 
-def test_fold_refuses_a_cycle_across_individually_acyclic_transitions() -> None:
-    """A back-edge across two relation declarations is still a fold cycle."""
+def test_fold_solves_a_cycle_across_individually_acyclic_transitions() -> None:
+    """REGRESSION: composed cycles reach the runtime starred solver."""
     tier_name = FIXTURE.name("cycle-nodes")
     item_type = FIXTURE.name("cycle-node")
     cost = FIXTURE.name("cycle-cost")
@@ -317,8 +318,64 @@ def test_fold_refuses_a_cycle_across_individually_acyclic_transitions() -> None:
         roots=(ItemRef(tier_name, 0),),
     )
 
-    with pytest.raises(ValueError, match="transitions form a cycle.*cycle-second"):
-        declared.run()
+    assert declared.run().value == DECIMAL_TROPICAL.zero
+
+
+def test_fold_applies_star_closure_to_the_cyclic_approximant() -> None:
+    """REGRESSION: the starred result, not the finite approximation, is cached."""
+
+    class DiscriminatingStar(ZeroClosedStar[Decimal]):
+        def close(self, operand: Decimal, /) -> Decimal:
+            assert operand == Decimal(2)
+            return Decimal(10)
+
+    class DiscriminatingSemiring:
+        star = DiscriminatingStar(DECIMAL_TROPICAL)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(DECIMAL_TROPICAL, name)
+
+    tier_name = FIXTURE.name("star-nodes")
+    item_type = FIXTURE.name("star-node")
+    cost = FIXTURE.name("star-cost")
+    membership = SimpleRelationDeclaration(
+        FIXTURE.name("star-members"), tier_name, item_type
+    )
+    depends = BipartiteRelationDeclaration(
+        FIXTURE.name("star-depends"), item_type, item_type
+    )
+    tier = Tier(
+        TierDeclaration(tier_name, "Star nodes"),
+        (
+            Item("root", (AttributeValue(cost, XsdType.DECIMAL, "2"),)),
+            Item("base", (AttributeValue(cost, XsdType.DECIMAL, "0"),)),
+        ),
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (tier,),
+        (membership, depends),
+        (
+            RelationInstance(
+                depends.name, ItemRef(tier_name, 0), ItemRef(tier_name, 0)
+            ),
+            RelationInstance(
+                depends.name, ItemRef(tier_name, 0), ItemRef(tier_name, 1)
+            ),
+        ),
+        (AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    declared = FoldDeclaration(
+        "star-value",
+        graph,
+        AttributeValuation("star-cost", cost, (tier_name,)),
+        cast(Semiring[Decimal], DiscriminatingSemiring()),
+        decimal_lift,
+        (FoldTransition(depends.name, ChildCombination.OR),),
+        roots=(ItemRef(tier_name, 0),),
+    )
+
+    assert declared.run().value == Decimal(12)
 
 
 def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
@@ -589,8 +646,8 @@ def test_valuation_reads_every_admitted_xsd_value_kind() -> None:
         assert reader.read(typed_graph, ItemRef(placement, 0)) == expected
 
 
-def test_domain_and_relation_declarations_are_refused() -> None:
-    """Undeclared tiers and dependency relations without acyclicity cannot enter a fold."""
+def test_domain_is_refused_but_relation_acyclicity_is_not_a_fold_gate() -> None:
+    """REGRESSION: declaration acyclicity does not claim composed acyclicity."""
     with pytest.raises(ValueError, match="undeclared tier"):
         replace(
             declaration(),
@@ -616,8 +673,9 @@ def test_domain_and_relation_declarations_are_refused() -> None:
         graph.relations,
         graph.attribute_declarations,
     )
-    with pytest.raises(ValueError, match="does not declare acyclic"):
-        replace(declaration(), graph=lax_graph)
+    assert (
+        replace(declaration(), graph=lax_graph).run().value == declaration().run().value
+    )
 
 
 def test_scalar_result_and_empty_index_product_are_serializable() -> None:

@@ -138,7 +138,15 @@ from tiergraph.selection_query import (
     evaluate_selection,
     selection_query_loads,
 )
-from tiergraph.semiring import BOOLEAN, COUNTING, DECIMAL_TROPICAL, PATH
+from tiergraph.semiring import (
+    BOOLEAN,
+    COUNTING,
+    DECIMAL_TROPICAL,
+    PATH,
+    StarRefusal,
+    StarSelector,
+    ZeroClosedStar,
+)
 from tiergraph.spanview import (
     SpanViewProfile,
     span_view,
@@ -273,6 +281,8 @@ __all__ = [
     "SimpleRelationDeclaration",
     "SelectionQuery",
     "Step",
+    "StarRefusal",
+    "StarSelector",
     "StructuralPathProfile",
     "Semimodule",
     "TiePolicy",
@@ -291,6 +301,7 @@ __all__ = [
     "WalkResult",
     "WitnessCoordinate",
     "YieldNormalization",
+    "ZeroClosedStar",
     "BOOLEAN",
     "COUNTING",
     "DECIMAL_TROPICAL",

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 151 top-level `tiergraph` exports exactly once.
+It covers 154 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1141,7 +1141,7 @@ Return the declaration, graph, and construction fingerprint.
 ### `ParseForest`
 
 ```text
-ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]', declaration: 'GrammarDeclaration') -> None
+ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]', declaration: 'GrammarDeclaration', collapsed: 'bool' = True) -> None
 ```
 
 Carry a machine-built parse forest and its Boolean interpretation.
@@ -1237,16 +1237,14 @@ Lower a grammar through machine opcodes to an ordered coordinate hedge.
 ### `recognize`
 
 ```text
-recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str]', namespace: 'str' = 'urn:tiergraph:grammar:chart') -> 'ParseForest'
+recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str]', namespace: 'str' = 'urn:tiergraph:grammar:chart', *, collapse_units: 'bool' = True) -> 'ParseForest'
 ```
 
 Build a chart forest for token input using polynomial span deduction.
 
 For a fixed grammar whose longest source pattern has length ``m``, the
 exhaustive boundary discipline takes ``O(n^(m+1))`` time and polynomial
-space in input length ``n``. Nullable expansion and unit closure remove
-same-span dependencies before candidate construction, so every remaining
-child span is shorter than its parent span.
+space in input length ``n``.
 
 ## Kernel
 
@@ -2567,6 +2565,63 @@ An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
 The exact decimal tropical semiring enriched with tied best paths.
 
+### `StarRefusal`
+
+Refuse a closure the declaring algebra does not license for this operand.
+
+### `StarSelector`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `ZeroClosedStar`
+
+```text
+ZeroClosedStar(algebra: 'Semiring[T]', name: 'str' = 'zero-closed') -> None
+```
+
+Admit 0-closed operands and close their finite ascending chain to one.
+
+#### `ZeroClosedStar.admits`
+
+Method.
+
+```text
+ZeroClosedStar.admits(self, operand: 'T', /) -> 'bool'
+```
+
+Prove that the operand is dominated by the multiplicative identity.
+
+#### `ZeroClosedStar.close`
+
+Method.
+
+```text
+ZeroClosedStar.close(self, operand: 'T', /) -> 'T'
+```
+
+Return the closure after checking the warrant.
+
 ## Serialization
 
 ### `dump_bytes`
@@ -3046,6 +3101,16 @@ BooleanSemiring()
 
 The exact Boolean semiring, with disjunction and conjunction.
 
+#### `BooleanSemiring.star`
+
+Property.
+
+```text
+BooleanSemiring.star(self) -> 'StarSelector[bool]'
+```
+
+Return the Boolean carrier's 0-closed closure.
+
 #### `BooleanSemiring.add`
 
 Method.
@@ -3093,6 +3158,16 @@ ArcticSemiring() -> 'None'
 ```
 
 The inexact IEEE-double max-plus semiring.
+
+#### `ArcticSemiring.star`
+
+Property.
+
+```text
+ArcticSemiring.star(self) -> 'StarSelector[float]'
+```
+
+Return this carrier's explicitly declared 0-closed closure.
 
 ### `CountingSemiring`
 
@@ -3150,6 +3225,16 @@ DecimalExtremumSemiring(*, minimum: 'bool') -> 'None'
 
 An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
+#### `DecimalExtremumSemiring.star`
+
+Property.
+
+```text
+DecimalExtremumSemiring.star(self) -> 'StarSelector[Decimal]'
+```
+
+Return this extremum carrier's 0-closed closure.
+
 #### `DecimalExtremumSemiring.add`
 
 Method.
@@ -3198,6 +3283,16 @@ DoubleExtremumSemiring(*, minimum: 'bool') -> 'None'
 
 An inexact min-plus or max-plus semiring over finite IEEE doubles.
 
+#### `DoubleExtremumSemiring.star`
+
+Property.
+
+```text
+DoubleExtremumSemiring.star(self) -> 'StarSelector[float]'
+```
+
+Return this extremum carrier's 0-closed closure.
+
 #### `DoubleExtremumSemiring.add`
 
 Method.
@@ -3245,6 +3340,16 @@ ExpectationSemiring(base: 'Semiring[T]') -> 'None'
 ```
 
 The expectation construction ``(weight, weighted statistic)``.
+
+#### `ExpectationSemiring.star`
+
+Property.
+
+```text
+ExpectationSemiring.star(self) -> 'StarSelector[tuple[T, T]] | None'
+```
+
+Declare no closure for an arbitrary expectation base.
 
 #### `ExpectationSemiring.multiply`
 
@@ -3333,6 +3438,16 @@ LexicographicSemiring(first: 'Semiring[T]', second: 'Semiring[U]') -> 'None'
 ```
 
 A selective first semiring with second-component aggregation on ties.
+
+#### `LexicographicSemiring.star`
+
+Property.
+
+```text
+LexicographicSemiring.star(self) -> 'StarSelector[tuple[T, U]] | None'
+```
+
+Declare no closure for arbitrary lexicographic components.
 
 #### `LexicographicSemiring.add`
 
@@ -3460,6 +3575,16 @@ PathSemiring() -> 'None'
 
 The exact decimal tropical semiring enriched with tied best paths.
 
+#### `PathSemiring.star`
+
+Property.
+
+```text
+PathSemiring.star(self) -> 'StarSelector[tuple[Decimal, tuple[tuple[str, ...], ...]]]'
+```
+
+Return the proved 0-closed closure for path values.
+
 #### `PathSemiring.multiply_preserves_witness_order`
 
 Property.
@@ -3502,6 +3627,16 @@ ProductSemiring(left: 'Semiring[T]', right: 'Semiring[U]') -> None
 ```
 
 The componentwise product of two semirings.
+
+#### `ProductSemiring.star`
+
+Property.
+
+```text
+ProductSemiring.star(self) -> 'StarSelector[tuple[T, U]] | None'
+```
+
+Declare no closure for arbitrary component products.
 
 #### `ProductSemiring.zero`
 
@@ -3741,6 +3876,16 @@ Semiring.add_idempotent(self) -> 'bool'
 
 Report whether addition is idempotent.
 
+#### `Semiring.star`
+
+Property.
+
+```text
+Semiring.star(self) -> 'StarSelector[T] | None'
+```
+
+Name this carrier's closure and its warrant, or declare none.
+
 #### `Semiring.multiply_commutative`
 
 Property.
@@ -3841,6 +3986,35 @@ Semiring.decode(self, value: 'object', /) -> 'T'
 
 Decode and validate a strict-JSON representation.
 
+### `StarRefusal`
+
+Refuse a closure the declaring algebra does not license for this operand.
+
+### `StarSelector`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
 ### `TropicalSemiring`
 
 ```text
@@ -3848,6 +4022,44 @@ TropicalSemiring() -> 'None'
 ```
 
 The inexact IEEE-double min-plus semiring.
+
+#### `TropicalSemiring.star`
+
+Property.
+
+```text
+TropicalSemiring.star(self) -> 'StarSelector[float]'
+```
+
+Return this carrier's explicitly declared 0-closed closure.
+
+### `ZeroClosedStar`
+
+```text
+ZeroClosedStar(algebra: 'Semiring[T]', name: 'str' = 'zero-closed') -> None
+```
+
+Admit 0-closed operands and close their finite ascending chain to one.
+
+#### `ZeroClosedStar.admits`
+
+Method.
+
+```text
+ZeroClosedStar.admits(self, operand: 'T', /) -> 'bool'
+```
+
+Prove that the operand is dominated by the multiplicative identity.
+
+#### `ZeroClosedStar.close`
+
+Method.
+
+```text
+ZeroClosedStar.close(self, operand: 'T', /) -> 'T'
+```
+
+Return the closure after checking the warrant.
 ### `tiergraph.schema`
 
 This module is importable and usable, but carries no API-stability promise at version 0.1.0.

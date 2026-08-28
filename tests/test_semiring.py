@@ -19,11 +19,17 @@ from tiergraph.semiring import (
     DECIMAL_ARCTIC,
     DECIMAL_TROPICAL,
     PATH,
+    PATH_WITNESSES,
     TROPICAL,
+    ArcticSemiring,
+    BooleanSemiring,
     CountingSemiring,
+    DecimalExtremumSemiring,
+    DoubleExtremumSemiring,
     ExpectationSemiring,
     LawCheck,
     LexicographicSemiring,
+    PathSemiring,
     PathValue,
     PathWitnessSemiring,
     ProductSemiring,
@@ -71,6 +77,80 @@ PATH_VALUES: SearchStrategy[PathValue] = st.one_of(
         st.sets(PATHS, min_size=1, max_size=4).map(lambda paths: tuple(sorted(paths))),
     ),
 )
+
+
+def test_declared_star_dispositions_and_warrants() -> None:
+    """REGRESSION: shipped carriers state exact, per-operand star dispositions."""
+    assert PATH.star is not None
+    assert PATH.star.name == "zero-closed"
+    positive = (Decimal(1), (("a",),))
+    tied = (Decimal(0), (("a",),))
+    assert PATH.star.admits(positive)
+    assert PATH.star.close(positive) == PATH.one
+    assert PATH.star.admits(PATH.one)
+    assert not PATH.star.admits(tied)
+    partial = PATH.one
+    power = PATH.one
+    sums = []
+    for _ in range(4):
+        power = PATH.multiply(power, tied)
+        partial = PATH.add(partial, power)
+        sums.append(partial)
+    assert len(set(sums)) == 4
+    with pytest.raises(ValueError, match=r"zero-closed warrant refuses operand.*0"):
+        PATH.star.close(tied)
+
+    assert PATH_WITNESSES.add_idempotent
+    assert PATH_WITNESSES.star is None
+    witness_partial = PATH_WITNESSES.one
+    witness_power = PATH_WITNESSES.one
+    witness_sums = []
+    operand = (("a",),)
+    for _ in range(4):
+        witness_power = PATH_WITNESSES.multiply(witness_power, operand)
+        witness_partial = PATH_WITNESSES.add(witness_partial, witness_power)
+        witness_sums.append(witness_partial)
+    assert len(set(witness_sums)) == 4
+
+    assert COUNTING.star is None
+    assert BOOLEAN.star.admits(False)
+    assert BOOLEAN.star.close(False) is True
+    assert not DECIMAL_TROPICAL.star.admits(Decimal(-1))
+    assert DECIMAL_TROPICAL.star.admits(Decimal(0))
+    assert DECIMAL_TROPICAL.star.admits(DECIMAL_TROPICAL.zero)
+    assert DECIMAL_ARCTIC.star.admits(Decimal(0))
+    assert TROPICAL.star.admits(0.0)
+    assert ARCTIC.star.admits(0.0)
+
+
+def test_star_is_explicit_and_not_a_component_conjunction() -> None:
+    """REGRESSION: every implementation owns star and products do not derive it."""
+    product = ProductSemiring(DECIMAL_TROPICAL, PATH_WITNESSES)
+    assert PATH.star is not None
+    assert product.star is None
+    assert ProductSemiring(BOOLEAN, BOOLEAN).star is None
+    assert DoubleExtremumSemiring(minimum=True).star is not None
+    assert LexicographicSemiring(DECIMAL_TROPICAL, PATH_WITNESSES).star is None
+    assert ExpectationSemiring(COUNTING).star is None
+    implementations = (
+        BooleanSemiring,
+        CountingSemiring,
+        DecimalExtremumSemiring,
+        DoubleExtremumSemiring,
+        TropicalSemiring,
+        ArcticSemiring,
+        PathWitnessSemiring,
+        ProductSemiring,
+        LexicographicSemiring,
+        ExpectationSemiring,
+        PathSemiring,
+    )
+    assert all("star" in implementation.__dict__ for implementation in implementations)
+    assert "star" not in {
+        "add_idempotent",
+        "multiply_commutative",
+        "zero_sum_free",
+    }
 
 
 @dataclass(frozen=True)
