@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from tiergraph.core import Graph, Item, ItemRef, QualifiedName, Tier
+from tiergraph.core import DurablePositionRef, Graph, Item, ItemRef, QualifiedName, Tier
 from tiergraph.machine import _decode_object, _decode_qname
 from tiergraph.path import ItemBinding, StructuralPathProfile
 
@@ -123,7 +123,7 @@ class SpanView:
         """
         size = len(self.base_surfaces)
         for span in self.spans:
-            if not 0 <= span.start < span.end <= size:
+            if not 0 <= span.start <= span.end <= size:
                 raise ValueError(
                     f"span {span.path!r} has bounds {span.start}..{span.end} "
                     f"outside the half-open range of {size} base items"
@@ -207,22 +207,39 @@ def span_view(
                 ) from error
 
     members: dict[ItemRef, set[int]] = {}
+    anchors: dict[ItemRef, int] = {}
     span_tiers = set(profile.span_tiers)
     for relation in graph.relations:
         if (
-            relation.declaration == profile.coverage_relation
-            and isinstance(relation.left, ItemRef)
-            and isinstance(relation.right, ItemRef)
-            and relation.left.tier == profile.base_tier
-            and relation.right.tier in span_tiers
+            relation.declaration != profile.coverage_relation
+            or not isinstance(relation.right, ItemRef)
+            or relation.right.tier not in span_tiers
         ):
-            members.setdefault(relation.right, set()).add(relation.left.index)
+            continue
+        if isinstance(relation.left, ItemRef):
+            if relation.left.tier == profile.base_tier:
+                members.setdefault(relation.right, set()).add(relation.left.index)
+        else:
+            assert isinstance(relation.left, DurablePositionRef)
+            boundary = graph.resolve_position(relation.left)
+            if boundary.tier == profile.base_tier:
+                previous = anchors.setdefault(relation.right, boundary.index)
+                if previous != boundary.index:
+                    raise ValueError(
+                        f"span {str(relation.right.tier)!r} item {relation.right.index} "
+                        f"has conflicting boundary coverage at {previous} and "
+                        f"{boundary.index}"
+                    )
 
     paths = StructuralPathProfile()
     projected: list[Span] = []
-    for reference, covered in members.items():
-        start, end = min(covered), max(covered) + 1
-        if covered != set(range(start, end)):
+    for reference in members.keys() | anchors.keys():
+        covered = members.get(reference)
+        if covered is None:
+            start = end = anchors[reference]
+        else:
+            start, end = min(covered), max(covered) + 1
+        if covered is not None and covered != set(range(start, end)):
             raise ValueError(
                 f"span {str(reference.tier)!r} item {reference.index} has non-contiguous coverage"
             )
@@ -281,13 +298,28 @@ def span_view(
                     ),
                 )
             )
+        char_start: int | None
+        char_end: int | None
+        if offsets:
+            char_start = (
+                offsets[start]
+                if start < len(offsets)
+                else offsets[-1] + len(surfaces[-1])
+            )
+            char_end = (
+                char_start
+                if start == end
+                else offsets[end - 1] + len(surfaces[end - 1])
+            )
+        else:
+            char_start = char_end = None
         projected.append(
             Span(
                 label,
                 start,
                 end,
-                offsets[start] if offsets else None,
-                offsets[end - 1] + len(surfaces[end - 1]) if offsets else None,
+                char_start,
+                char_end,
                 _attribute(item, profile.value_attribute),
                 _attribute(item, profile.score_attribute),
                 path,
@@ -352,12 +384,19 @@ def to_jsonl(
                 {
                     "input": index,
                     "text": view.text,
+                    "version": SPANVIEW_FORMAT_VERSION,
                     "spans": [_span_data(span, alternatives) for span in view.spans],
                 }
             )
         else:
             for span in view.spans:
-                records.append({"input": index, **_span_data(span, alternatives)})
+                records.append(
+                    {
+                        "input": index,
+                        "version": SPANVIEW_FORMAT_VERSION,
+                        **_span_data(span, alternatives),
+                    }
+                )
     return "".join(
         json.dumps(
             value,
@@ -380,7 +419,7 @@ def _char_boundaries(view: SpanView) -> list[int]:
 
 def _ruler(start: int, end: int) -> str:
     width = end - start
-    marker = "^" if width == 1 else "[" + "-" * (width - 2) + "]"
+    marker = "|" if width == 0 else "^" if width == 1 else "[" + "-" * (width - 2) + "]"
     return " " * start + marker
 
 
@@ -436,8 +475,9 @@ def to_html(view: SpanView, *, alternatives: bool = False) -> str:
         start, end = boundaries[span.start], boundaries[span.end]
         chunks.append(html.escape(view.text[cursor:start], quote=True))
         title = " | ".join((span.label, span.value or "", span.score or ""))
+        marker_class = ' class="zero-width"' if start == end else ""
         chunks.append(
-            f'<mark title="{html.escape(title, quote=True)}">{html.escape(view.text[start:end], quote=True)}</mark>'
+            f'<mark{marker_class} title="{html.escape(title, quote=True)}">{html.escape(view.text[start:end], quote=True)}</mark>'
         )
         cursor = end
     chunks.append(html.escape(view.text[cursor:], quote=True))
@@ -466,7 +506,7 @@ def to_html(view: SpanView, *, alternatives: bool = False) -> str:
         (
             "<!doctype html>",
             '<html lang="en"><head><meta charset="utf-8"><title>Span view</title>',
-            "<style>body{font-family:sans-serif}mark{background:#ffe08a}table{border-collapse:collapse}th,td{border:1px solid #999;padding:.3rem;text-align:left}</style>",
+            '<style>body{font-family:sans-serif}mark{background:#ffe08a}mark.zero-width::before{content:"|"}table{border-collapse:collapse}th,td{border:1px solid #999;padding:.3rem;text-align:left}</style>',
             "</head><body>",
             f"<pre>{''.join(chunks)}</pre>",
             f"<table><thead><tr><th>label</th><th>index</th><th>chars</th><th>value</th><th>score</th><th>path</th>{alternative_heading}</tr></thead>",

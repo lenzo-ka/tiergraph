@@ -7,16 +7,20 @@ from dataclasses import replace
 
 import pytest
 
+import tiergraph_dot
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundarySide,
+    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
     QualifiedName,
+    RelationEndpointKind,
     RelationInstance,
     SimpleRelationDeclaration,
     Tier,
@@ -43,7 +47,12 @@ def name(local: str) -> QualifiedName:
     return QualifiedName(NS, local)
 
 
-BASE, SPANS, CANDIDATES = name("base"), name("spans"), name("candidates")
+BASE, SPANS, CANDIDATES, SHADOW = (
+    name("base"),
+    name("spans"),
+    name("candidates"),
+    name("shadow"),
+)
 BASE_TYPE, SPAN_TYPE, CANDIDATE_TYPE = (
     name("base-type"),
     name("span-type"),
@@ -243,9 +252,11 @@ def test_json_jsonl_text_and_html_are_stable_and_toggle_alternatives() -> None:
     assert all(json.loads(line)["input"] == 0 for line in spans.splitlines())
     # The two record shapes are structurally distinct, not merely re-keyed.
     input_record = json.loads(inputs.splitlines()[0])
-    assert set(input_record) == {"input", "text", "spans"}
+    assert set(input_record) == {"input", "text", "version", "spans"}
+    assert input_record["version"] == "1"
     assert "alternatives" in input_record["spans"][0]
     span_record = json.loads(spans.splitlines()[0])
+    assert span_record["version"] == "1"
     assert "spans" not in span_record and "text" not in span_record
     assert {"input", "label", "start", "end", "path"} <= set(span_record)
     assert "alternatives" not in span_record
@@ -262,6 +273,145 @@ def test_json_jsonl_text_and_html_are_stable_and_toggle_alternatives() -> None:
     assert "<th>alternatives</th>" not in to_html(view)
     with pytest.raises(ValueError, match="unknown JSONL"):
         to_jsonl(view, record="item")
+
+
+def test_zero_width_span_constructs_and_emitters_distinguish_it() -> None:
+    """Anchors are valid, visible in text and HTML, and preserve source text."""
+    anchor = Span("anchor", 1, 1, 1, 1, None, None, "anchor")
+    view = SpanView("ab", (anchor,), ("a", "b"))
+    surrounding = SpanView(
+        "ab",
+        (
+            Span("left", 0, 1, 0, 1, None, None, "left"),
+            anchor,
+            Span("right", 1, 2, 1, 2, None, None, "right"),
+        ),
+        ("a", "b"),
+    )
+    assert " |\n" in to_text(view)
+    assert to_text(
+        SpanView(
+            "abc",
+            (
+                Span("anchor", 1, 1, 1, 1, None, None, "anchor"),
+                Span("wide", 1, 3, 1, 3, None, None, "wide"),
+            ),
+            ("a", "b", "c"),
+        )
+    ).splitlines()[1:3] == [" |", " []"]
+    page = to_html(surrounding)
+    assert '<mark class="zero-width"' in page
+    assert 'mark.zero-width::before{content:"|"}' in page
+    assert page.count(">a</mark>") == 1
+    assert page.count(">b</mark>") == 1
+
+
+def test_boundary_coverage_projects_anchor_at_leading_offset() -> None:
+    """A boundary coverage edge projects equal base and character bounds."""
+    graph, profile = fixture()
+    boundary_coverage = BipartiteRelationDeclaration(
+        COVERAGE,
+        BASE_TYPE,
+        SPAN_TYPE,
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+    )
+    graph = replace(
+        graph,
+        relation_declarations=tuple(
+            boundary_coverage if declaration.name == COVERAGE else declaration
+            for declaration in graph.relation_declarations
+        ),
+        relations=(
+            RelationInstance(
+                COVERAGE,
+                DurablePositionRef(BASE, BoundarySide.BEFORE),
+                ItemRef(SPANS, 0),
+            ),
+        ),
+    )
+    view = span_view(graph, profile)
+    assert len(view.spans) == 1
+    assert (view.spans[0].start, view.spans[0].end) == (0, 0)
+    assert (view.spans[0].char_start, view.spans[0].char_end) == (10, 10)
+    rendered = tiergraph_dot.dumps_spans(graph, profile)
+    assert "boundary_0_0 [shape=point" in rendered
+    assert 'item_1_0 -> boundary_0_0 [xlabel="extent"' in rendered
+
+
+def test_conflicting_boundary_coverage_refuses() -> None:
+    """Two boundary edges on one span item refuse rather than take the last."""
+    graph, profile = fixture()
+    boundary_coverage = BipartiteRelationDeclaration(
+        COVERAGE,
+        BASE_TYPE,
+        SPAN_TYPE,
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+    )
+    graph = replace(
+        graph,
+        relation_declarations=tuple(
+            boundary_coverage if declaration.name == COVERAGE else declaration
+            for declaration in graph.relation_declarations
+        ),
+        relations=(
+            RelationInstance(
+                COVERAGE,
+                DurablePositionRef(BASE, BoundarySide.BEFORE),
+                ItemRef(SPANS, 0),
+            ),
+            RelationInstance(
+                COVERAGE,
+                DurablePositionRef(BASE, BoundarySide.AFTER),
+                ItemRef(SPANS, 0),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="conflicting boundary coverage"):
+        span_view(graph, profile)
+
+
+def test_coverage_ignores_item_and_boundary_endpoints_outside_base_tier() -> None:
+    """A shared endpoint type does not make another tier part of the base cover."""
+    graph, profile = fixture()
+    shadow = Tier(TierDeclaration(SHADOW, "Shadow"), (Item("shadow-0"),))
+    shadow_members = SimpleRelationDeclaration(
+        name("shadow-members"), SHADOW, BASE_TYPE
+    )
+    common = replace(
+        graph,
+        tiers=(*graph.tiers, shadow),
+        relation_declarations=(*graph.relation_declarations, shadow_members),
+    )
+    item_graph = replace(
+        common,
+        relations=(
+            *common.relations,
+            RelationInstance(COVERAGE, ItemRef(SHADOW, 0), ItemRef(SPANS, 0)),
+        ),
+    )
+    assert span_view(item_graph, profile) == span_view(graph, profile)
+
+    boundary_coverage = BipartiteRelationDeclaration(
+        COVERAGE,
+        BASE_TYPE,
+        SPAN_TYPE,
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+    )
+    boundary_graph = replace(
+        common,
+        relation_declarations=tuple(
+            boundary_coverage if declaration.name == COVERAGE else declaration
+            for declaration in common.relation_declarations
+        ),
+        relations=(
+            RelationInstance(
+                COVERAGE,
+                DurablePositionRef(SHADOW, BoundarySide.BEFORE),
+                ItemRef(SPANS, 0),
+            ),
+        ),
+    )
+    assert span_view(boundary_graph, profile).spans == ()
 
 
 def test_projection_reports_profile_surface_and_coverage_errors() -> None:
@@ -361,7 +511,7 @@ def test_spanview_type_rejects_overlapping_spans() -> None:
 
 def test_spanview_type_rejects_out_of_range_or_inverted_spans() -> None:
     """Bounds are validated so an emitter can never slice text out of order."""
-    for start, end in ((3, 2), (1, 1), (0, 5)):
+    for start, end in ((3, 2), (-1, 0), (0, 5)):
         with pytest.raises(ValueError, match="bounds"):
             SpanView(
                 "abcd",

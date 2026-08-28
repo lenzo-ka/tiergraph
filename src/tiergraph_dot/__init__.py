@@ -785,6 +785,18 @@ def dumps_spans(
             lines.append(f'    {node} [shape=box, label="{label}"];')
         lines.append("  }")
     lines.extend(("", "  // Span extents over ordered base atoms."))
+    base_tier_index = next(
+        index for index, tier in tiers if tier.declaration.name == profile.base_tier
+    )
+    boundary_ids = {
+        span.start: f"boundary_{base_tier_index}_{span.start}"
+        for span in view.spans
+        if span.start == span.end
+    }
+    for index, node in sorted(boundary_ids.items()):
+        lines.append(
+            f'  {node} [shape=point, width=0.08, label="", xlabel="boundary {index}"];'
+        )
     for span in view.spans:
         span_reference = next(
             reference
@@ -792,8 +804,11 @@ def dumps_spans(
             if str(StructuralPathProfile().spell(ItemBinding(reference), graph))
             == span.path
         )
-        first = node_ids[ItemRef(profile.base_tier, span.start)]
-        last = node_ids[ItemRef(profile.base_tier, span.end - 1)]
+        if span.start == span.end:
+            first = last = boundary_ids[span.start]
+        else:
+            first = node_ids[ItemRef(profile.base_tier, span.start)]
+            last = node_ids[ItemRef(profile.base_tier, span.end - 1)]
         lines.append(
             f"  {node_ids[span_reference]} -> {first} "
             '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '

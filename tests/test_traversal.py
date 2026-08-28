@@ -7,9 +7,62 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from tests.conformance.traversal import TraversalLawSuite
-from tiergraph import Walk
+from tiergraph import (
+    BipartiteRelationDeclaration,
+    BoundarySide,
+    DurableItemRef,
+    DurablePositionRef,
+    Graph,
+    Node,
+    NodeKind,
+    NodeSet,
+    PositionRef,
+    RelationEndpointKind,
+    RelationInstance,
+    Walk,
+    WalkDirection,
+)
+from tiergraph.spanview import Span, SpanView
 
 LAWS = TraversalLawSuite(Walk)
+
+
+def test_walk_deduplicates_coincident_anchors_and_refuses_reentry() -> None:
+    """Distinct durable anchors at one boundary are one visited walk identity."""
+    anchors = SpanView(
+        "ab",
+        (
+            Span("first", 1, 1, 1, 1, None, None, "first"),
+            Span("second", 1, 1, 1, 1, None, None, "second"),
+        ),
+        ("a", "b"),
+    )
+    assert len(anchors.spans) == 2
+    graph = LAWS.graph(acyclic=False)
+    relation = BipartiteRelationDeclaration(
+        LAWS.name("anchor-cycle"),
+        LAWS.name("node"),
+        LAWS.name("node"),
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+        right_endpoint=RelationEndpointKind.BOUNDARY,
+    )
+    after_first = DurablePositionRef(DurableItemRef("node-0"), BoundarySide.AFTER)
+    before_second = DurablePositionRef(DurableItemRef("node-1"), BoundarySide.BEFORE)
+    extended = Graph(
+        graph.namespaces,
+        graph.tiers,
+        (*graph.relation_declarations, relation),
+        (
+            *graph.relations,
+            RelationInstance(relation.name, after_first, before_second),
+            RelationInstance(relation.name, before_second, after_first),
+        ),
+    )
+    boundary = PositionRef(LAWS.name("nodes"), 1)
+    source = NodeSet(extended, (Node(NodeKind.POSITION, boundary),))
+    result = Walk(source, relation.name, WalkDirection.FORWARD, 10).evaluate()
+    assert result.nodes.nodes == ()
+    assert result.truncated is False
 
 
 @pytest.mark.parametrize(
