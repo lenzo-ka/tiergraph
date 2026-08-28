@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from tiergraph import ItemRef, ItemSelector, Walk, WalkDirection, XsdType, select
+from tiergraph import (
+    ItemRef,
+    ItemSelector,
+    Walk,
+    WalkDirection,
+    XsdType,
+    evaluate_selection,
+)
 from tiergraph.build import document, item
 
 NAMESPACE = "https://tiergraph.dev/examples/caption-alignment"
@@ -37,7 +44,7 @@ def aligned_phones() -> list[str]:
     graph = builder.build()
 
     # The same graph can also be written with the kernel construction types.
-    selected = select(graph, (ItemSelector(graph, words.ref(1)),))
+    selected = evaluate_selection(graph, ItemSelector(words.ref(1)))
     reached = Walk(selected, aligns.name, WalkDirection.FORWARD).evaluate().nodes
     phone_tier = next(
         tier for tier in graph.tiers if tier.declaration.name == phones.name

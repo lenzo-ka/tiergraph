@@ -342,9 +342,9 @@ def _claim_selection_returns_nodeset() -> None:
         (tiergraph.Tier(tiergraph.TierDeclaration(namespace, "Items"), ()),),
         (),
     )
-    result = tiergraph.select(graph, (tiergraph.TierSelector(graph, namespace),))
+    result = tiergraph.evaluate_selection(graph, tiergraph.TierSelector(namespace))
     if not isinstance(result, tiergraph.NodeSet):
-        raise ValueError("select tuple claim did not return NodeSet")
+        raise ValueError("selection evaluation claim did not return NodeSet")
 
 
 def _claim_build_results() -> None:

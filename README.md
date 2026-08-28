@@ -38,7 +38,7 @@ This caption graph links each word to its phones. Select `cat`, walk the declare
 alignment, and the answer is visible in the input:
 
 ```python
-from tiergraph import ItemSelector, Walk, WalkDirection, select
+from tiergraph import ItemSelector, Walk, WalkDirection, evaluate_selection
 from tiergraph.build import document
 
 builder = document("https://example.com/captions", prefix="caption")
@@ -63,7 +63,7 @@ aligns = builder.link(
 )
 graph = builder.build()
 
-cat = select(graph, (ItemSelector(graph, words.ref(1)),))
+cat = evaluate_selection(graph, ItemSelector(words.ref(1)))
 reached = Walk(cat, aligns.name, WalkDirection.FORWARD).evaluate().nodes
 assert [node.reference for node in reached.nodes] == [
     phones.ref(1),

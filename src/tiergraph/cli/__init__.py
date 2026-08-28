@@ -320,7 +320,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_output(args.file, args.output, rendered.encode("utf-8"))
         elif args.command == "select":
             graph = tiergraph.loads(_read_bytes(args.file))
-            query = tiergraph.selection_query_loads(_read_bytes(args.query))
+            query = tiergraph.selection_loads(_read_bytes(args.query))
             _check_distinct(args.query, args.output)
             selection_result = tiergraph.evaluate_selection(graph, query)
             _write_output(
@@ -464,9 +464,13 @@ def _walk_source(
     """Resolve one walk source path as a single-node selection."""
     resolved = tiergraph.resolve_path(graph, profile, source_text)
     if isinstance(resolved, tiergraph.ResolvedItem):
-        return tiergraph.ItemSelector(graph, resolved.current).evaluate()
+        return tiergraph.evaluate_selection(
+            graph, tiergraph.ItemSelector(resolved.current)
+        )
     if isinstance(resolved, tiergraph.ResolvedPosition):
-        return tiergraph.BoundarySelector(graph, resolved.current).evaluate()
+        return tiergraph.evaluate_selection(
+            graph, tiergraph.BoundarySelector(resolved.current)
+        )
     raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
         "structural path profile returned an alternative"
     )
