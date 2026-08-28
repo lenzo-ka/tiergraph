@@ -11,7 +11,7 @@ Selecting `cat` and walking forward across `aligns` reaches phone positions 1,
 2, and 3: `K`, `AE`, `T`.
 
 ```python
-from tiergraph import ItemSelector, Walk, WalkDirection, select
+from tiergraph import ItemSelector, Walk, WalkDirection, evaluate_selection
 from tiergraph.build import document
 
 caption = document("https://example.com/captions", prefix="caption")
@@ -36,7 +36,7 @@ caption_aligns = caption.link(
 )
 caption_graph = caption.build()
 
-cat = select(caption_graph, (ItemSelector(caption_graph, caption_words.ref(1)),))
+cat = evaluate_selection(caption_graph, ItemSelector(caption_words.ref(1)))
 cat_phones = Walk(cat, caption_aligns.name, WalkDirection.FORWARD).evaluate().nodes
 assert [node.reference for node in cat_phones.nodes] == [
     caption_phones.ref(1),
@@ -99,7 +99,7 @@ from tiergraph import (
     XsdType,
     dumps,
     loads,
-    select,
+    evaluate_selection,
 )
 from tiergraph.semiring import DECIMAL_TROPICAL
 
@@ -150,7 +150,7 @@ def label(node: Node) -> str:
     return graph.tiers[0].items[reference.index].durable_id or ""
 
 
-items = select(graph, (ItemsSelector(graph, steps),))
+items = evaluate_selection(graph, ItemsSelector(steps))
 print([label(node) for node in items.nodes])
 ```
 
@@ -164,7 +164,7 @@ A `Walk` follows relation incidence transitively. Starting from `fetch` and
 going forward reaches everything that depends on it.
 
 ```python
-fetch = select(graph, (ItemSelector(graph, ItemRef(steps, 0)),))
+fetch = evaluate_selection(graph, ItemSelector(ItemRef(steps, 0)))
 reached = Walk(fetch, depends, WalkDirection.FORWARD).evaluate()
 print([label(node) for node in reached.nodes.nodes])
 ```

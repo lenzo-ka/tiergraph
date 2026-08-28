@@ -10,7 +10,7 @@
     "paths": ["AlternativeRef", "CanonicalPath", "ItemBinding", "PathBinding", "PathKind", "PathOffender", "PathProfile", "PathRefusal", "PathRefusalCode", "PositionBinding", "ResolvedAlternative", "ResolvedItem", "ResolvedPosition", "StructuralPathProfile", "resolve_path"],
     "profiles": ["JsonValueProfile", "OrderedRootsProfile", "PersistedChoiceProfile", "SpanViewProfile", "json_value_graph", "span_view", "to_json", "to_jsonl", "to_text", "to_html"],
     "references": ["DurableItemRef", "DurablePositionRef", "ItemRef", "PositionRef"],
-    "selection": ["AttributeQuery", "AttributeSelector", "BoundariesQuery", "BoundariesSelector", "BoundaryQuery", "BoundarySelector", "DifferenceQuery", "IntersectionQuery", "ItemQuery", "ItemSelector", "ItemsQuery", "ItemsSelector", "Node", "NodeKind", "NodeSet", "SelectionQuery", "TierQuery", "TierSelector", "TypeQuery", "TypeSelector", "UnionQuery", "evaluate_selection", "select", "selection_query_loads"],
+    "selection": ["AttributeSelector", "BoundariesSelector", "BoundaryPathSelector", "BoundarySelector", "DifferenceSelector", "IntersectionSelector", "ItemPathSelector", "ItemSelector", "ItemsSelector", "Node", "NodeKind", "NodeSet", "Selector", "TierSelector", "TypeSelector", "UnionSelector", "evaluate_selection", "selection_loads"],
     "semirings": ["BOOLEAN", "COUNTING", "DECIMAL_TROPICAL", "PATH", "StarRefusal", "StarSelector", "ZeroClosedStar"],
     "serialization": ["dump_bytes", "dump_compact", "dumps", "load_program", "loads", "program_dumps", "program_loads", "to_data"],
     "inspection": ["graph_summary"],
@@ -21,7 +21,7 @@
     {
       "name": "selection-tuple",
       "page": "docs/guide/selection-and-traversal.md",
-      "text": "`select(graph, (selector,))` returns a canonical `NodeSet`."
+      "text": "`evaluate_selection(graph, selector)` returns a canonical `NodeSet`."
     },
     {
       "name": "build-results",

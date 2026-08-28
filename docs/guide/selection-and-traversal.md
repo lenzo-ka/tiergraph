@@ -6,7 +6,7 @@ always gives the same order.
 
 ## Selecting nodes
 
-`select(graph, (selector,))` returns a canonical `NodeSet`. Selectors address
+`evaluate_selection(graph, selector)` returns a canonical `NodeSet`. Selectors address
 tiers, items, boundaries, types, and attributes. A `NodeSet` deduplicates and
 sorts its nodes into the graph's canonical order and supports union (`|`),
 intersection (`&`), and difference (`-`) with another set from the same graph.
@@ -31,7 +31,7 @@ from tiergraph import (
     TierDeclaration,
     Walk,
     WalkDirection,
-    select,
+    evaluate_selection,
 )
 
 ns = "https://example.com/net"
@@ -79,7 +79,7 @@ return a `NodeSet`.
 
 ```python
 def reach(start: ItemRef, direction: WalkDirection) -> NodeSet:
-    selection = select(graph, (ItemSelector(graph, start),))
+    selection = evaluate_selection(graph, ItemSelector(start))
     return Walk(selection, links, direction).evaluate().nodes
 
 
@@ -107,7 +107,7 @@ The result then reports whether the cap stopped it early.
 
 ```python
 bounded = Walk(
-    select(graph, (ItemSelector(graph, a),)), links, WalkDirection.FORWARD, cap=1
+    evaluate_selection(graph, ItemSelector(a)), links, WalkDirection.FORWARD, cap=1
 ).evaluate()
 print("one hop from a:", names(bounded.nodes), "truncated:", bounded.truncated)
 ```
