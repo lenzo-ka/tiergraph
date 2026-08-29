@@ -93,7 +93,7 @@ def test_string_encoding_and_parser_recursion_are_cleanly_normalized(
     with pytest.raises(ValueError, match="encode UTF-8 failed"):
         loads("\ud800")
 
-    def recursive_parser(_document: str) -> object:
+    def recursive_parser(_document: str, **_kwargs: object) -> object:
         raise RecursionError("parser depth")
 
     monkeypatch.setattr(json, "loads", recursive_parser)
@@ -114,6 +114,27 @@ def test_reasonable_nested_json_reaches_normal_typed_validation() -> None:
     """Ordinary nesting is parsed normally rather than rejected by the scanner."""
     document = "[" * 32 + "0" + "]" * 32
     with pytest.raises(ValueError, match="document must be an object"):
+        loads(document)
+
+
+@pytest.mark.parametrize(
+    "document, key",
+    (
+        (
+            '{"format_version":"7","format_version":"6","graph":{"namespaces":[]}}',
+            "format_version",
+        ),
+        (
+            '{"format_version":"6","graph":{"namespaces":[],"namespaces":[]}}',
+            "namespaces",
+        ),
+    ),
+)
+def test_duplicate_object_keys_are_refused(document: str, key: str) -> None:
+    """Repeated keys are ambiguous at both the envelope and graph levels."""
+    with pytest.raises(
+        ValueError, match=rf"parse JSON failed: duplicate object key '{key}'"
+    ):
         loads(document)
 
 
@@ -343,7 +364,92 @@ def ordered_variants() -> tuple[Graph, Graph, Graph]:
     )
 
 
-LAWS = WireLawSuite(dump_bytes, loads, rich_graph, canonical_variants, ordered_variants)
+def _tier_graph(
+    *,
+    tier_local_name: str = "tier",
+    long_name: str | None = None,
+    durable_id: str | None = None,
+) -> Graph:
+    """Build a minimal namespaced tier graph for focused string coverage."""
+    items = () if durable_id is None else (Item(durable_id),)
+    tier = Tier(TierDeclaration(name(tier_local_name), long_name or "Tier"), items)
+    return Graph((NamespaceDeclaration("w", NS),), (tier,), ())
+
+
+def _attribute_graph(*, attribute_local_name: str, lexical: str) -> Graph:
+    """Build a minimal graph carrying one item attribute value."""
+    declaration = AttributeDeclaration(
+        name(attribute_local_name), AttributeDomain.ITEM, XsdType.STRING
+    )
+    tier = Tier(
+        TierDeclaration(name("tier"), "Tier"),
+        (Item("item", (AttributeValue(declaration.name, XsdType.STRING, lexical),)),),
+    )
+    return Graph(
+        (NamespaceDeclaration("w", NS),),
+        (tier,),
+        (),
+        attribute_declarations=(declaration,),
+    )
+
+
+def read_back_corpus() -> tuple[Graph, ...]:
+    """Exercise canonical read-back across every user-controlled string position."""
+    return (
+        Graph((), (), ()),
+        rich_graph(),
+        rich_graph(reverse_unordered=True),
+        Graph(
+            (NamespaceDeclaration("p", "urn:café:😀:e\N{COMBINING ACUTE ACCENT}"),),
+            (),
+            (),
+        ),
+        Graph((NamespaceDeclaration("pré😀", NS),), (), ()),
+        _tier_graph(long_name='line one\n"line two"'),
+        _tier_graph(tier_local_name='quoted"name'),
+        _tier_graph(durable_id=r"durable\\identifier"),
+        _attribute_graph(
+            attribute_local_name="label", lexical="combine e\N{COMBINING ACUTE ACCENT}"
+        ),
+        _attribute_graph(attribute_local_name="line\nname", lexical="value"),
+    )
+
+
+def refused_corpus() -> tuple[tuple[Graph, str], ...]:
+    """Cover every constructible wire string position with a lone surrogate."""
+    surrogate = "\ud800"
+    return (
+        (
+            Graph((NamespaceDeclaration("p", surrogate),), (), ()),
+            "namespaces[0].namespace",
+        ),
+        (
+            Graph((NamespaceDeclaration(surrogate, NS),), (), ()),
+            "namespaces[0].prefix",
+        ),
+        (_tier_graph(long_name=surrogate), "tiers[0].declaration.long_name"),
+        (_tier_graph(tier_local_name=surrogate), "tiers[0].declaration.name"),
+        (_tier_graph(durable_id=surrogate), "tiers[0].items[0].durable_id"),
+        (
+            _attribute_graph(attribute_local_name="label", lexical=surrogate),
+            "tiers[0].items[0].attributes[0].lexical",
+        ),
+        (
+            _attribute_graph(attribute_local_name=surrogate, lexical="value"),
+            "tiers[0].items[0].attributes[0].name",
+        ),
+    )
+
+
+LAWS = WireLawSuite(
+    dump_bytes,
+    loads,
+    rich_graph,
+    canonical_variants,
+    ordered_variants,
+    read_back_corpus,
+    refused_corpus,
+)
 
 
 @pytest.mark.parametrize(
@@ -354,6 +460,7 @@ LAWS = WireLawSuite(dump_bytes, loads, rich_graph, canonical_variants, ordered_v
         LAWS.check_ordered_graphs_have_different_bytes,
         LAWS.check_strict_json,
         LAWS.check_canonical_read_back,
+        LAWS.check_writer_refuses_unreadable_text,
     ],
     ids=lambda law: law.__name__,
 )
@@ -379,9 +486,38 @@ def test_presentation_variant_law_does_not_delegate_its_domain_to_equality() -> 
         rich_graph,
         lambda: (left, right),
         ordered_variants,
+        read_back_corpus,
+        refused_corpus,
     )
     with pytest.raises(AssertionError):
         mutant.check_presentation_variants_have_equal_bytes()
+
+
+def test_canonical_read_back_corpus_denominator_is_pinned() -> None:
+    """Pin the denominator so canonical coverage cannot silently shrink to one."""
+    assert len(read_back_corpus()) == 10
+
+
+def test_no_writer_returns_text_this_reader_would_refuse() -> None:
+    """The reader-accepted surrogate document cannot become unreadable output.
+
+    This is the whole defect in one place: the reader accepts this 83-byte
+    ASCII document, and every writer used to hand back either a string holding
+    a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  All four
+    writers must now make the same decision, name the same field path, and
+    raise a plain ``ValueError`` rather than leaking an encoder exception.
+    """
+    document = (
+        '{"format_version":"6","graph":'
+        '{"namespaces":[{"namespace":"\\ud800","prefix":"p"}]}}'
+    )
+    assert len(document.encode("ascii")) == 83
+    graph = loads(document)
+    for writer in (to_data, dumps, dump_compact, dump_bytes):
+        with pytest.raises(ValueError) as refusal:
+            writer(graph)
+        assert type(refusal.value) is ValueError
+        assert "namespaces[0].namespace" in str(refusal.value)
 
 
 def mutable_document() -> dict[str, object]:

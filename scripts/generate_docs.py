@@ -237,9 +237,10 @@ def cli_bytes() -> bytes:
         "2 means command-line usage error, and 3 means an I/O or encoding failure.\n\n"
         "`validate` reports whether `loads()` accepts a document. This is deliberately "
         "separate from emission: a loads-accepted value such as an escaped lone "
-        "surrogate can still be refused cleanly by `convert` during strict UTF-8 "
-        "encoding. `convert` canonicalizes to indented `json`, compact `json-compact`, "
-        "or `bytes`; bytes uses the canonical JSON byte API and is not another syntax.\n\n"
+        "surrogate is refused by the writer when `convert` tries to emit it, producing "
+        "exit status 1 for a refused operation. `convert` canonicalizes to indented "
+        "`json`, compact `json-compact`, or `bytes`; bytes uses the canonical JSON byte "
+        "API and is not another syntax.\n\n"
         "`run` consumes a CLI-owned JSONL stream. Its first line is exactly "
         '`{"machine_version":"1"}` and each later line has one opcode\'s public '
         "`to_data()` shape (a repeat body remains nested on that line). Header-only "

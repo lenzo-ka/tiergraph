@@ -2668,6 +2668,8 @@ dump_bytes(graph: 'Graph') -> 'bytes'
 
 Encode the canonical document as UTF-8 bytes.
 
+A graph carrying a string UTF-8 cannot encode is refused, not written.
+
 ### `dump_compact`
 
 ```text
@@ -2676,6 +2678,8 @@ dump_compact(graph: 'Graph') -> 'str'
 
 Return compact canonical JSON, including its final newline.
 
+A graph carrying a string UTF-8 cannot encode is refused, not written.
+
 ### `dumps`
 
 ```text
@@ -2683,6 +2687,8 @@ dumps(graph: 'Graph') -> 'str'
 ```
 
 Return the sole canonical JSON spelling, including its final newline.
+
+A graph carrying a string UTF-8 cannot encode is refused, not written.
 
 ### `load_program`
 
@@ -2726,6 +2732,9 @@ to_data(graph: 'Graph') -> 'dict[str, JsonValue]'
 ```
 
 Return the versioned primitive document as strict JSON data.
+
+A string the UTF-8 encoder refuses is refused here, named by its field path,
+so no writer built on this function emits text `loads` would then refuse.
 
 ## Inspection
 

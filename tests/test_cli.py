@@ -1436,6 +1436,27 @@ def test_clean_domain_io_and_same_path_errors(
     assert source.read_bytes() == original
 
 
+def test_inspect_reports_a_real_output_encoding_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An encoding failure outside the wire writer still exits with status 3.
+
+    The wire writer now refuses an unencodable string and names its field path,
+    so `convert` reports a refused operation. The CLI's own reports are not the
+    wire writer: `inspect` prints expanded qualified names, so a surrogate
+    namespace still reaches the UTF-8 encoder there. This is that residue's real
+    witness; the exit-status-3 classification needs no fabricated error to reach.
+    """
+    source = tmp_path / "surrogate-tier.json"
+    source.write_text(
+        '{"format_version":"6","graph":{"namespaces":'
+        '[{"namespace":"\\ud800","prefix":"p"}],"tiers":[{"declaration":'
+        '{"long_name":"T","name":"p:t"},"items":[{"durable_id":"a"}]}]}}'
+    )
+    assert main(["inspect", str(source)]) == 3
+    assert "UnicodeEncodeError" in capsys.readouterr().err
+
+
 def test_validate_accepts_surrogate_but_convert_refuses_emission(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1447,8 +1468,11 @@ def test_validate_accepts_surrogate_but_convert_refuses_emission(
     source.write_text(json.dumps(data))
     assert main(["validate", str(source)]) == 0
     capsys.readouterr()
-    assert main(["convert", str(source), "--to", "json-compact"]) == 3
-    assert "UnicodeEncodeError" in capsys.readouterr().err
+    # Deliberately exercise the writer's refusal after reader-only validation.
+    assert main(["convert", str(source), "--to", "json-compact"]) == 1
+    error = capsys.readouterr().err
+    assert "ValueError" in error
+    assert "namespaces[0].namespace" in error
 
 
 def test_module_entry_point_and_pipelines(tmp_path: Path) -> None:

@@ -336,6 +336,8 @@ def test_every_c1_control_is_deliberately_refused(codepoint: int) -> None:
 @pytest.mark.parametrize("codepoint", (0xD800, 0xDBFF, 0xDC00, 0xDFFF))
 def test_unicode_surrogate_classes_are_deliberately_refused(codepoint: int) -> None:
     """Invalid Unicode scalar values are refused before output encoding."""
+    # The wire writer now refuses these graphs too; this fixture specifically
+    # preserves the DOT renderer's independent, deliberately stricter refusal.
     value = f"left{chr(codepoint)}right"
     with pytest.raises(ValueError, match="item durable ID") as refusal:
         tiergraph_dot.dumps(graph_with_durable_id(value))
