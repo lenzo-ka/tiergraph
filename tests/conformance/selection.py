@@ -38,18 +38,20 @@ from tiergraph import (
     TierDeclaration,
     TierSelector,
     TypeSelector,
+    UnionSelector,
     XsdType,
+    evaluate_selection,
 )
 from tiergraph.selection import Selector
 
-SelectionFactory = Callable[[Graph, tuple[Selector, ...]], NodeSet]
+SelectionFactory = Callable[[Graph, Selector], NodeSet]
 
 
 @dataclass(frozen=True)
 class SelectionLawSuite:
     """Apply selection laws through a replaceable evaluation boundary."""
 
-    select: SelectionFactory
+    evaluate: SelectionFactory
     namespace: str = "urn:test:selection"
 
     def name(self, local: str) -> QualifiedName:
@@ -104,15 +106,17 @@ class SelectionLawSuite:
     def check_axes_and_canonical_order(self) -> None:
         """Declared axes normalize route and relation storage order."""
         graph = self.graph()
-        selected = self.select(
+        selected = self.evaluate(
             graph,
-            (
-                ItemsSelector(graph, self.name("right")),
-                TypeSelector(graph, self.name("shared")),
-                TierSelector(graph, self.name("left")),
-                AttributeSelector(
-                    graph, self.name("mark"), AttributeDomain.RELATION_INSTANCE
-                ),
+            UnionSelector(
+                (
+                    ItemsSelector(self.name("right")),
+                    TypeSelector(self.name("shared")),
+                    TierSelector(self.name("left")),
+                    AttributeSelector(
+                        self.name("mark"), AttributeDomain.RELATION_INSTANCE
+                    ),
+                )
             ),
         )
         assert selected.nodes == (
@@ -127,45 +131,54 @@ class SelectionLawSuite:
     def check_duplicate_routes_and_set_operations(self) -> None:
         """Overlapping routes deduplicate and union, intersection, and difference compose."""
         graph = self.graph()
-        left = ItemsSelector(graph, self.name("left")).evaluate()
-        shared = TypeSelector(graph, self.name("shared")).evaluate()
-        combined = self.select(
+        left = evaluate_selection(graph, ItemsSelector(self.name("left")))
+        shared = evaluate_selection(graph, TypeSelector(self.name("shared")))
+        combined = self.evaluate(
             graph,
-            (
-                ItemsSelector(graph, self.name("left")),
-                TypeSelector(graph, self.name("shared")),
+            UnionSelector(
+                (
+                    ItemsSelector(self.name("left")),
+                    TypeSelector(self.name("shared")),
+                )
             ),
         )
         assert combined == left | shared
         assert left & shared == left
-        assert combined - left == ItemsSelector(graph, self.name("right")).evaluate()
+        assert combined - left == evaluate_selection(
+            graph, ItemsSelector(self.name("right"))
+        )
         assert len(combined.nodes) == len(set(combined.nodes))
 
     def check_refusals_name_offenders(self) -> None:
         """Each unsatisfied selector class refuses while its near-valid peer constructs."""
         graph = self.graph()
-        ItemSelector(graph, ItemRef(self.name("left"), 1))
+        evaluate_selection(graph, ItemSelector(ItemRef(self.name("left"), 1)))
         with pytest.raises(ValueError, match=r"left\[2\]"):
-            ItemSelector(graph, ItemRef(self.name("left"), 2))
-        TierSelector(graph, self.name("left"))
+            evaluate_selection(graph, ItemSelector(ItemRef(self.name("left"), 2)))
+        evaluate_selection(graph, TierSelector(self.name("left")))
         with pytest.raises(ValueError, match="missing"):
-            TierSelector(graph, self.name("missing"))
-        AttributeSelector(graph, self.name("mark"), AttributeDomain.RELATION_INSTANCE)
+            evaluate_selection(graph, TierSelector(self.name("missing")))
+        evaluate_selection(
+            graph,
+            AttributeSelector(self.name("mark"), AttributeDomain.RELATION_INSTANCE),
+        )
         with pytest.raises(ValueError, match=r"mark.*'item'"):
-            AttributeSelector(graph, self.name("mark"), AttributeDomain.ITEM)
+            evaluate_selection(
+                graph, AttributeSelector(self.name("mark"), AttributeDomain.ITEM)
+            )
 
     def check_boundaries_and_anchors(self) -> None:
         """Nonempty and empty tiers expose outer boundaries and anchored resolution."""
         graph = self.graph()
-        boundaries = BoundariesSelector(graph, self.name("left")).evaluate()
+        boundaries = evaluate_selection(graph, BoundariesSelector(self.name("left")))
         assert boundaries.nodes == tuple(
             Node(NodeKind.POSITION, PositionRef(self.name("left"), index))
             for index in range(3)
         )
-        anchored = BoundarySelector(
-            graph,
+        anchored_selector = BoundarySelector(
             DurablePositionRef(DurableItemRef("left-1"), BoundarySide.BEFORE),
-        ).evaluate()
+        )
+        anchored = evaluate_selection(graph, anchored_selector)
         assert anchored.nodes == (
             Node(NodeKind.POSITION, PositionRef(self.name("left"), 1)),
         )
@@ -177,24 +190,25 @@ class SelectionLawSuite:
             graph.relations,
             graph.attribute_declarations,
         )
-        assert BoundariesSelector(empty, empty_name).evaluate().nodes == (
+        assert evaluate_selection(empty, BoundariesSelector(empty_name)).nodes == (
             Node(NodeKind.POSITION, PositionRef(empty_name, 0)),
         )
-        assert (
+        assert evaluate_selection(
+            empty,
             BoundarySelector(
-                empty,
                 DurablePositionRef(empty_name, BoundarySide.BEFORE),
-            ).evaluate()
-            == BoundarySelector(
-                empty,
+            ),
+        ) == evaluate_selection(
+            empty,
+            BoundarySelector(
                 DurablePositionRef(empty_name, BoundarySide.AFTER),
-            ).evaluate()
+            ),
         )
 
     def check_json_data(self) -> None:
         """Selection results encode as strict JSON in canonical order."""
         graph = self.graph()
-        result = TypeSelector(graph, self.name("shared")).evaluate().to_data()
+        result = evaluate_selection(graph, TypeSelector(self.name("shared"))).to_data()
         encoded = json.dumps(
             result, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
@@ -264,33 +278,29 @@ class SelectionLawSuite:
             AttributeDomain.RELATION_INSTANCE: Node(NodeKind.RELATION_INSTANCE, 0),
         }
         for domain, node in expected.items():
-            result = AttributeSelector(graph, names[domain], domain).evaluate()
+            result = evaluate_selection(graph, AttributeSelector(names[domain], domain))
             assert result.nodes == (node,)
             json.dumps(result.to_data(), allow_nan=False)
-        assert (
-            not AttributeSelector(
-                graph, self.name("unvalued-document"), AttributeDomain.DOCUMENT
-            )
-            .evaluate()
-            .nodes
-        )
+        assert not evaluate_selection(
+            graph,
+            AttributeSelector(self.name("unvalued-document"), AttributeDomain.DOCUMENT),
+        ).nodes
 
     def check_remaining_construction_guards(self) -> None:
         """Undeclared axes and cross-graph composition refuse their offenders."""
         graph = self.graph()
         with pytest.raises(ValueError, match="absent-type"):
-            TypeSelector(graph, self.name("absent-type"))
+            evaluate_selection(graph, TypeSelector(self.name("absent-type")))
         with pytest.raises(ValueError, match="absent-attribute"):
-            AttributeSelector(
-                graph, self.name("absent-attribute"), AttributeDomain.ITEM
+            evaluate_selection(
+                graph,
+                AttributeSelector(self.name("absent-attribute"), AttributeDomain.ITEM),
             )
-        durable = ItemSelector(graph, DurableItemRef("left-0")).evaluate()
+        durable = evaluate_selection(graph, ItemSelector(DurableItemRef("left-0")))
         assert durable.nodes == (Node(NodeKind.ITEM, ItemRef(self.name("left"), 0)),)
         other = self.graph()
         with pytest.raises(ValueError, match="same graph"):
-            durable | ItemsSelector(other, self.name("left")).evaluate()
-        with pytest.raises(ValueError, match="different graph"):
-            self.select(graph, (ItemsSelector(other, self.name("left")),))
+            durable | evaluate_selection(other, ItemsSelector(self.name("left")))
 
     def check_boundary_relation_order(self) -> None:
         """Canonical relation ordering resolves anchored boundary endpoints."""

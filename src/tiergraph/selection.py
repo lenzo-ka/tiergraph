@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from enum import StrEnum
+from typing import cast
 
 from tiergraph.core import (
     AttributeDomain,
@@ -15,6 +17,14 @@ from tiergraph.core import (
     PositionRef,
     QualifiedName,
     SimpleRelationDeclaration,
+)
+from tiergraph.machine import _decode_qname
+from tiergraph.path import (
+    PathProfile,
+    ResolvedItem,
+    ResolvedPosition,
+    StructuralPathProfile,
+    resolve_path,
 )
 
 
@@ -147,50 +157,40 @@ class NodeSet:
 class TierSelector:
     """Select one declared tier node."""
 
-    graph: Graph
     tier: QualifiedName
 
-    def __post_init__(self) -> None:
-        """Refuse a tier name that the graph does not declare."""
-        if all(
-            candidate.declaration.name != self.tier for candidate in self.graph.tiers
-        ):
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Validate and return the selected tier."""
+        if all(candidate.declaration.name != self.tier for candidate in graph.tiers):
             raise ValueError(f"tier selector {str(self.tier)!r} is undeclared")
-
-    def evaluate(self) -> NodeSet:
-        """Return the selected tier."""
-        return NodeSet(self.graph, (Node(NodeKind.TIER, self.tier),))
+        return NodeSet(graph, (Node(NodeKind.TIER, self.tier),))
 
 
 @dataclass(frozen=True, slots=True)
 class TypeSelector:
     """Select every item assigned one declared type by simple membership."""
 
-    graph: Graph
     item_type: QualifiedName
 
-    def __post_init__(self) -> None:
-        """Refuse a type absent from every simple membership declaration."""
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Validate and return all items of the declared type."""
         if not any(
             isinstance(declaration, SimpleRelationDeclaration)
             and declaration.item_type == self.item_type
-            for declaration in self.graph.relation_declarations
+            for declaration in graph.relation_declarations
         ):
             raise ValueError(f"type selector {str(self.item_type)!r} is undeclared")
-
-    def evaluate(self) -> NodeSet:
-        """Return all items of the declared type."""
         tiers = {
             declaration.tier
-            for declaration in self.graph.relation_declarations
+            for declaration in graph.relation_declarations
             if isinstance(declaration, SimpleRelationDeclaration)
             and declaration.item_type == self.item_type
         }
         return NodeSet(
-            self.graph,
+            graph,
             tuple(
                 Node(NodeKind.ITEM, reference)
-                for reference in self.graph.canonical_items()
+                for reference in graph.canonical_items()
                 if reference.tier in tiers
             ),
         )
@@ -200,20 +200,16 @@ class TypeSelector:
 class ItemsSelector:
     """Select all items owned by one declared tier."""
 
-    graph: Graph
     tier: QualifiedName
 
-    def __post_init__(self) -> None:
-        """Reuse tier validation at selector construction."""
-        TierSelector(self.graph, self.tier)
-
-    def evaluate(self) -> NodeSet:
-        """Return the tier's items in coordinate order."""
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Validate and return the tier's items in coordinate order."""
+        TierSelector(self.tier).evaluate(graph, path_profile=path_profile)
         return NodeSet(
-            self.graph,
+            graph,
             tuple(
                 Node(NodeKind.ITEM, reference)
-                for reference in self.graph.canonical_items()
+                for reference in graph.canonical_items()
                 if reference.tier == self.tier
             ),
         )
@@ -223,20 +219,16 @@ class ItemsSelector:
 class BoundariesSelector:
     """Select every boundary owned by one declared tier."""
 
-    graph: Graph
     tier: QualifiedName
 
-    def __post_init__(self) -> None:
-        """Reuse tier validation at selector construction."""
-        TierSelector(self.graph, self.tier)
-
-    def evaluate(self) -> NodeSet:
-        """Return both outer boundaries and every boundary between items."""
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Validate and return outer and inter-item boundaries."""
+        TierSelector(self.tier).evaluate(graph, path_profile=path_profile)
         return NodeSet(
-            self.graph,
+            graph,
             tuple(
-                Node(NodeKind.POSITION, self.graph.resolve_position(position.reference))
-                for position in self.graph.positions(self.tier)
+                Node(NodeKind.POSITION, graph.resolve_position(position.reference))
+                for position in graph.positions(self.tier)
             ),
         )
 
@@ -245,52 +237,75 @@ class BoundariesSelector:
 class ItemSelector:
     """Select one structural or durable item reference."""
 
-    graph: Graph
     reference: ItemRef | DurableItemRef
-    _resolved: ItemRef = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        """Resolve and validate the reference at selector construction."""
-        object.__setattr__(self, "_resolved", self.graph.resolve_item(self.reference))
-
-    def evaluate(self) -> NodeSet:
-        """Return the resolved item identity."""
-        return NodeSet(self.graph, (Node(NodeKind.ITEM, self._resolved),))
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Resolve and return the item identity."""
+        return NodeSet(
+            graph, (Node(NodeKind.ITEM, graph.resolve_item(self.reference)),)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class BoundarySelector:
     """Select one structural or anchored durable boundary reference."""
 
-    graph: Graph
     reference: PositionRef | DurablePositionRef
-    _resolved: PositionRef = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        """Resolve and validate the reference at selector construction."""
-        object.__setattr__(
-            self, "_resolved", self.graph.resolve_position(self.reference)
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Resolve and return the boundary identity."""
+        return NodeSet(
+            graph, (Node(NodeKind.POSITION, graph.resolve_position(self.reference)),)
         )
 
-    def evaluate(self) -> NodeSet:
-        """Return the resolved boundary identity."""
-        return NodeSet(self.graph, (Node(NodeKind.POSITION, self._resolved),))
+
+@dataclass(frozen=True, slots=True)
+class ItemPathSelector:
+    """Select the item resolved by one path."""
+
+    path: str
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Resolve the path and require an item result."""
+        resolved = resolve_path(graph, path_profile, self.path)
+        if not isinstance(resolved, ResolvedItem):
+            raise ValueError(
+                f"item selection path {self.path!r} did not resolve to an item"
+            )
+        return ItemSelector(resolved.current).evaluate(graph, path_profile=path_profile)
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryPathSelector:
+    """Select the boundary resolved by one path."""
+
+    path: str
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Resolve the path and require a boundary result."""
+        resolved = resolve_path(graph, path_profile, self.path)
+        if not isinstance(resolved, ResolvedPosition):
+            raise ValueError(
+                f"boundary selection path {self.path!r} did not resolve to a boundary"
+            )
+        return BoundarySelector(resolved.current).evaluate(
+            graph, path_profile=path_profile
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class AttributeSelector:
     """Select nodes carrying one attribute on its declared domain."""
 
-    graph: Graph
     attribute: QualifiedName
     domain: AttributeDomain
 
-    def __post_init__(self) -> None:
-        """Refuse missing declarations and domains the declaration does not permit."""
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Validate and return owners carrying the named value."""
         declaration = next(
             (
                 candidate
-                for candidate in self.graph.attribute_declarations
+                for candidate in graph.attribute_declarations
                 if candidate.name == self.attribute
             ),
             None,
@@ -305,47 +320,95 @@ class AttributeSelector:
                 f"{self.domain.value!r}; declared for {declaration.domain.value!r}"
             )
 
-    def evaluate(self) -> NodeSet:
-        """Return owners that carry the named value without following relations."""
         nodes: list[Node] = []
         if self.domain is AttributeDomain.DOCUMENT:
-            if self._has(self.graph.attributes):
+            if self._has(graph.attributes):
                 nodes.append(Node(NodeKind.DOCUMENT, None))
         elif self.domain is AttributeDomain.TIER:
             nodes.extend(
                 Node(NodeKind.TIER, tier.declaration.name)
-                for tier in self.graph.tiers
+                for tier in graph.tiers
                 if self._has(tier.attributes)
             )
         elif self.domain is AttributeDomain.ITEM:
             nodes.extend(
                 Node(NodeKind.ITEM, ItemRef(tier.declaration.name, index))
-                for tier in self.graph.tiers
+                for tier in graph.tiers
                 for index, item in enumerate(tier.items)
                 if self._has(item.attributes)
             )
         elif self.domain is AttributeDomain.POSITION:
             nodes.extend(
-                Node(NodeKind.POSITION, self.graph.resolve_position(position.reference))
-                for position in self.graph.position_values
+                Node(NodeKind.POSITION, graph.resolve_position(position.reference))
+                for position in graph.position_values
                 if self._has(position.attributes)
             )
         elif self.domain is AttributeDomain.RELATION_DECLARATION:
             nodes.extend(
                 Node(NodeKind.RELATION_DECLARATION, declaration.name)
-                for declaration in self.graph.relation_declarations
+                for declaration in graph.relation_declarations
                 if self._has(declaration.attributes)
             )
         else:
             nodes.extend(
                 Node(NodeKind.RELATION_INSTANCE, index)
-                for index, relation in enumerate(self.graph.relations)
+                for index, relation in enumerate(graph.relations)
                 if self._has(relation.attributes)
             )
-        return NodeSet(self.graph, tuple(nodes))
+        return NodeSet(graph, tuple(nodes))
 
     def _has(self, values: tuple[object, ...]) -> bool:
         return any(getattr(value, "name", None) == self.attribute for value in values)
+
+
+@dataclass(frozen=True, slots=True)
+class UnionSelector:
+    """Union one or more selectors."""
+
+    args: tuple[Selector, ...]
+
+    def __post_init__(self) -> None:
+        if not self.args:
+            raise ValueError("union selector requires at least one argument")
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Evaluate and union the operands from left to right."""
+        result = self.args[0].evaluate(graph, path_profile=path_profile)
+        for child in self.args[1:]:
+            result = result | child.evaluate(graph, path_profile=path_profile)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class IntersectionSelector:
+    """Intersect one or more selectors."""
+
+    args: tuple[Selector, ...]
+
+    def __post_init__(self) -> None:
+        if not self.args:
+            raise ValueError("intersection selector requires at least one argument")
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Evaluate and intersect the operands from left to right."""
+        result = self.args[0].evaluate(graph, path_profile=path_profile)
+        for child in self.args[1:]:
+            result = result & child.evaluate(graph, path_profile=path_profile)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class DifferenceSelector:
+    """Remove the right selection from the left selection."""
+
+    left: Selector
+    right: Selector
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Evaluate both operands and remove right from left."""
+        return self.left.evaluate(
+            graph, path_profile=path_profile
+        ) - self.right.evaluate(graph, path_profile=path_profile)
 
 
 type Selector = (
@@ -355,15 +418,115 @@ type Selector = (
     | BoundariesSelector
     | ItemSelector
     | BoundarySelector
+    | ItemPathSelector
+    | BoundaryPathSelector
     | AttributeSelector
+    | UnionSelector
+    | IntersectionSelector
+    | DifferenceSelector
 )
 
 
-def select(graph: Graph, selectors: tuple[Selector, ...]) -> NodeSet:
-    """Union validated selector routes into one canonical node set."""
-    result = NodeSet(graph, ())
-    for selector in selectors:
-        if selector.graph is not graph:
-            raise ValueError("selector belongs to a different graph")
-        result = result | selector.evaluate()
-    return result
+class _DefaultStructuralPathProfile(StructuralPathProfile):
+    def __repr__(self) -> str:
+        return "StructuralPathProfile()"
+
+
+_STRUCTURAL_PATH_PROFILE = _DefaultStructuralPathProfile()
+
+
+def evaluate_selection(
+    graph: Graph,
+    selector: Selector,
+    *,
+    path_profile: PathProfile = _STRUCTURAL_PATH_PROFILE,
+) -> NodeSet:
+    """Evaluate a graph-free selector into one canonical node set."""
+    return selector.evaluate(graph, path_profile=path_profile)
+
+
+def selection_loads(source: str | bytes) -> Selector:
+    """Decode one strict declarative selector from JSON."""
+    return _decode_selector(cast(JsonValue, json.loads(source)), "$")
+
+
+def _decode_selector(value: JsonValue, path: str) -> Selector:
+    node = _object(value, path)
+    discriminators = {"op", "select"} & node.keys()
+    if len(discriminators) != 1:
+        raise ValueError(f"{path} must contain exactly one of 'op' or 'select'")
+    if "op" in discriminators:
+        operation = _string(node["op"], f"{path}.op")
+        if operation in ("union", "intersection"):
+            _keys(node, {"op", "args"}, path)
+            args_value = node["args"]
+            if not isinstance(args_value, list) or not args_value:
+                raise ValueError(f"{path}.args must be a non-empty list")
+            args = tuple(
+                _decode_selector(child, f"{path}.args[{index}]")
+                for index, child in enumerate(args_value)
+            )
+            return (
+                UnionSelector(args)
+                if operation == "union"
+                else IntersectionSelector(args)
+            )
+        if operation == "difference":
+            _keys(node, {"op", "left", "right"}, path)
+            return DifferenceSelector(
+                _decode_selector(node["left"], f"{path}.left"),
+                _decode_selector(node["right"], f"{path}.right"),
+            )
+        raise ValueError(f"{path}.op has unknown operation {operation!r}")
+    kind = _string(node["select"], f"{path}.select")
+    if kind in ("tier", "items", "boundaries"):
+        _keys(node, {"select", "tier"}, path)
+        name = _qualified_name(node["tier"], f"{path}.tier")
+        if kind == "tier":
+            return TierSelector(name)
+        if kind == "items":
+            return ItemsSelector(name)
+        return BoundariesSelector(name)
+    if kind == "type":
+        _keys(node, {"select", "type"}, path)
+        return TypeSelector(_qualified_name(node["type"], f"{path}.type"))
+    if kind in ("item", "boundary"):
+        _keys(node, {"select", "path"}, path)
+        text = _string(node["path"], f"{path}.path")
+        return ItemPathSelector(text) if kind == "item" else BoundaryPathSelector(text)
+    if kind == "attribute":
+        _keys(node, {"select", "attribute", "domain"}, path)
+        domain_text = _string(node["domain"], f"{path}.domain")
+        try:
+            domain = AttributeDomain(domain_text)
+        except ValueError as error:
+            raise ValueError(
+                f"{path}.domain has invalid attribute domain {domain_text!r}"
+            ) from error
+        return AttributeSelector(
+            _qualified_name(node["attribute"], f"{path}.attribute"), domain
+        )
+    raise ValueError(f"{path}.select has unknown selector {kind!r}")
+
+
+def _object(value: JsonValue, path: str) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    return value
+
+
+def _keys(value: dict[str, JsonValue], expected: set[str], path: str) -> None:
+    if value.keys() != expected:
+        raise ValueError(
+            f"{path} must contain exactly {sorted(expected)!r}; found {sorted(value)!r}"
+        )
+
+
+def _string(value: JsonValue, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a string")
+    return value
+
+
+def _qualified_name(value: JsonValue, path: str) -> QualifiedName:
+    return _decode_qname(value, path)

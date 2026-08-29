@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 154 top-level `tiergraph` exports exactly once.
+It covers 148 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2231,18 +2231,10 @@ Return the position reference as JSON-serializable data.
 
 ## Selection
 
-### `AttributeQuery`
-
-```text
-AttributeQuery(attribute: 'QualifiedName', domain: 'AttributeDomain') -> None
-```
-
-Select owners carrying one declared attribute on its domain.
-
 ### `AttributeSelector`
 
 ```text
-AttributeSelector(graph: 'Graph', attribute: 'QualifiedName', domain: 'AttributeDomain') -> None
+AttributeSelector(attribute: 'QualifiedName', domain: 'AttributeDomain') -> None
 ```
 
 Select nodes carrying one attribute on its declared domain.
@@ -2252,23 +2244,15 @@ Select nodes carrying one attribute on its declared domain.
 Method.
 
 ```text
-AttributeSelector.evaluate(self) -> 'NodeSet'
+AttributeSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return owners that carry the named value without following relations.
-
-### `BoundariesQuery`
-
-```text
-BoundariesQuery(tier: 'QualifiedName') -> None
-```
-
-Select every boundary on one declared tier.
+Validate and return owners carrying the named value.
 
 ### `BoundariesSelector`
 
 ```text
-BoundariesSelector(graph: 'Graph', tier: 'QualifiedName') -> None
+BoundariesSelector(tier: 'QualifiedName') -> None
 ```
 
 Select every boundary owned by one declared tier.
@@ -2278,23 +2262,33 @@ Select every boundary owned by one declared tier.
 Method.
 
 ```text
-BoundariesSelector.evaluate(self) -> 'NodeSet'
+BoundariesSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return both outer boundaries and every boundary between items.
+Validate and return outer and inter-item boundaries.
 
-### `BoundaryQuery`
+### `BoundaryPathSelector`
 
 ```text
-BoundaryQuery(path: 'str') -> None
+BoundaryPathSelector(path: 'str') -> None
 ```
 
-Select the boundary resolved by one structural path.
+Select the boundary resolved by one path.
+
+#### `BoundaryPathSelector.evaluate`
+
+Method.
+
+```text
+BoundaryPathSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Resolve the path and require a boundary result.
 
 ### `BoundarySelector`
 
 ```text
-BoundarySelector(graph: 'Graph', reference: 'PositionRef | DurablePositionRef') -> None
+BoundarySelector(reference: 'PositionRef | DurablePositionRef') -> None
 ```
 
 Select one structural or anchored durable boundary reference.
@@ -2304,39 +2298,69 @@ Select one structural or anchored durable boundary reference.
 Method.
 
 ```text
-BoundarySelector.evaluate(self) -> 'NodeSet'
+BoundarySelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return the resolved boundary identity.
+Resolve and return the boundary identity.
 
-### `DifferenceQuery`
+### `DifferenceSelector`
 
 ```text
-DifferenceQuery(left: 'SelectionQuery', right: 'SelectionQuery') -> None
+DifferenceSelector(left: 'Selector', right: 'Selector') -> None
 ```
 
 Remove the right selection from the left selection.
 
-### `IntersectionQuery`
+#### `DifferenceSelector.evaluate`
+
+Method.
 
 ```text
-IntersectionQuery(args: 'tuple[SelectionQuery, ...]') -> None
+DifferenceSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Intersect one or more selection queries.
+Evaluate both operands and remove right from left.
 
-### `ItemQuery`
+### `IntersectionSelector`
 
 ```text
-ItemQuery(path: 'str') -> None
+IntersectionSelector(args: 'tuple[Selector, ...]') -> None
 ```
 
-Select the item resolved by one structural path.
+Intersect one or more selectors.
+
+#### `IntersectionSelector.evaluate`
+
+Method.
+
+```text
+IntersectionSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Evaluate and intersect the operands from left to right.
+
+### `ItemPathSelector`
+
+```text
+ItemPathSelector(path: 'str') -> None
+```
+
+Select the item resolved by one path.
+
+#### `ItemPathSelector.evaluate`
+
+Method.
+
+```text
+ItemPathSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Resolve the path and require an item result.
 
 ### `ItemSelector`
 
 ```text
-ItemSelector(graph: 'Graph', reference: 'ItemRef | DurableItemRef') -> None
+ItemSelector(reference: 'ItemRef | DurableItemRef') -> None
 ```
 
 Select one structural or durable item reference.
@@ -2346,23 +2370,15 @@ Select one structural or durable item reference.
 Method.
 
 ```text
-ItemSelector.evaluate(self) -> 'NodeSet'
+ItemSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return the resolved item identity.
-
-### `ItemsQuery`
-
-```text
-ItemsQuery(tier: 'QualifiedName') -> None
-```
-
-Select every item on one declared tier.
+Resolve and return the item identity.
 
 ### `ItemsSelector`
 
 ```text
-ItemsSelector(graph: 'Graph', tier: 'QualifiedName') -> None
+ItemsSelector(tier: 'QualifiedName') -> None
 ```
 
 Select all items owned by one declared tier.
@@ -2372,10 +2388,10 @@ Select all items owned by one declared tier.
 Method.
 
 ```text
-ItemsSelector.evaluate(self) -> 'NodeSet'
+ItemsSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return the tier's items in coordinate order.
+Validate and return the tier's items in coordinate order.
 
 ### `Node`
 
@@ -2438,7 +2454,7 @@ NodeSet.to_data(self) -> 'list[JsonValue]'
 
 Return the ordered set as strict-JSON data.
 
-### `SelectionQuery`
+### `Selector`
 
 Type alias.
 
@@ -2463,18 +2479,10 @@ __type_params__ attribute.
 
 See PEP 695 for more information.
 
-### `TierQuery`
-
-```text
-TierQuery(tier: 'QualifiedName') -> None
-```
-
-Select one declared tier.
-
 ### `TierSelector`
 
 ```text
-TierSelector(graph: 'Graph', tier: 'QualifiedName') -> None
+TierSelector(tier: 'QualifiedName') -> None
 ```
 
 Select one declared tier node.
@@ -2484,23 +2492,15 @@ Select one declared tier node.
 Method.
 
 ```text
-TierSelector.evaluate(self) -> 'NodeSet'
+TierSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return the selected tier.
-
-### `TypeQuery`
-
-```text
-TypeQuery(item_type: 'QualifiedName') -> None
-```
-
-Select items belonging to one declared type.
+Validate and return the selected tier.
 
 ### `TypeSelector`
 
 ```text
-TypeSelector(graph: 'Graph', item_type: 'QualifiedName') -> None
+TypeSelector(item_type: 'QualifiedName') -> None
 ```
 
 Select every item assigned one declared type by simple membership.
@@ -2510,42 +2510,44 @@ Select every item assigned one declared type by simple membership.
 Method.
 
 ```text
-TypeSelector.evaluate(self) -> 'NodeSet'
+TypeSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
 ```
 
-Return all items of the declared type.
+Validate and return all items of the declared type.
 
-### `UnionQuery`
+### `UnionSelector`
 
 ```text
-UnionQuery(args: 'tuple[SelectionQuery, ...]') -> None
+UnionSelector(args: 'tuple[Selector, ...]') -> None
 ```
 
-Union one or more selection queries.
+Union one or more selectors.
+
+#### `UnionSelector.evaluate`
+
+Method.
+
+```text
+UnionSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Evaluate and union the operands from left to right.
 
 ### `evaluate_selection`
 
 ```text
-evaluate_selection(graph: 'Graph', query: 'SelectionQuery', *, path_profile: 'PathProfile' = StructuralPathProfile()) -> 'NodeSet'
+evaluate_selection(graph: 'Graph', selector: 'Selector', *, path_profile: 'PathProfile' = StructuralPathProfile()) -> 'NodeSet'
 ```
 
-Evaluate a declarative query into one canonically ordered node set.
+Evaluate a graph-free selector into one canonical node set.
 
-### `select`
+### `selection_loads`
 
 ```text
-select(graph: 'Graph', selectors: 'tuple[Selector, ...]') -> 'NodeSet'
+selection_loads(source: 'str | bytes') -> 'Selector'
 ```
 
-Union validated selector routes into one canonical node set.
-
-### `selection_query_loads`
-
-```text
-selection_query_loads(source: 'str | bytes') -> 'SelectionQuery'
-```
-
-Decode one strict declarative selection query from JSON.
+Decode one strict declarative selector from JSON.
 
 ## Semirings
 
