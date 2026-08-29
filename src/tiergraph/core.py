@@ -36,7 +36,13 @@ class AttributeDomain(StrEnum):
 
 
 class XsdType(StrEnum):
-    """The growable XSD datatype subset admitted for attribute values."""
+    """The growable XSD datatype subset admitted for scalar attribute values.
+
+    In-graph references are relations, not attribute value types.  Relation
+    declarations type their referents and may validate structural promises;
+    an out-of-graph reference is honestly a string because this graph cannot
+    validate what it denotes.
+    """
 
     STRING = "string"
     BOOLEAN = "boolean"
@@ -153,7 +159,11 @@ class TierDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class AttributeDeclaration:
-    """Declare an attribute's qualified name, domain, and XSD subset type."""
+    """Declare an optional, at-most-one value for one domain and XSD type.
+
+    Absence means absent: attributes have no defaults, deliberately, because a
+    default would put a value in the reading that is missing from graph bytes.
+    """
 
     name: QualifiedName
     domain: AttributeDomain
@@ -194,7 +204,12 @@ class SimpleRelationDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class BipartiteRelationDeclaration:
-    """Declare typed links and the graph invariants they promise."""
+    """Declare typed links and the graph invariants they promise.
+
+    Unlike scalar ``XsdType`` values, a relation types its referents through
+    ``left_type`` and ``right_type`` and validates its ``single_parent`` and
+    ``acyclic`` promises.
+    """
 
     name: QualifiedName
     left_type: QualifiedName
@@ -434,11 +449,21 @@ class DurableItemRef:
 class DurablePositionRef:
     """Address a boundary whose identity is its anchor and chosen side.
 
+    Boundary identity is anchor-relative: an interior boundary's identity is,
+    for example, "before item X", not an identity attached to an adjacency.
+    A boundary therefore follows its anchor when it moves; moving a block
+    carries its internal boundaries.  Under reordering identities follow their
+    anchors and no new adjacency inherits an identity.  Inserting exactly at
+    ``before(x)`` leaves that boundary before ``x``.
+
     Distinct anchors may resolve to the same boundary in the current graph and
     diverge after an edit.  In particular, ``after(a)`` and ``before(b)`` keep
     different intentions even when ``a`` and ``b`` are adjacent.  Likewise,
     ``before(tier)`` and ``after(tier)`` are distinct first-edge and last-edge
     anchors that coincide only while the tier is empty.
+
+    Removing an anchor is deliberately unsettled: removal destroys the anchor,
+    and the kernel has no ratified rule for that case.
     """
 
     anchor: DurableItemRef | QualifiedName
@@ -865,13 +890,24 @@ class Graph:
     def promote_item(
         self, reference: ItemRef, durable_id: str
     ) -> tuple[Graph, DurableItemRef]:
-        """Return a graph carrying the caller's semantic id for one item."""
+        """Return a graph carrying the caller's semantic id for one item.
+
+        The durable id is as-built content, so adding it changes canonical bytes
+        and the construction fingerprint.  Repeating the same id is idempotent;
+        a different id is refused and never replaces the established identity.
+        """
         _validate_reference(
             reference, "item reference", self._tiers_by_name, ValueError
         )
         tier = self._tiers_by_name[reference.tier]
         item = tier.items[reference.index]
         if item.durable_id is not None:
+            if item.durable_id != durable_id:
+                raise ValueError(
+                    f"item {str(reference)!r} already carries durable id "
+                    f"{item.durable_id!r}; refused conflicting durable id "
+                    f"{durable_id!r}"
+                )
             return self, DurableItemRef(item.durable_id)
         items = list(tier.items)
         items[reference.index] = Item(durable_id, item.attributes)
@@ -884,7 +920,13 @@ class Graph:
     def promote_position(
         self, reference: PositionRef, durable_id: str
     ) -> tuple[Graph, DurablePositionRef]:
-        """Return a graph whose boundary anchor has durable identity."""
+        """Return a graph whose boundary anchor has durable identity.
+
+        Promoting an interior boundary promotes its anchor item.  That durable
+        id is as-built content, so adding it changes canonical bytes and the
+        construction fingerprint.  An anchor carrying a different id refuses
+        the requested boundary identity rather than replacing its own.
+        """
         _validate_position(reference, self._tiers_by_name, ValueError)
         tier = self._tiers_by_name[reference.tier]
         if reference.index == 0:
@@ -894,9 +936,18 @@ class Graph:
             promoted = self
             durable = DurablePositionRef(reference.tier, BoundarySide.AFTER)
         else:
-            promoted, anchor = self.promote_item(
-                ItemRef(reference.tier, reference.index), durable_id
-            )
+            anchor_reference = ItemRef(reference.tier, reference.index)
+            anchor_item = tier.items[reference.index]
+            if (
+                anchor_item.durable_id is not None
+                and anchor_item.durable_id != durable_id
+            ):
+                raise ValueError(
+                    f"position {str(reference)!r} is before an anchor carrying "
+                    f"durable id {anchor_item.durable_id!r}; refused conflicting "
+                    f"boundary durable id {durable_id!r}"
+                )
+            promoted, anchor = self.promote_item(anchor_reference, durable_id)
             durable = DurablePositionRef(anchor, BoundarySide.BEFORE)
         position = promoted._positions_by_ref.get(reference)
         if position is None:

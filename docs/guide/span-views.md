@@ -19,3 +19,11 @@ candidate items carrying the configured value and score attributes. Emitters
 include those candidates only when requested and rank them by descending
 numeric score, then ascending path. JSON, JSON Lines, text, HTML, and the
 companion `tiergraph_dot.dumps_spans` renderer all consume the same projection.
+
+A span is a live rule over coverage membership, not an origin-plus-extent
+snapshot. The kernel graph stores coverage and no extent at all; the view
+derives `start` and `end` for projection and rendering. (Origin plus extent
+governs intervals, not kernel spans.) Coverage must be contiguous. If an item
+appears inside a span's range without a corresponding coverage edge, projection
+refuses the hole, forcing the caller to decide how membership changes instead
+of silently absorbing the item or splitting the span.

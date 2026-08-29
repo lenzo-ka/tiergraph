@@ -411,6 +411,9 @@ AsBuilt.fingerprint(self) -> 'str'
 
 Return a SHA-256 fingerprint of canonical as-built state bytes.
 
+Durable ids are genuine as-built content, not metadata, so promotion
+changes these bytes and therefore this fingerprint.
+
 #### `AsBuilt.to_data`
 
 Method.
@@ -1254,7 +1257,10 @@ space in input length ``n``.
 AttributeDeclaration(name: 'QualifiedName', domain: 'AttributeDomain', value_type: 'XsdType') -> None
 ```
 
-Declare an attribute's qualified name, domain, and XSD subset type.
+Declare an optional, at-most-one value for one domain and XSD type.
+
+Absence means absent: attributes have no defaults, deliberately, because a
+default would put a value in the reading that is missing from graph bytes.
 
 #### `AttributeDeclaration.to_data`
 
@@ -1308,6 +1314,10 @@ BipartiteRelationDeclaration(name: 'QualifiedName', left_type: 'QualifiedName', 
 ```
 
 Declare typed links and the graph invariants they promise.
+
+Unlike scalar ``XsdType`` values, a relation types its referents through
+``left_type`` and ``right_type`` and validates its ``single_parent`` and
+``acyclic`` promises.
 
 #### `BipartiteRelationDeclaration.to_data`
 
@@ -1406,6 +1416,10 @@ Graph.promote_item(self, reference: 'ItemRef', durable_id: 'str') -> 'tuple[Grap
 
 Return a graph carrying the caller's semantic id for one item.
 
+The durable id is as-built content, so adding it changes canonical bytes
+and the construction fingerprint.  Repeating the same id is idempotent;
+a different id is refused and never replaces the established identity.
+
 #### `Graph.promote_position`
 
 Method.
@@ -1415,6 +1429,11 @@ Graph.promote_position(self, reference: 'PositionRef', durable_id: 'str') -> 'tu
 ```
 
 Return a graph whose boundary anchor has durable identity.
+
+Promoting an interior boundary promotes its anchor item.  That durable
+id is as-built content, so adding it changes canonical bytes and the
+construction fingerprint.  An anchor carrying a different id refuses
+the requested boundary identity rather than replacing its own.
 
 #### `Graph.to_data`
 
@@ -1680,7 +1699,12 @@ Return the declaration as JSON-serializable data.
 XsdType(*values)
 ```
 
-The growable XSD datatype subset admitted for attribute values.
+The growable XSD datatype subset admitted for scalar attribute values.
+
+In-graph references are relations, not attribute value types.  Relation
+declarations type their referents and may validate structural promises;
+an out-of-graph reference is honestly a string because this graph cannot
+validate what it denotes.
 
 #### `XsdType` members
 
@@ -2177,11 +2201,21 @@ DurablePositionRef(anchor: 'DurableItemRef | QualifiedName', side: 'BoundarySide
 
 Address a boundary whose identity is its anchor and chosen side.
 
+Boundary identity is anchor-relative: an interior boundary's identity is,
+for example, "before item X", not an identity attached to an adjacency.
+A boundary therefore follows its anchor when it moves; moving a block
+carries its internal boundaries.  Under reordering identities follow their
+anchors and no new adjacency inherits an identity.  Inserting exactly at
+``before(x)`` leaves that boundary before ``x``.
+
 Distinct anchors may resolve to the same boundary in the current graph and
 diverge after an edit.  In particular, ``after(a)`` and ``before(b)`` keep
 different intentions even when ``a`` and ``b`` are adjacent.  Likewise,
 ``before(tier)`` and ``after(tier)`` are distinct first-edge and last-edge
 anchors that coincide only while the tier is empty.
+
+Removing an anchor is deliberately unsettled: removal destroys the anchor,
+and the kernel has no ratified rule for that case.
 
 #### `DurablePositionRef.to_data`
 
@@ -4136,7 +4170,12 @@ Hold reconstructed input text and its ordered, non-overlapping spans.
 Span(label: 'str', start: 'int', end: 'int', char_start: 'int | None', char_end: 'int | None', value: 'str | None', score: 'str | None', path: 'str', alternatives: 'tuple[SpanAlternative, ...]' = ()) -> None
 ```
 
-Describe one selected span and its graph-derived extent.
+Describe one selected span whose extent is derived from live coverage.
+
+The kernel graph stores membership, not an origin-plus-extent snapshot;
+this projection carries the resulting bounds for renderers.  Coverage must
+remain contiguous, so a new base item inside its range requires the caller
+to update membership rather than being absorbed or splitting it.
 
 ### `SpanAlternative`
 

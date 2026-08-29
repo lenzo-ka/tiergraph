@@ -620,7 +620,7 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
             )
         ),
         AddItem(tier, Item("already")),
-        PromoteItem(ItemRef(tier, 0), "ignored"),
+        PromoteItem(ItemRef(tier, 0), "already"),
         AddItem(tier),
         AttachValue(
             AttributeDomain.POSITION,
@@ -628,7 +628,7 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
             AttributeValue(position_attribute, XsdType.STRING, "middle"),
         ),
         PromotePosition(PositionRef(tier, 1), "middle-anchor"),
-        PromotePosition(PositionRef(tier, 1), "ignored-again"),
+        PromotePosition(PositionRef(tier, 1), "middle-anchor"),
         AttachValue(
             AttributeDomain.POSITION,
             PositionRef(tier, 2),
@@ -675,6 +675,27 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
     outcome = Program(trace).unroll()
     reference = execute(outcome.trace)
     assert wire.dumps(outcome.graph) == wire.dumps(reference)
+
+    conflicting_promotions = (
+        (
+            *LAWS.declarations(),
+            AddItem(tier, Item("already")),
+            PromoteItem(ItemRef(tier, 0), "ignored"),
+        ),
+        (
+            *LAWS.declarations(),
+            AddItem(tier),
+            AddItem(tier),
+            PromotePosition(PositionRef(tier, 1), "middle-anchor"),
+            PromotePosition(PositionRef(tier, 1), "ignored-again"),
+        ),
+    )
+    for conflicting_trace in conflicting_promotions:
+        with pytest.raises(ExecutionError) as linear_refusal:
+            Program(conflicting_trace).unroll()
+        with pytest.raises(ExecutionError) as reference_refusal:
+            execute(conflicting_trace)
+        assert str(linear_refusal.value) == str(reference_refusal.value)
 
     bad_subset = PolyadicRelationDeclaration(
         name("bad-subset"), side, side, targets_subset_of=name("later")

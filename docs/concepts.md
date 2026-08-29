@@ -27,10 +27,13 @@ of the same graph.
   `n` items.
 - **Items** are tier members. An item may hold typed attributes and may be
   promoted to a durable identifier when a reference must survive edits.
-- **Attributes** are typed by a growable XSD subset (string, boolean, integer,
-  decimal, double) and are declared for one domain: document, tier, item,
-  position, relation declaration, or relation instance. A value's lexical form
-  is canonicalized when it is stored, so equal values have one spelling.
+- **Attributes** are optional and have at most one value per qualified name.
+  They are typed by a growable XSD subset (string, boolean, integer, decimal,
+  double) and are declared for one domain: document, tier, item, position,
+  relation declaration, or relation instance. A value's lexical form is
+  canonicalized when it is stored, so equal values have one spelling. Absence
+  means absent: there are deliberately no defaults that appear in a reading
+  without being present in the bytes.
 - **Relations** come in three shapes. A simple relation gives every member of
   one tier a single item type. A bipartite relation links two typed endpoints,
   each an item or a boundary, and can promise acyclicity or a single parent. A
@@ -39,6 +42,18 @@ of the same graph.
 - **References** address items and boundaries at two identity levels. A
   structural reference is a coordinate (`tier`, `index`); a durable reference
   names an item by its promoted id, or a boundary by its anchor and side.
+
+`XsdType` types scalar values, not graph referents. An in-graph reference is a
+relation: its declaration types the referents and can validate `single_parent`
+and `acyclic` promises. An out-of-graph reference is a `STRING`, honestly,
+because the graph cannot validate its target. A hypothetical reference-valued
+`XsdType` could say only "this string is a reference," which is strictly weaker
+than the referent typing and promises relations already provide.
+
+Durable item and boundary ids are genuine as-built graph content, not metadata
+about that content. Promotion therefore changes canonical bytes and their
+SHA-256 fingerprint. This is expected: durable ids address items across graphs,
+and a fingerprint that ignored identity would hash away the identifier.
 
 ```python
 from tiergraph import (
