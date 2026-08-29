@@ -6,7 +6,7 @@ The `tiergraph` command prints help when called without arguments. `--version` p
 
 ## Contracts
 
-Every command accepts `-` as stdin. Document-producing commands write to stdout by default or to `-o/--output`; diagnostics go only to stderr. Exit status 0 means success, 1 means invalid input or a refused operation, 2 means command-line usage error, and 3 means an I/O or encoding failure.
+Every command accepts `-` as stdin. Document-producing commands write to stdout by default or to `-o/--output`; diagnostics go only to stderr. Exit status 0 means success, 1 means invalid input or a refused operation, 2 means command-line usage error, and 3 means an I/O failure or an input the CLI could not decode. The CLI's own reports refuse a graph the writer could not write in the same way as the writer, with exit status 1.
 
 `validate` reports whether `loads()` accepts a document. This is deliberately separate from emission: a loads-accepted value such as an escaped lone surrogate is refused by the writer when `convert` tries to emit it, producing exit status 1 for a refused operation. `convert` canonicalizes to indented `json`, compact `json-compact`, or `bytes`; bytes uses the canonical JSON byte API and is not another syntax.
 

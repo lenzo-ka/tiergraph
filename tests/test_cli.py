@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import io
 import json
 import os
@@ -1436,25 +1437,200 @@ def test_clean_domain_io_and_same_path_errors(
     assert source.read_bytes() == original
 
 
-def test_inspect_reports_a_real_output_encoding_failure(
+def test_cli_output_emitters_are_audited() -> None:
+    """Every dynamic CLI byte emitter remains behind the shared refusal.
+
+    This enumerates the emitters instead of trusting a hand list: any new
+    ``json.dumps`` or ``.encode`` in the module fails here until its author
+    routes it through the refusal and records it below.  The check is static,
+    so it discriminates by listing an emitter set no other revision has, not
+    by observing a leak; the behavioral discrimination lives in the matrix.
+    """
+    source = Path(cli.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    found: set[tuple[str, str]] = set()
+    # A module-level emitter has no enclosing function; name it so it is
+    # reported as unapproved rather than raising out of the visitor.
+    functions: list[str] = ["<module>"]
+
+    class Calls(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            functions.append(node.name)
+            self.generic_visit(node)
+            functions.pop()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Attribute):
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "json"
+                    and node.func.attr == "dumps"
+                ):
+                    found.add((functions[-1], "json.dumps"))
+                elif node.func.attr == "encode":
+                    found.add((functions[-1], "encode"))
+            self.generic_visit(node)
+
+    Calls().visit(tree)
+    approved = {
+        ("main", "json.dumps"),
+        ("main", "encode"),
+        ("_graph_bytes", "encode"),
+        ("_graph_report_bytes", "encode"),
+        ("_json_bytes", "json.dumps"),
+        ("_json_bytes", "encode"),
+        ("_step_bytes", "json.dumps"),
+        ("_step_bytes", "encode"),
+    }
+    assert found == approved, (
+        "route any new CLI emitter through the shared wire refusal; do not casually "
+        f"widen the approved emitter set (found {sorted(found)!r})"
+    )
+
+
+def test_surrogate_reports_are_refused_with_field_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An encoding failure outside the wire writer still exits with status 3.
-
-    The wire writer now refuses an unencodable string and names its field path,
-    so `convert` reports a refused operation. The CLI's own reports are not the
-    wire writer: `inspect` prints expanded qualified names, so a surrogate
-    namespace still reaches the UTF-8 encoder there. This is that residue's real
-    witness; the exit-status-3 classification needs no fabricated error to reach.
-    """
-    source = tmp_path / "surrogate-tier.json"
+    """Every CLI report refuses surrogate data with its report or graph path."""
+    source = tmp_path / "path-graph.json"
     source.write_text(
         '{"format_version":"6","graph":{"namespaces":'
         '[{"namespace":"\\ud800","prefix":"p"}],"tiers":[{"declaration":'
         '{"long_name":"T","name":"p:t"},"items":[{"durable_id":"a"}]}]}}'
     )
-    assert main(["inspect", str(source)]) == 3
-    assert "UnicodeEncodeError" in capsys.readouterr().err
+    surrogate = "\ud800"
+    profile = tmp_path / "profile.json"
+    profile.write_text("{}")
+    query = tmp_path / "query.json"
+    query.write_text(json.dumps({"select": "item", "path": "/items/durable/a"}))
+    program = tmp_path / "program.jsonl"
+    _program(program, DeclareNamespace(NamespaceDeclaration("p", surrogate)))
+
+    walk_graph = tmp_path / "walk-graph.json"
+    _walk_graph(walk_graph)
+    walk_graph.write_bytes(
+        walk_graph.read_bytes().replace(b"urn:test:traversal", b"\\ud800")
+    )
+
+    graph = ipakit_shape()
+    clock_graph = tmp_path / "clock-graph.json"
+    clock_graph.write_bytes(
+        tiergraph.dump_bytes(graph).replace(
+            CLOCK_SEGMENT.namespace.encode(), b"\\ud800"
+        )
+    )
+    clock_profile = tmp_path / "clock-profile.json"
+    clock_profile.write_text(
+        json.dumps(clock_profile_data()).replace(CLOCK_SEGMENT.namespace, "\\ud800")
+    )
+
+    (tmp_path / "span").mkdir()
+    span_graph, span_profile, span_value, profile_value = _span_files(tmp_path / "span")
+    del span_value, profile_value
+    span_data = tiergraph.to_data(tiergraph.loads(span_graph.read_bytes()))
+    graph_data = span_data["graph"]
+    assert isinstance(graph_data, dict)
+    namespaces = graph_data.setdefault("namespaces", [])
+    assert isinstance(namespaces, list)
+    namespaces.append({"namespace": surrogate, "prefix": "bad"})
+    span_graph.write_text(json.dumps(span_data))
+
+    cases = [
+        (["inspect", str(source)], "namespaces[0].namespace"),
+        (
+            [
+                "walk",
+                str(walk_graph),
+                "--source",
+                _item_path(0).replace("urn:test:traversal", surrogate),
+                "--relation-namespace",
+                surrogate,
+                "--relation-local",
+                "contains",
+            ],
+            "nodes[0].reference.tier.namespace",
+        ),
+        (
+            ["path", "resolve", str(source), "/items/durable/a"],
+            "current.tier.namespace",
+        ),
+        (
+            [
+                "path",
+                "spell",
+                str(source),
+                "--kind",
+                "item",
+                "--tier-namespace",
+                surrogate,
+                "--tier-local",
+                "t",
+                "--index",
+                "0",
+            ],
+            "path",
+        ),
+        (
+            ["select", str(source), "--query", str(query)],
+            "nodes[0].reference.tier.namespace",
+        ),
+        (
+            ["clock", "positions", str(clock_graph), "--profile", str(clock_profile)],
+            "clock_tier.namespace",
+        ),
+        (
+            [
+                "clock",
+                "item",
+                str(clock_graph),
+                "--profile",
+                str(clock_profile),
+                "--item",
+                _structural_path("items", surrogate, CLOCK_SEGMENT.local_name, 0),
+            ],
+            "item.tier.namespace",
+        ),
+        *[
+            (
+                [
+                    "span",
+                    "render",
+                    str(span_graph),
+                    "--profile",
+                    str(span_profile),
+                    "--format",
+                    name,
+                ],
+                "namespaces[1].namespace",
+            )
+            for name in ("text", "json", "jsonl", "html")
+        ],
+        (["step", str(program)], "declaration.namespace"),
+        (["render", str(span_graph)], "namespaces[1].namespace"),
+        (["run", str(program), "--to", "dot"], "namespaces[0].namespace"),
+    ]
+    for arguments, field_path in cases:
+        assert main(arguments) == 1, arguments
+        error = capsys.readouterr().err
+        assert f"{field_path} value " in error, (arguments, error)
+        assert "unsupported character U+D800" in error, (arguments, error)
+        assert "UnicodeEncodeError" not in error, (arguments, error)
+
+
+def test_invalid_utf8_profile_remains_an_exit_three_decode_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real input decoding failure still exercises the UnicodeError arm.
+
+    Output encoding no longer reaches that arm, so this pins the witness that
+    keeps it honest: a side-car document whose bytes are not UTF-8 at all.
+    """
+    graph = tmp_path / "graph.json"
+    graph.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    profile = tmp_path / "profile.json"
+    profile.write_bytes(b'{"clock_tier":"\xff\xfe"}')
+    assert main(["clock", "positions", str(graph), "--profile", str(profile)]) == 3
+    assert "UnicodeDecodeError" in capsys.readouterr().err
 
 
 def test_validate_accepts_surrogate_but_convert_refuses_emission(

@@ -18,6 +18,7 @@ import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program
 from tiergraph import core as _core
 from tiergraph import machine as _machine_codec
+from tiergraph import wire as _wire
 from tiergraph.schema import json_schema, shape_hash
 
 _attributes = _machine_codec._decode_attributes
@@ -219,10 +220,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "render":
             graph = tiergraph.loads(_read_bytes(args.file))
             rendered = _render(graph, args.include_empty_tiers)
-            _write_output(args.file, args.output, rendered.encode("utf-8"))
+            _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
         elif args.command == "inspect":
             graph = tiergraph.loads(_read_bytes(args.file))
-            _write_output(args.file, args.output, _inspect(graph).encode("utf-8"))
+            _write_output(
+                args.file, args.output, _graph_report_bytes(graph, _inspect(graph))
+            )
         elif args.command == "convert":
             graph = tiergraph.loads(_read_bytes(args.file))
             _write_output(args.file, args.output, _graph_bytes(graph, args.to))
@@ -317,7 +320,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _check_distinct(args.profile, args.output)
             rendered = _span_render(graph, span_profile, args)
-            _write_output(args.file, args.output, rendered.encode("utf-8"))
+            _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
         elif args.command == "select":
             graph = tiergraph.loads(_read_bytes(args.file))
             query = tiergraph.selection_loads(_read_bytes(args.query))
@@ -334,7 +337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             program = _read_program(args.file)
             graph = program.unroll().graph
             encoded = (
-                _render(graph, args.include_empty_tiers).encode("utf-8")
+                _graph_report_bytes(graph, _render(graph, args.include_empty_tiers))
                 if args.to == "dot"
                 else _graph_bytes(graph, args.to)
             )
@@ -648,7 +651,20 @@ def _graph_bytes(graph: tiergraph.Graph, target: str) -> bytes:
     return tiergraph.dump_compact(graph).encode("utf-8")
 
 
+def _graph_report_bytes(graph: tiergraph.Graph, rendered: str) -> bytes:
+    """Encode one graph-derived report, refusing what the wire writer refuses.
+
+    A report is not the wire document, so its text never reaches ``to_data``.
+    Asking the writer's one shared root about the graph makes the CLI's own
+    reports refuse the same strings, named by the same field path, instead of
+    leaking the encoder's ``UnicodeEncodeError``.
+    """
+    tiergraph.to_data(graph)
+    return rendered.encode("utf-8")
+
+
 def _json_bytes(value: object) -> bytes:
+    _wire._refuse_unencodable_strings(cast(_core.JsonValue, value), "")
     return (
         json.dumps(
             value,
@@ -663,9 +679,11 @@ def _json_bytes(value: object) -> bytes:
 
 def _step_bytes(step: Step) -> bytes:
     """Serialize only the public step data as one deterministic JSONL record."""
+    data = step.to_data()
+    _wire._refuse_unencodable_strings(data, "")
     return (
         json.dumps(
-            step.to_data(),
+            data,
             allow_nan=False,
             ensure_ascii=False,
             sort_keys=True,
