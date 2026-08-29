@@ -530,6 +530,7 @@ class ParseForest:
     root: ItemRef
     fold: FoldDeclaration[bool]
     declaration: GrammarDeclaration
+    collapsed: bool = True
 
     def recognized(self) -> bool:
         """Return whether the designated start span has a derivation."""
@@ -541,7 +542,10 @@ class ParseForest:
 
     def count(self) -> int:
         """Count derivations when the grammar lies in the finite-fold domain."""
-        _require_finite_fold_domain(self.declaration, "count")
+        if self.collapsed:
+            raise ValueError(
+                "count requires a parse forest built with collapse_units=False"
+            )
         return _count_fold(self).run().value
 
     def best(self, count: int = 1) -> tuple[BestDerivation, ...]:
@@ -553,7 +557,10 @@ class ParseForest:
         globally canonical one, because ranking keeps the cheapest by cost rather than
         by witness identity.
         """
-        _require_finite_fold_domain(self.declaration, "best")
+        if self.collapsed:
+            raise ValueError(
+                "best requires a parse forest built with collapse_units=False"
+            )
         return _best_derivations(self, count)
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -727,6 +734,8 @@ def _candidate_matches(
     tokens: tuple[str, ...],
     start: int,
     end: int,
+    *,
+    allow_empty_holes: bool = False,
 ) -> tuple[tuple[tuple[tuple[QualifiedName, int, int], ...], bool], ...]:
     found: list[tuple[tuple[tuple[QualifiedName, int, int], ...], bool]] = []
 
@@ -750,7 +759,8 @@ def _candidate_matches(
                     terminals_match and tokens[position] == element.text.lexical,
                 )
             return
-        for boundary in range(position + 1, end + 1):
+        first = position if allow_empty_holes else position + 1
+        for boundary in range(first, end + 1):
             key = (element.nonterminal, position, boundary)
             _visit(index + 1, boundary, (*children, key), terminals_match)
 
@@ -871,21 +881,28 @@ def recognize(
     grammar: LoweredGrammar,
     input_tokens: Sequence[str],
     namespace: str = CHART_NAMESPACE,
+    *,
+    collapse_units: bool = True,
 ) -> ParseForest:
     """Build a chart forest for token input using polynomial span deduction.
 
     For a fixed grammar whose longest source pattern has length ``m``, the
     exhaustive boundary discipline takes ``O(n^(m+1))`` time and polynomial
-    space in input length ``n``. Nullable expansion and unit closure remove
-    same-span dependencies before candidate construction, so every remaining
-    child span is shorter than its parent span.
+    space in input length ``n``.
     """
     tokens = tuple(input_tokens)
     if any(not isinstance(token, str) for token in tokens):
         raise ValueError("grammar input token must be a string")
     declaration = grammar.declaration
     source_rules = _source_rules(grammar)
-    recognition_rules = _recognition_rules(declaration, source_rules)
+    recognition_rules = (
+        _recognition_rules(declaration, source_rules)
+        if collapse_units
+        else tuple(
+            (rule_index, left, pattern)
+            for rule_index, (left, pattern) in enumerate(source_rules)
+        )
+    )
     applications: dict[
         tuple[QualifiedName, int, int],
         list[tuple[int, tuple[tuple[QualifiedName, int, int], ...], bool]],
@@ -905,7 +922,11 @@ def recognize(
             if candidate_left != left:
                 continue
             for children, terminals_match in _candidate_matches(
-                source, tokens, start, end
+                source,
+                tokens,
+                start,
+                end,
+                allow_empty_holes=not collapse_units,
             ):
                 application = (rule_index, children, terminals_match)
                 choices.append(application)
@@ -1087,7 +1108,7 @@ def recognize(
         ),
         roots=(root,),
     )
-    return ParseForest(graph, program, root, fold, declaration)
+    return ParseForest(graph, program, root, fold, declaration, collapse_units)
 
 
 def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
@@ -1188,37 +1209,6 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
     )
 
 
-def _require_finite_fold_domain(
-    declaration: GrammarDeclaration, operation: str
-) -> None:
-    nullable: set[QualifiedName] = set()
-    changed = True
-    while changed:
-        changed = False
-        for rule in declaration.rules:
-            if rule.left in nullable:
-                continue
-            if not rule.source or all(
-                isinstance(element, GrammarHole) and element.nonterminal in nullable
-                for element in rule.source
-            ):
-                nullable.add(rule.left)
-                changed = True
-    for index, rule in enumerate(declaration.rules):
-        unit = len(rule.source) == 1 and isinstance(rule.source[0], GrammarHole)
-        nullable_rule = not rule.source or all(
-            isinstance(element, GrammarHole) and element.nonterminal in nullable
-            for element in rule.source
-        )
-        if unit or nullable_rule:
-            kind = "unit" if unit else "nullable/epsilon"
-            raise ValueError(
-                f"{operation} rule {index} ({str(rule.left)!r}) is a {kind} "
-                "production; counting and best-cost over unit/nullable/cyclic "
-                "grammars require the star / least-fixpoint fold, which is not yet built"
-            )
-
-
 def _forest(
     grammar: LoweredGrammar | ParseForest,
     input_tokens: Sequence[str] | None,
@@ -1227,12 +1217,14 @@ def _forest(
     if isinstance(grammar, ParseForest):
         if input_tokens is not None:
             raise ValueError("a prebuilt parse forest does not accept input tokens")
-        _require_finite_fold_domain(grammar.declaration, operation)
+        if grammar.collapsed:
+            raise ValueError(
+                f"{operation} requires a parse forest built with collapse_units=False"
+            )
         return grammar
     if input_tokens is None:
         raise ValueError("a lowered grammar requires input tokens")
-    _require_finite_fold_domain(grammar.declaration, operation)
-    return recognize(grammar, input_tokens)
+    return recognize(grammar, input_tokens, collapse_units=False)
 
 
 def count(

@@ -9,6 +9,33 @@ from enum import Enum
 from typing import Protocol, cast
 
 
+class StarRefusal(ValueError):
+    """Refuse a closure the declaring algebra does not license for this operand."""
+
+
+@dataclass(frozen=True, slots=True)
+class ZeroClosedStar[T]:
+    """Admit 0-closed operands and close their finite ascending chain to one."""
+
+    algebra: Semiring[T]
+    name: str = "zero-closed"
+
+    def admits(self, operand: T, /) -> bool:
+        """Prove that the operand is dominated by the multiplicative identity."""
+        return self.algebra.add(self.algebra.one, operand) == self.algebra.one
+
+    def close(self, operand: T, /) -> T:
+        """Return the closure after checking the warrant."""
+        if not self.admits(operand):
+            raise StarRefusal(
+                f"{self.name} warrant refuses operand {self.algebra.encode(operand)!r}"
+            )
+        return self.algebra.one
+
+
+type StarSelector[T] = ZeroClosedStar[T]
+
+
 class LawCheck(Enum):
     """The mandatory comparison used to check a semiring law."""
 
@@ -61,6 +88,10 @@ class Semiring[T](Protocol):
         """Report whether addition is idempotent."""
 
     @property
+    def star(self) -> StarSelector[T] | None:
+        """Name this carrier's closure and its warrant, or declare none."""
+
+    @property
     def multiply_commutative(self) -> bool:
         """Report whether multiplication is commutative."""
 
@@ -110,6 +141,11 @@ class BooleanSemiring:
     multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
+    @property
+    def star(self) -> StarSelector[bool]:
+        """Return the Boolean carrier's 0-closed closure."""
+        return ZeroClosedStar(self)
+
     def _value(self, value: bool, name: str) -> bool:
         if type(value) is not bool:
             raise TypeError(f"{name} must be a Boolean carrier value")
@@ -145,6 +181,7 @@ class CountingSemiring:
     multiply_strictly_order_preserving = False
     multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
+    star = None
 
     def _value(self, value: int, name: str) -> int:
         if type(value) is not int or value < 0:
@@ -178,6 +215,11 @@ class DecimalExtremumSemiring:
     multiply_strictly_order_preserving = True
     multiply_preserves_witness_order = True
     zero_sum_free = no_zero_divisors = True
+
+    @property
+    def star(self) -> StarSelector[Decimal]:
+        """Return this extremum carrier's 0-closed closure."""
+        return ZeroClosedStar(self)
 
     def __init__(self, *, minimum: bool) -> None:
         self._minimum = minimum
@@ -255,6 +297,11 @@ class DoubleExtremumSemiring:
     multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
 
+    @property
+    def star(self) -> StarSelector[float]:
+        """Return this extremum carrier's 0-closed closure."""
+        return ZeroClosedStar(self)
+
     def __init__(self, *, minimum: bool) -> None:
         self._minimum = minimum
         self.zero = math.inf if minimum else -math.inf
@@ -312,12 +359,22 @@ class DoubleExtremumSemiring:
 class TropicalSemiring(DoubleExtremumSemiring):
     """The inexact IEEE-double min-plus semiring."""
 
+    @property
+    def star(self) -> StarSelector[float]:
+        """Return this carrier's explicitly declared 0-closed closure."""
+        return ZeroClosedStar(self)
+
     def __init__(self) -> None:
         super().__init__(minimum=True)
 
 
 class ArcticSemiring(DoubleExtremumSemiring):
     """The inexact IEEE-double max-plus semiring."""
+
+    @property
+    def star(self) -> StarSelector[float]:
+        """Return this carrier's explicitly declared 0-closed closure."""
+        return ZeroClosedStar(self)
 
     def __init__(self) -> None:
         super().__init__(minimum=False)
@@ -329,6 +386,11 @@ class ProductSemiring[T, U]:
 
     left: Semiring[T]
     right: Semiring[U]
+
+    @property
+    def star(self) -> StarSelector[tuple[T, U]] | None:
+        """Declare no closure for arbitrary component products."""
+        return None
 
     @property
     def zero(self) -> tuple[T, U]:
@@ -428,6 +490,11 @@ class ProductSemiring[T, U]:
 class LexicographicSemiring[T, U](ProductSemiring[T, U]):
     """A selective first semiring with second-component aggregation on ties."""
 
+    @property
+    def star(self) -> StarSelector[tuple[T, U]] | None:
+        """Declare no closure for arbitrary lexicographic components."""
+        return None
+
     def __init__(self, first: Semiring[T], second: Semiring[U]) -> None:
         for component in (first, second):
             for name in REQUIRED_LAW_CHECKS:
@@ -507,6 +574,7 @@ class PathWitnessSemiring:
     multiply_strictly_order_preserving = False
     multiply_preserves_witness_order = False
     zero_sum_free = no_zero_divisors = True
+    star = None
 
     def _value(
         self, value: tuple[tuple[str, ...], ...], name: str
@@ -556,6 +624,11 @@ class PathWitnessSemiring:
 
 class ExpectationSemiring[T](ProductSemiring[T, T]):
     """The expectation construction ``(weight, weighted statistic)``."""
+
+    @property
+    def star(self) -> StarSelector[tuple[T, T]] | None:
+        """Declare no closure for an arbitrary expectation base."""
+        return None
 
     def __init__(self, base: Semiring[T]) -> None:
         for name in REQUIRED_LAW_CHECKS:
@@ -614,6 +687,11 @@ class ExpectationSemiring[T](ProductSemiring[T, T]):
 class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
     """The exact decimal tropical semiring enriched with tied best paths."""
 
+    @property
+    def star(self) -> StarSelector[tuple[Decimal, tuple[tuple[str, ...], ...]]]:
+        """Return the proved 0-closed closure for path values."""
+        return ZeroClosedStar(self)
+
     def __init__(self) -> None:
         super().__init__(DECIMAL_TROPICAL, PATH_WITNESSES)
 
@@ -656,5 +734,8 @@ __all__ = [
     "PathValue",
     "ProductSemiring",
     "Semiring",
+    "StarRefusal",
+    "StarSelector",
     "TropicalSemiring",
+    "ZeroClosedStar",
 ]

@@ -19,7 +19,7 @@ from tiergraph.core import (
     QualifiedName,
     XsdType,
 )
-from tiergraph.semiring import LawCheck, Semiring
+from tiergraph.semiring import LawCheck, Semiring, StarRefusal
 
 Value = TypeVar("Value")
 OtherValue = TypeVar("OtherValue")
@@ -366,10 +366,6 @@ class FoldDeclaration[Value]:
                     f"fold {self.name!r} names undeclared bipartite relation "
                     f"{str(transition.relation)!r}"
                 )
-            if not declaration.acyclic:
-                raise ValueError(
-                    f"fold {self.name!r} relation {str(transition.relation)!r} does not declare acyclic"
-                )
         admitted = set(self._references())
         for root in self.roots:
             if root not in admitted:
@@ -445,6 +441,81 @@ class FoldDeclaration[Value]:
     def run(self) -> FoldResult[Value]:
         """Evaluate every state using only the semiring's addition and multiplication."""
         outgoing, item_roots = self._topology()
+        references = self._references()
+        canonical_index = {
+            reference: index for index, reference in enumerate(references)
+        }
+        adjacency = {
+            reference: tuple(
+                dict.fromkeys(
+                    child
+                    for transition in self.transitions
+                    for child in outgoing[reference][transition.relation]
+                )
+            )
+            for reference in references
+        }
+        tarjan_index = 0
+        indices: dict[ItemRef, int] = {}
+        lowlinks: dict[ItemRef, int] = {}
+        stack: list[ItemRef] = []
+        on_stack: set[ItemRef] = set()
+        components: list[tuple[ItemRef, ...]] = []
+
+        def connect(reference: ItemRef) -> None:
+            """Add one canonical vertex with iterative Tarjan traversal."""
+            nonlocal tarjan_index
+            indices[reference] = tarjan_index
+            lowlinks[reference] = tarjan_index
+            tarjan_index += 1
+            stack.append(reference)
+            on_stack.add(reference)
+            frames: list[tuple[ItemRef, int]] = [(reference, 0)]
+            while frames:
+                current, child_index = frames[-1]
+                children = adjacency[current]
+                if child_index < len(children):
+                    child = children[child_index]
+                    frames[-1] = (current, child_index + 1)
+                    if child not in indices:
+                        indices[child] = tarjan_index
+                        lowlinks[child] = tarjan_index
+                        tarjan_index += 1
+                        stack.append(child)
+                        on_stack.add(child)
+                        frames.append((child, 0))
+                    elif child in on_stack:
+                        lowlinks[current] = min(lowlinks[current], indices[child])
+                    continue
+                frames.pop()
+                if frames:
+                    parent = frames[-1][0]
+                    lowlinks[parent] = min(lowlinks[parent], lowlinks[current])
+                if lowlinks[current] == indices[current]:
+                    members: list[ItemRef] = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.remove(member)
+                        members.append(member)
+                        if member == current:
+                            break
+                    components.append(
+                        tuple(sorted(members, key=canonical_index.__getitem__))
+                    )
+
+        for reference in references:
+            if reference not in indices:
+                connect(reference)
+        cyclic_components = tuple(
+            component
+            for component in components
+            if len(component) > 1 or component[0] in adjacency[component[0]]
+        )
+        component_by_item = {
+            reference: component
+            for component in cyclic_components
+            for reference in component
+        }
         coordinates = self.coordinates()
         additions = 0
         multiplications = 0
@@ -462,6 +533,265 @@ class FoldDeclaration[Value]:
                 ItemRef,
                 tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
             ] = {}
+            solving: set[tuple[ItemRef, ...]] = set()
+
+            def solve_component(
+                component: tuple[ItemRef, ...],
+                component_cache: dict[
+                    ItemRef,
+                    tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+                ] = cache,
+                active_components: set[tuple[ItemRef, ...]] = solving,
+            ) -> None:
+                """Resolve one cyclic SCC by the declared ordered trichotomy."""
+                nonlocal additions, multiplications
+                active_components.add(component)
+                members = set(component)
+                for member in component:
+                    for child in adjacency[member]:
+                        if child not in members:
+                            visit(child)
+
+                def equation(current: ItemRef, values: dict[ItemRef, Value]) -> Value:
+                    """Evaluate one equation under current SCC approximants."""
+                    nonlocal additions, multiplications
+                    item = _item(self.graph, current)
+                    label = item.durable_id or _structural_label(current)
+                    value = self.lift(self.valuation.read(self.graph, current), label)
+                    has_children = False
+                    for transition in self.transitions:
+                        children = outgoing[current][transition.relation]
+                        if not children:
+                            continue
+                        has_children = True
+                        child_values = [
+                            values[child]
+                            if child in members
+                            else component_cache[child][0]
+                            for child in children
+                        ]
+                        if transition.combination is ChildCombination.AND:
+                            relation_value = self.semiring.one
+                            for child_value in child_values:
+                                relation_value = self.semiring.multiply(
+                                    relation_value, child_value
+                                )
+                                multiplications += 1
+                        else:
+                            relation_value = child_values[0]
+                            for child_value in child_values[1:]:
+                                relation_value = self.semiring.add(
+                                    relation_value, child_value
+                                )
+                                additions += 1
+                        value = self.semiring.multiply(value, relation_value)
+                        multiplications += 1
+                    assert has_children
+                    return value
+
+                approximants = {member: self.semiring.zero for member in component}
+                for _ in component:
+                    approximants = {
+                        member: equation(member, approximants) for member in component
+                    }
+                if all(value == self.semiring.zero for value in approximants.values()):
+                    for member in component:
+                        component_cache[member] = (self.semiring.zero, (), (), 0)
+                    active_components.remove(component)
+                    return
+
+                next_approximants = {
+                    member: equation(member, approximants) for member in component
+                }
+                if self.semiring.star is None and next_approximants == approximants:
+                    for member, value in approximants.items():
+                        label = _item(
+                            self.graph, member
+                        ).durable_id or _structural_label(member)
+                        paths: Provenance = (
+                            () if value == self.semiring.zero else ((label,),)
+                        )
+                        ranked = (
+                            ()
+                            if not self.ranked_output or value == self.semiring.zero
+                            else ((value, (label,)),)
+                        )
+                        component_cache[member] = (
+                            value,
+                            paths,
+                            ranked,
+                            len(ranked) or len(paths),
+                        )
+                    active_components.remove(component)
+                    return
+
+                nonlinear = next(
+                    (
+                        member
+                        for member in component
+                        if sum(
+                            child in members
+                            for transition in self.transitions
+                            if transition.combination is ChildCombination.AND
+                            for child in outgoing[member][transition.relation]
+                        )
+                        >= 2
+                    ),
+                    None,
+                )
+                closing_parent, closing_child, closing_relation = next(
+                    (member, child, transition.relation)
+                    for member in component
+                    for transition in self.transitions
+                    for child in outgoing[member][transition.relation]
+                    if child in members
+                )
+                member_data = [member.to_data() for member in component]
+                edge = (
+                    f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
+                    f"through relation {str(closing_relation)!r}"
+                )
+                algebra_name = type(self.semiring).__name__
+                if nonlinear is not None:
+                    chart_item = next(
+                        (
+                            member
+                            for member in component
+                            if _item(self.graph, member).attributes
+                            and {
+                                value.name.local_name: value.lexical
+                                for value in _item(self.graph, member).attributes
+                            }.get("kind")
+                            == "chart-item"
+                        ),
+                        nonlinear,
+                    )
+                    chart_attributes = {
+                        value.name.local_name: value.lexical
+                        for value in _item(self.graph, chart_item).attributes
+                    }
+                    span = (chart_attributes.get("start"), chart_attributes.get("end"))
+                    raise StarRefusal(
+                        f"fold {self.name!r} SCC {member_data!r} is nonlinear at "
+                        f"zero-width chart item {chart_item.to_data()!r} span {span!r}; "
+                        f"closing edge {edge}; algebra {algebra_name}; nonlinear "
+                        "least fixpoints are not supported"
+                    )
+
+                star = self.semiring.star
+                fallback = (
+                    f"fold {self.name!r} transitions form a cycle from "
+                    f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
+                    f"through relation {str(closing_relation)!r}"
+                )
+                if star is None:
+                    raise StarRefusal(
+                        f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
+                        f"algebra {algebra_name} declares no star"
+                    )
+
+                def coefficient(current: ItemRef, target: ItemRef) -> Value:
+                    """Return the linear coefficient of one internal child."""
+                    nonlocal additions, multiplications
+                    item = _item(self.graph, current)
+                    label = item.durable_id or _structural_label(current)
+                    value = self.lift(self.valuation.read(self.graph, current), label)
+                    for transition in self.transitions:
+                        children = outgoing[current][transition.relation]
+                        if not children:
+                            continue
+                        internal = tuple(
+                            child for child in children if child in members
+                        )
+                        if transition.combination is ChildCombination.AND:
+                            relation_value = self.semiring.one
+                            for child in children:
+                                child_value = (
+                                    self.semiring.one
+                                    if child == target
+                                    else self.semiring.zero
+                                    if child in members
+                                    else component_cache[child][0]
+                                )
+                                relation_value = self.semiring.multiply(
+                                    relation_value, child_value
+                                )
+                                multiplications += 1
+                        else:
+                            relation_value = self.semiring.zero
+                            for child in children:
+                                child_value = (
+                                    self.semiring.one
+                                    if child == target
+                                    else self.semiring.zero
+                                    if internal or child in members
+                                    else component_cache[child][0]
+                                )
+                                relation_value = self.semiring.add(
+                                    relation_value,
+                                    child_value,
+                                )
+                                additions += 1
+                        value = self.semiring.multiply(value, relation_value)
+                        multiplications += 1
+                    return value
+
+                coefficients = {
+                    (member, child): coefficient(member, child)
+                    for member in component
+                    for child in members
+                    if child in adjacency[member]
+                }
+                operand = self.semiring.zero
+                for start in component:
+                    start_index = canonical_index[start]
+                    cycle_paths: list[tuple[ItemRef, Value, frozenset[ItemRef]]] = [
+                        (start, self.semiring.one, frozenset((start,)))
+                    ]
+                    while cycle_paths:
+                        current, path_value, seen = cycle_paths.pop()
+                        for child in adjacency[current]:
+                            if child not in members:
+                                continue
+                            edge_value = coefficients[(current, child)]
+                            cycle_value = self.semiring.multiply(path_value, edge_value)
+                            multiplications += 1
+                            if child == start:
+                                operand = self.semiring.add(operand, cycle_value)
+                                additions += 1
+                            elif (
+                                child not in seen
+                                and canonical_index[child] >= start_index
+                            ):
+                                cycle_paths.append((child, cycle_value, seen | {child}))
+                if not star.admits(operand):
+                    raise StarRefusal(
+                        f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
+                        f"algebra {algebra_name}; operand "
+                        f"{self.semiring.encode(operand)!r}; warrant {star.name!r} refuses"
+                    )
+                closure = star.close(operand)
+                for member in component:
+                    value = self.semiring.multiply(closure, approximants[member])
+                    multiplications += 1
+                    label = _item(self.graph, member).durable_id or _structural_label(
+                        member
+                    )
+                    member_paths: Provenance = (
+                        () if value == self.semiring.zero else ((label,),)
+                    )
+                    ranked = (
+                        ()
+                        if not self.ranked_output or value == self.semiring.zero
+                        else ((value, (label,)),)
+                    )
+                    component_cache[member] = (
+                        value,
+                        member_paths,
+                        ranked,
+                        len(ranked) or len(member_paths),
+                    )
+                active_components.remove(component)
 
             def visit(
                 reference: ItemRef,
@@ -472,6 +802,10 @@ class FoldDeclaration[Value]:
             ) -> tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int]:
                 """Evaluate one state once for the current index coordinate."""
                 nonlocal additions, multiplications, ranked_multiplications
+                component = component_by_item.get(reference)
+                if component is not None and reference not in state_cache:
+                    solve_component(component)
+                    return state_cache[reference]
                 prepared: dict[ItemRef, tuple[Value, str]] = {}
                 in_progress: set[ItemRef] = set()
                 work: list[tuple[ItemRef, bool]] = [(reference, False)]
@@ -492,13 +826,10 @@ class FoldDeclaration[Value]:
                             for child in reversed(
                                 outgoing[current][transition.relation]
                             ):
-                                if child in in_progress:
-                                    raise ValueError(
-                                        f"fold {self.name!r} transitions form a cycle "
-                                        f"from {current.to_data()!r} to "
-                                        f"{child.to_data()!r} through relation "
-                                        f"{str(transition.relation)!r}"
-                                    )
+                                child_component = component_by_item.get(child)
+                                if child_component is not None:
+                                    solve_component(child_component)
+                                    continue
                                 if child not in state_cache:
                                     work.append((child, False))
                         continue

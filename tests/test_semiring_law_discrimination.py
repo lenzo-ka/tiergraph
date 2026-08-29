@@ -49,6 +49,7 @@ class MutantSemiring:
     multiply_preserves_witness_order: bool = False
     zero_sum_free: bool = True
     no_zero_divisors: bool = True
+    star: None = None
 
     def add(self, left: int, right: int, /) -> int:
         """Apply the selected addition mutant."""

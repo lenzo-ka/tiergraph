@@ -570,7 +570,7 @@ def test_best_orders_exact_weights_and_resolves_ties_by_witness() -> None:
 
 def test_public_api_reuses_one_forest_for_all_three_questions() -> None:
     """Public counting and ranking consume the forest returned by recognition."""
-    forest = recognize(lower_grammar(diamond()), ("x", "y"))
+    forest = recognize(lower_grammar(diamond()), ("x", "y"), collapse_units=False)
     graph = forest.graph
     fingerprint = forest.program.fingerprint()
     assert forest.recognized() is True
@@ -586,8 +586,8 @@ def test_public_api_reuses_one_forest_for_all_three_questions() -> None:
         count(lower_grammar(diamond()))
 
 
-def test_count_and_best_refuse_unit_nullable_and_cyclic_grammars() -> None:
-    """Finite folds name rules that require an unavailable fixed-point fold."""
+def test_cyclic_count_refuses_and_cyclic_best_succeeds_from_one_chart() -> None:
+    """REGRESSION: COUNTING declines while PATH closes a productive unit SCC."""
     sentence = name("S")
     atom = name("A")
     unit_cycle = GrammarDeclaration(
@@ -599,34 +599,138 @@ def test_count_and_best_refuse_unit_nullable_and_cyclic_grammars() -> None:
             GrammarRule(atom, (terminal("x"),), (terminal("x"),)),
         ),
     )
-    epsilon = GrammarDeclaration(
-        (sentence,), sentence, (GrammarRule(sentence, (), ()),)
-    )
-    nullable = GrammarDeclaration(
-        (sentence, atom),
+    lowered = lower_grammar(unit_cycle)
+    with pytest.raises(
+        ValueError,
+        match=r"SCC .*chart-items.*applications.*algebra CountingSemiring declares no star",
+    ) as refusal:
+        count(lowered, ("x",))
+    assert "is a unit production" not in str(refusal.value)
+    derivations = best(lowered, ("x",))
+    assert len(derivations) == 1
+    assert derivations[0].weight == "2.0"
+
+
+def test_nonproductive_cycle_is_zero() -> None:
+    """REGRESSION: zero elimination precedes star and nonlinearity checks."""
+    sentence = name("S")
+    ghost = name("G")
+    ghost_hole = (hole("g", ghost),)
+    grammar = GrammarDeclaration(
+        (sentence, ghost),
         sentence,
         (
-            GrammarRule(
-                sentence,
-                (hole("a", atom), hole("b", atom)),
-                (hole("a", atom), hole("b", atom)),
-            ),
-            GrammarRule(atom, (), ()),
+            GrammarRule(sentence, (terminal("a"),), (terminal("a"),)),
+            GrammarRule(sentence, ghost_hole, ghost_hole),
+            GrammarRule(ghost, ghost_hole, ghost_hole),
         ),
     )
-    for grammar, kind in (
-        (unit_cycle, "unit"),
-        (epsilon, "nullable/epsilon"),
-        (nullable, "nullable/epsilon"),
+    assert count(lower_grammar(grammar), ("a",)) == 1
+
+
+def test_positive_span_binary_application_is_linear() -> None:
+    """CHARACTERIZATION: S → S S on two tokens retains its count of one."""
+    sentence = name("S")
+    pair = (hole("left", sentence), hole("right", sentence))
+    binary = GrammarDeclaration(
+        (sentence,),
+        sentence,
+        (
+            GrammarRule(sentence, pair, pair),
+            GrammarRule(sentence, (terminal("a"),), (terminal("a"),)),
+        ),
+    )
+    assert count(lower_grammar(binary), ("a", "a")) == 1
+
+
+def test_nonnullable_guarded_recursion_retains_its_count() -> None:
+    """CHARACTERIZATION: A → A B consumes input and forms no same-span SCC."""
+    left = name("A")
+    guard = name("B")
+    recursive = (hole("a", left), hole("b", guard))
+    grammar = GrammarDeclaration(
+        (left, guard),
+        left,
+        (
+            GrammarRule(left, recursive, recursive),
+            GrammarRule(left, (terminal("a"),), (terminal("a"),)),
+            GrammarRule(guard, (terminal("b"),), (terminal("b"),)),
+        ),
+    )
+    assert count(lower_grammar(grammar), ("a", "b", "b")) == 1
+
+
+def test_zero_width_nonlinear_scc_is_not_supported() -> None:
+    """REGRESSION: G = 1 + G² names nonlinearity and its zero-width item."""
+    sentence = name("S")
+    ghost = name("G")
+    pair = (hole("left", ghost), hole("right", ghost))
+    ghost_hole = (hole("g", ghost),)
+    grammar = GrammarDeclaration(
+        (ghost, sentence),
+        sentence,
+        (
+            GrammarRule(ghost, pair, pair),
+            GrammarRule(ghost, (), ()),
+            GrammarRule(sentence, (terminal("a"),), (terminal("a"),)),
+            GrammarRule(sentence, ghost_hole, ghost_hole),
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"nonlinear at zero-width chart item .*span \('0', '0'\).*CountingSemiring.*not supported",
     ):
-        lowered = lower_grammar(grammar)
-        assert recognize(lowered, ("x",) if grammar is unit_cycle else ()).recognized()
-        for operation in (count, best):
-            with pytest.raises(
-                ValueError,
-                match=rf"rule 0 .*{kind} production.*star / least-fixpoint fold",
-            ):
-                operation(lowered, ("x",) if grammar is unit_cycle else ())
+        count(lower_grammar(grammar), ("a",))
+
+
+def test_best_refuses_a_cycle_outside_its_star_warrant() -> None:
+    """REGRESSION: a warrant refusal names its encoded operand and warrant."""
+    sentence = name("S")
+    self_hole = (hole("self", sentence),)
+    grammar = GrammarDeclaration(
+        (sentence,),
+        sentence,
+        (
+            GrammarRule(sentence, self_hole, self_hole, weight=decimal("-1")),
+            GrammarRule(sentence, (terminal("a"),), (terminal("a"),)),
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"algebra PathSemiring; operand \['-1\.0'.*warrant 'zero-closed' refuses",
+    ):
+        best(lower_grammar(grammar), ("a",))
+
+
+def test_best_refuses_alternative_negative_recursive_coefficients() -> None:
+    """REGRESSION: recursive alternatives add; their weights do not multiply."""
+    sentence = name("S")
+    self_hole = (hole("self", sentence),)
+    grammar = GrammarDeclaration(
+        (sentence,),
+        sentence,
+        (
+            GrammarRule(sentence, self_hole, self_hole, weight=decimal("-2")),
+            GrammarRule(sentence, self_hole, self_hole, weight=decimal("3")),
+            GrammarRule(sentence, (terminal("a"),), (terminal("a"),)),
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"operand \['-2\.0'.*warrant 'zero-closed' refuses",
+    ):
+        best(lower_grammar(grammar), ("a",))
+
+
+def test_collapsed_forest_requires_noncollapsing_recognition_for_folds() -> None:
+    """REGRESSION: a lossy prebuilt forest cannot silently count or rank."""
+    forest = recognize(lower_grammar(diamond()), ("x", "y"))
+    assert forest.collapsed
+    for operation in (forest.count, forest.best):
+        with pytest.raises(ValueError, match="collapse_units=False"):
+            operation()
+    with pytest.raises(ValueError, match="collapse_units=False"):
+        count(forest)
 
 
 def test_best_candidates_are_produced_by_declared_fold_transitions() -> None:

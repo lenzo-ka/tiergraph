@@ -354,10 +354,10 @@ def test_grammar_command_refuses_bad_tokens_json(
     assert "tiergraph: grammar: ValueError:" in capsys.readouterr().err
 
 
-def test_grammar_command_reports_bad_grammar_unit_folds_and_count(
+def test_grammar_command_reports_bad_grammar_and_count(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Malformed grammar, unsupported folds, and nonpositive caps exit one."""
+    """Malformed grammar and nonpositive caps exit one; unit folds run."""
     malformed = tmp_path / "bad.json"
     malformed.write_text("{}", encoding="utf-8")
     assert main(["grammar", "recognize", str(malformed), "--tokens-json", "[]"]) == 1
@@ -366,8 +366,8 @@ def test_grammar_command_reports_bad_grammar_unit_folds_and_count(
     unit = tmp_path / "unit.json"
     _grammar(unit, unit=True)
     for command in ("count", "best"):
-        assert main(["grammar", command, str(unit), "--tokens-json", '["x"]']) == 1
-        assert "is a unit production" in capsys.readouterr().err
+        assert main(["grammar", command, str(unit), "--tokens-json", '["x"]']) == 0
+        capsys.readouterr()
 
     source = tmp_path / "grammar.json"
     _grammar(source)
