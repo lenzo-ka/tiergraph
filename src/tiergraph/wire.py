@@ -61,13 +61,18 @@ MAX_JSON_DEPTH = 256
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
-    """Return the versioned primitive document as strict JSON data."""
+    """Return the versioned primitive document as strict JSON data.
+
+    A string the UTF-8 encoder refuses is refused here, named by its field path,
+    so no writer built on this function emits text `loads` would then refuse.
+    """
     prefixes: dict[str, str] = {}
     for binding in graph.namespaces:
         if ":" in binding.prefix:
             raise ValueError("namespace prefix must not contain ':' in wire format")
         prefixes[binding.namespace] = binding.prefix
     encoded = _encode_value(graph.to_data(), prefixes)
+    _refuse_unencodable_strings(encoded, "")
     return {"format_version": FORMAT_VERSION, "graph": encoded}
 
 
@@ -95,8 +100,30 @@ def _encode_value(value: JsonValue, prefixes: dict[str, str]) -> JsonValue:
     return value
 
 
+def _refuse_unencodable_strings(value: JsonValue, path: str) -> None:
+    """Refuse string values outside the platform UTF-8 encoder's language."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as error:
+            codepoint = ord(value[error.start])
+            raise ValueError(
+                f"{path} value {value!r} has unsupported character U+{codepoint:04X}"
+            ) from error
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _refuse_unencodable_strings(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            child_path = f"{path}.{key}" if path else key
+            _refuse_unencodable_strings(item, child_path)
+
+
 def dumps(graph: Graph) -> str:
-    """Return the sole canonical JSON spelling, including its final newline."""
+    """Return the sole canonical JSON spelling, including its final newline.
+
+    A graph carrying a string UTF-8 cannot encode is refused, not written.
+    """
     return (
         json.dumps(
             to_data(graph),
@@ -110,7 +137,10 @@ def dumps(graph: Graph) -> str:
 
 
 def dump_compact(graph: Graph) -> str:
-    """Return compact canonical JSON, including its final newline."""
+    """Return compact canonical JSON, including its final newline.
+
+    A graph carrying a string UTF-8 cannot encode is refused, not written.
+    """
     return (
         json.dumps(
             to_data(graph),
@@ -124,7 +154,10 @@ def dump_compact(graph: Graph) -> str:
 
 
 def dump_bytes(graph: Graph) -> bytes:
-    """Encode the canonical document as UTF-8 bytes."""
+    """Encode the canonical document as UTF-8 bytes.
+
+    A graph carrying a string UTF-8 cannot encode is refused, not written.
+    """
     return dumps(graph).encode("utf-8")
 
 
@@ -136,7 +169,7 @@ def loads(document: str | bytes) -> Graph:
     """
     try:
         text = _checked_document(document)
-        value = json.loads(text)
+        value = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
     except json.JSONDecodeError as error:
         raise ValueError(f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
@@ -154,6 +187,18 @@ def loads(document: str | bytes) -> Graph:
             f"format_version {version!r} is unsupported; expected {FORMAT_VERSION!r}"
         )
     return _graph(_object(root["graph"], "graph"))
+
+
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    """Construct one JSON object while refusing ambiguous repeated keys."""
+    value: dict[str, object] = {}
+    for name, item in pairs:
+        if name in value:
+            raise ValueError(f"parse JSON failed: duplicate object key {name!r}")
+        value[name] = item
+    return value
 
 
 def _checked_document(document: str | bytes) -> str:

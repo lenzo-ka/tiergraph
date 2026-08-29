@@ -24,6 +24,8 @@ class WireLawSuite:
     fixture: Callable[[], Graph]
     canonical_variants: Callable[[], tuple[Graph, Graph]]
     ordered_variants: Callable[[], tuple[Graph, Graph, Graph]]
+    read_back_corpus: Callable[[], tuple[Graph, ...]]
+    refused_corpus: Callable[[], tuple[tuple[Graph, str], ...]]
 
     def check_round_trip(self) -> None:
         """Construction, serialization, and read-back preserve the whole graph."""
@@ -64,9 +66,29 @@ class WireLawSuite:
         json.dumps(parsed, allow_nan=False)
 
     def check_canonical_read_back(self) -> None:
-        """Reading canonical bytes and writing them again changes no byte."""
-        encoded = self.encode(self.fixture())
-        assert self.encode(self.decode(encoded)) == encoded
+        """Reading canonical bytes and writing them again changes no byte.
+
+        The corpus, not one fixture, is the domain of this law.  A denominator
+        of one cannot distinguish a writer that emits text its own reader
+        refuses, which is how exactly that defect survived here.
+        """
+        for graph in self.read_back_corpus():
+            encoded = self.encode(graph)
+            assert self.encode(self.decode(encoded)) == encoded
+
+    def check_writer_refuses_unreadable_text(self) -> None:
+        """Every unencodable string is refused at its exact decoder path.
+
+        The refusal must be a plain ``ValueError``.  ``UnicodeEncodeError`` is a
+        ``ValueError`` subclass, so accepting any subclass would let an encoder
+        that merely leaks its own exception satisfy this law without ever
+        deciding to refuse.
+        """
+        for graph, expected_path in self.refused_corpus():
+            with pytest.raises(ValueError) as refusal:
+                self.encode(graph)
+            assert type(refusal.value) is ValueError
+            assert expected_path in str(refusal.value)
 
     def check_refusal(self, offender: str, document: object) -> None:
         """Require malformed near-valid input to name its offending operation."""
