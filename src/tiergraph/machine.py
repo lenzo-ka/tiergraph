@@ -795,7 +795,11 @@ class AsBuilt:
         return self
 
     def fingerprint(self) -> str:
-        """Return a SHA-256 fingerprint of canonical as-built state bytes."""
+        """Return a SHA-256 fingerprint of canonical as-built state bytes.
+
+        Durable ids are genuine as-built content, not metadata, so promotion
+        changes these bytes and therefore this fingerprint.
+        """
         encoded = json.dumps(
             self.graph.to_data(),
             sort_keys=True,
@@ -965,6 +969,12 @@ def _build_promote_item(
     tier = builder.tiers_by_name[coordinate.tier]
     item = tier.items[coordinate.index]
     if item.durable_id is not None:
+        if item.durable_id != durable_id:
+            raise ValueError(
+                f"item {str(reference)!r} already carries durable id "
+                f"{item.durable_id!r}; refused conflicting durable id "
+                f"{durable_id!r}"
+            )
         return DurableItemRef(item.durable_id)
     durable = DurableItemRef(durable_id)
     tier.items[coordinate.index] = Item(durable_id, item.attributes)
@@ -982,6 +992,20 @@ def _build_promote_position(
     elif coordinate.index == len(tier.items):
         durable = DurablePositionRef(coordinate.tier, BoundarySide.AFTER)
     else:
+        anchor_item = tier.items[coordinate.index]
+        # Refusing here keeps this engine's own diagnostic in boundary terms rather
+        # than the item terms the delegation below would raise. No test gates that
+        # wording: _build_checked re-runs the reference machine on any builder
+        # failure and re-raises its error, so nothing a builder raises reaches a
+        # caller, and deleting this branch leaves the suite green. The parity the
+        # refusal exists for is between the engines themselves, not between their
+        # observable messages, which the substitution would supply either way.
+        if anchor_item.durable_id is not None and anchor_item.durable_id != durable_id:
+            raise ValueError(
+                f"position {str(reference)!r} is before an anchor carrying "
+                f"durable id {anchor_item.durable_id!r}; refused conflicting "
+                f"boundary durable id {durable_id!r}"
+            )
         anchor = _build_promote_item(
             builder, ItemRef(coordinate.tier, coordinate.index), durable_id
         )

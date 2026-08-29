@@ -92,7 +92,13 @@ class SpanAlternative:
 
 @dataclass(frozen=True, slots=True)
 class Span:
-    """Describe one selected span and its graph-derived extent."""
+    """Describe one selected span whose extent is derived from live coverage.
+
+    The kernel graph stores membership, not an origin-plus-extent snapshot;
+    this projection carries the resulting bounds for renderers.  Coverage must
+    remain contiguous, so a new base item inside its range requires the caller
+    to update membership rather than being absorbed or splitting it.
+    """
 
     label: str
     start: int

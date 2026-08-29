@@ -41,3 +41,8 @@ shape.
 The CLI's `convert --to bytes` target uses the same canonical JSON byte API. It
 is not a distinct compact wire spelling; `json-compact` is only a presentation
 variant accepted and normalized by the decoder.
+
+Durable ids are canonical as-built content, not metadata. Promoting an item or
+an interior boundary therefore changes the canonical bytes and their SHA-256
+fingerprint. Ignoring durable identity would make fingerprints erase the very
+identifier consumers use to address an item across graphs.

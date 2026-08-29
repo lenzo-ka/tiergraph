@@ -1009,7 +1009,7 @@ def test_position_promotion_uses_an_existing_anchor_id() -> None:
         (Tier(TierDeclaration(tier_name, "X"), (Item(), Item("taken"))),),
         (),
     )
-    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "ignored")
+    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "taken")
     assert promoted is graph
     assert durable == DurablePositionRef(DurableItemRef("taken"), BoundarySide.BEFORE)
 
@@ -1030,7 +1030,7 @@ def test_position_promotion_returns_the_anchor_that_already_stores_values() -> N
         attribute_declarations=(mark,),
         position_values=(stored,),
     )
-    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "ignored")
+    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "b")
     assert promoted is graph
     assert durable == after_a
     assert promoted.position_values[0].reference == durable
@@ -1071,7 +1071,7 @@ def test_promotion_is_idempotent_and_unvalued_positions_remain_derived() -> None
     assert independent_item_ref == item_ref
     assert equivalent_item_ref == item_ref
     same_item_graph, same_item_ref = item_graph.promote_item(
-        ItemRef(tier_name, 0), "ignored-replacement"
+        ItemRef(tier_name, 0), "the-item"
     )
     assert same_item_graph is item_graph
     assert same_item_ref == item_ref
@@ -1084,6 +1084,36 @@ def test_promotion_is_idempotent_and_unvalued_positions_remain_derived() -> None
     assert same_position_graph is position_graph
     assert same_position_ref == position_ref
     assert position_graph.position_values == ()
+
+
+def test_item_promotion_refuses_a_conflicting_durable_id() -> None:
+    """An established identity wins and the refused replacement is named."""
+    tier_name = name("x")
+    graph = Graph(
+        NAMESPACES,
+        (Tier(TierDeclaration(tier_name, "X"), (Item("first"),)),),
+        (),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"already carries durable id 'first'.*refused.*'second'",
+    ):
+        graph.promote_item(ItemRef(tier_name, 0), "second")
+
+
+def test_position_promotion_refuses_a_conflicting_anchor_id() -> None:
+    """An interior-boundary conflict is reported in boundary terms."""
+    tier_name = name("x")
+    graph = Graph(
+        NAMESPACES,
+        (Tier(TierDeclaration(tier_name, "X"), (Item(), Item("anchor"))),),
+        (),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"position .* is before an anchor.*'anchor'.*boundary.*'refused'",
+    ):
+        graph.promote_position(PositionRef(tier_name, 1), "refused")
 
 
 def test_anchored_position_reference_has_tagged_json_shape() -> None:
