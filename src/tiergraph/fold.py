@@ -352,7 +352,6 @@ class FoldDeclaration[Value]:
         declarations = {
             declaration.name: declaration
             for declaration in self.graph.relation_declarations
-            if isinstance(declaration, BipartiteRelationDeclaration)
         }
         if not self.transitions:
             raise ValueError(f"fold {self.name!r} has no declared dependency relations")
@@ -365,6 +364,14 @@ class FoldDeclaration[Value]:
                 raise ValueError(
                     f"fold {self.name!r} names undeclared bipartite relation "
                     f"{str(transition.relation)!r}"
+                )
+            if not isinstance(declaration, BipartiteRelationDeclaration):
+                kind = declaration.to_data()["kind"]
+                raise ValueError(
+                    f"fold {self.name!r} dependency relation "
+                    f"{str(transition.relation)!r} is declared {kind}; a fold "
+                    "reads one parent and one child per incidence and requires "
+                    f"a bipartite declaration, so it cannot fold a {kind} relation"
                 )
         admitted = set(self._references())
         for root in self.roots:

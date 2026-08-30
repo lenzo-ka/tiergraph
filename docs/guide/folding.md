@@ -15,6 +15,11 @@ tuple that gives each dependency relation an `AND` or `OR` meaning. `AND`
 combines a node's children as joint requirements; `OR` combines them as
 alternatives. Import concrete semirings from `tiergraph.semiring`.
 
+Each transition must name a bipartite declaration, because a fold reads one
+parent and one child per incidence. A declared relation of another kind is
+refused and named for the kind it is, rather than being reported as undeclared
+or quietly contributing no incidence.
+
 The example graph is a diamond: `a` depends on `b` and `c`, both of which depend
 on `d`. Each task has a decimal `cost`.
 

@@ -37,6 +37,7 @@ class NodeKind(StrEnum):
     POSITION = "position"
     RELATION_DECLARATION = "relation_declaration"
     RELATION_INSTANCE = "relation_instance"
+    POLYADIC_RELATION_INSTANCE = "polyadic_relation_instance"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,11 @@ class Node:
     Item and boundary coordinates include their tier, declaration nodes use their
     qualified name, and relation instances use their graph-local index.  The kind
     is part of identity, so coordinates from unlike node classes never alias.
+
+    Bipartite and polyadic instances live in separate graph collections, so they
+    index separate spaces and index 0 names a different fact in each.  They are
+    two node kinds over their own indices rather than one kind over a merged
+    index, so a selection can neither confuse them nor answer for only one.
     """
 
     kind: NodeKind
@@ -67,6 +73,10 @@ class NodeSet:
     Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
     declaration index, then item or position index, so reproducible selection
     output depends on the graph's tier declaration order.
+
+    A polyadic instance sorts by its declaration, then its two side arities,
+    then its endpoints read in stored order.  Side order is part of the key, so
+    two instances over the same endpoints in different orders remain distinct.
     """
 
     graph: Graph
@@ -85,6 +95,7 @@ class NodeSet:
             NodeKind.POSITION: 3,
             NodeKind.RELATION_DECLARATION: 4,
             NodeKind.RELATION_INSTANCE: 5,
+            NodeKind.POLYADIC_RELATION_INSTANCE: 6,
         }
         tier_order = {
             tier.declaration.name: index for index, tier in enumerate(self.graph.tiers)
@@ -100,13 +111,27 @@ class NodeSet:
         elif isinstance(reference, QualifiedName):
             detail = (tier_order.get(reference, declaration_order.get(reference, 0)),)
         elif isinstance(reference, int):
-            relation = self.graph.relations[reference]
-            detail = (
-                declaration_order[relation.declaration],
-                *self._endpoint_key(relation.left),
-                *self._endpoint_key(relation.right),
-                reference,
-            )
+            if node.kind is NodeKind.POLYADIC_RELATION_INSTANCE:
+                polyadic = self.graph.polyadic_relations[reference]
+                detail = (
+                    declaration_order[polyadic.declaration],
+                    len(polyadic.sources),
+                    len(polyadic.targets),
+                    *(
+                        part
+                        for endpoint in (*polyadic.sources, *polyadic.targets)
+                        for part in self._endpoint_key(endpoint)
+                    ),
+                    reference,
+                )
+            else:
+                relation = self.graph.relations[reference]
+                detail = (
+                    declaration_order[relation.declaration],
+                    *self._endpoint_key(relation.left),
+                    *self._endpoint_key(relation.right),
+                    reference,
+                )
         else:
             detail = ()
         return (kind_order[node.kind], *detail)
@@ -295,7 +320,13 @@ class BoundaryPathSelector:
 
 @dataclass(frozen=True, slots=True)
 class AttributeSelector:
-    """Select nodes carrying one attribute on its declared domain."""
+    """Select nodes carrying one attribute on its declared domain.
+
+    The kernel admits ``relation_instance`` values on bipartite and polyadic
+    instances alike, so this selector reads both collections and reports each
+    carrier under its own node kind.  Reading only one would answer a question
+    about the whole domain from part of it.
+    """
 
     attribute: QualifiedName
     domain: AttributeDomain
@@ -354,6 +385,11 @@ class AttributeSelector:
                 Node(NodeKind.RELATION_INSTANCE, index)
                 for index, relation in enumerate(graph.relations)
                 if self._has(relation.attributes)
+            )
+            nodes.extend(
+                Node(NodeKind.POLYADIC_RELATION_INSTANCE, index)
+                for index, polyadic in enumerate(graph.polyadic_relations)
+                if self._has(polyadic.attributes)
             )
         return NodeSet(graph, tuple(nodes))
 

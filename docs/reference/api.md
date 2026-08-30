@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 148 top-level `tiergraph` exports exactly once.
+It covers 149 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2115,6 +2115,14 @@ SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ..
 
 Name every graph declaration used to interpret a segmentation.
 
+``coverage_relation`` and ``alternative_relation`` must name bipartite
+declarations.  A span is an interval over the base tier, so each fact this
+view reads is one base endpoint paired with one span item; there is no
+reading of a polyadic instance's ordered sides that keeps that meaning.
+Naming a non-bipartite declaration is refused rather than skipped, because
+silently reading only the bipartite collection would report a partial
+segmentation as a complete one.
+
 #### `SpanViewProfile.from_data`
 
 Class method.
@@ -2272,6 +2280,11 @@ AttributeSelector(attribute: 'QualifiedName', domain: 'AttributeDomain') -> None
 ```
 
 Select nodes carrying one attribute on its declared domain.
+
+The kernel admits ``relation_instance`` values on bipartite and polyadic
+instances alike, so this selector reads both collections and reports each
+carrier under its own node kind.  Reading only one would answer a question
+about the whole domain from part of it.
 
 #### `AttributeSelector.evaluate`
 
@@ -2439,6 +2452,11 @@ Item and boundary coordinates include their tier, declaration nodes use their
 qualified name, and relation instances use their graph-local index.  The kind
 is part of identity, so coordinates from unlike node classes never alias.
 
+Bipartite and polyadic instances live in separate graph collections, so they
+index separate spaces and index 0 names a different fact in each.  They are
+two node kinds over their own indices rather than one kind over a merged
+index, so a selection can neither confuse them nor answer for only one.
+
 #### `Node.to_data`
 
 Method.
@@ -2465,6 +2483,7 @@ Distinguish identities belonging to different graph node classes.
 - `POSITION` = `position`
 - `RELATION_DECLARATION` = `relation_declaration`
 - `RELATION_INSTANCE` = `relation_instance`
+- `POLYADIC_RELATION_INSTANCE` = `polyadic_relation_instance`
 
 ### `NodeSet`
 
@@ -2477,6 +2496,10 @@ Hold unique nodes in the graph's canonical mixed-node order.
 Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
 declaration index, then item or position index, so reproducible selection
 output depends on the graph's tier declaration order.
+
+A polyadic instance sorts by its declaration, then its two side arities,
+then its endpoints read in stored order.  Side order is part of the key, so
+two instances over the same endpoints in different orders remain distinct.
 
 #### `NodeSet.to_data`
 
@@ -2883,6 +2906,21 @@ OrderedPolyadicTraversal.inverse(self, endpoint: 'TraversalEndpointRef') -> 'Nod
 
 Return the deduplicated computed fiber over the target endpoint.
 
+#### `OrderedPolyadicTraversal.instances`
+
+Method.
+
+```text
+OrderedPolyadicTraversal.instances(self) -> 'tuple[PolyadicIncidence, ...]'
+```
+
+Return every validated instance of this relation in stored order.
+
+Origin-keyed steps answer "what does this endpoint correspond to"; a
+correspondence read as a whole, one ordered side against another with
+no positional pairing between them, has no origin to key on, so it is
+reachable only by enumeration.  Both sides keep their stored order.
+
 #### `OrderedPolyadicTraversal.stored_opposite`
 
 Method.
@@ -2892,6 +2930,30 @@ OrderedPolyadicTraversal.stored_opposite(self, instance_index: 'int') -> 'NodeSe
 ```
 
 Return one instance's stored target-side sequence without inversion.
+
+### `PolyadicIncidence`
+
+```text
+PolyadicIncidence(index: 'int', sources: 'NodeSequence', targets: 'NodeSequence') -> None
+```
+
+Hold one instance's graph-local index and both sides in stored order.
+
+Sides are named for the declaration, not for a traversal direction, so
+``sources`` and ``targets`` mean the same thing whichever way a caller
+walks.  Each side is a :class:`NodeSequence` because its order is graph
+content: a correspondence that reorders its two sides is a different fact
+from one that does not, and a pair-per-endpoint reading would lose that.
+
+#### `PolyadicIncidence.to_data`
+
+Method.
+
+```text
+PolyadicIncidence.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the index and both ordered sides as strict-JSON data.
 
 ### `PolyadicSide`
 
@@ -4213,6 +4275,14 @@ SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ..
 ```
 
 Name every graph declaration used to interpret a segmentation.
+
+``coverage_relation`` and ``alternative_relation`` must name bipartite
+declarations.  A span is an interval over the base tier, so each fact this
+view reads is one base endpoint paired with one span item; there is no
+reading of a polyadic instance's ordered sides that keeps that meaning.
+Naming a non-bipartite declaration is refused rather than skipped, because
+silently reading only the bipartite collection would report a partial
+segmentation as a complete one.
 
 #### `SpanViewProfile.from_data`
 

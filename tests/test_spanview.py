@@ -19,9 +19,11 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PolyadicRelationDeclaration,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -482,6 +484,33 @@ def test_additional_missing_profile_names_are_reported() -> None:
     for role, candidate in broken:
         with pytest.raises(ValueError, match=role):
             span_view(graph, candidate)
+
+
+def test_relation_roles_that_are_not_bipartite_are_refused_not_skipped() -> None:
+    """A span is an interval, so a non-bipartite role is named rather than ignored.
+
+    This projection reads one left endpoint against one right span item.  A
+    polyadic instance carries two ordered sides with no such pairing, and a
+    simple declaration carries no instances at all.  Reading only
+    ``graph.relations`` would answer with an empty cover, which is a partial
+    segmentation reported as a complete one.
+    """
+    graph, profile = fixture()
+    aligns = name("aligns")
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), tiers=(BASE, SPANS), maximum=None
+    )
+    extended = replace(
+        graph,
+        relation_declarations=(
+            *graph.relation_declarations,
+            PolyadicRelationDeclaration(aligns, side, side),
+        ),
+    )
+    with pytest.raises(ValueError, match="coverage relation.*is declared polyadic"):
+        span_view(extended, replace(profile, coverage_relation=aligns))
+    with pytest.raises(ValueError, match="alternative relation.*is declared simple"):
+        span_view(graph, replace(profile, alternative_relation=name("base-members")))
 
 
 def test_overlapping_cover_is_rejected() -> None:

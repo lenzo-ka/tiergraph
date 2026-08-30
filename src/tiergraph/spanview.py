@@ -8,7 +8,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from tiergraph.core import DurablePositionRef, Graph, Item, ItemRef, QualifiedName, Tier
+from tiergraph.core import (
+    BipartiteRelationDeclaration,
+    DurablePositionRef,
+    Graph,
+    Item,
+    ItemRef,
+    QualifiedName,
+    Tier,
+)
 from tiergraph.machine import _decode_object, _decode_qname
 from tiergraph.path import ItemBinding, StructuralPathProfile
 
@@ -18,7 +26,16 @@ SPANVIEW_FORMAT_VERSION = "1"
 
 @dataclass(frozen=True, slots=True)
 class SpanViewProfile:
-    """Name every graph declaration used to interpret a segmentation."""
+    """Name every graph declaration used to interpret a segmentation.
+
+    ``coverage_relation`` and ``alternative_relation`` must name bipartite
+    declarations.  A span is an interval over the base tier, so each fact this
+    view reads is one base endpoint paired with one span item; there is no
+    reading of a polyadic instance's ordered sides that keeps that meaning.
+    Naming a non-bipartite declaration is refused rather than skipped, because
+    silently reading only the bipartite collection would report a partial
+    segmentation as a complete one.
+    """
 
     base_tier: QualifiedName
     span_tiers: tuple[QualifiedName, ...]
@@ -161,14 +178,27 @@ def _validate_profile(graph: Graph, profile: SpanViewProfile) -> None:
     ):
         if name not in tiers:
             raise ValueError(f"{role} {str(name)!r} is not declared in the graph")
-    relations = {declaration.name for declaration in graph.relation_declarations}
+    relations = {
+        declaration.name: declaration for declaration in graph.relation_declarations
+    }
     for role, optional_name in (
         ("coverage relation", profile.coverage_relation),
         ("alternative relation", profile.alternative_relation),
     ):
-        if optional_name is not None and optional_name not in relations:
+        if optional_name is None:
+            continue
+        declaration = relations.get(optional_name)
+        if declaration is None:
             raise ValueError(
                 f"{role} {str(optional_name)!r} is not declared in the graph"
+            )
+        if not isinstance(declaration, BipartiteRelationDeclaration):
+            kind = declaration.to_data()["kind"]
+            raise ValueError(
+                f"{role} {str(optional_name)!r} is declared {kind}; a span view "
+                "reads one left endpoint and one right span item per fact and "
+                "requires a bipartite declaration, so it cannot project a "
+                f"{kind} relation"
             )
     attributes = {declaration.name for declaration in graph.attribute_declarations}
     for role, optional_name in (
