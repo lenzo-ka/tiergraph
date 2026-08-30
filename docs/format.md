@@ -56,3 +56,45 @@ the version it found and the one it expected.
 Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
 later release is not supported.
+
+## Refusal order
+
+An input routinely breaks several rules at once. Every reader in this package
+ranks the conditions it can meet by one numbered order, `RefusalStage`, so the
+condition reported first is the one that explains the rest rather than whichever
+check happened to run first:
+
+1. `ENVELOPE` — a byte or line limit the reader enforces before interpreting the
+   input at all.
+2. `ENCODING` — the bytes are text, and the text is one the encoder can write.
+3. `SYNTAX` — the text is JSON, nested no deeper than the limit, with no
+   repeated object key.
+4. `CONSTRUCTION` — this node is the JSON construction its declaration names.
+5. `DISCRIMINATOR` — the member that selects which declaration applies is
+   present, readable, and names one this release implements. `format_version`
+   and a program's `machine_version` are discriminators, and so are a relation's
+   `kind`, an opcode's name, and a selector's `op` or `select`.
+6. `SHAPE` — this node's field set is the selected declaration's, naming every
+   missing and every unknown member at once.
+7. `VALUE` — this node's own value lies in the declared language: an enumerated
+   spelling, a lexical pattern, a bound.
+8. `REFERENCE` — a name this node carries resolves inside the document.
+9. `SEMANTICS` — a promise spanning more than one node holds.
+
+The stages rank the conditions of one node. Nodes are read from the outside in
+and members in their declared order, so an enclosing node's condition precedes
+its members' whatever their stages; the pair of a node and a stage totally
+orders every condition a read can meet.
+
+A further condition is reported beside the primary one only while it stays
+applicable once the primary is known. A document announcing a format this
+release does not implement is refused for its version alone, because the field
+set of a declaration the document never selected cannot honestly be judged. A
+document whose version this release does implement reports every structural
+condition it meets, so a caller repairs it in one pass rather than once per
+problem.
+
+The stage is the stable part of a refusal and the wording is diagnostic.
+`tiergraph.schema.Refusal` carries the stage as `stage` and any further
+applicable conditions as `also`, each a refusal in its own right. A `Refusal` is
+a `ValueError`, so callers that already catch one still do.

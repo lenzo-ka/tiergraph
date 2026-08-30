@@ -42,6 +42,7 @@ from tiergraph.core import (
     _validate_endpoint,
     _validate_polyadic_instance,
 )
+from tiergraph.schema import Refusal, RefusalStage
 from tiergraph.wire import MAX_JSON_DEPTH
 
 MACHINE_VERSION = "1"
@@ -50,8 +51,16 @@ MAX_REPEAT_COUNT = 10_000
 MAX_TOTAL_OPCODES = 2_000_000
 
 
-class ExecutionError(ValueError):
-    """Name the opcode that could not make its checked state transition."""
+class ExecutionError(Refusal):
+    """Name the opcode that could not make its checked state transition.
+
+    Every execution refusal is a promise spanning more than one opcode, so
+    the class carries the last stage of the declared refusal order.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Stage the refusal as a whole-graph promise."""
+        super().__init__(RefusalStage.SEMANTICS, message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +156,10 @@ class AddItem:
                 )
             tiers.append(candidate)
         if not found:
-            raise ValueError(f"item tier {str(self.tier)!r} is not declared")
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"item tier {str(self.tier)!r} is not declared",
+            )
         return _replace(graph, tiers=tuple(tiers))
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -316,12 +328,14 @@ class Repeat:
     def __post_init__(self) -> None:
         """Refuse values that do not prove a finite nonnegative expansion."""
         if type(self.count) is not int or self.count < 0:
-            raise ValueError(
-                f"repeat count {self.count!r} must be a nonnegative integer"
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"repeat count {self.count!r} must be a nonnegative integer",
             )
         if self.count > MAX_REPEAT_COUNT:
-            raise ValueError(
-                f"repeat count {self.count!r} exceeds limit {MAX_REPEAT_COUNT}"
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"repeat count {self.count!r} exceeds limit {MAX_REPEAT_COUNT}",
             )
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -362,9 +376,12 @@ _PRIMITIVE_OPCODE_TYPES = (
 def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
     """Decode one JSON-value opcode with path-aware shape diagnostics."""
     if depth > MAX_JSON_DEPTH:
-        raise ValueError(f"{path}: JSON nesting depth exceeds limit {MAX_JSON_DEPTH}")
+        raise Refusal(
+            RefusalStage.SYNTAX,
+            f"{path}: JSON nesting depth exceeds limit {MAX_JSON_DEPTH}",
+        )
     if not isinstance(value, dict) or not isinstance(value.get("opcode"), str):
-        raise ValueError(f"{path} must be an opcode object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an opcode object")
     name = value["opcode"]
     decoders: dict[str, tuple[set[str], Callable[[dict[str, object]], Opcode]]] = {
         "declare_namespace": (
@@ -428,18 +445,19 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
         ),
     }
     if name not in decoders:
-        raise ValueError(f"{path}.opcode {name!r} is unknown")
+        raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.opcode {name!r} is unknown")
     keys, decoder = decoders[name]
     return decoder(_decode_object(value, path, keys))
 
 
 def _decode_object(value: object, path: str, keys: set[str]) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must be an object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
     actual = set(value)
     if actual != keys:
-        raise ValueError(
-            f"{path} fields must be {sorted(keys)!r}; got {sorted(actual)!r}"
+        raise Refusal(
+            RefusalStage.SHAPE,
+            f"{path} fields must be {sorted(keys)!r}; got {sorted(actual)!r}",
         )
     return cast(dict[str, object], value)
 
@@ -449,9 +467,9 @@ def _decode_qname(value: object, path: str) -> QualifiedName:
     namespace = obj["namespace"]
     local_name = obj["local_name"]
     if not isinstance(namespace, str):
-        raise ValueError(f"{path}.namespace must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.namespace must be a string")
     if not isinstance(local_name, str):
-        raise ValueError(f"{path}.local_name must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.local_name must be a string")
     return QualifiedName(namespace, local_name)
 
 
@@ -482,9 +500,9 @@ def _decode_attribute_value(value: object, path: str) -> AttributeValue:
     value_type = obj["value_type"]
     lexical = obj["lexical"]
     if not isinstance(value_type, str):
-        raise ValueError(f"{path}.value_type must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.value_type must be a string")
     if not isinstance(lexical, str):
-        raise ValueError(f"{path}.lexical must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.lexical must be a string")
     return AttributeValue(
         name,
         XsdType(value_type),
@@ -494,7 +512,7 @@ def _decode_attribute_value(value: object, path: str) -> AttributeValue:
 
 def _decode_attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
     if not isinstance(value, list):
-        raise ValueError(f"{path} must be an array")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
     return tuple(
         _decode_attribute_value(item, f"{path}[{index}]")
         for index, item in enumerate(value)
@@ -523,7 +541,7 @@ def _decode_position_ref(value: object, path: str) -> PositionRef:
 
 def _decode_endpoint(value: object, path: str) -> object:
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must be an endpoint object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an endpoint object")
     if set(value) == {"tier", "index"}:
         return _decode_item_ref(value, path)
     if set(value) == {"durable_id"}:
@@ -542,11 +560,14 @@ def _decode_endpoint(value: object, path: str) -> object:
         elif set(anchor) == {"kind", "tier"} and anchor["kind"] == "tier":
             decoded_anchor = _decode_qname(anchor["tier"], f"{path}.anchor.tier")
         else:
-            raise ValueError(f"{path}.anchor has an unknown shape")
+            raise Refusal(
+                RefusalStage.DISCRIMINATOR,
+                f"{path}.anchor has an unknown shape",
+            )
         return DurablePositionRef(
             decoded_anchor, BoundarySide(cast(str, value["side"]))
         )
-    raise ValueError(f"{path} has an unknown reference shape")
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path} has an unknown reference shape")
 
 
 def _decode_relation_instance(
@@ -560,7 +581,10 @@ def _decode_relation_instance(
         )
         sources, targets = obj["sources"], obj["targets"]
         if not isinstance(sources, list) or not isinstance(targets, list):
-            raise ValueError(f"{path} sources and targets must be arrays")
+            raise Refusal(
+                RefusalStage.CONSTRUCTION,
+                f"{path} sources and targets must be arrays",
+            )
         return PolyadicRelationInstance(
             _decode_qname(obj["declaration"], f"{path}.declaration"),
             tuple(
@@ -604,7 +628,10 @@ def _decode_side(value: object, path: str) -> RelationSideDeclaration:
     )
     kinds, tiers = obj["endpoint_kinds"], obj["tiers"]
     if not isinstance(kinds, list) or not isinstance(tiers, list):
-        raise ValueError(f"{path} endpoint_kinds and tiers must be arrays")
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{path} endpoint_kinds and tiers must be arrays",
+        )
     maximum = obj["maximum"]
     return RelationSideDeclaration(
         tuple(RelationEndpointKind(cast(str, item)) for item in kinds),
@@ -619,7 +646,7 @@ def _decode_side(value: object, path: str) -> RelationSideDeclaration:
 
 def _decode_relation_declaration(value: object, path: str) -> RelationDeclaration:
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must be an object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
     kind = value.get("kind")
     if kind == "simple":
         obj = _decode_object(
@@ -676,7 +703,10 @@ def _decode_relation_declaration(value: object, path: str) -> RelationDeclaratio
         )
         subset = obj["targets_subset_of"]
         if not isinstance(subset, list) or len(subset) > 1:
-            raise ValueError(f"{path}.targets_subset_of must contain at most one name")
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"{path}.targets_subset_of must contain at most one name",
+            )
         return PolyadicRelationDeclaration(
             _decode_qname(obj["name"], f"{path}.name"),
             _decode_side(obj["sources"], f"{path}.sources"),
@@ -690,7 +720,7 @@ def _decode_relation_declaration(value: object, path: str) -> RelationDeclaratio
             else _decode_qname(subset[0], f"{path}.targets_subset_of[0]"),
             _decode_attributes(obj["attributes"], f"{path}.attributes"),
         )
-    raise ValueError(f"{path}.kind {kind!r} is unknown")
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unknown")
 
 
 def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
@@ -713,7 +743,7 @@ def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
 def _decode_repeat(value: dict[str, object], path: str, depth: int) -> Repeat:
     body = value["body"]
     if not isinstance(body, list):
-        raise ValueError(f"{path}.body must be an array")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.body must be an array")
     return Repeat(
         cast(int, value["count"]),
         tuple(
@@ -781,7 +811,10 @@ class AsBuilt:
         """Require the trace to execute to the graph it claims to construct."""
         rebuilt = _build_checked(self.trace)
         if rebuilt != self.graph:
-            raise ValueError("as-built trace does not execute to its graph")
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "as-built trace does not execute to its graph",
+            )
 
     @classmethod
     def _trusted(cls, graph: Graph, trace: tuple[PrimitiveOpcode, ...]) -> AsBuilt:
@@ -891,7 +924,10 @@ def _build_opcode(builder: _GraphBuilder, opcode: PrimitiveOpcode) -> None:
     if type(opcode) is AddItem:
         current_tier = builder.tiers_by_name.get(opcode.tier)
         if current_tier is None:
-            raise ValueError(f"item tier {str(opcode.tier)!r} is not declared")
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"item tier {str(opcode.tier)!r} is not declared",
+            )
         _validate_attributes(
             opcode.item.attributes, AttributeDomain.ITEM, builder.attributes_by_name
         )
@@ -929,8 +965,10 @@ def _build_declare_relation(
         names.append(declaration.item_type)
         _unique_simple_types([declaration], builder._tier_views())
         if declaration.tier in builder.types_by_tier:
-            raise ValueError(
-                f"tier {str(declaration.tier)!r} has multiple simple relations; at most one is allowed"
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"tier {str(declaration.tier)!r} has multiple simple relations; "
+                f"at most one is allowed",
             )
         builder.types_by_tier[declaration.tier] = declaration.item_type
     elif isinstance(declaration, BipartiteRelationDeclaration):
@@ -947,9 +985,11 @@ def _build_declare_relation(
             if declaration.targets_subset_of == declaration.name:
                 subset = declaration
             if not isinstance(subset, PolyadicRelationDeclaration):
-                raise ValueError(
-                    f"polyadic relation {str(declaration.name)!r} targets-subset-of names undeclared "
-                    f"polyadic relation {str(declaration.targets_subset_of)!r}"
+                raise Refusal(
+                    RefusalStage.REFERENCE,
+                    f"polyadic relation {str(declaration.name)!r} "
+                    f"targets-subset-of names undeclared polyadic relation "
+                    f"{str(declaration.targets_subset_of)!r}",
                 )
     builder._require_namespaces(names)
     _validate_attributes(
@@ -970,10 +1010,11 @@ def _build_promote_item(
     item = tier.items[coordinate.index]
     if item.durable_id is not None:
         if item.durable_id != durable_id:
-            raise ValueError(
+            raise Refusal(
+                RefusalStage.SEMANTICS,
                 f"item {str(reference)!r} already carries durable id "
                 f"{item.durable_id!r}; refused conflicting durable id "
-                f"{durable_id!r}"
+                f"{durable_id!r}",
             )
         return DurableItemRef(item.durable_id)
     durable = DurableItemRef(durable_id)
@@ -1001,10 +1042,11 @@ def _build_promote_position(
         # refusal exists for is between the engines themselves, not between their
         # observable messages, which the substitution would supply either way.
         if anchor_item.durable_id is not None and anchor_item.durable_id != durable_id:
-            raise ValueError(
+            raise Refusal(
+                RefusalStage.SEMANTICS,
                 f"position {str(reference)!r} is before an anchor carrying "
                 f"durable id {anchor_item.durable_id!r}; refused conflicting "
-                f"boundary durable id {durable_id!r}"
+                f"boundary durable id {durable_id!r}",
             )
         anchor = _build_promote_item(
             builder, ItemRef(coordinate.tier, coordinate.index), durable_id
@@ -1039,7 +1081,9 @@ def _build_relate(
     if isinstance(relation, RelationInstance):
         declaration = builder.declarations_by_name.get(relation.declaration)
         if not isinstance(declaration, BipartiteRelationDeclaration):
-            raise ValueError("a bipartite relation declaration is required")
+            raise Refusal(
+                RefusalStage.REFERENCE, "a bipartite relation declaration is required"
+            )
         index = len(builder.relations)
         _validate_endpoint(
             index,
@@ -1065,7 +1109,9 @@ def _build_relate(
         return
     declaration = builder.declarations_by_name.get(relation.declaration)
     if not isinstance(declaration, PolyadicRelationDeclaration):
-        raise ValueError("a polyadic relation declaration is required")
+        raise Refusal(
+            RefusalStage.REFERENCE, "a polyadic relation declaration is required"
+        )
     index = len(builder.polyadic_relations)
     _validate_polyadic_instance(
         index,
@@ -1096,8 +1142,9 @@ def _build_relate(
                 (declaration.targets_subset_of, source)
             )
             if allowed is None or not targets <= allowed:
-                raise ValueError(
-                    "polyadic targets-subset-of membership is not satisfied"
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    "polyadic targets-subset-of membership is not satisfied",
                 )
     builder.polyadic_relations.append(relation)
 
@@ -1111,7 +1158,10 @@ def _build_attach_value(builder: _GraphBuilder, opcode: AttachValue) -> None:
         target = _qualified_target(opcode.target, opcode.domain)
         tier = builder.tiers_by_name.get(target)
         if tier is None:
-            raise ValueError(f"tier attribute target {str(target)!r} is not declared")
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"tier attribute target {str(target)!r} is not declared",
+            )
         tier.attributes.append(opcode.value)
     elif opcode.domain is AttributeDomain.ITEM:
         coordinate = builder._resolve_item(_item_target(opcode.target, opcode.domain))
@@ -1124,8 +1174,10 @@ def _build_attach_value(builder: _GraphBuilder, opcode: AttachValue) -> None:
         target = _qualified_target(opcode.target, opcode.domain)
         index = builder.declaration_indexes.get(target)
         if index is None:
-            raise ValueError(
-                f"relation declaration attribute target {str(target)!r} is not declared"
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"relation declaration attribute target {str(target)!r} "
+                f"is not declared",
             )
         declaration = _relation_with_value(
             builder.relation_declarations[index], opcode.value
@@ -1282,8 +1334,9 @@ def _primitive_count(opcodes: tuple[Opcode, ...]) -> int:
                 else:
                     contribution = opcode.count * body_total
             if contribution > MAX_TOTAL_OPCODES - total:
-                raise ValueError(
-                    f"total primitive opcode count exceeds limit {MAX_TOTAL_OPCODES}"
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"total primitive opcode count exceeds limit {MAX_TOTAL_OPCODES}",
                 )
             total += contribution
         totals[id(block)] = total
@@ -1348,15 +1401,19 @@ def _require_target(
     actual: AttributeTarget, expected: None, domain: AttributeDomain
 ) -> None:
     if actual is not expected:
-        raise ValueError(f"{domain.value} attribute target {actual!r} must be None")
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{domain.value} attribute target {actual!r} must be None",
+        )
 
 
 def _qualified_target(
     target: AttributeTarget, domain: AttributeDomain
 ) -> QualifiedName:
     if not isinstance(target, QualifiedName):
-        raise ValueError(
-            f"{domain.value} attribute target {target!r} must be a qualified name"
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{domain.value} attribute target {target!r} must be a qualified name",
         )
     return target
 
@@ -1365,8 +1422,9 @@ def _item_target(
     target: AttributeTarget, domain: AttributeDomain
 ) -> ItemRef | DurableItemRef:
     if not isinstance(target, ItemRef | DurableItemRef):
-        raise ValueError(
-            f"{domain.value} attribute target {target!r} must be an item reference"
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{domain.value} attribute target {target!r} must be an item reference",
         )
     return target
 
@@ -1375,16 +1433,19 @@ def _position_target(
     target: AttributeTarget, domain: AttributeDomain
 ) -> PositionRef | DurablePositionRef:
     if not isinstance(target, PositionRef | DurablePositionRef):
-        raise ValueError(
-            f"{domain.value} attribute target {target!r} must be a position reference"
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{domain.value} attribute target {target!r} must be a position reference",
         )
     return target
 
 
 def _index_target(target: AttributeTarget, domain: AttributeDomain, length: int) -> int:
     if type(target) is not int or target < 0 or target >= length:
-        raise ValueError(
-            f"{domain.value} attribute target {target!r} is not an existing relation index"
+        raise Refusal(
+            RefusalStage.REFERENCE,
+            f"{domain.value} attribute target {target!r} is not an existing "
+            f"relation index",
         )
     return target
 
@@ -1400,7 +1461,10 @@ def _map_tier(
             tier = replace(tier)
         tiers.append(tier)
     if not found:
-        raise ValueError(f"tier attribute target {str(target)!r} is not declared")
+        raise Refusal(
+            RefusalStage.REFERENCE,
+            f"tier attribute target {str(target)!r} is not declared",
+        )
     return tuple(tiers)
 
 
@@ -1435,7 +1499,8 @@ def _attach_relation_declaration(
             declaration = _relation_with_value(declaration, value)
         declarations.append(declaration)
     if not found:
-        raise ValueError(
-            f"relation declaration attribute target {str(target)!r} is not declared"
+        raise Refusal(
+            RefusalStage.REFERENCE,
+            f"relation declaration attribute target {str(target)!r} is not declared",
         )
     return tuple(declarations)

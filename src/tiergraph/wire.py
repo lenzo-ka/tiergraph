@@ -44,6 +44,8 @@ from tiergraph.schema import (
     ITEM_REFERENCE,
     TIER,
     TIER_DECLARATION,
+    Refusal,
+    RefusalStage,
     _refuse_field_set,
     array_item,
     field_shape,
@@ -70,7 +72,10 @@ def to_data(graph: Graph) -> dict[str, JsonValue]:
     prefixes: dict[str, str] = {}
     for binding in graph.namespaces:
         if ":" in binding.prefix:
-            raise ValueError("namespace prefix must not contain ':' in wire format")
+            raise Refusal(
+                RefusalStage.VALUE,
+                "namespace prefix must not contain ':' in wire format",
+            )
         prefixes[binding.namespace] = binding.prefix
     encoded = _encode_value(graph.to_data(), prefixes)
     _refuse_unencodable_strings(encoded, "")
@@ -108,8 +113,9 @@ def _refuse_unencodable_strings(value: JsonValue, path: str) -> None:
             value.encode("utf-8")
         except UnicodeEncodeError as error:
             codepoint = ord(value[error.start])
-            raise ValueError(
-                f"{path} value {value!r} has unsupported character U+{codepoint:04X}"
+            raise Refusal(
+                RefusalStage.ENCODING,
+                f"{path} value {value!r} has unsupported character U+{codepoint:04X}",
             ) from error
     elif isinstance(value, list):
         for index, item in enumerate(value):
@@ -172,20 +178,32 @@ def loads(document: str | bytes) -> Graph:
         text = _checked_document(document)
         value = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
     except json.JSONDecodeError as error:
-        raise ValueError(f"parse JSON failed: {error.msg}") from error
+        raise Refusal(RefusalStage.SYNTAX, f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
-        raise ValueError(f"parse UTF-8 failed: {error.reason}") from error
+        raise Refusal(
+            RefusalStage.ENCODING, f"parse UTF-8 failed: {error.reason}"
+        ) from error
     except UnicodeEncodeError as error:
-        raise ValueError(f"encode UTF-8 failed: {error.reason}") from error
+        raise Refusal(
+            RefusalStage.ENCODING, f"encode UTF-8 failed: {error.reason}"
+        ) from error
     except RecursionError as error:
-        raise ValueError("parse JSON failed: document nesting is too deep") from error
+        raise Refusal(
+            RefusalStage.SYNTAX, "parse JSON failed: document nesting is too deep"
+        ) from error
     root = _object(value, "document")
     if "format_version" not in root:
-        raise ValueError("document is missing field 'format_version'")
-    version = _string(root["format_version"], "format_version")
-    if version != FORMAT_VERSION:
-        raise ValueError(
-            f"format_version {version!r} is unsupported; expected {FORMAT_VERSION!r}"
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            "document is missing field 'format_version'",
+        )
+    announced = root["format_version"]
+    if not isinstance(announced, str):
+        raise Refusal(RefusalStage.DISCRIMINATOR, "format_version must be a string")
+    if announced != FORMAT_VERSION:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"format_version {announced!r} is unsupported; expected {FORMAT_VERSION!r}",
         )
     _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
@@ -199,7 +217,10 @@ def _object_without_duplicate_keys(
     value: dict[str, object] = {}
     for name, item in pairs:
         if name in value:
-            raise ValueError(f"parse JSON failed: duplicate object key {name!r}")
+            raise Refusal(
+                RefusalStage.SYNTAX,
+                f"parse JSON failed: duplicate object key {name!r}",
+            )
         value[name] = item
     return value
 
@@ -209,18 +230,23 @@ def _checked_document(document: str | bytes) -> str:
     if isinstance(document, bytes):
         size = len(document)
         if size > MAX_DOCUMENT_BYTES:
-            raise ValueError(
-                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}"
+            raise Refusal(
+                RefusalStage.ENVELOPE,
+                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}",
             )
         text = document.decode("utf-8")
     else:
         if len(document) > MAX_DOCUMENT_BYTES:
-            raise ValueError(f"document size exceeds limit {MAX_DOCUMENT_BYTES} bytes")
+            raise Refusal(
+                RefusalStage.ENVELOPE,
+                f"document size exceeds limit {MAX_DOCUMENT_BYTES} bytes",
+            )
         encoded = document.encode("utf-8")
         size = len(encoded)
         if size > MAX_DOCUMENT_BYTES:
-            raise ValueError(
-                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}"
+            raise Refusal(
+                RefusalStage.ENVELOPE,
+                f"document size {size} bytes exceeds limit {MAX_DOCUMENT_BYTES}",
             )
         text = document
 
@@ -240,7 +266,10 @@ def _checked_document(document: str | bytes) -> str:
         elif character in "[{":
             depth += 1
             if depth > MAX_JSON_DEPTH:
-                raise ValueError(f"JSON nesting depth exceeds limit {MAX_JSON_DEPTH}")
+                raise Refusal(
+                    RefusalStage.SYNTAX,
+                    f"JSON nesting depth exceeds limit {MAX_JSON_DEPTH}",
+                )
         elif character in "]}":
             depth -= 1
     return text
@@ -298,7 +327,7 @@ def _graph(data: dict[str, object]) -> Graph:
         )
     }
     if any(":" in prefix for prefix in namespaces):
-        raise ValueError("namespace prefix must not contain ':'")
+        raise Refusal(RefusalStage.VALUE, "namespace prefix must not contain ':'")
     token = _namespace_by_prefix.set(tuple(namespaces.items()))
     try:
         return _decode_graph(data)
@@ -435,7 +464,10 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
         _keys(data, object_fields(DECLARATIONS["polyadic_relation"]), path)
         subset = _array(data["targets_subset_of"], f"{path}.targets_subset_of")
         if len(subset) > 1:
-            raise ValueError(f"{path}.targets_subset_of must contain at most one name")
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"{path}.targets_subset_of must contain at most one name",
+            )
         return PolyadicRelationDeclaration(
             _name(data["name"], f"{path}.name"),
             _relation_side(data["sources"], f"{path}.sources"),
@@ -447,7 +479,7 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
             None if not subset else _name(subset[0], f"{path}.targets_subset_of[0]"),
             _attributes(data["attributes"], f"{path}.attributes"),
         )
-    raise ValueError(f"{path}.kind {kind!r} is unsupported")
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unsupported")
 
 
 def _relation_side(value: object, path: str) -> RelationSideDeclaration:
@@ -550,7 +582,10 @@ def _durable_position(data: dict[str, object], path: str) -> DurablePositionRef:
         _keys(anchor, object_fields(DECLARATIONS["tier_anchor"]), f"{path}.anchor")
         target = _name(anchor["tier"], f"{path}.anchor.tier")
     else:
-        raise ValueError(f"{path}.anchor.kind {kind!r} is unsupported")
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"{path}.anchor.kind {kind!r} is unsupported",
+        )
     return DurablePositionRef(target, _enum(BoundarySide, data["side"], f"{path}.side"))
 
 
@@ -584,10 +619,16 @@ def _name(value: object, path: str) -> QualifiedName:
     spelling = _string(value, path)
     prefix, separator, local_name = spelling.partition(":")
     if not separator or not prefix or not local_name:
-        raise ValueError(f"{path} must be a qualified name spelled 'prefix:local'")
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"{path} must be a qualified name spelled 'prefix:local'",
+        )
     namespace = dict(_namespace_by_prefix.get()).get(prefix)
     if namespace is None:
-        raise ValueError(f"{path} uses undeclared namespace prefix {prefix!r}")
+        raise Refusal(
+            RefusalStage.REFERENCE,
+            f"{path} uses undeclared namespace prefix {prefix!r}",
+        )
     return QualifiedName(namespace, local_name)
 
 
@@ -599,19 +640,19 @@ def _named_object(value: object, path: str, keys: set[str]) -> dict[str, object]
 
 def _object(value: object, path: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError(f"{path} must be an object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
     return cast(dict[str, object], value)
 
 
 def _object_list(value: object, path: str) -> list[dict[str, object]]:
     if not isinstance(value, list):
-        raise ValueError(f"{path} must be an array")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
     return [_object(entry, f"{path}[{index}]") for index, entry in enumerate(value)]
 
 
 def _array(value: object, path: str) -> list[object]:
     if not isinstance(value, list):
-        raise ValueError(f"{path} must be an array")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
     return value
 
 
@@ -628,19 +669,19 @@ def _keys(data: dict[str, object], expected: set[str], path: str) -> None:
 
 def _string(value: object, path: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{path} must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a string")
     return value
 
 
 def _integer(value: object, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{path} must be an integer")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an integer")
     return value
 
 
 def _boolean(value: object, path: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{path} must be a boolean")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a boolean")
     return value
 
 
@@ -649,7 +690,9 @@ def _enum[E](enum_type: Callable[[str], E], value: object, path: str) -> E:
     try:
         return enum_type(spelling)
     except ValueError as error:
-        raise ValueError(f"{path} has unsupported value {spelling!r}") from error
+        raise Refusal(
+            RefusalStage.VALUE, f"{path} has unsupported value {spelling!r}"
+        ) from error
 
 
 __all__ = [

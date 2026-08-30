@@ -26,6 +26,7 @@ from tiergraph.path import (
     StructuralPathProfile,
     resolve_path,
 )
+from tiergraph.schema import Refusal, RefusalStage
 
 
 class NodeKind(StrEnum):
@@ -148,8 +149,9 @@ class NodeSet:
 
     def _same_graph(self, other: NodeSet) -> None:
         if other.graph is not self.graph:
-            raise ValueError(
-                "node-set operation requires selections from the same graph"
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "node-set operation requires selections from the same graph",
             )
 
     def __or__(self, other: NodeSet) -> NodeSet:
@@ -187,7 +189,10 @@ class TierSelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return the selected tier."""
         if all(candidate.declaration.name != self.tier for candidate in graph.tiers):
-            raise ValueError(f"tier selector {str(self.tier)!r} is undeclared")
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"tier selector {str(self.tier)!r} is undeclared",
+            )
         return NodeSet(graph, (Node(NodeKind.TIER, self.tier),))
 
 
@@ -204,7 +209,10 @@ class TypeSelector:
             and declaration.item_type == self.item_type
             for declaration in graph.relation_declarations
         ):
-            raise ValueError(f"type selector {str(self.item_type)!r} is undeclared")
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"type selector {str(self.item_type)!r} is undeclared",
+            )
         tiers = {
             declaration.tier
             for declaration in graph.relation_declarations
@@ -294,8 +302,9 @@ class ItemPathSelector:
         """Resolve the path and require an item result."""
         resolved = resolve_path(graph, path_profile, self.path)
         if not isinstance(resolved, ResolvedItem):
-            raise ValueError(
-                f"item selection path {self.path!r} did not resolve to an item"
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"item selection path {self.path!r} did not resolve to an item",
             )
         return ItemSelector(resolved.current).evaluate(graph, path_profile=path_profile)
 
@@ -310,8 +319,9 @@ class BoundaryPathSelector:
         """Resolve the path and require a boundary result."""
         resolved = resolve_path(graph, path_profile, self.path)
         if not isinstance(resolved, ResolvedPosition):
-            raise ValueError(
-                f"boundary selection path {self.path!r} did not resolve to a boundary"
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"boundary selection path {self.path!r} did not resolve to a boundary",
             )
         return BoundarySelector(resolved.current).evaluate(
             graph, path_profile=path_profile
@@ -342,13 +352,16 @@ class AttributeSelector:
             None,
         )
         if declaration is None:
-            raise ValueError(
-                f"attribute selector {str(self.attribute)!r} is undeclared"
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"attribute selector {str(self.attribute)!r} is undeclared",
             )
         if declaration.domain is not self.domain:
-            raise ValueError(
-                f"attribute selector {str(self.attribute)!r} does not permit domain "
-                f"{self.domain.value!r}; declared for {declaration.domain.value!r}"
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"attribute selector {str(self.attribute)!r} does not permit "
+                f"domain {self.domain.value!r}; declared for "
+                f"{declaration.domain.value!r}",
             )
 
         nodes: list[Node] = []
@@ -405,7 +418,10 @@ class UnionSelector:
 
     def __post_init__(self) -> None:
         if not self.args:
-            raise ValueError("union selector requires at least one argument")
+            raise Refusal(
+                RefusalStage.VALUE,
+                "union selector requires at least one argument",
+            )
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Evaluate and union the operands from left to right."""
@@ -423,7 +439,10 @@ class IntersectionSelector:
 
     def __post_init__(self) -> None:
         if not self.args:
-            raise ValueError("intersection selector requires at least one argument")
+            raise Refusal(
+                RefusalStage.VALUE,
+                "intersection selector requires at least one argument",
+            )
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Evaluate and intersect the operands from left to right."""
@@ -490,14 +509,19 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
     node = _object(value, path)
     discriminators = {"op", "select"} & node.keys()
     if len(discriminators) != 1:
-        raise ValueError(f"{path} must contain exactly one of 'op' or 'select'")
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"{path} must contain exactly one of 'op' or 'select'",
+        )
     if "op" in discriminators:
-        operation = _string(node["op"], f"{path}.op")
+        operation = _discriminator(node["op"], f"{path}.op")
         if operation in ("union", "intersection"):
             _keys(node, {"op", "args"}, path)
             args_value = node["args"]
             if not isinstance(args_value, list) or not args_value:
-                raise ValueError(f"{path}.args must be a non-empty list")
+                raise Refusal(
+                    RefusalStage.VALUE, f"{path}.args must be a non-empty list"
+                )
             args = tuple(
                 _decode_selector(child, f"{path}.args[{index}]")
                 for index, child in enumerate(args_value)
@@ -513,8 +537,11 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
                 _decode_selector(node["left"], f"{path}.left"),
                 _decode_selector(node["right"], f"{path}.right"),
             )
-        raise ValueError(f"{path}.op has unknown operation {operation!r}")
-    kind = _string(node["select"], f"{path}.select")
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"{path}.op has unknown operation {operation!r}",
+        )
+    kind = _discriminator(node["select"], f"{path}.select")
     if kind in ("tier", "items", "boundaries"):
         _keys(node, {"select", "tier"}, path)
         name = _qualified_name(node["tier"], f"{path}.tier")
@@ -536,31 +563,48 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
         try:
             domain = AttributeDomain(domain_text)
         except ValueError as error:
-            raise ValueError(
-                f"{path}.domain has invalid attribute domain {domain_text!r}"
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"{path}.domain has invalid attribute domain {domain_text!r}",
             ) from error
         return AttributeSelector(
             _qualified_name(node["attribute"], f"{path}.attribute"), domain
         )
-    raise ValueError(f"{path}.select has unknown selector {kind!r}")
+    raise Refusal(
+        RefusalStage.DISCRIMINATOR, f"{path}.select has unknown selector {kind!r}"
+    )
 
 
 def _object(value: JsonValue, path: str) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must be an object")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
     return value
 
 
 def _keys(value: dict[str, JsonValue], expected: set[str], path: str) -> None:
     if value.keys() != expected:
-        raise ValueError(
-            f"{path} must contain exactly {sorted(expected)!r}; found {sorted(value)!r}"
+        raise Refusal(
+            RefusalStage.SHAPE,
+            f"{path} must contain exactly {sorted(expected)!r}; "
+            f"found {sorted(value)!r}",
         )
+
+
+def _discriminator(value: JsonValue, path: str) -> str:
+    """Read the member that selects a declaration, staged as such.
+
+    Which declaration applies is settled before anything is judged against
+    it, so a discriminator that cannot be read is a discriminator condition
+    rather than an ordinary member of the wrong construction.
+    """
+    if not isinstance(value, str):
+        raise Refusal(RefusalStage.DISCRIMINATOR, f"{path} must be a string")
+    return value
 
 
 def _string(value: JsonValue, path: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{path} must be a string")
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a string")
     return value
 
 

@@ -566,7 +566,14 @@ Return the opcode as JSON data.
 
 ### `ExecutionError`
 
+```text
+ExecutionError(message: 'str') -> 'None'
+```
+
 Name the opcode that could not make its checked state transition.
+
+Every execution refusal is a promise spanning more than one opcode, so
+the class carries the last stage of the declared refusal order.
 
 ### `Program`
 
@@ -4344,6 +4351,61 @@ check the laws at values rather than read this tuple.
 ### `tiergraph.schema`
 
 This module is importable and usable, but carries no API-stability promise at version 0.1.0.
+
+### `Refusal`
+
+```text
+Refusal(stage: 'RefusalStage', message: 'str', also: 'Iterable[Refusal]' = ()) -> 'None'
+```
+
+Refuse one read, naming its stage and every further applicable condition.
+
+``stage`` places the refusal in the declared total order, and ``also``
+carries the conditions that remain applicable once this one is known, each a
+refusal in its own right.  Both are data rather than prose, so a caller acts
+on the order without matching message text.  A ``Refusal`` is a
+``ValueError``, so every caller that already catches one still does.
+
+### `RefusalStage`
+
+```text
+RefusalStage(*values)
+```
+
+Number the classes a refusal can belong to, lowest reported first.
+
+A reader routinely meets several conditions at once.  The stage numbers put
+them in one order, so a caller is told the condition that explains the rest
+rather than whichever check happened to run first: a refusal at one stage
+explains what a later stage would have reported, and the converse never
+holds.  Bytes that are not text have no JSON to nest; a document announcing
+a format this release does not implement has a field set this release cannot
+judge; a member of the wrong construction has no value to place in a
+declared language; a name that does not resolve cannot keep a promise.
+
+The stages rank the conditions that apply to one node.  Nodes are read from
+the outside in and members in their declared order, so an enclosing node's
+condition precedes its members' whatever their stages, and the pair of a
+node and a stage totally orders every condition one read can meet.
+
+A condition is carried beside the primary one only while it stays
+applicable once the primary is known.  A field set is not judged against a
+declaration the document never selected, so a foreign version is reported
+alone rather than with the fields that being foreign introduces.
+
+The stage is the stable part of a refusal; the wording is diagnostic.
+
+#### `RefusalStage` members
+
+- `ENVELOPE` = `1`
+- `ENCODING` = `2`
+- `SYNTAX` = `3`
+- `CONSTRUCTION` = `4`
+- `DISCRIMINATOR` = `5`
+- `SHAPE` = `6`
+- `VALUE` = `7`
+- `REFERENCE` = `8`
+- `SEMANTICS` = `9`
 
 ### `json_schema`
 

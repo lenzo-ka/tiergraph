@@ -5,12 +5,71 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import cast
 
 from tiergraph.core import JsonValue
+
+
+class RefusalStage(IntEnum):
+    """Number the classes a refusal can belong to, lowest reported first.
+
+    A reader routinely meets several conditions at once.  The stage numbers put
+    them in one order, so a caller is told the condition that explains the rest
+    rather than whichever check happened to run first: a refusal at one stage
+    explains what a later stage would have reported, and the converse never
+    holds.  Bytes that are not text have no JSON to nest; a document announcing
+    a format this release does not implement has a field set this release cannot
+    judge; a member of the wrong construction has no value to place in a
+    declared language; a name that does not resolve cannot keep a promise.
+
+    The stages rank the conditions that apply to one node.  Nodes are read from
+    the outside in and members in their declared order, so an enclosing node's
+    condition precedes its members' whatever their stages, and the pair of a
+    node and a stage totally orders every condition one read can meet.
+
+    A condition is carried beside the primary one only while it stays
+    applicable once the primary is known.  A field set is not judged against a
+    declaration the document never selected, so a foreign version is reported
+    alone rather than with the fields that being foreign introduces.
+
+    The stage is the stable part of a refusal; the wording is diagnostic.
+    """
+
+    ENVELOPE = 1
+    ENCODING = 2
+    SYNTAX = 3
+    CONSTRUCTION = 4
+    DISCRIMINATOR = 5
+    SHAPE = 6
+    VALUE = 7
+    REFERENCE = 8
+    SEMANTICS = 9
+
+
+class Refusal(ValueError):
+    """Refuse one read, naming its stage and every further applicable condition.
+
+    ``stage`` places the refusal in the declared total order, and ``also``
+    carries the conditions that remain applicable once this one is known, each a
+    refusal in its own right.  Both are data rather than prose, so a caller acts
+    on the order without matching message text.  A ``Refusal`` is a
+    ``ValueError``, so every caller that already catches one still does.
+    """
+
+    def __init__(
+        self,
+        stage: RefusalStage,
+        message: str,
+        also: Iterable[Refusal] = (),
+    ) -> None:
+        """Record the stage and the further conditions that still apply."""
+        super().__init__(message)
+        self.stage = stage
+        self.also = tuple(also)
 
 
 class ShapeKind(StrEnum):
@@ -298,7 +357,7 @@ def _field_set_refusal(
     declared: AbstractSet[str],
     required: AbstractSet[str],
     path: str,
-) -> str | None:
+) -> Refusal | None:
     """Return one refusal naming every missing and every unknown field, or None.
 
     Both directions are named in a single message so a consumer holding a
@@ -306,17 +365,23 @@ def _field_set_refusal(
     attempt rather than one lexically first name per attempt.  A declared field
     that is not required is absent from both lists, so an optional field is
     never reported as missing.
+
+    The two directions are separate conditions of one node, so when both hold
+    the unknown-field condition is also carried as data on ``also`` rather than
+    being readable only by parsing the combined message.
     """
     missing = sorted(required - actual)
     unknown = sorted(actual - declared)
     if missing and unknown:
-        return (
-            f"{path} is missing fields {missing!r} and has unknown fields {unknown!r}"
+        return Refusal(
+            RefusalStage.SHAPE,
+            f"{path} is missing fields {missing!r} and has unknown fields {unknown!r}",
+            (Refusal(RefusalStage.SHAPE, f"{path} has unknown fields {unknown!r}"),),
         )
     if missing:
-        return f"{path} is missing fields {missing!r}"
+        return Refusal(RefusalStage.SHAPE, f"{path} is missing fields {missing!r}")
     if unknown:
-        return f"{path} has unknown fields {unknown!r}"
+        return Refusal(RefusalStage.SHAPE, f"{path} has unknown fields {unknown!r}")
     return None
 
 
@@ -327,9 +392,9 @@ def _refuse_field_set(
     path: str,
 ) -> None:
     """Refuse an object whose field set is not the declared one."""
-    message = _field_set_refusal(actual, declared, required, path)
-    if message is not None:
-        raise ValueError(message)
+    refusal = _field_set_refusal(actual, declared, required, path)
+    if refusal is not None:
+        raise refusal
 
 
 def object_fields(shape: Shape) -> set[str]:
@@ -383,10 +448,11 @@ def json_schema(format_version: str) -> dict[str, JsonValue]:
     from tiergraph.wire import FORMAT_VERSION
 
     if format_version != FORMAT_VERSION:
-        raise ValueError(
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
             f"format_version {format_version!r} is unsupported; expected "
             f"{FORMAT_VERSION!r}; this release publishes only the schema for "
-            f"the format it implements"
+            f"the format it implements",
         )
     return json_schema_for(DOCUMENT, DECLARATIONS, format_version)
 
@@ -427,7 +493,14 @@ def json_schema_for(
 
 
 def validation_errors(value: object, format_version: str) -> list[str]:
-    """Return deterministic structural errors derived from the wire declaration."""
+    """Return every applicable structural error, in the declared refusal order.
+
+    A document carrying several problems at once reports all of them from one
+    attempt, ordered outside in and by :class:`RefusalStage` within a node, so
+    the first entry is the primary refusal and the rest are the conditions that
+    remain applicable beside it.  A foreign version is reported alone: the field
+    sets of a declaration the document never selected are not judged.
+    """
     declared = _declared_format_version(value)
     if declared is not None and declared != format_version:
         return [
@@ -460,35 +533,35 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
                 value, DECLARATIONS[shape.variants[index]]
             ),
         )
-        return [alternatives[best_index][0]]
+        return alternatives[best_index]
     if shape.kind is ShapeKind.OBJECT:
         if not isinstance(value, dict) or not all(
             isinstance(key, str) for key in value
         ):
             return [f"{path} must be an object"]
-        message = _field_set_refusal(
+        refusal = _field_set_refusal(
             value.keys(), object_fields(shape), required_object_fields(shape), path
         )
-        if message is not None:
-            return [message]
+        if refusal is not None:
+            return [str(refusal)]
+        errors: list[str] = []
         for field in shape.fields:
-            if field.name not in value:
-                continue
-            errors = _validation_errors(
-                value[field.name], field.shape, f"{path}.{field.name}"
-            )
-            if errors:
-                return errors
-        return []
+            if field.name in value:
+                errors.extend(
+                    _validation_errors(
+                        value[field.name], field.shape, f"{path}.{field.name}"
+                    )
+                )
+        return errors
     if shape.kind is ShapeKind.ARRAY:
         if not isinstance(value, list):
             return [f"{path} must be an array"]
         assert shape.item is not None
-        for index, item in enumerate(value):
-            errors = _validation_errors(item, shape.item, f"{path}[{index}]")
-            if errors:
-                return errors
-        return []
+        return [
+            error
+            for index, item in enumerate(value)
+            for error in _validation_errors(item, shape.item, f"{path}[{index}]")
+        ]
     if shape.kind is ShapeKind.NULLABLE_STRING:
         if value is None or (
             isinstance(value, str)
@@ -589,4 +662,4 @@ def _json_schema(shape: Shape) -> JsonValue:
     return result
 
 
-__all__ = ["json_schema", "shape_hash"]
+__all__ = ["Refusal", "RefusalStage", "json_schema", "shape_hash"]
