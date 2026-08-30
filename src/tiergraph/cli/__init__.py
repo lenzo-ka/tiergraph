@@ -548,7 +548,6 @@ def _fold_declaration(
             )
             for text in args.root or ()
         ),
-        tie_policy=tiergraph.TiePolicy.CHOOSE_FIRST if args.ranked else None,
         output_cap=1 if args.output_cap is None else args.output_cap,
         ranked_output=args.ranked,
     )

@@ -1009,11 +1009,19 @@ FoldDeclaration(name: 'str', graph: 'Graph', valuation: 'AttributeValuation', se
 
 Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
 
-With ``ranked_output`` the fold also returns up to ``output_cap`` witnesses ranked
-by the semiring's own order, which its multiplication must preserve
-(``multiply_preserves_witness_order``); a custom ``witness_order`` is refused. Among
-witnesses of equal carrier value the ranked selection is deterministic but not
-guaranteed to be a globally canonical one.
+``witness_order`` and ``tie_policy`` are one mechanism and are declared together:
+the order names the winner and the policy says what happens where it reports a
+tie, so each without the other is refused. The policy is executable and is read
+at every tie the order reports.
+
+With ``ranked_output`` the fold instead returns up to ``output_cap`` witnesses
+ranked by the semiring's own order, which its multiplication must preserve
+(``multiply_preserves_witness_order``); a custom ``witness_order`` is refused, and
+so is a ``tie_policy``. Ranked selection breaks an equal-valued tie by the
+canonical witness path, which is a total order over distinct witnesses, so it
+leaves no tie for a policy to decide and would never read one. The resulting
+order is deterministic, and the paths it compares are the fold's own structural
+labels, so it is canonical for a given document rather than globally so.
 
 ``exactness`` states how the published value stands to the combination over every
 derivation. It defaults to ``UNDECLARED`` and ``run()`` never consults it, because
@@ -1185,6 +1193,10 @@ TiePolicy(*values)
 ```
 
 Supported, executable policies for equal-valued alternatives.
+
+A policy answers a tie that a declared ``witness_order`` reports, so it is
+declared with that order and with nothing else. Ranked output totalizes its
+own comparison and takes no policy.
 
 #### `TiePolicy` members
 

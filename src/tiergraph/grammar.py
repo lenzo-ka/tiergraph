@@ -34,7 +34,6 @@ from tiergraph.fold import (
     FoldDeclaration,
     FoldResult,
     FoldTransition,
-    TiePolicy,
 )
 from tiergraph.machine import (
     AddItem,
@@ -1203,7 +1202,6 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
             FoldTransition(names["children"], ChildCombination.AND),
         ),
         roots=(forest.root,),
-        tie_policy=TiePolicy.CHOOSE_FIRST,
         output_cap=output_cap,
         ranked_output=True,
     )

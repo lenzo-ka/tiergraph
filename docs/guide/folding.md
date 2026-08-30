@@ -92,7 +92,9 @@ transitions = (FoldTransition(depends, ChildCombination.OR),)
 `DECIMAL_TROPICAL` is exact min-plus arithmetic. Its addition takes the smaller
 of two carriers and its multiplication adds them, so an `OR` fold returns the
 least-cost path. A witness order and a `TiePolicy` make the fold also report
-which path won; `output_cap` limits how many witnesses it emits.
+which path won; `output_cap` limits how many witnesses it emits. The two are one
+mechanism and are declared together: the order names the winner and the policy
+answers the ties the order reports, so neither is accepted alone.
 
 ```python
 least_cost = FoldDeclaration(
@@ -352,3 +354,10 @@ embeds the semiring's multiplicative identity whatever the value is. A general
 `lift`, a `witness_order`, and an index product are caller code and stay here in
 the Python API; `--ranked` is the shell's route to witnesses, and it needs an
 algebra that declares `multiply_preserves_witness_order`.
+
+Ranked output is the other mechanism, and it takes neither a `witness_order` nor
+a `TiePolicy`. It ranks by the semiring's own order and settles an equal-valued
+tie by the canonical witness path, which is a total order over distinct
+witnesses; every tied witness is kept, in that order, up to `output_cap`. A
+`TiePolicy` alongside `ranked_output` is refused rather than accepted and
+ignored, because nothing would ever read it.

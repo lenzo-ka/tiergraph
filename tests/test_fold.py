@@ -389,6 +389,7 @@ def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
         declaration("tie"),
         index_axes=(),
         witness_order=None,
+        tie_policy=None,
         ranked_output=True,
     )
 
@@ -417,6 +418,81 @@ def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
         result.cost.witness_operations,
         result.cost.ranked_multiplications,
     ) == (5, 8, 6, 4)
+
+
+def ranked_tie() -> FoldDeclaration[object]:
+    """Return the genuine-tie ranked declaration: two paths, one carrier value."""
+    return replace(
+        declaration("tie"),
+        index_axes=(),
+        witness_order=None,
+        tie_policy=None,
+        ranked_output=True,
+    )
+
+
+def test_the_ranked_tie_fixture_carries_a_tie_the_carrier_cannot_break() -> None:
+    """REGRESSION: the fixture's two witnesses tie, and PATH addition keeps both.
+
+    A tie policy can only be discriminated by a fixture where the winner is not
+    already decided, so this states the tie in the carrier before anything else
+    reads it: the two root witnesses hold the same value, and the semiring's own
+    addition returns neither of them but their union. That is the tie the ranked
+    comparison has to break, and it is why breaking it by the witness path is a
+    decision rather than a formality.
+    """
+    witnesses = replace(ranked_tie(), output_cap=7).run().ranked_witnesses
+    assert witnesses is not None
+    (raw_first, first_path), (raw_second, second_path) = witnesses
+    first = cast(PathValue, raw_first)
+    second = cast(PathValue, raw_second)
+    assert first[0] == second[0] == Decimal("0.0")
+    assert first_path != second_path
+    combined = PATH.add(first, second)
+    assert combined != first and combined != second
+
+
+def test_ranked_output_breaks_a_genuine_tie_by_the_canonical_witness_path() -> None:
+    """REGRESSION: the retained witness of a tie is the earlier canonical path.
+
+    The cap is what makes the choice observable. With room for both, keeping all
+    tied witnesses and choosing one look alike; with room for one, the fold has
+    to say which, and it says the canonically earlier path.
+    """
+    capped = replace(ranked_tie(), output_cap=1).run()
+    assert capped.ranked_witnesses == (
+        ((Decimal("0.0"), (("start", "bed", "out"),)), ("start", "bed", "out")),
+    )
+    assert capped.truncated is True
+
+
+def test_ranked_output_refuses_a_tie_policy_it_would_never_read() -> None:
+    """REGRESSION: ranked output takes no tie policy, in either direction.
+
+    The refusal is what keeps the surface honest. Ranked output totalizes its
+    own comparison, so a declared policy would be accepted, never consulted, and
+    contradicted by a fold that keeps every tied witness whatever it said.
+    """
+    base = ranked_tie()
+    assert base.tie_policy is None
+    for policy in TiePolicy:
+        with pytest.raises(ValueError, match="ranked output.*canonical witness path"):
+            replace(base, tie_policy=policy)
+
+
+def test_a_tie_policy_is_declared_exactly_where_it_is_executed() -> None:
+    """CHARACTERIZATION: witness_order and tie_policy stand or fall together.
+
+    This half of the rule is unchanged and is pinned because the ranked refusal
+    is stated beside it: the two refusals must keep answering the case each was
+    written for rather than one absorbing the other.
+    """
+    ordered = replace(declaration("tie"), index_axes=())
+    assert ordered.witness_order is not None and ordered.tie_policy is not None
+    with pytest.raises(ValueError, match="produces witnesses but has no tie policy"):
+        replace(ordered, tie_policy=None)
+    with pytest.raises(ValueError, match="but produces no witnesses"):
+        replace(ordered, witness_order=None)
 
 
 def test_plain_tropical_carrier_accumulates_provenance_and_applies_ties() -> None:
@@ -905,7 +981,11 @@ def test_the_double_valuation_guard_is_not_absorbed_by_any_later_claim() -> None
 def test_ranked_candidate_deduplication_is_costed() -> None:
     """Ranked selection counts comparisons used to remove duplicate witnesses."""
     declared = replace(
-        declaration(), ranked_output=True, output_cap=1, witness_order=None
+        declaration(),
+        ranked_output=True,
+        output_cap=1,
+        witness_order=None,
+        tie_policy=None,
     )
     operations = [0]
     additions = [0]
