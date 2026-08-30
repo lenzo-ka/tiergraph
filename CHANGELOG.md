@@ -103,6 +103,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary anchored to its tier's last edge, because growing the tier moves
   that edge and leaves the value's old coordinate empty. The document format is
   untouched.
+- Made profile satisfaction an enumerable question instead of a convention. A
+  profile was a class that happened to validate in its own constructor, with no
+  base type, no registry, and no way to ask which roles a graph supports without
+  naming a profile and trying it. A new `tiergraph.profile` module publishes
+  `GraphProfile`, `ProfileRegistry`, `ProfileReport`, `ProfileOutcome`,
+  `ProfileRegistrationRefusal`, `RoleBinding`, `RoleValue`, and the `PROFILES`
+  registry this package's own profiles register into. `PROFILES.reports(graph,
+  roles)` answers for every registered profile in name order. Four outcomes keep
+  that answer honest: a check that decided everything the profile declares reads
+  `satisfied`, one that decided what it can reads `satisfied_as_checked` with
+  the rest named in the report, an unbound required role reads `not_applicable`
+  rather than counting as a pass, and a refusal carries its reason. Registration
+  tests a profile's claims rather than taking them: one that names no condition
+  its check decides is refused, since a check that states nothing cannot be told
+  from one that passes always, and every profile carries two witnesses, one
+  arrangement its check must accept and one it must refuse, which the registry
+  runs so a check that cannot tell them apart never enters. Population is
+  explicit, never discovered, so import order cannot decide what a caller is
+  told. Five profiles are registered: ordered containment, ordered roots,
+  persisted choice, JSON value, and span view, the last of which gains a graph
+  check it never had, because `SpanViewProfile` names declarations without
+  holding a graph. The clock profile is adapted separately, and the path
+  profiles are outside this mechanism: a path vocabulary asserts nothing about a
+  graph. The wire format is untouched.
 
 ### Changed
 

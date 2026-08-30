@@ -137,3 +137,120 @@ exactly the dependency relations you pass, and is silent about any you omit,
 because enumerating today's dependencies does not enforce anything about a
 dependency added later. A curated ordered subset of parentless items is valid;
 consumers that require every inferred root can call `is_exhaustive()`.
+
+## Asking which profiles a graph satisfies
+
+Constructing a profile checks one role you already had in mind. `PROFILES` is
+the registry that turns that into a question you can ask without naming a
+profile first: bind the roles you have, and it reports every registered profile
+against your graph.
+
+```python
+from tiergraph import (
+    PROFILES,
+    Graph,
+    Item,
+    ItemRef,
+    NamespaceDeclaration,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
+    QualifiedName,
+    RelationEndpointKind,
+    RelationSideDeclaration,
+    RoleBinding,
+    Tier,
+    TierDeclaration,
+)
+
+ns = "https://example.com/tree"
+nodes = QualifiedName(ns, "nodes")
+members = QualifiedName(ns, "members")
+roots = QualifiedName(ns, "roots")
+one = RelationSideDeclaration((RelationEndpointKind.ITEM,), (nodes,), 1, 1)
+many = RelationSideDeclaration((RelationEndpointKind.ITEM,), (nodes,), 1, None)
+none = RelationSideDeclaration((RelationEndpointKind.ITEM,), (nodes,), 0, 0, True)
+graph = Graph(
+    (NamespaceDeclaration("t", ns),),
+    (
+        Tier(
+            TierDeclaration(nodes, "Nodes"),
+            (Item("root"), Item("left"), Item("right")),
+        ),
+    ),
+    (
+        PolyadicRelationDeclaration(
+            members, one, many, unique_sources=True, distinct_targets=True, acyclic=True
+        ),
+        PolyadicRelationDeclaration(roots, none, many, distinct_targets=True),
+    ),
+    polyadic_relations=(
+        PolyadicRelationInstance(
+            members, (ItemRef(nodes, 0),), (ItemRef(nodes, 1), ItemRef(nodes, 2))
+        ),
+        PolyadicRelationInstance(roots, (), (ItemRef(nodes, 0),)),
+    ),
+)
+
+bindings: RoleBinding = {
+    "relation": members,
+    "root_relation": roots,
+    "dependency_relations": (members,),
+}
+for report in PROFILES.reports(graph, bindings):
+    print(report.profile, report.outcome.value)
+print()
+roots_report = PROFILES.report("tiergraph.ordered-roots", graph, bindings)
+for condition in roots_report.unconfirmed:
+    print("undecided:", condition)
+```
+
+```text
+tiergraph.json-value not_applicable
+tiergraph.ordered-containment satisfied
+tiergraph.ordered-roots satisfied_as_checked
+tiergraph.persisted-choice not_applicable
+tiergraph.span-view not_applicable
+
+undecided: roots implied by a dependency relation the caller did not enumerate
+undecided: whether the stored roots are the whole inferred set, which OrderedRootsProfile.is_exhaustive answers separately
+```
+
+Four outcomes keep that answer honest. `satisfied` means the check decided every
+condition the profile declares. `satisfied_as_checked` means it decided the ones
+it can and the report names the rest, so a partial answer cannot be read as a
+whole guarantee: ordered roots reconciles over the dependency relations you
+enumerate, and says so. `refused` carries the reason. `not_applicable` means a
+required role was left unbound and no check ran, so a profile you bound no roles
+for is reported as unanswered rather than quietly counted as a pass.
+
+`PROFILES.satisfied(graph, bindings)` returns the reports of the profiles whose
+check refused nothing. It returns reports rather than names because a bare name
+would read as a whole guarantee.
+
+## Registering a profile of your own
+
+A profile is a `GraphProfile` subclass. It names itself, names the roles it
+reads, states in prose the conditions its `check` decides and any it leaves
+undecided, and supplies two witnesses: one arrangement its check must accept and
+one it must refuse.
+
+Registration tests those claims rather than taking them. A profile that names no
+condition its check decides is refused outright, because a check that states
+nothing cannot be told from one that passes always, and a caller counts a
+registered profile as coverage. That alone would still leave room for a profile
+to name conditions and check none of them, so `register` runs both witnesses and
+admits the profile only when its check tells them apart.
+
+Population is explicit. Nothing is discovered by scanning, because a discovered
+profile is one nobody decided to trust, and import order would then decide what
+a caller is told a graph satisfies. Register what you mean to offer, into
+`PROFILES` or into a `ProfileRegistry` of your own.
+
+`SpanViewProfile` shows why the check and the naming are separate. It holds no
+graph, so constructing one settles nothing about any particular graph; the
+registered `tiergraph.span-view` profile projects the view, which is where the
+names it carries are reconciled with what the graph stores.
+
+The clock profile and the path profiles are absent from the registry. A path
+profile interprets a path vocabulary rather than asserting anything about a
+graph, so satisfaction is not a question it answers.

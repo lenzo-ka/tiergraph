@@ -89,6 +89,7 @@ ALLOWED_URL_PREFIXES: dict[str, str] = {
 
 # Python language and standard-library modules used by shipped code and examples.
 _STDLIB_IMPORTS = {
+    "abc",
     "argparse",
     "ast",
     "collections",
