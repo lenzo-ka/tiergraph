@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StarRefusal`, `StarSelector`, and `ZeroClosedStar` public names; retired the
   ineffective per-relation acyclic check, and added `collapse_units` to grammar
   recognition (#73).
+- Added `tiergraph fold`, which evaluates a declared dependency relation with a
+  named semiring and emits the public `FoldResult` report, and `tiergraph
+  semirings`, which lists every algebra a fold can name with its carrier
+  boundary, declared law checks, and declared properties. The listed names are
+  exactly the values `fold --semiring` accepts. The shell names one of two
+  lifts, `value` and `one`; a general lift, a witness order, and an index
+  product remain caller code in the Python API, so `--ranked` is the shell's
+  route to witnesses. The action and react surface gets no command, because
+  every part of it that matters is a caller-supplied callable.
 
 ### Changed
 

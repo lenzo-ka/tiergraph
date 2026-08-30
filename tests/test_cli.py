@@ -441,6 +441,300 @@ def test_grammar_command_reports_bad_grammar_and_count(
     assert "must be positive" in capsys.readouterr().err
 
 
+FOLD_NAMESPACE = "urn:test:fold"
+FOLD_TASKS = QualifiedName(FOLD_NAMESPACE, "tasks")
+FOLD_COST = QualifiedName(FOLD_NAMESPACE, "cost")
+FOLD_DEPENDS = QualifiedName(FOLD_NAMESPACE, "depends")
+FOLD_TIER_DATA = {"local_name": "tasks", "namespace": FOLD_NAMESPACE}
+DIAMOND = (("a", "1"), ("b", "2"), ("c", "5"), ("d", "1"))
+
+
+def _fold_graph(path: Path, *costs: tuple[str, str]) -> tiergraph.Graph:
+    """Write the folding guide's diamond, or a prefix of it, as a document."""
+    task_type = QualifiedName(FOLD_NAMESPACE, "task")
+    items = tuple(
+        Item(identifier, (AttributeValue(FOLD_COST, XsdType.DECIMAL, weight),))
+        for identifier, weight in costs
+    )
+    references = tuple(ItemRef(FOLD_TASKS, index) for index in range(len(items)))
+    graph = tiergraph.Graph(
+        (NamespaceDeclaration("t", FOLD_NAMESPACE),),
+        (Tier(TierDeclaration(FOLD_TASKS, "Tasks"), items),),
+        (
+            SimpleRelationDeclaration(
+                QualifiedName(FOLD_NAMESPACE, "membership"), FOLD_TASKS, task_type
+            ),
+            BipartiteRelationDeclaration(
+                FOLD_DEPENDS, task_type, task_type, acyclic=True
+            ),
+        ),
+        tuple(
+            RelationInstance(FOLD_DEPENDS, references[left], references[right])
+            for left, right in ((0, 1), (0, 2), (1, 3), (2, 3))
+            if left < len(items) and right < len(items)
+        ),
+        (AttributeDeclaration(FOLD_COST, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    path.write_bytes(tiergraph.dump_bytes(graph))
+    return graph
+
+
+def _fold_args(path: Path, semiring: str, lift: str, *extra: str) -> list[str]:
+    """Spell the shared fold flags the way the CLI reference documents them."""
+    return [
+        "fold",
+        str(path),
+        "--attribute-namespace",
+        FOLD_NAMESPACE,
+        "--attribute-local",
+        "cost",
+        "--tier",
+        FOLD_NAMESPACE,
+        "tasks",
+        "--semiring",
+        semiring,
+        "--lift",
+        lift,
+        "--transition",
+        FOLD_NAMESPACE,
+        "depends",
+        "or",
+        *extra,
+    ]
+
+
+def test_fold_reproduces_the_guide_least_cost_and_path_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two documented folds reach the shell with their guide answers.
+
+    One graph and one dependency relation yield a least-cost path under exact
+    min-plus arithmetic and a count of paths under natural-number arithmetic.
+    Only the named algebra and the named lift differ.
+    """
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+
+    assert (
+        main(
+            _fold_args(
+                source,
+                "decimal-tropical",
+                "value",
+                "--name",
+                "least-cost",
+                "--root",
+                "/items/durable/a",
+                "--ranked",
+                "--output-cap",
+                "4",
+            )
+        )
+        == 0
+    )
+    least_cost = json.loads(capsys.readouterr().out)
+    assert least_cost["value"] == "4.0"
+    assert least_cost["truncated"] is False
+    assert least_cost["ranked_witnesses"] == [
+        {"path": ["a", "b", "d"], "value": "4.0"},
+        {"path": ["a", "c", "d"], "value": "7.0"},
+    ]
+    assert least_cost["cost"]["carrier_work"] == 19
+
+    assert main(_fold_args(source, "counting", "one", "--name", "path-count")) == 0
+    path_count = json.loads(capsys.readouterr().out)
+    assert path_count["value"] == 2
+    assert path_count["provenance"] is None
+    assert "ranked_witnesses" not in path_count
+
+
+def test_fold_infers_roots_and_keeps_the_shared_file_contract(tmp_path: Path) -> None:
+    """An omitted root is inferred, and output refuses to overwrite its input."""
+    source = tmp_path / "plan.json"
+    original = _fold_graph(source, *DIAMOND)
+    target = tmp_path / "fold.json"
+    assert main([*_fold_args(source, "counting", "one"), "-o", str(target)]) == 0
+    inferred = json.loads(target.read_text(encoding="utf-8"))
+    assert inferred["roots"] == [
+        {"coordinate": [], "item": {"index": 0, "tier": FOLD_TIER_DATA}}
+    ]
+    assert main([*_fold_args(source, "counting", "one"), "-o", str(source)]) == 1
+    assert tiergraph.loads(source.read_bytes()) == original
+
+
+@pytest.mark.parametrize(
+    ("semiring", "lift", "extra", "fragment"),
+    (
+        ("counting", "value", (), "nonnegative integer carrier value"),
+        ("boolean", "value", (), "must be a Boolean carrier value"),
+        ("path", "value", (), "not subscriptable"),
+        ("counting", "one", ("--output-cap", "3"), "--output-cap requires --ranked"),
+        ("counting", "one", ("--ranked",), "multiply_preserves_witness_order"),
+        (
+            "decimal-tropical",
+            "value",
+            ("--ranked", "--output-cap", "0"),
+            "output cap 0 must be positive",
+        ),
+    ),
+)
+def test_fold_refuses_a_mismatched_carrier_or_flag_combination(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    semiring: str,
+    lift: str,
+    extra: tuple[str, ...],
+    fragment: str,
+) -> None:
+    """Each carrier and flag mismatch is one exit-one diagnostic, not a traceback."""
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+    assert main(_fold_args(source, semiring, lift, *extra)) == 1
+    error = capsys.readouterr().err
+    assert error.startswith("tiergraph: fold: ")
+    assert fragment in error
+    assert "Traceback" not in error
+
+
+def test_fold_refuses_a_bad_combination_and_a_position_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A transition needs an and/or meaning, and a declared root needs an item."""
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+    arguments = _fold_args(source, "counting", "one")
+    arguments[arguments.index("or")] = "xor"
+    assert main(arguments) == 1
+    assert (
+        "transition combination 'xor' must be 'and' or 'or'" in capsys.readouterr().err
+    )
+
+    assert (
+        main(
+            _fold_args(
+                source,
+                "counting",
+                "one",
+                "--root",
+                _structural_path("positions", FOLD_NAMESPACE, "tasks", 0),
+            )
+        )
+        == 1
+    )
+    assert "fold root item path" in capsys.readouterr().err
+
+
+def test_fold_json_shape_does_not_vary_with_cardinality(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every fold array stays an array at one member and at many.
+
+    A zero-length ``states`` or ``roots`` is unreachable: a domain with no
+    parentless item is refused before the fold can run, and the last case here
+    witnesses that refusal. A zero-length ``ranked_witnesses`` is unreachable
+    too, because only the decimal extrema admit ranked output and their zero is
+    an infinity that no ``xsd:decimal`` lexical can carry into the graph.
+    """
+    shapes = []
+    for name, costs in (("one", DIAMOND[:1]), ("many", DIAMOND)):
+        source = tmp_path / f"{name}.json"
+        _fold_graph(source, *costs)
+        assert (
+            main(
+                _fold_args(
+                    source, "decimal-tropical", "value", "--ranked", "--output-cap", "4"
+                )
+            )
+            == 0
+        )
+        shapes.append(json.loads(capsys.readouterr().out))
+    single, many = shapes
+    for key in ("roots", "states", "ranked_witnesses"):
+        assert isinstance(single[key], list), key
+        assert isinstance(many[key], list), key
+    assert set(single) == set(many)
+    assert [len(single[key]) for key in ("roots", "states", "ranked_witnesses")] == [
+        1,
+        1,
+        1,
+    ]
+    assert [len(many[key]) for key in ("roots", "states", "ranked_witnesses")] == [
+        1,
+        4,
+        2,
+    ]
+
+    empty = tmp_path / "empty.json"
+    _fold_graph(empty)
+    assert main(_fold_args(empty, "counting", "one")) == 1
+    assert "dependency DAG has no root" in capsys.readouterr().err
+
+
+def test_semirings_lists_exactly_the_algebras_a_fold_can_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The listing is one array whose names are the `--semiring` vocabulary."""
+    assert main(["semirings"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert isinstance(report["semirings"], list)
+    listed = [entry["name"] for entry in report["semirings"]]
+    assert listed == sorted(listed)
+
+    action = next(
+        candidate
+        for candidate in build_parser()._actions
+        if isinstance(candidate, argparse._SubParsersAction)
+    )
+    semiring_choice = next(
+        candidate
+        for candidate in action.choices["fold"]._actions
+        if candidate.dest == "semiring"
+    )
+    assert list(semiring_choice.choices or ()) == listed
+
+    counting = next(
+        entry for entry in report["semirings"] if entry["name"] == "counting"
+    )
+    assert counting == {
+        "laws": {
+            "add_associativity": "exact",
+            "add_commutativity": "exact",
+            "left_distributivity": "exact",
+            "multiply_associativity": "exact",
+            "right_distributivity": "exact",
+        },
+        "name": "counting",
+        "one": 1,
+        "properties": {
+            "add_idempotent": False,
+            "add_selective": False,
+            "multiply_commutative": True,
+            "multiply_preserves_witness_order": False,
+            "multiply_strictly_order_preserving": False,
+            "no_zero_divisors": True,
+            "zero_sum_free": True,
+        },
+        "star": None,
+        "type": "CountingSemiring",
+        "zero": 0,
+    }
+    tropical = next(
+        entry for entry in report["semirings"] if entry["name"] == "decimal-tropical"
+    )
+    assert tropical["star"] == "zero-closed"
+    assert tropical["zero"] == "INF"
+    assert tropical["properties"]["multiply_preserves_witness_order"] is True
+
+
+def test_semirings_writes_to_a_file_without_reading_a_document(
+    tmp_path: Path,
+) -> None:
+    """The listing takes no document, so it emits under the shared file contract."""
+    target = tmp_path / "semirings.json"
+    assert main(["semirings", "-o", str(target)]) == 0
+    assert json.loads(target.read_text(encoding="utf-8"))["semirings"]
+
+
 def test_clock_commands_query_full_declarative_profile(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -676,8 +970,8 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select}"
-        in capsys.readouterr().out
+        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,"
+        "clock,span,select,fold,semirings}" in capsys.readouterr().out
     )
     for command in (
         "validate",
@@ -693,6 +987,8 @@ def test_version_default_help_and_every_command_help(
         "clock",
         "span",
         "select",
+        "fold",
+        "semirings",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -717,6 +1013,8 @@ def test_version_default_help_and_every_command_help(
         "clock",
         "span",
         "select",
+        "fold",
+        "semirings",
     ]
 
 
@@ -1489,14 +1787,33 @@ def test_clean_domain_io_and_same_path_errors(
     assert source.read_bytes() == original
 
 
+def _spells_a_codec(node: ast.Call) -> bool:
+    """Report whether one `.encode` call names a text codec inline."""
+    if not node.args and not node.keywords:
+        return True
+    return (
+        len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    )
+
+
 def test_cli_output_emitters_are_audited() -> None:
     """Every dynamic CLI byte emitter remains behind the shared refusal.
 
     This enumerates the emitters instead of trusting a hand list: any new
-    ``json.dumps`` or ``.encode`` in the module fails here until its author
-    routes it through the refusal and records it below.  The check is static,
-    so it discriminates by listing an emitter set no other revision has, not
-    by observing a leak; the behavioral discrimination lives in the matrix.
+    ``json.dumps`` or text-to-bytes ``.encode`` in the module fails here until
+    its author routes it through the refusal and records it below.  The check is
+    static, so it discriminates by listing an emitter set no other revision has,
+    not by observing a leak; the behavioral discrimination lives in the matrix.
+
+    A byte emitter spells its codec inline, as ``.encode()`` or
+    ``.encode("utf-8")``, so only those two shapes count.  A semiring's
+    ``encode`` returns strict-JSON data rather than bytes and takes the carrier
+    value as its argument, so naming a carrier value is what tells the two
+    apart. An emitter that reached its codec through a variable would evade
+    this, but no shipped emitter spells one that way.
     """
     source = Path(cli.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -1519,7 +1836,7 @@ def test_cli_output_emitters_are_audited() -> None:
                     and node.func.attr == "dumps"
                 ):
                     found.add((functions[-1], "json.dumps"))
-                elif node.func.attr == "encode":
+                elif node.func.attr == "encode" and _spells_a_codec(node):
                     found.add((functions[-1], "encode"))
             self.generic_visit(node)
 
@@ -1590,6 +1907,12 @@ def test_surrogate_reports_are_refused_with_field_paths(
         walk_graph.read_bytes().replace(b"urn:test:traversal", b"\\ud800")
     )
 
+    fold_graph = tmp_path / "fold-graph.json"
+    _fold_graph(fold_graph, *DIAMOND)
+    fold_graph.write_bytes(
+        fold_graph.read_bytes().replace(FOLD_NAMESPACE.encode(), b"\\ud800")
+    )
+
     graph = reference_shape()
     clock_graph = tmp_path / "clock-graph.json"
     clock_graph.write_bytes(
@@ -1652,6 +1975,35 @@ def test_surrogate_reports_are_refused_with_field_paths(
             ["select", str(source), "--selector", str(selector)],
             "nodes[0].reference.tier.namespace",
         ),
+        *[
+            (
+                [
+                    "fold",
+                    str(fold_graph),
+                    "--attribute-namespace",
+                    surrogate,
+                    "--attribute-local",
+                    "cost",
+                    "--tier",
+                    surrogate,
+                    "tasks",
+                    "--semiring",
+                    semiring_name,
+                    "--lift",
+                    lift_name,
+                    "--transition",
+                    surrogate,
+                    "depends",
+                    "or",
+                    *extra_flags,
+                ],
+                "roots[0].item.tier.namespace",
+            )
+            for semiring_name, lift_name, extra_flags in (
+                ("counting", "one", ()),
+                ("decimal-tropical", "value", ("--ranked", "--output-cap", "4")),
+            )
+        ],
         (
             ["clock", "positions", str(clock_graph), "--profile", str(clock_profile)],
             "clock_tier.namespace",
