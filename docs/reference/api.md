@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 152 top-level `tiergraph` exports exactly once.
+It covers 157 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2378,6 +2378,154 @@ PositionRef.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the position reference as JSON-serializable data.
+
+## Rewrite
+
+### `EffectRefusal`
+
+Refuse an effect claim a rewrite does not make good on.
+
+### `RewriteCertificate`
+
+```text
+RewriteCertificate(effect: 'RewriteEffect', subjects: 'int', disturbances: 'int') -> None
+```
+
+Report what discharged one rewrite's effect claim, and over how much.
+
+``subjects`` is the honest part. It counts the structures the source
+asserts, every one of which was examined. A ``DECORATE`` claim over a
+source that asserts three things has been held to three things; the count
+is there so a nearly vacuous claim cannot be read as a strong one.
+
+``disturbances`` counts the structures that were not left standing as the
+source had them, which is zero exactly when the rewrite decorated.
+
+### `RewriteDeclaration`
+
+```text
+RewriteDeclaration(name: 'str', source: 'Graph', result: 'Graph', effect: 'RewriteEffect' = <RewriteEffect.UNDECLARED: 'undeclared'>) -> None
+```
+
+Bind one named claim to the pair of graphs a rewrite read and wrote.
+
+``effect`` states what the rewrite did to ``source``. It defaults to
+``UNDECLARED`` and nothing consults it until ``check_effect()`` is called,
+because the claim is owed where it is relied on rather than where a pair of
+graphs is built.
+
+This is a claim about two graph *values*. It does not know, and does not
+ask, whether one was produced from the other: two graphs built
+independently that happen to stand in this relation are measured exactly as
+a rewrite and its input would be.
+
+#### `RewriteDeclaration.disturbances`
+
+Method.
+
+```text
+RewriteDeclaration.disturbances(self) -> 'tuple[RewriteDisturbance, ...]'
+```
+
+Return every structure the rewrite disturbed, in the source's order.
+
+The order is the source graph's own reading order -- namespaces, then
+each tier and its items, then relation declarations, attribute
+declarations, relation instances, polyadic relation instances, position
+values, and the document. It is total and reproducible, so the first
+disturbance is the first in a fixed order rather than a minimized or a
+most-severe one, and the refusals report it as such.
+
+#### `RewriteDeclaration.check_effect`
+
+Method.
+
+```text
+RewriteDeclaration.check_effect(self) -> 'RewriteCertificate'
+```
+
+Demand this rewrite's effect claim and discharge it, or refuse.
+
+Every branch bites, and the asymmetry is deliberate. An ``UNDECLARED``
+effect is refused with **the declaration to be made**; a false claim is
+refused with **a semantic counterexample** naming the structure, the
+tier it belongs to, and what happened to it. Declining to say is not
+the same as saying the weaker thing.
+
+What a discharged ``DECORATE`` licenses is one thing and not more:
+every reading taken over the source is still a correct reading of the
+result, without re-reading it. An item's attributes, a position's
+values, a relation's endpoints, whatever a reference resolved to --
+all of it still holds. What it does not license is any reading that
+counts, quantifies over everything, or turns on absence: a tier's
+extent, a root set's exhaustiveness, the canonical bytes, the
+construction fingerprint. Decoration adds, so those must be taken
+again. Put shortly, a positive property proved of the source transfers
+to the result and a negative or counting one does not.
+
+As this tree stands that license discharges a proof obligation and buys
+no optimization: nothing here caches a reading across a rewrite, so
+there is no revalidation for the claim to skip. It is stated as a
+license rather than a speedup on purpose.
+
+### `RewriteDisturbance`
+
+```text
+RewriteDisturbance(effect: 'RewriteEffect', subject: 'str', tier: 'QualifiedName | None', detail: 'str') -> None
+```
+
+Name one structure the rewrite did not leave standing as it found it.
+
+``effect`` is ``REVISE`` when the structure still stands and a value in it
+was replaced, and ``COLLAPSE`` when the structure or the value is gone.
+``subject`` names it in the source's own coordinates, ``tier`` is the tier
+it belongs to when it belongs to one, and ``detail`` says what happened.
+
+#### `RewriteDisturbance.to_data`
+
+Method.
+
+```text
+RewriteDisturbance.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the disturbance as JSON-serializable data.
+
+### `RewriteEffect`
+
+```text
+RewriteEffect(*values)
+```
+
+State what a rewrite did to the graph it rewrote.
+
+``DECORATE``
+    The rewrite added to the source and took nothing back. Gate: no
+    structure the source asserts may be missing from the result, and no
+    value it carries may have been replaced.
+``REVISE``
+    Every structure the source asserts still stands, but some value stands
+    in place of another. Gate: the replacement must be exhibitable -- a
+    ``REVISE`` claim over a rewrite that replaced nothing is a declaration
+    that is hiding, and it is refused.
+``COLLAPSE``
+    Some structure the source asserts is gone. Gate: the loss must be
+    exhibitable, for the same reason.
+``UNDECLARED``
+    The default. It is refused, and it does not mean ``COLLAPSE``:
+    declining to say is not the same as saying the weaker thing, and the
+    refusal says so by handing back the declaration to be made.
+
+Every branch bites, and the asymmetry is deliberate. Omitting the claim is
+answered with the declaration; asserting it falsely is answered with a
+semantic counterexample naming the structure and what happened to it.
+
+#### `RewriteEffect` members
+
+- `DECORATE` = `decorate`
+- `REVISE` = `revise`
+- `COLLAPSE` = `collapse`
+- `UNDECLARED` = `undeclared`
 
 ## Selection
 
