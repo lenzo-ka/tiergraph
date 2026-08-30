@@ -204,6 +204,59 @@ DECLARATIONS: dict[str, Shape] = {
             ),
         ),
     ),
+    "layer_name": _object(
+        _field("vocabulary", NON_EMPTY_STRING), _field("source", NON_EMPTY_STRING)
+    ),
+    "layer_item": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("item-coordinate",))),
+        _field("tier", QUALIFIED_NAME),
+        _field("index", NON_NEGATIVE_INTEGER),
+    ),
+    "layer_boundary": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("boundary-coordinate",))),
+        _field("tier", QUALIFIED_NAME),
+        _field("index", NON_NEGATIVE_INTEGER),
+    ),
+    "layer_durable_item": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("durable-item",))),
+        _field("durable_id", NON_EMPTY_STRING),
+    ),
+    "layer_durable_boundary": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("durable-boundary",))),
+        _field("anchor", ANCHOR),
+        _field("side", Shape(ShapeKind.STRING, values=("before", "after"))),
+    ),
+    "layer_tier": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("tier",))),
+        _field("tier", QUALIFIED_NAME),
+    ),
+    "layer_relation_declaration": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("relation-declaration",))),
+        _field("relation", QUALIFIED_NAME),
+    ),
+    "layer_relation_instance": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("relation-instance",))),
+        _field("index", NON_NEGATIVE_INTEGER),
+    ),
+    "layer_durable_relation": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("durable-relation",))),
+        _field("durable_id", NON_EMPTY_STRING),
+    ),
+    "layer_polyadic_instance": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("polyadic-instance",))),
+        _field("index", NON_NEGATIVE_INTEGER),
+    ),
+    "layer_durable_polyadic": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("durable-polyadic",))),
+        _field("durable_id", NON_EMPTY_STRING),
+    ),
+    "layer_document": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("document",)))
+    ),
+    "layer_orphan_index": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("index",))),
+        _field("index", NON_NEGATIVE_INTEGER),
+    ),
     "simple_relation": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("simple",))),
         _field("name", QUALIFIED_NAME),
@@ -246,6 +299,32 @@ DECLARATIONS: dict[str, Shape] = {
         _field("attributes", ATTRIBUTES),
     ),
 }
+LAYER_LIVE_SUBJECT = _reference(
+    "layer_item",
+    "layer_durable_item",
+    "layer_boundary",
+    "layer_durable_boundary",
+    "layer_tier",
+    "layer_relation_declaration",
+    "layer_relation_instance",
+    "layer_durable_relation",
+    "layer_polyadic_instance",
+    "layer_durable_polyadic",
+    "layer_document",
+)
+DECLARATIONS["layer_orphan"] = _object(
+    _field("kind", Shape(ShapeKind.STRING, values=("orphaned",))),
+    _field("carrier", _reference("tier_seal_carrier", "graph_seal_carrier")),
+    _field("was", _reference("layer_item", "layer_boundary", "layer_orphan_index")),
+)
+LAYER_SUBJECT = _reference(*LAYER_LIVE_SUBJECT.variants, "layer_orphan")
+DECLARATIONS["layer_fact"] = _object(
+    _field("subject", LAYER_SUBJECT), _field("value", ATTRIBUTE_VALUE)
+)
+DECLARATIONS["layer"] = _object(
+    _field("name", _reference("layer_name")),
+    _field("facts", _array(_reference("layer_fact"))),
+)
 
 RELATION_DECLARATION = _reference(
     "simple_relation", "bipartite_relation", "polyadic_relation"
@@ -347,6 +426,7 @@ GRAPH = _object(
             )
         ),
     ),
+    _field("layers", _array(_reference("layer"))),
 )
 DOCUMENT = _object(_field("format_version", STRING), _field("graph", GRAPH))
 

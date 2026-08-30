@@ -36,6 +36,14 @@ class AttributeDomain(StrEnum):
     DOCUMENT = "document"
 
 
+class LayerRead(StrEnum):
+    """Choose how a delivery answers a subject several layers describe."""
+
+    FIRST = "first"
+    LAST = "last"
+    ALL = "all"
+
+
 class XsdType(StrEnum):
     """The growable XSD datatype subset admitted for scalar attribute values.
 
@@ -85,6 +93,69 @@ class QualifiedName:
     def __str__(self) -> str:
         """Return a compact expanded spelling for diagnostics."""
         return f"{{{self.namespace}}}{self.local_name}"
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class LayerName:
+    """Identify a layer by its vocabulary and its producing source."""
+
+    vocabulary: str
+    source: str
+
+    def __post_init__(self) -> None:
+        _require_name(self.vocabulary, "layer vocabulary")
+        _require_name(self.source, "layer source")
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the layer identity axes as JSON-serializable data."""
+        return {"vocabulary": self.vocabulary, "source": self.source}
+
+
+@dataclass(frozen=True, slots=True)
+class TierRef:
+    """Identify one tier as an attribute subject."""
+
+    tier: QualifiedName
+
+
+@dataclass(frozen=True, slots=True)
+class RelationDeclarationRef:
+    """Identify one relation declaration as an attribute subject."""
+
+    relation: QualifiedName
+
+
+@dataclass(frozen=True, slots=True)
+class RelationInstanceRef:
+    """Identify one binary relation instance by structural index."""
+
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class DurableRelationRef:
+    """Identify one relation instance by durable identity."""
+
+    durable_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PolyadicInstanceRef:
+    """Identify one polyadic relation instance by structural index."""
+
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class DurablePolyadicRef:
+    """Identify one polyadic relation instance by durable identity."""
+
+    durable_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentRef:
+    """Identify the document itself as an attribute subject."""
 
 
 class GraphCarrier(StrEnum):
@@ -716,6 +787,82 @@ class PolyadicRelationInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class OrphanedSubject:
+    """Name where a fact stood when an edit left its subject no image.
+
+    The old coordinate and its carrier are retained, never re-anchored. Orphans
+    are unreachable from reads and accumulate until a caller constructs a layer
+    without them; ``flatten`` refuses rather than hiding that cost in the base.
+    """
+
+    carrier: SealedCarrier
+    was: ItemRef | BoundaryRef | int
+
+
+type LayerSubject = (
+    ItemRef
+    | DurableItemRef
+    | BoundaryRef
+    | DurableBoundaryRef
+    | TierRef
+    | RelationDeclarationRef
+    | RelationInstanceRef
+    | DurableRelationRef
+    | PolyadicInstanceRef
+    | DurablePolyadicRef
+    | DocumentRef
+    | OrphanedSubject
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LayerFact:
+    """State one named typed value at one subject of the base."""
+
+    subject: LayerSubject
+    value: AttributeValue
+
+
+@dataclass(frozen=True, slots=True)
+class Layer:
+    """Hold one source's attribute facts and nothing structural."""
+
+    name: LayerName
+    facts: tuple[LayerFact, ...]
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the layer and its tagged facts as JSON-serializable data."""
+        return {
+            "name": self.name.to_data(),
+            "facts": [
+                {
+                    "subject": _layer_subject_data(fact.subject),
+                    "value": fact.value.to_data(),
+                }
+                for fact in self.facts
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """Select layers in lowest-to-highest precedence order; read is explicit."""
+
+    layers: tuple[LayerName, ...]
+    read: LayerRead
+
+
+@dataclass(frozen=True, slots=True)
+class Consensus:
+    """Report every delivered reading and whether their canonical values agree."""
+
+    subject: LayerSubject
+    name: QualifiedName
+    readings: tuple[tuple[LayerName, AttributeValue], ...]
+    agreed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class Graph:
     """Hold a validated immutable graph and derive order and empty boundaries.
 
@@ -735,6 +882,7 @@ class Graph:
     attributes: tuple[AttributeValue, ...] = ()
     polyadic_relations: tuple[PolyadicRelationInstance, ...] = ()
     seals: tuple[Seal, ...] = ()
+    layers: tuple[Layer, ...] = ()
     _tiers_by_name: dict[QualifiedName, Tier] = field(
         init=False, repr=False, compare=False
     )
@@ -765,6 +913,21 @@ class Graph:
             tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
         )
         object.__setattr__(self, "seals", tuple(sorted(self.seals, key=_seal_key)))
+        object.__setattr__(
+            self,
+            "layers",
+            tuple(
+                sorted(
+                    (
+                        Layer(
+                            layer.name, tuple(sorted(layer.facts, key=_layer_fact_key))
+                        )
+                        for layer in self.layers
+                    ),
+                    key=lambda layer: layer.name,
+                )
+            ),
+        )
         namespaces = _unique_by_name(
             ((binding.prefix, binding) for binding in self.namespaces),
             "namespace prefix",
@@ -806,6 +969,9 @@ class Graph:
                 for declaration in self.attribute_declarations
             ),
             "attribute declaration",
+        )
+        layer_names = _unique_by_name(
+            ((layer.name, layer) for layer in self.layers), "layer"
         )
         qualified_names = [
             *(tier.declaration.name for tier in self.tiers),
@@ -983,6 +1149,165 @@ class Graph:
             "_items_by_id",
             items_by_id,
         )
+        for layer in layer_names.values():
+            seen: set[tuple[LayerSubject, QualifiedName]] = set()
+            for fact in layer.facts:
+                if fact.value.name.namespace != layer.name.vocabulary:
+                    raise GraphValidationError(
+                        f"layer {layer.name.vocabulary!r}/{layer.name.source!r} states "
+                        f"{str(fact.value.name)!r}; a layer writes in its named vocabulary"
+                    )
+                key = (fact.subject, fact.value.name)
+                if key in seen:
+                    raise GraphValidationError(
+                        f"layer {layer.name.vocabulary!r}/{layer.name.source!r} states "
+                        f"{str(fact.value.name)!r} twice at {str(fact.subject)!r}; one "
+                        "layer states one value at one subject, and a second producer "
+                        "states its own in its own layer"
+                    )
+                seen.add(key)
+                self._validate_layer_fact(layer, fact, attributes)
+
+    def _validate_layer_fact(
+        self,
+        layer: Layer,
+        fact: LayerFact,
+        declarations: Mapping[QualifiedName, AttributeDeclaration],
+    ) -> None:
+        """Require a live subject and the declaration domain it promises."""
+        declaration = declarations.get(fact.value.name)
+        if declaration is None:
+            raise GraphValidationError(
+                f"attribute {str(fact.value.name)!r} is undeclared"
+            )
+        if declaration.value_type is not fact.value.value_type:
+            raise GraphValidationError(
+                f"attribute {str(fact.value.name)!r} requires {declaration.value_type.value}, "
+                f"not {fact.value.value_type.value}"
+            )
+        expected = _layer_subject_domain(fact.subject)
+        if declaration.domain is not expected:
+            raise GraphValidationError(
+                f"layer {layer.name.vocabulary!r}/{layer.name.source!r} states "
+                f"{str(fact.value.name)!r} at {_domain_article(expected)}, but that name "
+                f"is declared for the {declaration.domain.value} domain; a value is "
+                "carried where its declaration says it is carried"
+            )
+        if not isinstance(fact.subject, OrphanedSubject):
+            _resolve_layer_subject(self, fact.subject)
+
+    def layer_values(
+        self, subject: LayerSubject, name: QualifiedName, delivery: Delivery
+    ) -> tuple[AttributeValue, ...]:
+        """Return what the explicit delivery reads at this live subject and name."""
+        readings = self._layer_readings(subject, name, delivery)
+        if delivery.read is LayerRead.FIRST:
+            return tuple(value for _, value in readings[:1])
+        if delivery.read is LayerRead.LAST:
+            return tuple(value for _, value in readings[-1:])
+        return tuple(value for _, value in readings)
+
+    def consensus(
+        self, subject: LayerSubject, name: QualifiedName, delivery: Delivery
+    ) -> Consensus:
+        """Report every delivered statement and whether canonical values agree."""
+        readings = self._layer_readings(subject, name, delivery)
+        return Consensus(
+            subject,
+            name,
+            readings,
+            bool(readings) and len({value for _, value in readings}) == 1,
+        )
+
+    def disagreements(self, delivery: Delivery) -> tuple[Consensus, ...]:
+        """Return only delivered subject/name rows carrying unequal readings."""
+        keys = {
+            (fact.subject, fact.value.name)
+            for layer in self._delivered(delivery)
+            for fact in layer.facts
+            if not isinstance(fact.subject, OrphanedSubject)
+        }
+        return tuple(
+            report
+            for subject, name in sorted(keys, key=_layer_key)
+            if not (report := self.consensus(subject, name, delivery)).agreed
+        )
+
+    def flatten(self, delivery: Delivery) -> Graph:
+        """Write selected readings into a layerless base, refusing ambiguity/orphans."""
+        delivered = self._delivered(delivery)
+        for layer in delivered:
+            for fact in layer.facts:
+                if isinstance(fact.subject, OrphanedSubject):
+                    raise GraphValidationError(
+                        f"delivery cannot be flattened: layer {layer.name.vocabulary!r}/"
+                        f"{layer.name.source!r} holds {str(fact.value.name)!r} orphaned "
+                        f"from {str(fact.subject.was)!r}, and an orphaned fact has no "
+                        "subject in the base to be written to. Re-anchor it, or leave "
+                        "that layer out of the delivery."
+                    )
+        keys = {
+            (fact.subject, fact.value.name)
+            for layer in delivered
+            for fact in layer.facts
+        }
+        editor = self.edit()
+        editor._layers = []
+        for subject, name in keys:
+            values = self.layer_values(subject, name, delivery)
+            if len(values) > 1:
+                readings = self._layer_readings(subject, name, delivery)
+                first, second = readings[:2]
+                raise GraphValidationError(
+                    f"delivery cannot be flattened: layers {first[0].vocabulary!r}/"
+                    f"{first[0].source!r} and {second[0].vocabulary!r}/"
+                    f"{second[0].source!r} both state {str(name)!r} at "
+                    f"{str(subject)!r}, and one subject carries at most one value "
+                    "under one name. Flatten under FIRST or LAST to choose one, or "
+                    "keep the layers and read them."
+                )
+            if values:  # pragma: no branch - keys come only from delivered facts
+                editor.set_attribute(_layer_edit_target(self, subject), values[0])
+        return editor.freeze()
+
+    def promotion(self, tier: QualifiedName) -> bool:
+        """Report whether every item on a tier carries durable identity."""
+        member = self._tiers_by_name.get(tier)
+        if member is None:
+            raise ValueError(f"promotion names undeclared tier {str(tier)!r}")
+        return all(item.durable_id is not None for item in member.items)
+
+    def _delivered(self, delivery: Delivery) -> tuple[Layer, ...]:
+        if not delivery.layers:
+            raise GraphValidationError(
+                "delivery names no layers; a read with nothing to read from has no answer to give, and an empty result would look like agreement"
+            )
+        if len(set(delivery.layers)) != len(delivery.layers):
+            duplicate = next(
+                name for name in delivery.layers if delivery.layers.count(name) > 1
+            )
+            raise GraphValidationError(
+                f"delivery names layer {duplicate.vocabulary!r}/{duplicate.source!r} twice; a delivery is a precedence order and a layer has one place in it"
+            )
+        held = {layer.name: layer for layer in self.layers}
+        missing = next((name for name in delivery.layers if name not in held), None)
+        if missing is not None:
+            raise GraphValidationError(
+                f"delivery names layer {missing.vocabulary!r}/{missing.source!r}, which this graph does not hold"
+            )
+        return tuple(held[name] for name in delivery.layers)
+
+    def _layer_readings(
+        self, subject: LayerSubject, name: QualifiedName, delivery: Delivery
+    ) -> tuple[tuple[LayerName, AttributeValue], ...]:
+        if isinstance(subject, OrphanedSubject):
+            return ()
+        return tuple(
+            (layer.name, fact.value)
+            for layer in self._delivered(delivery)
+            for fact in layer.facts
+            if fact.subject == subject and fact.value.name == name
+        )
 
     def boundaries(self, tier: QualifiedName) -> tuple[Boundary, ...]:
         """Return every addressable boundary with sparse values joined on demand."""
@@ -1144,6 +1469,7 @@ class Graph:
             self.attributes,
             self.polyadic_relations,
             self.seals,
+            self.layers,
         )
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -1167,6 +1493,7 @@ class Graph:
             ],
             "attributes": _attributes_data(self.attributes),
             "seals": [seal.to_data() for seal in self.seals],
+            "layers": [layer.to_data() for layer in self.layers],
         }
 
     def seal(self, carrier: SealedCarrier, sealed: int) -> Graph:
@@ -1203,6 +1530,7 @@ class Graph:
             self.attributes,
             self.polyadic_relations,
             (*kept, Seal(carrier, sealed)),
+            self.layers,
         )
 
     def edit(self) -> GraphEditor:
@@ -1385,6 +1713,7 @@ class GraphEditor:
         self._attributes = list(graph.attributes)
         self._polyadic_relations = list(graph.polyadic_relations)
         self._seals = list(graph.seals)
+        self._layers = list(graph.layers)
 
     def freeze(self) -> Graph:
         """Return a fully validated graph without consuming this editor."""
@@ -1401,6 +1730,7 @@ class GraphEditor:
             tuple(self._attributes),
             tuple(self._polyadic_relations),
             tuple(self._seals),
+            tuple(self._layers),
         )
 
     def displacement(self) -> Displacement:
@@ -1656,6 +1986,17 @@ class GraphEditor:
                 polyadic_relations=mapping,
                 departed_polyadic_relations=frozenset({index}),
             )
+            self._layers = [_remap_layer(layer, step) for layer in self._layers]
+            durable_id = self._polyadic_relations[index].durable_id
+            if (
+                durable_id is not None
+            ):  # pragma: no branch - polyadic removal needs an id
+                self._layers = [
+                    _orphan_durable_relation(
+                        layer, durable_id, GraphCarrier.POLYADIC_RELATIONS, index
+                    )
+                    for layer in self._layers
+                ]
             del self._polyadic_relations[index]
         else:
             mapping = {
@@ -1666,6 +2007,15 @@ class GraphEditor:
             step = self._current_displacement(
                 relations=mapping, departed_relations=frozenset({index})
             )
+            self._layers = [_remap_layer(layer, step) for layer in self._layers]
+            durable_id = self._relations[index].durable_id
+            if durable_id is not None:
+                self._layers = [
+                    _orphan_durable_relation(
+                        layer, durable_id, GraphCarrier.RELATIONS, index
+                    )
+                    for layer in self._layers
+                ]
             del self._relations[index]
         self._advance_displacement(step)
         return self
@@ -1838,10 +2188,12 @@ class GraphEditor:
             departed_items=departed_items,
             departed_boundaries=departed_boundaries,
         )
+        layers = [_remap_layer(layer, step) for layer in self._layers]
         member.items = items
         self._boundary_values = boundaries
         self._relations = relations
         self._polyadic_relations = polyadic
+        self._layers = layers
         self._advance_displacement(step)
 
     def _advance_displacement(self, step: Displacement) -> None:
@@ -2831,6 +3183,216 @@ def _seal_key(seal: Seal) -> tuple[int, str, str]:
     if isinstance(seal.carrier, QualifiedName):
         return (0, seal.carrier.namespace, seal.carrier.local_name)
     return (1, seal.carrier.value, "")
+
+
+def _layer_subject_domain(subject: LayerSubject) -> AttributeDomain:
+    if isinstance(subject, (ItemRef, DurableItemRef)):
+        return AttributeDomain.ITEM
+    if isinstance(subject, (BoundaryRef, DurableBoundaryRef)):
+        return AttributeDomain.BOUNDARY
+    if isinstance(subject, TierRef):
+        return AttributeDomain.TIER
+    if isinstance(subject, RelationDeclarationRef):
+        return AttributeDomain.RELATION_DECLARATION
+    if isinstance(
+        subject,
+        (
+            RelationInstanceRef,
+            DurableRelationRef,
+            PolyadicInstanceRef,
+            DurablePolyadicRef,
+        ),
+    ):
+        return AttributeDomain.RELATION_INSTANCE
+    if isinstance(subject, DocumentRef):
+        return AttributeDomain.DOCUMENT
+    if isinstance(subject.was, ItemRef):
+        return AttributeDomain.ITEM
+    if isinstance(subject.was, BoundaryRef):
+        return AttributeDomain.BOUNDARY
+    return AttributeDomain.RELATION_INSTANCE
+
+
+def _domain_article(domain: AttributeDomain) -> str:
+    return f"a {domain.value.replace('_', ' ')}"
+
+
+def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
+    if isinstance(subject, (ItemRef, DurableItemRef)):
+        return graph.resolve_item(subject)
+    if isinstance(subject, (BoundaryRef, DurableBoundaryRef)):
+        return graph.resolve_boundary(subject)
+    if isinstance(subject, TierRef):
+        if subject.tier not in graph._tiers_by_name:
+            raise GraphValidationError(
+                f"layer subject names undeclared tier {str(subject.tier)!r}"
+            )
+        return subject.tier
+    if isinstance(subject, RelationDeclarationRef):
+        if not any(
+            item.name == subject.relation for item in graph.relation_declarations
+        ):
+            raise GraphValidationError(
+                f"layer subject names undeclared relation {str(subject.relation)!r}"
+            )
+        return subject.relation
+    if isinstance(subject, RelationInstanceRef):
+        if subject.index < 0 or subject.index >= len(graph.relations):
+            raise GraphValidationError(
+                f"layer subject relation index {subject.index} is outside the graph"
+            )
+        return subject.index
+    if isinstance(subject, PolyadicInstanceRef):
+        if subject.index < 0 or subject.index >= len(graph.polyadic_relations):
+            raise GraphValidationError(
+                f"layer subject polyadic relation index {subject.index} is outside the graph"
+            )
+        return subject.index
+    if isinstance(subject, DurableRelationRef):
+        if not any(item.durable_id == subject.durable_id for item in graph.relations):
+            raise GraphValidationError(
+                f"unknown durable relation id {subject.durable_id!r}"
+            )
+        return subject.durable_id
+    if isinstance(subject, DurablePolyadicRef):
+        if not any(
+            item.durable_id == subject.durable_id for item in graph.polyadic_relations
+        ):
+            raise GraphValidationError(
+                f"unknown durable polyadic relation id {subject.durable_id!r}"
+            )
+        return subject.durable_id
+    if isinstance(subject, DocumentRef):
+        return None
+    raise GraphValidationError(  # pragma: no cover - callers exclude orphans
+        "an orphaned layer subject has no live coordinate"
+    )
+
+
+def _layer_edit_target(graph: Graph, subject: LayerSubject) -> EditTarget:
+    if isinstance(subject, TierRef):
+        return subject.tier
+    if isinstance(subject, RelationDeclarationRef):
+        return subject.relation
+    if isinstance(subject, RelationInstanceRef):
+        return subject.index
+    if isinstance(subject, PolyadicInstanceRef):
+        relation = graph.polyadic_relations[subject.index]
+        if relation.durable_id is None:
+            raise GraphValidationError(
+                "a polyadic layer fact cannot be flattened without durable relation identity"
+            )
+        return relation.durable_id
+    if isinstance(subject, DurableRelationRef | DurablePolyadicRef):
+        return subject.durable_id
+    if isinstance(subject, DocumentRef):
+        return None
+    if isinstance(subject, OrphanedSubject):  # pragma: no cover - flatten prechecks
+        raise GraphValidationError("an orphaned layer subject has no edit target")
+    return subject
+
+
+def _layer_subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
+    if isinstance(subject, ItemRef):
+        return {
+            "kind": "item-coordinate",
+            "tier": subject.tier.to_data(),
+            "index": subject.index,
+        }
+    if isinstance(subject, DurableItemRef):
+        return {"kind": "durable-item", "durable_id": subject.durable_id}
+    if isinstance(subject, BoundaryRef):
+        return {
+            "kind": "boundary-coordinate",
+            "tier": subject.tier.to_data(),
+            "index": subject.index,
+        }
+    if isinstance(subject, DurableBoundaryRef):
+        return {"kind": "durable-boundary", **subject.to_data()}
+    if isinstance(subject, TierRef):
+        return {"kind": "tier", "tier": subject.tier.to_data()}
+    if isinstance(subject, RelationDeclarationRef):
+        return {"kind": "relation-declaration", "relation": subject.relation.to_data()}
+    if isinstance(subject, RelationInstanceRef):
+        return {"kind": "relation-instance", "index": subject.index}
+    if isinstance(subject, DurableRelationRef):
+        return {"kind": "durable-relation", "durable_id": subject.durable_id}
+    if isinstance(subject, PolyadicInstanceRef):
+        return {"kind": "polyadic-instance", "index": subject.index}
+    if isinstance(subject, DurablePolyadicRef):
+        return {"kind": "durable-polyadic", "durable_id": subject.durable_id}
+    if isinstance(subject, DocumentRef):
+        return {"kind": "document"}
+    carrier: dict[str, JsonValue]
+    if isinstance(subject.carrier, QualifiedName):
+        carrier = {"kind": "tier", "tier": subject.carrier.to_data()}
+    else:
+        carrier = {"kind": "graph", "name": subject.carrier.value}
+    if isinstance(subject.was, ItemRef | BoundaryRef):
+        was = _layer_subject_data(subject.was)
+    else:
+        was = {"kind": "index", "index": subject.was}
+    return {"kind": "orphaned", "carrier": carrier, "was": was}
+
+
+def _layer_key(key: tuple[LayerSubject, QualifiedName]) -> tuple[str, str, str]:
+    subject, name = key
+    return (repr(_layer_subject_data(subject)), name.namespace, name.local_name)
+
+
+def _layer_fact_key(fact: LayerFact) -> tuple[str, str, str]:
+    return _layer_key((fact.subject, fact.value.name))
+
+
+def _remap_layer(layer: Layer, displacement: Displacement) -> Layer:
+    facts: list[LayerFact] = []
+    for fact in layer.facts:
+        subject = fact.subject
+        if isinstance(subject, ItemRef):
+            subject = (
+                OrphanedSubject(subject.tier, subject)
+                if subject in displacement.departed_items
+                else displacement.items[subject]
+            )
+        elif isinstance(subject, BoundaryRef):
+            subject = (
+                OrphanedSubject(subject.tier, subject)
+                if subject in displacement.departed_boundaries
+                else displacement.boundaries[subject]
+            )
+        elif isinstance(subject, RelationInstanceRef):
+            subject = (
+                OrphanedSubject(GraphCarrier.RELATIONS, subject.index)
+                if subject.index in displacement.departed_relations
+                else RelationInstanceRef(displacement.relations[subject.index])
+            )
+        elif isinstance(subject, PolyadicInstanceRef):
+            subject = (
+                OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, subject.index)
+                if subject.index in displacement.departed_polyadic_relations
+                else PolyadicInstanceRef(displacement.polyadic_relations[subject.index])
+            )
+        facts.append(LayerFact(subject, fact.value))
+    return Layer(layer.name, tuple(facts))
+
+
+def _orphan_durable_relation(
+    layer: Layer, durable_id: str, carrier: GraphCarrier, index: int
+) -> Layer:
+    """Retain a durable fact when removal takes away the identity it names."""
+    return Layer(
+        layer.name,
+        tuple(
+            LayerFact(
+                OrphanedSubject(carrier, index)
+                if isinstance(fact.subject, DurableRelationRef | DurablePolyadicRef)
+                and fact.subject.durable_id == durable_id
+                else fact.subject,
+                fact.value,
+            )
+            for fact in layer.facts
+        ),
+    )
 
 
 def _carrier_kind(carrier: SealedCarrier) -> str:

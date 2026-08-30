@@ -367,6 +367,422 @@
       ],
       "type": "object"
     },
+    "layer": {
+      "additionalProperties": false,
+      "properties": {
+        "facts": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/layer_fact"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "name": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/layer_name"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "layer_boundary": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "boundary-coordinate"
+          ],
+          "type": "string"
+        },
+        "tier": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tier",
+        "index"
+      ],
+      "type": "object"
+    },
+    "layer_document": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "document"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "layer_durable_boundary": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item_anchor"
+            },
+            {
+              "$ref": "#/$defs/tier_anchor"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "durable-boundary"
+          ],
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "anchor",
+        "side"
+      ],
+      "type": "object"
+    },
+    "layer_durable_item": {
+      "additionalProperties": false,
+      "properties": {
+        "durable_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "durable-item"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durable_id"
+      ],
+      "type": "object"
+    },
+    "layer_durable_polyadic": {
+      "additionalProperties": false,
+      "properties": {
+        "durable_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "durable-polyadic"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durable_id"
+      ],
+      "type": "object"
+    },
+    "layer_durable_relation": {
+      "additionalProperties": false,
+      "properties": {
+        "durable_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "durable-relation"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durable_id"
+      ],
+      "type": "object"
+    },
+    "layer_fact": {
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/layer_item"
+            },
+            {
+              "$ref": "#/$defs/layer_durable_item"
+            },
+            {
+              "$ref": "#/$defs/layer_boundary"
+            },
+            {
+              "$ref": "#/$defs/layer_durable_boundary"
+            },
+            {
+              "$ref": "#/$defs/layer_tier"
+            },
+            {
+              "$ref": "#/$defs/layer_relation_declaration"
+            },
+            {
+              "$ref": "#/$defs/layer_relation_instance"
+            },
+            {
+              "$ref": "#/$defs/layer_durable_relation"
+            },
+            {
+              "$ref": "#/$defs/layer_polyadic_instance"
+            },
+            {
+              "$ref": "#/$defs/layer_durable_polyadic"
+            },
+            {
+              "$ref": "#/$defs/layer_document"
+            },
+            {
+              "$ref": "#/$defs/layer_orphan"
+            }
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/string_attribute_value"
+            },
+            {
+              "$ref": "#/$defs/boolean_attribute_value"
+            },
+            {
+              "$ref": "#/$defs/integer_attribute_value"
+            },
+            {
+              "$ref": "#/$defs/decimal_attribute_value"
+            },
+            {
+              "$ref": "#/$defs/double_attribute_value"
+            }
+          ]
+        }
+      },
+      "required": [
+        "subject",
+        "value"
+      ],
+      "type": "object"
+    },
+    "layer_item": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "item-coordinate"
+          ],
+          "type": "string"
+        },
+        "tier": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tier",
+        "index"
+      ],
+      "type": "object"
+    },
+    "layer_name": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "vocabulary": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "vocabulary",
+        "source"
+      ],
+      "type": "object"
+    },
+    "layer_orphan": {
+      "additionalProperties": false,
+      "properties": {
+        "carrier": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tier_seal_carrier"
+            },
+            {
+              "$ref": "#/$defs/graph_seal_carrier"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "orphaned"
+          ],
+          "type": "string"
+        },
+        "was": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/layer_item"
+            },
+            {
+              "$ref": "#/$defs/layer_boundary"
+            },
+            {
+              "$ref": "#/$defs/layer_orphan_index"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "carrier",
+        "was"
+      ],
+      "type": "object"
+    },
+    "layer_orphan_index": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "index"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "index"
+      ],
+      "type": "object"
+    },
+    "layer_polyadic_instance": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "polyadic-instance"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "index"
+      ],
+      "type": "object"
+    },
+    "layer_relation_declaration": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "relation-declaration"
+          ],
+          "type": "string"
+        },
+        "relation": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "relation"
+      ],
+      "type": "object"
+    },
+    "layer_relation_instance": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "relation-instance"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "index"
+      ],
+      "type": "object"
+    },
+    "layer_tier": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "tier"
+          ],
+          "type": "string"
+        },
+        "tier": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tier"
+      ],
+      "type": "object"
+    },
     "polyadic_relation": {
       "additionalProperties": false,
       "properties": {
@@ -760,6 +1176,16 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "layers": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/layer"
               }
             ]
           },

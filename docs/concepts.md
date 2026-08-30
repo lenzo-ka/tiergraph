@@ -124,6 +124,26 @@ first-class payload-attachment API that could attach a JSON value to an item in
 another graph. That API does not yet exist. If it is added, stringified-JSON
 attributes will be candidates for migration.
 
+## Attribute layers
+
+`Graph.layers` keeps separately sourced attribute facts without weakening the
+base graph's at-most-one value rule. A layer is identified by the vocabulary it
+writes in and by its source. Facts may describe items, boundaries, tiers,
+relation declarations, binary or polyadic relation instances, and the document;
+they cannot add tiers, items, boundaries, or relations.
+
+A `Delivery` names the layers to read and their precedence. Its `read` policy is
+always explicit: `FIRST` selects the earliest statement, `LAST` selects the
+latest, and `ALL` returns every statement in delivery order. `consensus` reports
+agreement without merging values, while `disagreements` supplies the rows that
+need review. `flatten` writes a chosen delivery into a new layerless base.
+
+Structural edits remap coordinate-keyed facts. When a subject is removed, its
+fact becomes an `OrphanedSubject` carrying the old coordinate and its former
+carrier. Orphans are invisible to reads and accumulate until a caller replaces
+the layer; flattening a delivery containing one is refused. A layer does not
+veto a base edit, but an existing positional seal still does.
+
 ## Immutability and refusal
 
 `Graph` is a frozen value that validates its whole boundary in

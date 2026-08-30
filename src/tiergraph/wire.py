@@ -15,26 +15,38 @@ from tiergraph.core import (
     Boundary,
     BoundaryRef,
     BoundarySide,
+    DocumentRef,
     DurableBoundaryRef,
     DurableItemRef,
+    DurablePolyadicRef,
+    DurableRelationRef,
     Graph,
     GraphCarrier,
     Item,
     ItemRef,
     JsonValue,
+    Layer,
+    LayerFact,
+    LayerName,
+    LayerSubject,
     NamespaceDeclaration,
+    OrphanedSubject,
+    PolyadicInstanceRef,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
     RelationDeclaration,
+    RelationDeclarationRef,
     RelationEndpointKind,
     RelationEndpointRef,
     RelationInstance,
+    RelationInstanceRef,
     RelationSideDeclaration,
     Seal,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    TierRef,
     XsdType,
 )
 from tiergraph.schema import (
@@ -412,6 +424,12 @@ def _decode_graph(data: dict[str, object]) -> Graph:
                 )
             )
         ),
+        tuple(
+            _layer(entry, index)
+            for index, entry in enumerate(
+                _objects(data["layers"], "layers", object_fields(DECLARATIONS["layer"]))
+            )
+        ),
     )
 
 
@@ -434,6 +452,108 @@ def _seal(data: dict[str, object], index: int) -> Seal:
             f"{path}.carrier.kind {kind!r} is unsupported",
         )
     return Seal(target, _integer(data["sealed"], f"{path}.sealed"))
+
+
+def _layer(data: dict[str, object], index: int) -> Layer:
+    path = f"layers[{index}]"
+    name = _object(data["name"], f"{path}.name")
+    _keys(name, object_fields(DECLARATIONS["layer_name"]), f"{path}.name")
+    return Layer(
+        LayerName(
+            _string(name["vocabulary"], f"{path}.name.vocabulary"),
+            _string(name["source"], f"{path}.name.source"),
+        ),
+        tuple(
+            _layer_fact(fact, fact_index, path)
+            for fact_index, fact in enumerate(
+                _objects(
+                    data["facts"],
+                    f"{path}.facts",
+                    object_fields(DECLARATIONS["layer_fact"]),
+                )
+            )
+        ),
+    )
+
+
+def _layer_fact(data: dict[str, object], index: int, layer_path: str) -> LayerFact:
+    path = f"{layer_path}.facts[{index}]"
+    subject = _object(data["subject"], f"{path}.subject")
+    return LayerFact(
+        _layer_subject(subject, f"{path}.subject"),
+        _attribute(data["value"], f"{path}.value"),
+    )
+
+
+def _layer_subject(data: dict[str, object], path: str) -> LayerSubject:
+    kind = _string(data.get("kind"), f"{path}.kind")
+    variants = {
+        "item-coordinate": "layer_item",
+        "durable-item": "layer_durable_item",
+        "boundary-coordinate": "layer_boundary",
+        "durable-boundary": "layer_durable_boundary",
+        "tier": "layer_tier",
+        "relation-declaration": "layer_relation_declaration",
+        "relation-instance": "layer_relation_instance",
+        "durable-relation": "layer_durable_relation",
+        "polyadic-instance": "layer_polyadic_instance",
+        "durable-polyadic": "layer_durable_polyadic",
+        "document": "layer_document",
+        "orphaned": "layer_orphan",
+    }
+    declaration = variants.get(kind)
+    if declaration is None:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unsupported"
+        )
+    _keys(data, object_fields(DECLARATIONS[declaration]), path)
+    if kind == "item-coordinate":
+        return ItemRef(
+            _name(data["tier"], f"{path}.tier"),
+            _integer(data["index"], f"{path}.index"),
+        )
+    if kind == "durable-item":
+        return DurableItemRef(_string(data["durable_id"], f"{path}.durable_id"))
+    if kind == "boundary-coordinate":
+        return BoundaryRef(
+            _name(data["tier"], f"{path}.tier"),
+            _integer(data["index"], f"{path}.index"),
+        )
+    if kind == "durable-boundary":
+        return _durable_boundary({"anchor": data["anchor"], "side": data["side"]}, path)
+    if kind == "tier":
+        return TierRef(_name(data["tier"], f"{path}.tier"))
+    if kind == "relation-declaration":
+        return RelationDeclarationRef(_name(data["relation"], f"{path}.relation"))
+    if kind == "relation-instance":
+        return RelationInstanceRef(_integer(data["index"], f"{path}.index"))
+    if kind == "durable-relation":
+        return DurableRelationRef(_string(data["durable_id"], f"{path}.durable_id"))
+    if kind == "polyadic-instance":
+        return PolyadicInstanceRef(_integer(data["index"], f"{path}.index"))
+    if kind == "durable-polyadic":
+        return DurablePolyadicRef(_string(data["durable_id"], f"{path}.durable_id"))
+    if kind == "document":
+        return DocumentRef()
+    carrier_data = _object(data["carrier"], f"{path}.carrier")
+    carrier_kind = _string(carrier_data.get("kind"), f"{path}.carrier.kind")
+    carrier = (
+        _name(carrier_data["tier"], f"{path}.carrier.tier")
+        if carrier_kind == "tier"
+        else _enum(GraphCarrier, carrier_data["name"], f"{path}.carrier.name")
+    )
+    was_data = _object(data["was"], f"{path}.was")
+    was_kind = _string(was_data.get("kind"), f"{path}.was.kind")
+    if was_kind == "index":
+        _keys(
+            was_data, object_fields(DECLARATIONS["layer_orphan_index"]), f"{path}.was"
+        )
+        was: ItemRef | BoundaryRef | int = _integer(
+            was_data["index"], f"{path}.was.index"
+        )
+    else:
+        was = cast(ItemRef | BoundaryRef, _layer_subject(was_data, f"{path}.was"))
+    return OrphanedSubject(carrier, was)
 
 
 def _tier(data: dict[str, object], index: int) -> Tier:
@@ -648,6 +768,16 @@ def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
                 object_fields(DECLARATIONS["string_attribute_value"]),
             )
         )
+    )
+
+
+def _attribute(value: object, path: str) -> AttributeValue:
+    data = _object(value, path)
+    _keys(data, object_fields(DECLARATIONS["string_attribute_value"]), path)
+    return AttributeValue(
+        _name(data["name"], f"{path}.name"),
+        _enum(XsdType, data["value_type"], f"{path}.value_type"),
+        _string(data["lexical"], f"{path}.lexical"),
     )
 
 

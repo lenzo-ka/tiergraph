@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 173 top-level `tiergraph` exports exactly once.
+It covers 188 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1670,7 +1670,7 @@ Choose the boundary immediately before or after an anchor.
 ### `Graph`
 
 ```text
-Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = ()) -> None
+Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = (), layers: 'tuple[Layer, ...]' = ()) -> None
 ```
 
 Hold a validated immutable graph and derive order and empty boundaries.
@@ -1680,6 +1680,56 @@ order has no graph meaning: namespaces, relation and attribute declarations,
 every attribute-value collection, sparse boundary values, and relation-side
 allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
 endpoint sequences remain ordered because their sequence carries graph meaning.
+
+#### `Graph.layer_values`
+
+Method.
+
+```text
+Graph.layer_values(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'tuple[AttributeValue, ...]'
+```
+
+Return what the explicit delivery reads at this live subject and name.
+
+#### `Graph.consensus`
+
+Method.
+
+```text
+Graph.consensus(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'Consensus'
+```
+
+Report every delivered statement and whether canonical values agree.
+
+#### `Graph.disagreements`
+
+Method.
+
+```text
+Graph.disagreements(self, delivery: 'Delivery') -> 'tuple[Consensus, ...]'
+```
+
+Return only delivered subject/name rows carrying unequal readings.
+
+#### `Graph.flatten`
+
+Method.
+
+```text
+Graph.flatten(self, delivery: 'Delivery') -> 'Graph'
+```
+
+Write selected readings into a layerless base, refusing ambiguity/orphans.
+
+#### `Graph.promotion`
+
+Method.
+
+```text
+Graph.promotion(self, tier: 'QualifiedName') -> 'bool'
+```
+
+Report whether every item on a tier carries durable identity.
 
 #### `Graph.boundaries`
 
@@ -2255,6 +2305,119 @@ validate what it denotes.
 - `INTEGER` = `integer`
 - `DECIMAL` = `decimal`
 - `DOUBLE` = `double`
+
+## Layers
+
+### `Consensus`
+
+```text
+Consensus(subject: 'LayerSubject', name: 'QualifiedName', readings: 'tuple[tuple[LayerName, AttributeValue], ...]', agreed: 'bool') -> None
+```
+
+Report every delivered reading and whether their canonical values agree.
+
+### `Delivery`
+
+```text
+Delivery(layers: 'tuple[LayerName, ...]', read: 'LayerRead') -> None
+```
+
+Select layers in lowest-to-highest precedence order; read is explicit.
+
+### `Layer`
+
+```text
+Layer(name: 'LayerName', facts: 'tuple[LayerFact, ...]') -> None
+```
+
+Hold one source's attribute facts and nothing structural.
+
+#### `Layer.to_data`
+
+Method.
+
+```text
+Layer.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the layer and its tagged facts as JSON-serializable data.
+
+### `LayerFact`
+
+```text
+LayerFact(subject: 'LayerSubject', value: 'AttributeValue') -> None
+```
+
+State one named typed value at one subject of the base.
+
+### `LayerName`
+
+```text
+LayerName(vocabulary: 'str', source: 'str') -> None
+```
+
+Identify a layer by its vocabulary and its producing source.
+
+#### `LayerName.to_data`
+
+Method.
+
+```text
+LayerName.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the layer identity axes as JSON-serializable data.
+
+### `LayerRead`
+
+```text
+LayerRead(*values)
+```
+
+Choose how a delivery answers a subject several layers describe.
+
+#### `LayerRead` members
+
+- `FIRST` = `first`
+- `LAST` = `last`
+- `ALL` = `all`
+
+### `LayerSubject`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `OrphanedSubject`
+
+```text
+OrphanedSubject(carrier: 'SealedCarrier', was: 'ItemRef | BoundaryRef | int') -> None
+```
+
+Name where a fact stood when an edit left its subject no image.
+
+The old coordinate and its carrier are retained, never re-anchored. Orphans
+are unreachable from reads and accumulate until a caller constructs a layer
+without them; ``flatten`` refuses rather than hiding that cost in the base.
 
 ## Metadata
 
@@ -2983,6 +3146,14 @@ BoundaryRef.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the boundary reference as JSON-serializable data.
 
+### `DocumentRef`
+
+```text
+DocumentRef() -> None
+```
+
+Identify the document itself as an attribute subject.
+
 ### `DurableBoundaryRef`
 
 ```text
@@ -3039,6 +3210,22 @@ DurableItemRef.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the durable reference as JSON-serializable data.
 
+### `DurablePolyadicRef`
+
+```text
+DurablePolyadicRef(durable_id: 'str') -> None
+```
+
+Identify one polyadic relation instance by durable identity.
+
+### `DurableRelationRef`
+
+```text
+DurableRelationRef(durable_id: 'str') -> None
+```
+
+Identify one relation instance by durable identity.
+
 ### `ItemRef`
 
 ```text
@@ -3056,6 +3243,38 @@ ItemRef.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the reference as JSON-serializable data.
+
+### `PolyadicInstanceRef`
+
+```text
+PolyadicInstanceRef(index: 'int') -> None
+```
+
+Identify one polyadic relation instance by structural index.
+
+### `RelationDeclarationRef`
+
+```text
+RelationDeclarationRef(relation: 'QualifiedName') -> None
+```
+
+Identify one relation declaration as an attribute subject.
+
+### `RelationInstanceRef`
+
+```text
+RelationInstanceRef(index: 'int') -> None
+```
+
+Identify one binary relation instance by structural index.
+
+### `TierRef`
+
+```text
+TierRef(tier: 'QualifiedName') -> None
+```
+
+Identify one tier as an attribute subject.
 
 ## Rewrite
 

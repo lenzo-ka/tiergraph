@@ -93,6 +93,16 @@
       "TierDeclaration",
       "XsdType"
     ],
+    "layers": [
+      "Consensus",
+      "Delivery",
+      "Layer",
+      "LayerFact",
+      "LayerName",
+      "LayerRead",
+      "LayerSubject",
+      "OrphanedSubject"
+    ],
     "metadata": [
       "FORMAT_VERSION",
       "MACHINE_VERSION",
@@ -144,9 +154,16 @@
     ],
     "references": [
       "BoundaryRef",
+      "DocumentRef",
       "DurableBoundaryRef",
       "DurableItemRef",
-      "ItemRef"
+      "DurablePolyadicRef",
+      "DurableRelationRef",
+      "ItemRef",
+      "PolyadicInstanceRef",
+      "RelationDeclarationRef",
+      "RelationInstanceRef",
+      "TierRef"
     ],
     "rewrite": [
       "EffectRefusal",
