@@ -7,7 +7,15 @@ from tiergraph.wire import FORMAT_VERSION
 
 
 def graph_summary(graph: Graph) -> dict[str, object]:
-    """Return stable document counts and per-declaration graph summaries."""
+    """Return stable document counts and per-declaration graph summaries.
+
+    Qualified names carry their declared expanded spelling, the same
+    ``{"namespace", "local_name"}`` data every declaration's ``to_data`` emits,
+    so the whole summary is JSON-serializable. The wire's compact
+    ``prefix:local`` spelling is deliberately not used: it depends on the
+    document's prefix bindings, which are a wire choice rather than graph
+    content, and a summary of graph content should not vary with them.
+    """
     return {
         "format_version": FORMAT_VERSION,
         "namespaces": len(graph.namespaces),
@@ -21,7 +29,7 @@ def graph_summary(graph: Graph) -> dict[str, object]:
         "document_attributes": len(graph.attributes),
         "tier_summaries": [
             {
-                "name": tier.declaration.name,
+                "name": tier.declaration.name.to_data(),
                 "long_name": tier.declaration.long_name,
                 "items": len(tier.items),
                 "attributes": len(tier.attributes),
@@ -30,7 +38,7 @@ def graph_summary(graph: Graph) -> dict[str, object]:
         ],
         "relation_summaries": [
             {
-                "name": declaration.name,
+                "name": declaration.name.to_data(),
                 "kind": declaration.to_data()["kind"],
             }
             for declaration in graph.relation_declarations

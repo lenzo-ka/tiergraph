@@ -94,8 +94,17 @@ class NamespaceDeclaration:
     namespace: str
 
     def __post_init__(self) -> None:
-        """Require a usable prefix and namespace URI."""
+        """Require a prefix that is usable and writable, and a namespace URI.
+
+        A colon in the prefix is refused here rather than at emission, because
+        the colon is the qualified-name delimiter in every wire spelling: such a
+        binding is unwritable in principle, not merely unwritten by this codec.
+        """
         _require_name(self.prefix, "namespace prefix")
+        if ":" in self.prefix:
+            raise GraphValidationError(
+                f"namespace prefix {self.prefix!r} must not contain ':'"
+            )
         _require_name(self.namespace, f"namespace prefix {self.prefix!r}")
 
     @property

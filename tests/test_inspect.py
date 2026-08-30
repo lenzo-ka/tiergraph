@@ -1,5 +1,7 @@
 """Graph inspection is available as structured public data."""
 
+import json
+
 from tiergraph import (
     FORMAT_VERSION,
     Graph,
@@ -13,21 +15,26 @@ from tiergraph import (
 )
 
 
-def test_graph_summary_reports_counts_and_declaration_details() -> None:
+def _summary_graph() -> Graph:
+    """Build the smallest graph that carries both summarized name positions."""
     namespace = "urn:inspect"
     tier_name = QualifiedName(namespace, "tokens")
-    relation_name = QualifiedName(namespace, "next")
-    graph = Graph(
+    return Graph(
         (NamespaceDeclaration("i", namespace),),
         (Tier(TierDeclaration(tier_name, "Tokens"), (Item(), Item())),),
         (
             SimpleRelationDeclaration(
-                relation_name, tier_name, QualifiedName(namespace, "sequence")
+                QualifiedName(namespace, "next"),
+                tier_name,
+                QualifiedName(namespace, "sequence"),
             ),
         ),
     )
 
-    assert graph_summary(graph) == {
+
+def test_graph_summary_reports_counts_and_declaration_details() -> None:
+    """Names are reported in the declared expanded spelling, not name objects."""
+    assert graph_summary(_summary_graph()) == {
         "format_version": FORMAT_VERSION,
         "namespaces": 1,
         "tiers": 1,
@@ -40,11 +47,39 @@ def test_graph_summary_reports_counts_and_declaration_details() -> None:
         "document_attributes": 0,
         "tier_summaries": [
             {
-                "name": tier_name,
+                "name": {"namespace": "urn:inspect", "local_name": "tokens"},
                 "long_name": "Tokens",
                 "items": 2,
                 "attributes": 0,
             }
         ],
-        "relation_summaries": [{"name": relation_name, "kind": "simple"}],
+        "relation_summaries": [
+            {
+                "name": {"namespace": "urn:inspect", "local_name": "next"},
+                "kind": "simple",
+            }
+        ],
+    }
+
+
+def test_graph_summary_is_json_serializable() -> None:
+    """A public return that JSON refuses is a broken return, however it reads.
+
+    The expected spellings are written out rather than derived from the graph,
+    so this fails on a summary that serializes to some other shape as surely as
+    on one that does not serialize at all.
+    """
+    summary = graph_summary(_summary_graph())
+
+    round_tripped = json.loads(json.dumps(summary))
+
+    tier_summaries = round_tripped["tier_summaries"]
+    relation_summaries = round_tripped["relation_summaries"]
+    assert tier_summaries[0]["name"] == {
+        "namespace": "urn:inspect",
+        "local_name": "tokens",
+    }
+    assert relation_summaries[0]["name"] == {
+        "namespace": "urn:inspect",
+        "local_name": "next",
     }

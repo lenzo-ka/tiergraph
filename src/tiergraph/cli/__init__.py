@@ -786,6 +786,16 @@ def _step_until(
     return 0, False
 
 
+def _qualified_name_text(value: object) -> str:
+    """Spell a summary's serialized qualified name the way diagnostics spell it.
+
+    The report keeps the expanded ``{namespace}local`` form it has always shown;
+    only the summary's carrier changed from a name object to its data.
+    """
+    name = cast(dict[str, object], value)
+    return f"{{{name['namespace']}}}{name['local_name']}"
+
+
 def _inspect(graph: tiergraph.Graph) -> str:
     summary = tiergraph.graph_summary(graph)
     lines = [
@@ -803,12 +813,15 @@ def _inspect(graph: tiergraph.Graph) -> str:
     tier_summaries = cast(list[dict[str, object]], summary["tier_summaries"])
     for tier in tier_summaries:
         lines.append(
-            f"tier: {tier['name']} | {tier['long_name']} | "
+            f"tier: {_qualified_name_text(tier['name'])} | {tier['long_name']} | "
             f"items={tier['items']} | attributes={tier['attributes']}"
         )
     relation_summaries = cast(list[dict[str, object]], summary["relation_summaries"])
     for relation in relation_summaries:
-        lines.append(f"relation: {relation['name']} | kind={relation['kind']}")
+        lines.append(
+            f"relation: {_qualified_name_text(relation['name'])} "
+            f"| kind={relation['kind']}"
+        )
     return "\n".join(lines) + "\n"
 
 
