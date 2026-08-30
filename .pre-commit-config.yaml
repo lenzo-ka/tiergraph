@@ -30,3 +30,8 @@ repos:
         entry: python scripts/check_documented.py
         language: system
         pass_filenames: false
+      - id: reservations
+        name: reservations are declared and still true
+        entry: python scripts/check_reservations.py
+        language: system
+        pass_filenames: false
