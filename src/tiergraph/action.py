@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, TypeVar, cast
 
-from tiergraph.fold import FoldDeclaration, FoldResult, Provenance
+from tiergraph.fold import DerivationProvenance, FoldDeclaration, FoldResult
 
 Value = TypeVar("Value")
 Carrier = TypeVar("Carrier")
@@ -21,25 +21,27 @@ Source = TypeVar("Source")
 
 
 @dataclass(frozen=True, slots=True)
-class WitnessCoordinate:
+class OrderedDelivery:
     """Pair an action value with its order in the declared structure."""
 
-    position: tuple[int, ...]
+    order: tuple[int, ...]
     value: object
 
 
-class CoordinateYield(Protocol):
-    """Extract structural coordinates from recognized provenance."""
+class DeliveryYield(Protocol):
+    """Extract ordered deliveries from recognized provenance."""
 
-    def __call__(self, provenance: Provenance, /) -> tuple[WitnessCoordinate, ...]:
-        """Return coordinates whose positions, rather than arrival, define order."""
+    def __call__(
+        self, provenance: DerivationProvenance, /
+    ) -> tuple[OrderedDelivery, ...]:
+        """Return deliveries whose order, rather than arrival, is structural."""
 
 
 class ActionFunction(Protocol[ReadCarrier, WriteResult]):
-    """Apply a normalized coordinate yield to an opaque carrier."""
+    """Apply a normalized delivery yield to an opaque carrier."""
 
     def __call__(
-        self, carrier: ReadCarrier, coordinates: tuple[object, ...], /
+        self, carrier: ReadCarrier, values: tuple[object, ...], /
     ) -> WriteResult:
         """Return a JSON-serializable action result."""
 
@@ -72,16 +74,16 @@ class YieldNormalization:
         return self.collapse or self.unique or self.reorder
 
     def apply(
-        self, coordinates: tuple[WitnessCoordinate, ...]
-    ) -> tuple[WitnessCoordinate, ...]:
+        self, deliveries: tuple[OrderedDelivery, ...]
+    ) -> tuple[OrderedDelivery, ...]:
         """Normalize a complete yield after first restoring structural order."""
-        normalized = tuple(sorted(coordinates, key=lambda item: item.position))
+        normalized = tuple(sorted(deliveries, key=lambda item: item.order))
         if self.collapse:
             normalized = _collapse(normalized)
         if self.unique:
             normalized = _unique(normalized)
         if self.reorder:
-            normalized = tuple(sorted(normalized, key=_coordinate_key))
+            normalized = tuple(sorted(normalized, key=_delivery_key))
         return normalized
 
 
@@ -89,10 +91,10 @@ class YieldNormalization:
 class DistributionWitness:
     """Opt in to executable one-for-one equivalence certification.
 
-    The witness supplies no operations, coordinate bridge, samples, or carrier.
-    On every one-for-one run, react extracts coordinates once with its declared
-    ``yield_coordinates`` and requires its bound action to produce the same result
-    when applied one coordinate at a time and as one complete batch. This
+    The witness supplies no operations, delivery bridge, samples, or carrier.
+    On every one-for-one run, react extracts deliveries once with its declared
+    ``yield_deliveries`` and requires its bound action to produce the same result
+    when applied one delivery at a time and as one complete batch. This
     certifies the concrete recognition and carrier being executed; it does not
     prove equivalence for runs that have not been executed.
     """
@@ -338,7 +340,7 @@ class ReactDeclaration[Value, Carrier, Result]:
 
     name: str
     fold: FoldDeclaration[Value]
-    yield_coordinates: CoordinateYield
+    yield_deliveries: DeliveryYield
     action: ActionDeclaration[Carrier, Result]
     normalization: YieldNormalization = YieldNormalization()
     mode: ReactMode = ReactMode.TRANSACTIONAL
@@ -393,22 +395,22 @@ class ReactDeclaration[Value, Carrier, Result]:
         cannot in general be decided when the declaration is constructed.
         """
         recognition = self.fold.run()
-        coordinates = self._coordinates(recognition)
+        deliveries = self._deliveries(recognition)
         if self.mode is ReactMode.TRANSACTIONAL:
-            normalized = self.normalization.apply(coordinates)
+            normalized = self.normalization.apply(deliveries)
             result = self.action.apply(
                 carrier, tuple(item.value for item in normalized)
             )
         else:
-            ordered = tuple(sorted(coordinates, key=lambda item: item.position))
+            ordered = tuple(sorted(deliveries, key=lambda item: item.order))
             transactional: Result | None = None
             if self.distribution is not None:
                 transactional = self.action.apply(
                     carrier, tuple(item.value for item in ordered)
                 )
             current = carrier
-            for coordinate in ordered:
-                current = cast(Carrier, self.action.apply(current, (coordinate.value,)))
+            for delivery in ordered:
+                current = cast(Carrier, self.action.apply(current, (delivery.value,)))
             result = cast(Result, current)
             if self.distribution is not None and result != transactional:
                 raise ActionEquivalenceError(
@@ -424,46 +426,46 @@ class ReactDeclaration[Value, Carrier, Result]:
             "result": result,
         }
 
-    def _coordinates(
+    def _deliveries(
         self, recognition: FoldResult[Value]
-    ) -> tuple[WitnessCoordinate, ...]:
+    ) -> tuple[OrderedDelivery, ...]:
         """Extract a yield only from witness provenance."""
         if recognition.provenance is None:
             raise ValueError(f"react {self.name!r} recognition produced no witnesses")
-        coordinates = self.yield_coordinates(recognition.provenance)
-        for coordinate in coordinates:
-            _require_json(coordinate.value, f"react {self.name!r} coordinate")
-        return coordinates
+        deliveries = self.yield_deliveries(recognition.provenance)
+        for delivery in deliveries:
+            _require_json(delivery.value, f"react {self.name!r} delivery")
+        return deliveries
 
 
 def _collapse(
-    coordinates: tuple[WitnessCoordinate, ...],
-) -> tuple[WitnessCoordinate, ...]:
+    deliveries: tuple[OrderedDelivery, ...],
+) -> tuple[OrderedDelivery, ...]:
     """Collapse adjacent equal values after structural ordering."""
-    result: list[WitnessCoordinate] = []
-    for coordinate in coordinates:
-        if not result or result[-1].value != coordinate.value:
-            result.append(coordinate)
+    result: list[OrderedDelivery] = []
+    for delivery in deliveries:
+        if not result or result[-1].value != delivery.value:
+            result.append(delivery)
     return tuple(result)
 
 
 def _unique(
-    coordinates: tuple[WitnessCoordinate, ...],
-) -> tuple[WitnessCoordinate, ...]:
+    deliveries: tuple[OrderedDelivery, ...],
+) -> tuple[OrderedDelivery, ...]:
     """Keep the structurally first occurrence of each JSON value."""
-    result: list[WitnessCoordinate] = []
+    result: list[OrderedDelivery] = []
     seen: set[str] = set()
-    for coordinate in coordinates:
-        key = _json_key(coordinate.value)
+    for delivery in deliveries:
+        key = _json_key(delivery.value)
         if key not in seen:
             seen.add(key)
-            result.append(coordinate)
+            result.append(delivery)
     return tuple(result)
 
 
-def _coordinate_key(coordinate: WitnessCoordinate) -> tuple[str, tuple[int, ...]]:
+def _delivery_key(delivery: OrderedDelivery) -> tuple[str, tuple[int, ...]]:
     """Return a deterministic value order with structure as its tie breaker."""
-    return _json_key(coordinate.value), coordinate.position
+    return _json_key(delivery.value), delivery.order
 
 
 def _json_key(value: object) -> str:
@@ -482,11 +484,11 @@ def _require_json(value: object, offender: str) -> None:
 __all__ = [
     "ActionDeclaration",
     "ActionFunction",
-    "CoordinateYield",
+    "DeliveryYield",
     "DistributionWitness",
     "ReactDeclaration",
     "ReactMode",
     "Semimodule",
-    "WitnessCoordinate",
+    "OrderedDelivery",
     "YieldNormalization",
 ]

@@ -10,7 +10,7 @@ immutable API.
   [Construction](guide/construction.md).
 - **Find items or follow their links?** See
   [Selection and traversal](guide/selection-and-traversal.md).
-- **Attach physical times to positions?** Use [Timing](guide/timing.md).
+- **Attach physical times to boundaries?** Use [Timing](guide/timing.md).
 - **Compute a cost, count, or recognition result?** Read
   [Folding](guide/folding.md) and
   [Recognize and act](guide/recognize-and-act.md).

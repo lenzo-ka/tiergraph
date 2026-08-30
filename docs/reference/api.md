@@ -27,17 +27,17 @@ DistributionWitness(name: 'str') -> None
 
 Opt in to executable one-for-one equivalence certification.
 
-The witness supplies no operations, coordinate bridge, samples, or carrier.
-On every one-for-one run, react extracts coordinates once with its declared
-``yield_coordinates`` and requires its bound action to produce the same result
-when applied one coordinate at a time and as one complete batch. This
+The witness supplies no operations, delivery bridge, samples, or carrier.
+On every one-for-one run, react extracts deliveries once with its declared
+``yield_deliveries`` and requires its bound action to produce the same result
+when applied one delivery at a time and as one complete batch. This
 certifies the concrete recognition and carrier being executed; it does not
 prove equivalence for runs that have not been executed.
 
 ### `ReactDeclaration`
 
 ```text
-ReactDeclaration(name: 'str', fold: 'FoldDeclaration[Value]', yield_coordinates: 'CoordinateYield', action: 'ActionDeclaration[Carrier, Result]', normalization: 'YieldNormalization' = YieldNormalization(collapse=False, unique=False, reorder=False), mode: 'ReactMode' = <ReactMode.TRANSACTIONAL: 'transactional'>, distribution: 'DistributionWitness | None' = None) -> None
+ReactDeclaration(name: 'str', fold: 'FoldDeclaration[Value]', yield_deliveries: 'DeliveryYield', action: 'ActionDeclaration[Carrier, Result]', normalization: 'YieldNormalization' = YieldNormalization(collapse=False, unique=False, reorder=False), mode: 'ReactMode' = <ReactMode.TRANSACTIONAL: 'transactional'>, distribution: 'DistributionWitness | None' = None) -> None
 ```
 
 Bind recognition, yield, normalization, action, and react mode.
@@ -88,10 +88,10 @@ Supply operations and samples for an explicit, opt-in semimodule claim.
 Merely declaring an action does not claim or check these laws; callers that
 provide this optional structure must execute a semimodule law suite.
 
-### `WitnessCoordinate`
+### `OrderedDelivery`
 
 ```text
-WitnessCoordinate(position: 'tuple[int, ...]', value: 'object') -> None
+OrderedDelivery(order: 'tuple[int, ...]', value: 'object') -> None
 ```
 
 Pair an action value with its order in the declared structure.
@@ -125,7 +125,7 @@ Report whether this policy cannot be performed by a binary merge.
 Method.
 
 ```text
-YieldNormalization.apply(self, coordinates: 'tuple[WitnessCoordinate, ...]') -> 'tuple[WitnessCoordinate, ...]'
+YieldNormalization.apply(self, deliveries: 'tuple[OrderedDelivery, ...]') -> 'tuple[OrderedDelivery, ...]'
 ```
 
 Normalize a complete yield after first restoring structural order.
@@ -142,7 +142,7 @@ Interpret ordered tier boundaries against a refined structural clock.
 
 Every non-clock tier is either completely bound or explicitly untimed.  A
 binding targets an ordinary integral kernel boundary; optional integer
-position attributes refine it to ``(coarse tick, ordered gap)``.  Thus two
+boundary attributes refine it to ``(coarse tick, ordered gap)``.  Thus two
 repeated point occurrences can occupy distinct structural gaps at the same
 coarse tick without introducing fractional indices.
 
@@ -159,7 +159,7 @@ have no independent unit annotation within this single-document profile.
 The profile remains silent on physical time for bound events with neither a
 rate nor stored timing, and on all events of explicitly untimed tiers.  It
 does not infer refinement: without refinement attributes each integral
-clock boundary is the unrefined position ``(index, 0)``.  Partial document
+clock boundary is the unrefined coordinate ``(index, 0)``.  Partial document
 extents remain valid, and trailing silence still needs an explicit item.
 
 #### `ClockProfile.from_data`
@@ -176,19 +176,19 @@ Every field is required. Optional qualified-name roles are represented
 by JSON null, while the clock tier, binding relation, and unit attribute
 must be qualified-name objects.
 
-#### `ClockProfile.from_position_values`
+#### `ClockProfile.from_boundary_values`
 
 Class method.
 
 ```text
-ClockProfile.from_position_values(cls, graph: 'Graph', clock_tier: 'QualifiedName', *, tick_attribute: 'QualifiedName', gap_attribute: 'QualifiedName', unit_attribute: 'QualifiedName | None' = None, collapse_shared_boundaries: 'bool' = False) -> 'ClockProfile'
+ClockProfile.from_boundary_values(cls, graph: 'Graph', clock_tier: 'QualifiedName', *, tick_attribute: 'QualifiedName', gap_attribute: 'QualifiedName', unit_attribute: 'QualifiedName | None' = None, collapse_shared_boundaries: 'bool' = False) -> 'ClockProfile'
 ```
 
-Derive only the clock spine from the clock tier's boundary positions.
+Derive only the clock spine from the clock tier's boundary values.
 
-This construction path reads the ``(tick, gap)`` position attributes on
+This construction path reads the ``(tick, gap)`` boundary attributes on
 the clock tier's own boundaries -- exactly as the full constructor reads
-them -- and yields the same :attr:`positions` sequence that the DOT
+them -- and yields the same :attr:`coordinates` sequence that the DOT
 renderer draws as the spine. It requires neither a binding relation nor
 a unit attribute, so it accepts a graph whose relations and document
 attributes are empty; a unit is read only when ``unit_attribute`` is
@@ -196,7 +196,7 @@ given.
 
 The result supports spine rendering alone. It carries no tier-to-clock
 bindings, so every non-spine timing query -- :meth:`is_timed`,
-:meth:`clock_position`, :meth:`refined_position`, :meth:`extent`,
+:meth:`clock_index`, :meth:`refined_coordinate`, :meth:`extent`,
 :meth:`structural_span`, :meth:`timing`, and :meth:`duration` -- raises
 rather than returning an answer it cannot justify. Binding other tiers
 to the clock genuinely needs ``graph.relations`` and remains the full
@@ -204,7 +204,7 @@ constructor's responsibility; this path never weakens that validation.
 
 With ``collapse_shared_boundaries``, each coarse tick's trailing gap --
 its closing boundary, coincident with the next tick's opening boundary
--- is folded away so the spine shows one node per occupied position.
+-- is folded away so the spine shows one node per occupied coordinate.
 The default is off, leaving the raw boundaries and keeping every other
 caller's spine byte-identical.
 
@@ -238,15 +238,15 @@ ClockProfile.unit(self) -> 'str'
 
 Return the declared physical timing unit.
 
-#### `ClockProfile.positions`
+#### `ClockProfile.coordinates`
 
 Property.
 
 ```text
-ClockProfile.positions(self) -> 'tuple[ClockPosition, ...]'
+ClockProfile.coordinates(self) -> 'tuple[ClockCoordinate, ...]'
 ```
 
-Return the profile's validated refined clock positions in order.
+Return the profile's validated refined clock coordinates in order.
 
 #### `ClockProfile.is_timed`
 
@@ -258,32 +258,32 @@ ClockProfile.is_timed(self, tier: 'QualifiedName') -> 'bool'
 
 Report whether a tier chose complete clock binding.
 
-#### `ClockProfile.clock_position`
+#### `ClockProfile.clock_index`
 
 Method.
 
 ```text
-ClockProfile.clock_position(self, position: 'PositionRef') -> 'int'
+ClockProfile.clock_index(self, boundary: 'BoundaryRef') -> 'int'
 ```
 
-Return the integral clock-tier boundary bound to one tier position.
+Return the integral clock-tier boundary bound to one tier boundary.
 
-#### `ClockProfile.refined_position`
+#### `ClockProfile.refined_coordinate`
 
 Method.
 
 ```text
-ClockProfile.refined_position(self, position: 'PositionRef') -> 'ClockPosition'
+ClockProfile.refined_coordinate(self, boundary: 'BoundaryRef') -> 'ClockCoordinate'
 ```
 
-Return the coarse tick and ordered gap bound to one tier position.
+Return the coarse tick and ordered gap bound to one tier boundary.
 
 #### `ClockProfile.extent`
 
 Method.
 
 ```text
-ClockProfile.extent(self, tier: 'QualifiedName') -> 'tuple[ClockPosition, ClockPosition]'
+ClockProfile.extent(self, tier: 'QualifiedName') -> 'tuple[ClockCoordinate, ClockCoordinate]'
 ```
 
 Return a timed tier's possibly partial refined clock extent.
@@ -293,10 +293,10 @@ Return a timed tier's possibly partial refined clock extent.
 Method.
 
 ```text
-ClockProfile.structural_span(self, tier: 'QualifiedName', index: 'int') -> 'tuple[ClockPosition, ClockPosition]'
+ClockProfile.structural_span(self, tier: 'QualifiedName', index: 'int') -> 'tuple[ClockCoordinate, ClockCoordinate]'
 ```
 
-Return an event span between refined integral positions.
+Return an event span between refined integral coordinates.
 
 #### `ClockProfile.timing`
 
@@ -325,10 +325,10 @@ ClockProfile.duration(self, tier: 'QualifiedName', index: 'int') -> 'tuple[int, 
 
 Return the legacy coarse-tick span and rate when a rate exists.
 
-### `ClockPosition`
+### `ClockCoordinate`
 
 ```text
-ClockPosition(tick: 'int', gap: 'int' = 0) -> None
+ClockCoordinate(tick: 'int', gap: 'int' = 0) -> None
 ```
 
 Name one integral gap inside an integral coarse tick.
@@ -345,10 +345,10 @@ The unit is carried, not dimensionally enforced: this profile validates its
 declaration and stamps stored values with it, but a stored decimal has no
 independent unit metadata against which the declaration could be checked.
 
-### `anchored_position`
+### `anchored_boundary`
 
 ```text
-anchored_position(graph: 'Graph', position: 'PositionRef') -> 'DurablePositionRef'
+anchored_boundary(graph: 'Graph', boundary: 'BoundaryRef') -> 'DurableBoundaryRef'
 ```
 
 Name an existing boundary by its anchor without changing the graph.
@@ -631,30 +631,30 @@ PromoteItem.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the opcode as JSON data.
 
-### `PromotePosition`
+### `PromoteBoundary`
 
 ```text
-PromotePosition(reference: 'PositionRef', durable_id: 'str') -> None
+PromoteBoundary(reference: 'BoundaryRef', durable_id: 'str') -> None
 ```
 
 Promote one structural boundary reference to anchored identity.
 
-#### `PromotePosition.apply`
+#### `PromoteBoundary.apply`
 
 Method.
 
 ```text
-PromotePosition.apply(self, graph: 'Graph') -> 'Graph'
+PromoteBoundary.apply(self, graph: 'Graph') -> 'Graph'
 ```
 
 Apply the kernel's checked boundary promotion operation.
 
-#### `PromotePosition.to_data`
+#### `PromoteBoundary.to_data`
 
 Method.
 
 ```text
-PromotePosition.to_data(self) -> 'dict[str, JsonValue]'
+PromoteBoundary.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the opcode as JSON data.
@@ -765,7 +765,7 @@ rewritten to follow their items, and durable identifiers resolve again at
 freeze.  A stored boundary value addressed by coordinate is rewritten when
 the edit leaves its boundary exactly one image, and refuses the edit when
 it does not: a bare coordinate has no anchor to follow, while a boundary
-promoted through ``Graph.promote_position`` does.
+promoted through ``Graph.promote_boundary`` does.
 
 An operation that refuses changes nothing, so a refused edit leaves this
 editor exactly as it was.  What one operation cannot see on its own -- a
@@ -1029,12 +1029,12 @@ the claim is owed where it is relied on rather than where a fixture is built;
 ``check_exactness()`` is the gate that demands and discharges it. Only the two
 refusals a declaration alone can settle are made here.
 
-#### `FoldDeclaration.coordinates`
+#### `FoldDeclaration.index_coordinates`
 
 Method.
 
 ```text
-FoldDeclaration.coordinates(self) -> 'tuple[Coordinate, ...]'
+FoldDeclaration.index_coordinates(self) -> 'tuple[IndexCoordinate, ...]'
 ```
 
 Construct the declared finite index product in lexical axis order.
@@ -1163,7 +1163,7 @@ Refuse a declared homomorphism whose square does not commute.
 ### `FoldResult`
 
 ```text
-FoldResult(values: 'tuple[tuple[State, Value], ...]', roots: 'tuple[State, ...]', value: 'Value', provenance: 'Provenance | None', truncated: 'bool', cost: 'FoldCost', ranked_witnesses: 'tuple[RankedWitness[Value], ...] | None' = None) -> None
+FoldResult(values: 'tuple[tuple[State, Value], ...]', roots: 'tuple[State, ...]', value: 'Value', provenance: 'DerivationProvenance | None', truncated: 'bool', cost: 'FoldCost', ranked_witnesses: 'tuple[RankedWitness[Value], ...] | None' = None) -> None
 ```
 
 Keep semiring values, witness provenance, and measured work separate.
@@ -1594,6 +1594,24 @@ BipartiteRelationDeclaration.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the declaration as JSON-serializable data.
 
+### `Boundary`
+
+```text
+Boundary(reference: 'BoundaryRef | DurableBoundaryRef', attributes: 'tuple[AttributeValue, ...]') -> None
+```
+
+Hold values for one addressable boundary while empty boundaries stay derived.
+
+#### `Boundary.to_data`
+
+Method.
+
+```text
+Boundary.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the boundary and its values as JSON-serializable data.
+
 ### `BoundarySide`
 
 ```text
@@ -1610,23 +1628,23 @@ Choose the boundary immediately before or after an anchor.
 ### `Graph`
 
 ```text
-Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), position_values: 'tuple[Position, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = ()) -> None
+Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = ()) -> None
 ```
 
 Hold a validated immutable graph and derive order and empty boundaries.
 
 Collections keyed by names or references are canonicalized because supply
 order has no graph meaning: namespaces, relation and attribute declarations,
-every attribute-value collection, sparse position values, and relation-side
+every attribute-value collection, sparse boundary values, and relation-side
 allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
 endpoint sequences remain ordered because their sequence carries graph meaning.
 
-#### `Graph.positions`
+#### `Graph.boundaries`
 
 Method.
 
 ```text
-Graph.positions(self, tier: 'QualifiedName') -> 'tuple[Position, ...]'
+Graph.boundaries(self, tier: 'QualifiedName') -> 'tuple[Boundary, ...]'
 ```
 
 Return every addressable boundary with sparse values joined on demand.
@@ -1661,15 +1679,15 @@ Graph.resolve_item(self, reference: 'ItemRef | DurableItemRef') -> 'ItemRef'
 
 Resolve either identity level to the item's current coordinate.
 
-#### `Graph.resolve_position`
+#### `Graph.resolve_boundary`
 
 Method.
 
 ```text
-Graph.resolve_position(self, reference: 'PositionRef | DurablePositionRef') -> 'PositionRef'
+Graph.resolve_boundary(self, reference: 'BoundaryRef | DurableBoundaryRef') -> 'BoundaryRef'
 ```
 
-Resolve either identity level to the position's current coordinate.
+Resolve either identity level to the boundary's current coordinate.
 
 #### `Graph.promote_item`
 
@@ -1685,12 +1703,12 @@ The durable id is as-built content, so adding it changes canonical bytes
 and the construction fingerprint.  Repeating the same id is idempotent;
 a different id is refused and never replaces the established identity.
 
-#### `Graph.promote_position`
+#### `Graph.promote_boundary`
 
 Method.
 
 ```text
-Graph.promote_position(self, reference: 'PositionRef', durable_id: 'str') -> 'tuple[Graph, DurablePositionRef]'
+Graph.promote_boundary(self, reference: 'BoundaryRef', durable_id: 'str') -> 'tuple[Graph, DurableBoundaryRef]'
 ```
 
 Return a graph whose boundary anchor has durable identity.
@@ -1914,24 +1932,6 @@ PolyadicRelationInstance.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the ordered sides as JSON-serializable arrays.
 
-### `Position`
-
-```text
-Position(reference: 'PositionRef | DurablePositionRef', attributes: 'tuple[AttributeValue, ...]') -> None
-```
-
-Hold values for one addressable boundary while empty boundaries stay derived.
-
-#### `Position.to_data`
-
-Method.
-
-```text
-Position.to_data(self) -> 'dict[str, JsonValue]'
-```
-
-Return the position and its values as JSON-serializable data.
-
 ### `QualifiedName`
 
 ```text
@@ -2136,6 +2136,14 @@ AlternativeRef(owner: 'ItemRef | DurableItemRef', relation: 'QualifiedName', ind
 
 Select one profile-ordered alternative of an owning graph item.
 
+### `BoundaryBinding`
+
+```text
+BoundaryBinding(reference: 'BoundaryRef | DurableBoundaryRef') -> None
+```
+
+Request resolution of one structural or durable boundary reference.
+
 ### `CanonicalPath`
 
 ```text
@@ -2282,14 +2290,6 @@ resolver or profile.
 - `PROFILE_REFUSED` = `profile_refused`
 - `ALTERNATIVE_OUT_OF_RANGE` = `alternative_out_of_range`
 
-### `PositionBinding`
-
-```text
-PositionBinding(reference: 'PositionRef | DurablePositionRef') -> None
-```
-
-Request resolution of one structural or durable position reference.
-
 ### `ResolvedAlternative`
 
 ```text
@@ -2298,6 +2298,14 @@ ResolvedAlternative(path: 'CanonicalPath', owner: 'ItemRef', relation: 'Qualifie
 
 Pair a path with one selection from a profile-ordered alternative set.
 
+### `ResolvedBoundary`
+
+```text
+ResolvedBoundary(path: 'CanonicalPath', current: 'BoundaryRef') -> None
+```
+
+Pair the parsed path with its current structural boundary coordinate.
+
 ### `ResolvedItem`
 
 ```text
@@ -2305,14 +2313,6 @@ ResolvedItem(path: 'CanonicalPath', current: 'ItemRef') -> None
 ```
 
 Pair the parsed path with its current structural item coordinate.
-
-### `ResolvedPosition`
-
-```text
-ResolvedPosition(path: 'CanonicalPath', current: 'PositionRef') -> None
-```
-
-Pair the parsed path with its current structural boundary coordinate.
 
 ### `StructuralPathProfile`
 
@@ -2360,7 +2360,7 @@ Return no alternatives because this vocabulary declares none.
 ### `resolve_path`
 
 ```text
-resolve_path(graph: 'Graph', profile: 'PathProfile', text: 'str', *, require: 'PathKind | None' = None) -> 'ResolvedItem | ResolvedPosition | ResolvedAlternative'
+resolve_path(graph: 'Graph', profile: 'PathProfile', text: 'str', *, require: 'PathKind | None' = None) -> 'ResolvedItem | ResolvedBoundary | ResolvedAlternative'
 ```
 
 Parse, bind, kind-check, and resolve a profile-owned graph path.
@@ -2435,7 +2435,8 @@ object keys are attributes of those membership items.  Keys are required in
 lexical order so equivalent objects have one encoding.
 Scalar leaves retain the kernel's canonical XSD lexical spelling.
 
-Provenance is deliberately not interpreted or constrained by this profile.
+Derivation provenance is deliberately not interpreted or constrained by this
+profile.
 
 #### `JsonValueProfile.value`
 
@@ -2792,28 +2793,28 @@ Return a deterministic ruler and aligned plain-text span table.
 
 ## References
 
-### `DurableItemRef`
+### `BoundaryRef`
 
 ```text
-DurableItemRef(durable_id: 'str') -> None
+BoundaryRef(tier: 'QualifiedName', index: 'int') -> None
 ```
 
-Address an item by a durable identifier without a coordinate fallback.
+Address a boundary owned by a tier, including both outer boundaries.
 
-#### `DurableItemRef.to_data`
+#### `BoundaryRef.to_data`
 
 Method.
 
 ```text
-DurableItemRef.to_data(self) -> 'dict[str, JsonValue]'
+BoundaryRef.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
-Return the durable reference as JSON-serializable data.
+Return the boundary reference as JSON-serializable data.
 
-### `DurablePositionRef`
+### `DurableBoundaryRef`
 
 ```text
-DurablePositionRef(anchor: 'DurableItemRef | QualifiedName', side: 'BoundarySide') -> None
+DurableBoundaryRef(anchor: 'DurableItemRef | QualifiedName', side: 'BoundarySide') -> None
 ```
 
 Address a boundary whose identity is its anchor and chosen side.
@@ -2838,15 +2839,33 @@ An edit that would remove such an item is therefore refused, immediately by
 a frozen graph's operation and at ``GraphEditor.freeze()`` by the editor's,
 and a caller who means to keep the boundary anchors it elsewhere first.
 
-#### `DurablePositionRef.to_data`
+#### `DurableBoundaryRef.to_data`
 
 Method.
 
 ```text
-DurablePositionRef.to_data(self) -> 'dict[str, JsonValue]'
+DurableBoundaryRef.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the tagged anchor and side as JSON-serializable data.
+
+### `DurableItemRef`
+
+```text
+DurableItemRef(durable_id: 'str') -> None
+```
+
+Address an item by a durable identifier without a coordinate fallback.
+
+#### `DurableItemRef.to_data`
+
+Method.
+
+```text
+DurableItemRef.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the durable reference as JSON-serializable data.
 
 ### `ItemRef`
 
@@ -2854,7 +2873,7 @@ Return the tagged anchor and side as JSON-serializable data.
 ItemRef(tier: 'QualifiedName', index: 'int') -> None
 ```
 
-Address an item by its current structural position.
+Address an item by its current structural coordinate.
 
 #### `ItemRef.to_data`
 
@@ -2865,24 +2884,6 @@ ItemRef.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the reference as JSON-serializable data.
-
-### `PositionRef`
-
-```text
-PositionRef(tier: 'QualifiedName', index: 'int') -> None
-```
-
-Address a boundary owned by a tier, including both outer boundaries.
-
-#### `PositionRef.to_data`
-
-Method.
-
-```text
-PositionRef.to_data(self) -> 'dict[str, JsonValue]'
-```
-
-Return the position reference as JSON-serializable data.
 
 ## Rewrite
 
@@ -2936,7 +2937,7 @@ Return every structure the rewrite disturbed, in the source's order.
 
 The order is the source graph's own reading order -- namespaces, then
 each tier and its items, then relation declarations, attribute
-declarations, relation instances, polyadic relation instances, position
+declarations, relation instances, polyadic relation instances, boundary
 values, and the document. It is total and reproducible, so the first
 disturbance is the first in a fixed order rather than a minimized or a
 most-severe one, and the refusals report it as such.
@@ -2959,7 +2960,7 @@ the same as saying the weaker thing.
 
 What a discharged ``DECORATE`` licenses is one thing and not more:
 every reading taken over the source is still a correct reading of the
-result, without re-reading it. An item's attributes, a position's
+result, without re-reading it. An item's attributes, a boundary's
 values, a relation's endpoints, whatever a reference resolved to --
 all of it still holds. What it does not license is any reading that
 counts, quantifies over everything, or turns on absence: a tier's
@@ -3096,7 +3097,7 @@ Resolve the path and require a boundary result.
 ### `BoundarySelector`
 
 ```text
-BoundarySelector(reference: 'PositionRef | DurablePositionRef') -> None
+BoundarySelector(reference: 'BoundaryRef | DurableBoundaryRef') -> None
 ```
 
 Select one structural or anchored durable boundary reference.
@@ -3204,7 +3205,7 @@ Validate and return the tier's items in coordinate order.
 ### `Node`
 
 ```text
-Node(kind: 'NodeKind', reference: 'QualifiedName | ItemRef | PositionRef | int | None') -> None
+Node(kind: 'NodeKind', reference: 'QualifiedName | ItemRef | BoundaryRef | int | None') -> None
 ```
 
 Identify a node by its kind and its graph-local coordinate.
@@ -3255,7 +3256,7 @@ NodeSet(graph: 'Graph', nodes: 'tuple[Node, ...]') -> None
 Hold unique nodes in the graph's canonical mixed-node order.
 
 Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
-declaration index, then item or position index, so reproducible selection
+declaration index, then item or boundary index, so reproducible selection
 output depends on the graph's tier declaration order.
 
 A polyadic instance sorts by its declaration, then its two side arities,
@@ -3896,10 +3897,10 @@ Add an already-constructed kernel relation instance as-is.
 Method.
 
 ```text
-Document.add(self, value: 'RelationInstance | PolyadicRelationInstance | Position') -> 'None'
+Document.add(self, value: 'RelationInstance | PolyadicRelationInstance | Boundary') -> 'None'
 ```
 
-Add an already-constructed relation instance or sparse position value.
+Add an already-constructed relation instance or sparse boundary value.
 
 #### `Document.attach`
 
@@ -5249,14 +5250,14 @@ before.
 ### `dumps`
 
 ```text
-dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockPosition, ClockPosition]] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
+dumps(graph: 'Graph', *, clock: 'ClockProfile | None' = None, presentation: 'DotPresentation | None' = None, binding: 'Callable[..., tuple[ClockCoordinate, ClockCoordinate]] | None' = None, include_empty_tiers: 'bool' = False) -> 'str'
 ```
 
 Return byte-stable DOT for ``graph``.
 
 With ``clock``, the complete refined clock is the horizontal spine. Timed
 tier boundaries align with that spine, event extents end at their bound
-refined positions, and physical timing is included when the profile exposes
+refined coordinates, and physical timing is included when the profile exposes
 it. Explicitly untimed tiers are still drawn on their own structural axes.
 Without ``clock``, every tier uses its own ordered structural boundaries.
 
@@ -5266,12 +5267,12 @@ data; the renderer assigns no domain-specific meaning to them. A clock
 profile must belong to this exact graph instance, not merely an equal graph,
 because its cached derived state was computed from that instance.
 
-A structural clock (built by :meth:`ClockProfile.from_position_values`)
+A structural clock (built by :meth:`ClockProfile.from_boundary_values`)
 selects the occupied-spine rendering: the clock tier is drawn only as the
 spine, an occupied clock column is anchored on its item node, and empty
 columns keep a guide point. ``binding`` places the non-clock items: when it
 is supplied it MUST return, for every visible non-clock item, the
-``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+``(start, end)`` :class:`tiergraph.ClockCoordinate` pair naming the collapsed
 columns the item occupies. There is no untimed lane, so returning ``None``
 is refused with the offending item named. The kernel never parses domain
 identifiers; the caller supplies the placement.

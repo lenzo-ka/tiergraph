@@ -8,10 +8,12 @@ from typing import cast
 import pytest
 
 from tiergraph import (
+    BoundaryBinding,
+    BoundaryRef,
     BoundarySide,
     CanonicalPath,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemBinding,
@@ -22,11 +24,9 @@ from tiergraph import (
     PathOffender,
     PathRefusal,
     PathRefusalCode,
-    PositionBinding,
-    PositionRef,
     QualifiedName,
+    ResolvedBoundary,
     ResolvedItem,
-    ResolvedPosition,
     StructuralPathProfile,
     Tier,
     TierDeclaration,
@@ -88,17 +88,17 @@ def test_malformed_pointer_is_strictly_refused(text: str) -> None:
         (ItemBinding(ItemRef(TIER, 1)), "/items/structural/urn:path/tokens/1"),
         (ItemBinding(DurableItemRef("a/b~c")), "/items/durable/a~1b~0c"),
         (
-            PositionBinding(PositionRef(TIER, 2)),
+            BoundaryBinding(BoundaryRef(TIER, 2)),
             "/positions/structural/urn:path/tokens/2",
         ),
         (
-            PositionBinding(
-                DurablePositionRef(DurableItemRef("beta"), BoundarySide.BEFORE)
+            BoundaryBinding(
+                DurableBoundaryRef(DurableItemRef("beta"), BoundarySide.BEFORE)
             ),
             "/positions/durable/item/beta/before",
         ),
         (
-            PositionBinding(DurablePositionRef(TIER, BoundarySide.AFTER)),
+            BoundaryBinding(DurableBoundaryRef(TIER, BoundarySide.AFTER)),
             "/positions/durable/tier/urn:path/tokens/after",
         ),
     ],
@@ -115,13 +115,13 @@ def test_structural_profile_spells_and_binds_every_form(
 def test_item_and_position_resolution_call_existing_graph_semantics() -> None:
     """Both structural and durable forms resolve to current kernel coordinates."""
     item = resolve_path(GRAPH, PROFILE, "/items/durable/beta")
-    position = resolve_path(GRAPH, PROFILE, "/positions/durable/item/beta/after")
+    boundary = resolve_path(GRAPH, PROFILE, "/positions/durable/item/beta/after")
     assert item == ResolvedItem(
         CanonicalPath(("items", "durable", "beta")), ItemRef(TIER, 1)
     )
-    assert position == ResolvedPosition(
+    assert boundary == ResolvedBoundary(
         CanonicalPath(("positions", "durable", "item", "beta", "after")),
-        PositionRef(TIER, 2),
+        BoundaryRef(TIER, 2),
     )
 
 
@@ -261,7 +261,7 @@ def test_empty_tier_segment_reports_its_own_index(
 
 
 def test_position_range_and_tier_anchor_failures_are_typed() -> None:
-    """Position lookup distinguishes range failure from an unknown tier anchor."""
+    """Boundary lookup distinguishes range failure from an unknown tier anchor."""
     cases = (
         (
             "/positions/structural/urn:path/tokens/3",
@@ -342,9 +342,9 @@ def test_unspellable_reference_is_typed() -> None:
             "invalid_item_reference",
         ),
         (
-            PositionBinding(cast(PositionRef, object())),
+            BoundaryBinding(cast(BoundaryRef, object())),
             PathRefusalCode.PROFILE_REFUSED,
-            "invalid_position_reference",
+            "invalid_boundary_reference",
         ),
     ],
 )

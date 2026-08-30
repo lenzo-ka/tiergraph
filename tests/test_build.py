@@ -12,16 +12,16 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -193,12 +193,12 @@ def test_boundary_relation_and_anchor_helpers_are_byte_identical() -> None:
     right = ergonomic.tier(
         "right", ("right-0",), item_type="thing", membership="right-members"
     )
-    assert left.start() == DurablePositionRef(left.name, BoundarySide.BEFORE)
-    assert left.end() == DurablePositionRef(left.name, BoundarySide.AFTER)
-    assert left.before(1) == DurablePositionRef(
+    assert left.start() == DurableBoundaryRef(left.name, BoundarySide.BEFORE)
+    assert left.end() == DurableBoundaryRef(left.name, BoundarySide.AFTER)
+    assert left.before(1) == DurableBoundaryRef(
         DurableItemRef("left-1"), BoundarySide.BEFORE
     )
-    assert left.after(0) == DurablePositionRef(
+    assert left.after(0) == DurableBoundaryRef(
         DurableItemRef("left-0"), BoundarySide.AFTER
     )
     ergonomic.relation(
@@ -231,15 +231,15 @@ def test_boundary_relation_and_anchor_helpers_are_byte_identical() -> None:
     direct.add(
         RelationInstance(
             q("aligned-boundaries"),
-            DurablePositionRef(q("left"), BoundarySide.BEFORE),
-            DurablePositionRef(q("right"), BoundarySide.AFTER),
+            DurableBoundaryRef(q("left"), BoundarySide.BEFORE),
+            DurableBoundaryRef(q("right"), BoundarySide.AFTER),
         )
     )
     direct.add(
         RelationInstance(
             q("aligned-boundaries"),
-            DurablePositionRef(DurableItemRef("left-0"), BoundarySide.AFTER),
-            DurablePositionRef(DurableItemRef("right-0"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("left-0"), BoundarySide.AFTER),
+            DurableBoundaryRef(DurableItemRef("right-0"), BoundarySide.BEFORE),
         )
     )
     assert ergonomic.build() == direct.build()
@@ -292,7 +292,7 @@ def test_boundary_relation_refusals() -> None:
             right_endpoint=RelationEndpointKind.ITEM,
             source_type="thing",
         )
-    with pytest.raises(BuilderError, match="needs DurablePositionRef"):
+    with pytest.raises(BuilderError, match="needs DurableBoundaryRef"):
         doc.relation(
             "malformed",
             left,
@@ -306,7 +306,7 @@ def test_boundary_relation_refusals() -> None:
     with pytest.raises(BuilderError, match="item 0 has no durable id"):
         no_id.before(0)
 
-    malformed_anchor = object.__new__(DurablePositionRef)
+    malformed_anchor = object.__new__(DurableBoundaryRef)
     object.__setattr__(malformed_anchor, "anchor", object())
     object.__setattr__(malformed_anchor, "side", BoundarySide.BEFORE)
     with pytest.raises(BuilderError, match="malformed boundary anchor"):
@@ -320,7 +320,7 @@ def test_boundary_relation_refusals() -> None:
             source_type="thing",
         )
 
-    malformed_side = object.__new__(DurablePositionRef)
+    malformed_side = object.__new__(DurableBoundaryRef)
     object.__setattr__(malformed_side, "anchor", left.name)
     object.__setattr__(malformed_side, "side", "before")
     with pytest.raises(BuilderError, match="malformed boundary side"):
@@ -334,7 +334,7 @@ def test_boundary_relation_refusals() -> None:
             source_type="thing",
         )
 
-    missing_anchor = object.__new__(DurablePositionRef)
+    missing_anchor = object.__new__(DurableBoundaryRef)
     object.__setattr__(missing_anchor, "side", BoundarySide.BEFORE)
     with pytest.raises(
         BuilderError, match="relation missing-anchor source: malformed boundary anchor"
@@ -349,7 +349,7 @@ def test_boundary_relation_refusals() -> None:
             source_type="thing",
         )
 
-    missing_side = object.__new__(DurablePositionRef)
+    missing_side = object.__new__(DurableBoundaryRef)
     object.__setattr__(missing_side, "anchor", left.name)
     with pytest.raises(
         BuilderError, match="relation missing-side source: malformed boundary side"
@@ -365,7 +365,7 @@ def test_boundary_relation_refusals() -> None:
         )
 
     missing_durable_id = object.__new__(DurableItemRef)
-    missing_nested_slot = object.__new__(DurablePositionRef)
+    missing_nested_slot = object.__new__(DurableBoundaryRef)
     object.__setattr__(missing_nested_slot, "anchor", missing_durable_id)
     object.__setattr__(missing_nested_slot, "side", BoundarySide.BEFORE)
     with pytest.raises(
@@ -458,7 +458,7 @@ def test_required_refusals_and_empty_pairs() -> None:
         doc.link("foreign-link", foreign, typed, source_type="thing")
     with pytest.raises(BuilderError, match="index 1 out of range"):
         typed.ref(1)
-    boundary = DurablePositionRef(DurableItemRef("two"), BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(DurableItemRef("two"), BoundarySide.BEFORE)
     with pytest.raises(BuilderError, match="boundary endpoint refuses integer"):
         doc.link(
             "boundary",
@@ -571,8 +571,8 @@ def test_link_endpoint_notation_errors() -> None:
             two,
             left_endpoint=RelationEndpointKind.BOUNDARY,
         )
-    boundary = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
-    with pytest.raises(BuilderError, match="needs DurablePositionRef"):
+    boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    with pytest.raises(BuilderError, match="needs DurableBoundaryRef"):
         doc.link(
             "bad-boundary",
             one,
@@ -624,12 +624,12 @@ def test_escape_hatches_and_attribute_attachments() -> None:
         {"declaration-value": "r"},
     )
     doc.attach(AttributeDomain.RELATION_INSTANCE, 0, {"instance-value": "x"})
-    position = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
-    doc.attach(AttributeDomain.POSITION, position, {"position-value": "p"})
-    doc.attach(AttributeDomain.POSITION, position, {"position-value-2": "q"})
+    boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    doc.attach(AttributeDomain.POSITION, boundary, {"position-value": "p"})
+    doc.attach(AttributeDomain.POSITION, boundary, {"position-value-2": "q"})
     graph = doc.build()
     assert graph.attributes[0].lexical == "d"
-    assert graph.position_values[0].attributes[0].lexical == "p"
+    assert graph.boundary_values[0].attributes[0].lexical == "p"
 
     direct_relation = RelationInstance(q("self"), tier.ref(0), tier.ref(0))
     extra = document(ns, prefix="e")
@@ -643,8 +643,8 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     extra.relate(direct_relation)
     extra.add(direct_relation)
     extra.add(
-        Position(
-            position,
+        Boundary(
+            boundary,
             (AttributeValue(q("position-value"), XsdType.STRING, "p"),),
         )
     )
@@ -652,19 +652,19 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     assert len(built_extra.relations) == 2
     assert built_extra.polyadic_relations == (polyadic,)
 
-    position_branches = document(ns, prefix="e")
-    position_branches.attribute(
+    boundary_branches = document(ns, prefix="e")
+    boundary_branches.attribute(
         "position-value", XsdType.STRING, domain=AttributeDomain.POSITION
     )
-    position_branches.attach(
-        AttributeDomain.POSITION, position, {"position-value": "p"}
+    boundary_branches.attach(
+        AttributeDomain.POSITION, boundary, {"position-value": "p"}
     )
-    position_branches.attach(
+    boundary_branches.attach(
         AttributeDomain.POSITION,
-        DurablePositionRef(DurableItemRef("other"), BoundarySide.BEFORE),
+        DurableBoundaryRef(DurableItemRef("other"), BoundarySide.BEFORE),
         {"position-value": "q"},
     )
-    position_branches.attach(AttributeDomain.DOCUMENT, None, {})
+    boundary_branches.attach(AttributeDomain.DOCUMENT, None, {})
 
     with pytest.raises(BuilderError, match="declare: expected"):
         doc.declare(cast(RelationDeclaration, object()))
@@ -701,7 +701,7 @@ def test_escape_hatches_and_attribute_attachments() -> None:
             "not uniquely declared",
         ),
         (AttributeDomain.RELATION_INSTANCE, 2, "out of range"),
-        (AttributeDomain.POSITION, None, "position reference"),
+        (AttributeDomain.POSITION, None, "boundary reference"),
     ],
 )
 def test_attachment_target_refusals(

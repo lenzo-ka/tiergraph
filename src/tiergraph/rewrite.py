@@ -154,7 +154,7 @@ class RewriteDeclaration:
 
         The order is the source graph's own reading order -- namespaces, then
         each tier and its items, then relation declarations, attribute
-        declarations, relation instances, polyadic relation instances, position
+        declarations, relation instances, polyadic relation instances, boundary
         values, and the document. It is total and reproducible, so the first
         disturbance is the first in a fixed order rather than a minimized or a
         most-severe one, and the refusals report it as such.
@@ -177,7 +177,7 @@ class RewriteDeclaration:
 
         What a discharged ``DECORATE`` licenses is one thing and not more:
         every reading taken over the source is still a correct reading of the
-        result, without re-reading it. An item's attributes, a position's
+        result, without re-reading it. An item's attributes, a boundary's
         values, a relation's endpoints, whatever a reference resolved to --
         all of it still holds. What it does not license is any reading that
         counts, quantifies over everything, or turns on absence: a tier's
@@ -410,14 +410,14 @@ def _facts(graph: Graph) -> Iterator[_Fact]:
             polyadic.durable_id,
             _attributes(polyadic.attributes),
         )
-    for position in graph.position_values:
-        coordinate = graph.resolve_position(position.reference)
+    for boundary in graph.boundary_values:
+        coordinate = graph.resolve_boundary(boundary.reference)
         yield _Fact(
             ("position", str(coordinate.tier), str(coordinate.index)),
-            f"position {str(coordinate.tier)!r}[{coordinate.index}]",
+            f"boundary {str(coordinate.tier)!r}[{coordinate.index}]",
             coordinate.tier,
             (),
-            attributes=_attributes(position.attributes),
+            attributes=_attributes(boundary.attributes),
         )
     yield _Fact(
         ("document",),

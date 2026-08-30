@@ -18,18 +18,18 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
-    ClockPosition,
+    ClockCoordinate,
     ClockProfile,
-    DurablePositionRef,
+    DurableBoundaryRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -38,7 +38,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
-    anchored_position,
+    anchored_boundary,
 )
 
 NS = "urn:tiergraph:dot:test"
@@ -113,9 +113,9 @@ def graph_and_clock() -> tuple[Graph, ClockProfile]:
             RelationSideDeclaration((RelationEndpointKind.ITEM,), (note,)),
         ),
     )
-    positions = tuple(
-        Position(
-            PositionRef(clock_name, index),
+    boundaries = tuple(
+        Boundary(
+            BoundaryRef(clock_name, index),
             (
                 AttributeValue(tick, XsdType.INTEGER, str(coarse)),
                 AttributeValue(gap, XsdType.INTEGER, str(refined_gap)),
@@ -128,14 +128,14 @@ def graph_and_clock() -> tuple[Graph, ClockProfile]:
         tiers,
         declarations,
         attribute_declarations=attributes,
-        position_values=positions,
+        boundary_values=boundaries,
         attributes=(AttributeValue(unit, XsdType.STRING, "s"),),
     )
     bindings = tuple(
         RelationInstance(
             binding,
-            anchored_position(bare, PositionRef(segment, source)),
-            anchored_position(bare, PositionRef(clock_name, target)),
+            anchored_boundary(bare, BoundaryRef(segment, source)),
+            anchored_boundary(bare, BoundaryRef(clock_name, target)),
         )
         for source, target in ((0, 0), (1, 2), (2, 3))
     )
@@ -269,8 +269,8 @@ def test_bare_graph_and_empty_tier_policy() -> None:
             *graph.relations,
             RelationInstance(
                 boundary_link,
-                DurablePositionRef(empty, BoundarySide.BEFORE),
-                DurablePositionRef(empty, BoundarySide.AFTER),
+                DurableBoundaryRef(empty, BoundarySide.BEFORE),
+                DurableBoundaryRef(empty, BoundarySide.AFTER),
             ),
         ),
     )
@@ -614,7 +614,7 @@ _KAT_SPINE = '  // The clock spine is the total order.\n  { rank=same;\n    scor
 
 
 def clock_only_graph(raw: tuple[tuple[int, int], ...]) -> Graph:
-    """Build a clock-only graph with tick/gap boundary positions, no relations."""
+    """Build a clock-only graph with tick/gap boundary values, no relations."""
     clock, tick, gap = name("clock"), name("tick"), name("gap")
     tiers = (
         Tier(
@@ -626,9 +626,9 @@ def clock_only_graph(raw: tuple[tuple[int, int], ...]) -> Graph:
         AttributeDeclaration(tick, AttributeDomain.POSITION, XsdType.INTEGER),
         AttributeDeclaration(gap, AttributeDomain.POSITION, XsdType.INTEGER),
     )
-    positions = tuple(
-        Position(
-            PositionRef(clock, index),
+    boundaries = tuple(
+        Boundary(
+            BoundaryRef(clock, index),
             (
                 AttributeValue(tick, XsdType.INTEGER, str(coarse)),
                 AttributeValue(gap, XsdType.INTEGER, str(refined)),
@@ -641,13 +641,13 @@ def clock_only_graph(raw: tuple[tuple[int, int], ...]) -> Graph:
         tiers,
         (),
         attribute_declarations=attributes,
-        position_values=positions,
+        boundary_values=boundaries,
     )
 
 
 def _structural_spine(raw: tuple[tuple[int, int], ...]) -> str:
     graph = clock_only_graph(raw)
-    clock = ClockProfile.from_position_values(
+    clock = ClockProfile.from_boundary_values(
         graph,
         name("clock"),
         tick_attribute=name("tick"),
@@ -686,7 +686,7 @@ def test_structural_spine_matches_reference_kat_golden() -> None:
 def test_structural_spine_draws_without_raising_and_graphviz_accepts() -> None:
     """A structural clock renders the spine cleanly on a clock-only graph."""
     graph = clock_only_graph(((0, 0), (0, 1), (1, 0)))
-    clock = ClockProfile.from_position_values(
+    clock = ClockProfile.from_boundary_values(
         graph, name("clock"), tick_attribute=name("tick"), gap_attribute=name("gap")
     )
     rendered = tiergraph_dot.dumps(graph, clock=clock)
@@ -771,9 +771,9 @@ def build_fixture_graph(
         AttributeDeclaration(_IK_SPAN_START, AttributeDomain.ITEM, XsdType.STRING),
         AttributeDeclaration(_IK_SPAN_END, AttributeDomain.ITEM, XsdType.STRING),
     )
-    positions = tuple(
-        Position(
-            PositionRef(_IK_CLOCK, index),
+    boundaries = tuple(
+        Boundary(
+            BoundaryRef(_IK_CLOCK, index),
             (
                 AttributeValue(_IK_TICK, XsdType.INTEGER, str(tick)),
                 AttributeValue(_IK_GAP, XsdType.INTEGER, str(gap)),
@@ -786,7 +786,7 @@ def build_fixture_graph(
         tiers,
         (),
         attribute_declarations=declarations,
-        position_values=positions,
+        boundary_values=boundaries,
     )
 
 
@@ -813,7 +813,7 @@ def fixture_hooks_and_binding(
     graph: Graph,
 ) -> tuple[
     tiergraph_dot.DotPresentation,
-    Callable[[Item], tuple[ClockPosition, ClockPosition]],
+    Callable[[Item], tuple[ClockCoordinate, ClockCoordinate]],
 ]:
     """Mirror the fixture's render-time hooks and clock binding.
 
@@ -829,18 +829,18 @@ def fixture_hooks_and_binding(
         for index, item in enumerate(tier.items)
     }
 
-    def parse_ref(reference: str) -> ClockPosition:
+    def parse_ref(reference: str) -> ClockCoordinate:
         parts = reference.split("/")
-        return ClockPosition(int(parts[2]), int(parts[4]))
+        return ClockCoordinate(int(parts[2]), int(parts[4]))
 
-    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
+    def binding(item: Item) -> tuple[ClockCoordinate, ClockCoordinate]:
         span_start = _attr(item, "span-start")
         span_end = _attr(item, "span-end")
         if span_start is not None and span_end is not None:
             return (parse_ref(span_start), parse_ref(span_end))
         tick = int(_durable(item).split("/")[2])
         duration = int(_attr(item, "structural-duration") or 0)
-        return (ClockPosition(tick, 0), ClockPosition(tick + duration, 0))
+        return (ClockCoordinate(tick, 0), ClockCoordinate(tick + duration, 0))
 
     def item_label(item: Item, tier: Tier) -> str:
         text = _attr(item, "text")
@@ -865,7 +865,7 @@ def fixture_hooks_and_binding(
 
 
 def _render_fixture(graph: Graph) -> str:
-    clock = ClockProfile.from_position_values(
+    clock = ClockProfile.from_boundary_values(
         graph,
         _IK_CLOCK,
         tick_attribute=_IK_TICK,
@@ -1667,7 +1667,7 @@ def test_same_tier_colocated_items_share_one_column_anchor() -> None:
 def test_structural_default_item_label_holds_without_a_hook() -> None:
     """Absent item_label under a structural clock builds a timing-free default."""
     graph = _kat_graph()
-    clock = ClockProfile.from_position_values(
+    clock = ClockProfile.from_boundary_values(
         graph,
         _IK_CLOCK,
         tick_attribute=_IK_TICK,
@@ -1689,7 +1689,7 @@ def test_structural_raw_single_boundary_tick_is_refused() -> None:
         (("segment", (_ik_item("/clock/1/segment/0", text="x", duration=1),)),),
     )
     with pytest.raises(ValueError, match="single raw boundary"):
-        ClockProfile.from_position_values(
+        ClockProfile.from_boundary_values(
             graph,
             _IK_CLOCK,
             tick_attribute=_IK_TICK,
@@ -1699,7 +1699,7 @@ def test_structural_raw_single_boundary_tick_is_refused() -> None:
 
 
 def _structural_clock(graph: Graph) -> ClockProfile:
-    return ClockProfile.from_position_values(
+    return ClockProfile.from_boundary_values(
         graph,
         _IK_CLOCK,
         tick_attribute=_IK_TICK,
@@ -1719,7 +1719,7 @@ def test_structural_binding_returning_none_is_refused() -> None:
     """A binding returning None for a visible item is refused, item named."""
     graph = _kat_graph()
 
-    def binding(item: Item) -> tuple[ClockPosition, ClockPosition] | None:
+    def binding(item: Item) -> tuple[ClockCoordinate, ClockCoordinate] | None:
         return None
 
     with pytest.raises(ValueError, match="binding returned None"):
@@ -1734,15 +1734,15 @@ def test_structural_reversed_span_is_refused() -> None:
     """A binding whose start column follows its end column is refused."""
     graph = _kat_graph()
 
-    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
-        return (ClockPosition(2, 0), ClockPosition(0, 0))
+    def binding(item: Item) -> tuple[ClockCoordinate, ClockCoordinate]:
+        return (ClockCoordinate(2, 0), ClockCoordinate(0, 0))
 
     with pytest.raises(ValueError, match="reversed"):
         tiergraph_dot.dumps(graph, clock=_structural_clock(graph), binding=binding)
 
 
 def test_structural_malformed_binding_is_refused() -> None:
-    """A binding returning a non-pair or non-ClockPositions is refused."""
+    """A binding returning a non-pair or non-ClockCoordinates is refused."""
     graph = _kat_graph()
 
     def not_a_pair(item: Item) -> object:
@@ -1758,7 +1758,7 @@ def test_structural_malformed_binding_is_refused() -> None:
     def wrong_types(item: Item) -> object:
         return (0, 3)
 
-    with pytest.raises(ValueError, match="must return ClockPositions"):
+    with pytest.raises(ValueError, match="must return ClockCoordinates"):
         tiergraph_dot.dumps(
             graph,
             clock=_structural_clock(graph),
@@ -1767,13 +1767,13 @@ def test_structural_malformed_binding_is_refused() -> None:
 
 
 def test_structural_off_spine_placement_is_refused() -> None:
-    """A binding naming a non-occupied clock position is refused, item named."""
+    """A binding naming a non-occupied clock boundary is refused, item named."""
     graph = _kat_graph()
 
-    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
-        return (ClockPosition(9, 9), ClockPosition(9, 9))
+    def binding(item: Item) -> tuple[ClockCoordinate, ClockCoordinate]:
+        return (ClockCoordinate(9, 9), ClockCoordinate(9, 9))
 
-    with pytest.raises(ValueError, match="not an occupied spine position"):
+    with pytest.raises(ValueError, match="not an occupied spine coordinate"):
         tiergraph_dot.dumps(graph, clock=_structural_clock(graph), binding=binding)
 
 
@@ -1788,8 +1788,8 @@ def test_binding_is_refused_when_the_renderer_cannot_use_it() -> None:
     """Placement cannot be silently ignored without a structural clock."""
     graph, profile = graph_and_clock()
 
-    def binding(item: Item) -> tuple[ClockPosition, ClockPosition]:
-        return ClockPosition(0), ClockPosition(1)
+    def binding(item: Item) -> tuple[ClockCoordinate, ClockCoordinate]:
+        return ClockCoordinate(0), ClockCoordinate(1)
 
     with pytest.raises(ValueError, match="only used with a structural"):
         tiergraph_dot.dumps(graph, binding=binding)
@@ -1819,8 +1819,8 @@ def test_structural_boundary_relation_endpoint_is_refused() -> None:
         relations=(
             RelationInstance(
                 link,
-                DurablePositionRef(_ik("tier-0"), BoundarySide.BEFORE),
-                DurablePositionRef(_ik("tier-0"), BoundarySide.AFTER),
+                DurableBoundaryRef(_ik("tier-0"), BoundarySide.BEFORE),
+                DurableBoundaryRef(_ik("tier-0"), BoundarySide.AFTER),
             ),
         ),
     )

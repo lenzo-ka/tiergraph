@@ -82,9 +82,9 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
             {"name": name, "domain": "document", "value_type": value_type}
         )
         attributes.append({"name": name, "value_type": value_type, "lexical": lexical})
-    positions = cast(list[JsonValue], graph["position_values"])
-    first_position = cast(dict[str, JsonValue], positions[0])
-    positions.append(
+    boundaries = cast(list[JsonValue], graph["position_values"])
+    first_boundary = cast(dict[str, JsonValue], boundaries[0])
+    boundaries.append(
         {
             "reference": {
                 "anchor": {
@@ -93,7 +93,7 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
                 },
                 "side": "before",
             },
-            "attributes": copy.deepcopy(first_position["attributes"]),
+            "attributes": copy.deepcopy(first_boundary["attributes"]),
         }
     )
     return (

@@ -16,17 +16,17 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationDeclaration,
     RelationEndpointKind,
@@ -43,8 +43,8 @@ type AttributeTarget = (
     | QualifiedName
     | ItemRef
     | DurableItemRef
-    | PositionRef
-    | DurablePositionRef
+    | BoundaryRef
+    | DurableBoundaryRef
     | int
 )
 type AttributeInput = Mapping[Name, object] | None
@@ -80,19 +80,19 @@ class TierHandle:
         """Return a checked structural reference into this tier."""
         return self._document._tier_ref(self, index)
 
-    def start(self) -> DurablePositionRef:
+    def start(self) -> DurableBoundaryRef:
         """Return the durable boundary at the start of this tier."""
         return self._document._tier_edge_ref(self, BoundarySide.BEFORE)
 
-    def end(self) -> DurablePositionRef:
+    def end(self) -> DurableBoundaryRef:
         """Return the durable boundary at the end of this tier."""
         return self._document._tier_edge_ref(self, BoundarySide.AFTER)
 
-    def before(self, index: int) -> DurablePositionRef:
+    def before(self, index: int) -> DurableBoundaryRef:
         """Return the durable boundary immediately before one tier item."""
         return self._document._item_boundary_ref(self, index, BoundarySide.BEFORE)
 
-    def after(self, index: int) -> DurablePositionRef:
+    def after(self, index: int) -> DurableBoundaryRef:
         """Return the durable boundary immediately after one tier item."""
         return self._document._item_boundary_ref(self, index, BoundarySide.AFTER)
 
@@ -141,7 +141,7 @@ class Document:
         self._instances: list[RelationInstance] = []
         self._polyadic_instances: list[PolyadicRelationInstance] = []
         self._attribute_declarations: list[AttributeDeclaration] = []
-        self._positions: list[Position] = []
+        self._boundaries: list[Boundary] = []
         self._attributes: list[AttributeValue] = []
 
     def namespace(self, namespace: str, *, prefix: str) -> None:
@@ -459,11 +459,11 @@ class Document:
             )
 
     def add(
-        self, value: RelationInstance | PolyadicRelationInstance | Position
+        self, value: RelationInstance | PolyadicRelationInstance | Boundary
     ) -> None:
-        """Add an already-constructed relation instance or sparse position value."""
-        if isinstance(value, Position):
-            self._positions.append(value)
+        """Add an already-constructed relation instance or sparse boundary value."""
+        if isinstance(value, Boundary):
+            self._boundaries.append(value)
         else:
             self.relate(value)
 
@@ -490,7 +490,7 @@ class Document:
             tuple(self._relations),
             tuple(self._instances),
             tuple(self._attribute_declarations),
-            tuple(self._positions),
+            tuple(self._boundaries),
             tuple(self._attributes),
             tuple(self._polyadic_instances),
         )
@@ -540,13 +540,13 @@ class Document:
 
     def _tier_edge_ref(
         self, handle: TierHandle, side: BoundarySide
-    ) -> DurablePositionRef:
+    ) -> DurableBoundaryRef:
         self._owned_tier(handle, f"tier boundary {handle.name.local_name}")
-        return DurablePositionRef(handle.name, side)
+        return DurableBoundaryRef(handle.name, side)
 
     def _item_boundary_ref(
         self, handle: TierHandle, index: int, side: BoundarySide
-    ) -> DurablePositionRef:
+    ) -> DurableBoundaryRef:
         reference = self._tier_ref(handle, index)
         tier = self._owned_tier(handle, f"tier boundary {handle.name.local_name}")
         durable_id = tier.items[reference.index].durable_id
@@ -554,7 +554,7 @@ class Document:
             raise BuilderError(
                 f"tier boundary {handle.name.local_name}: item {index} has no durable id"
             )
-        return DurablePositionRef(DurableItemRef(durable_id), side)
+        return DurableBoundaryRef(DurableItemRef(durable_id), side)
 
     def _memberships(self, tier: QualifiedName) -> tuple[QualifiedName, ...]:
         return tuple(
@@ -605,7 +605,7 @@ class Document:
         tier: TierHandle,
         value: object,
         kind: RelationEndpointKind,
-    ) -> ItemRef | DurablePositionRef:
+    ) -> ItemRef | DurableBoundaryRef:
         operation = f"relation {relation} {side}"
         if kind is RelationEndpointKind.ITEM:
             return self._endpoint(relation, side, tier, value, kind)
@@ -614,9 +614,9 @@ class Document:
                 f"{operation}: boundary endpoint refuses numeric coordinate; "
                 "use an explicit tier anchor"
             )
-        if not isinstance(value, DurablePositionRef):
+        if not isinstance(value, DurableBoundaryRef):
             raise BuilderError(
-                f"{operation}: boundary endpoint needs DurablePositionRef anchor"
+                f"{operation}: boundary endpoint needs DurableBoundaryRef anchor"
             )
         expected = self._owned_tier(tier, operation)
         anchor = getattr(value, "anchor", _MISSING)
@@ -646,17 +646,17 @@ class Document:
         tier: TierHandle,
         value: object,
         kind: RelationEndpointKind,
-    ) -> ItemRef | DurablePositionRef:
+    ) -> ItemRef | DurableBoundaryRef:
         operation = f"link {link} {side}"
         if kind is RelationEndpointKind.BOUNDARY:
             if isinstance(value, int):
                 raise BuilderError(
                     f"{operation}: boundary endpoint refuses integer index"
                 )
-            if isinstance(value, DurablePositionRef):
+            if isinstance(value, DurableBoundaryRef):
                 return value
             raise BuilderError(
-                f"{operation}: boundary endpoint needs DurablePositionRef"
+                f"{operation}: boundary endpoint needs DurableBoundaryRef"
             )
         if type(value) is int:
             return self._tier_ref(tier, value)
@@ -783,16 +783,16 @@ class Document:
                 relation, attributes=(*relation.attributes, value)
             )
         else:
-            if not isinstance(target, PositionRef | DurablePositionRef):
-                raise BuilderError(f"{operation}: target must be a position reference")
-            for index, position in enumerate(self._positions):
-                if position.reference == target:
-                    self._positions[index] = replace(
-                        position, attributes=(*position.attributes, value)
+            if not isinstance(target, BoundaryRef | DurableBoundaryRef):
+                raise BuilderError(f"{operation}: target must be a boundary reference")
+            for index, boundary in enumerate(self._boundaries):
+                if boundary.reference == target:
+                    self._boundaries[index] = replace(
+                        boundary, attributes=(*boundary.attributes, value)
                     )
                     break
             else:
-                self._positions.append(Position(target, (value,)))
+                self._boundaries.append(Boundary(target, (value,)))
 
     @staticmethod
     def _qualified_target(target: AttributeTarget, operation: str) -> QualifiedName:

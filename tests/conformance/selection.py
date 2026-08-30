@@ -15,10 +15,12 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     BoundariesSelector,
+    Boundary,
+    BoundaryRef,
     BoundarySelector,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -30,8 +32,6 @@ from tiergraph import (
     NodeSet,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -175,15 +175,15 @@ class SelectionLawSuite:
         graph = self.graph()
         boundaries = evaluate_selection(graph, BoundariesSelector(self.name("left")))
         assert boundaries.nodes == tuple(
-            Node(NodeKind.POSITION, PositionRef(self.name("left"), index))
+            Node(NodeKind.POSITION, BoundaryRef(self.name("left"), index))
             for index in range(3)
         )
         anchored_selector = BoundarySelector(
-            DurablePositionRef(DurableItemRef("left-1"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("left-1"), BoundarySide.BEFORE),
         )
         anchored = evaluate_selection(graph, anchored_selector)
         assert anchored.nodes == (
-            Node(NodeKind.POSITION, PositionRef(self.name("left"), 1)),
+            Node(NodeKind.POSITION, BoundaryRef(self.name("left"), 1)),
         )
         empty_name = self.name("empty")
         empty = Graph(
@@ -194,17 +194,17 @@ class SelectionLawSuite:
             graph.attribute_declarations,
         )
         assert evaluate_selection(empty, BoundariesSelector(empty_name)).nodes == (
-            Node(NodeKind.POSITION, PositionRef(empty_name, 0)),
+            Node(NodeKind.POSITION, BoundaryRef(empty_name, 0)),
         )
         assert evaluate_selection(
             empty,
             BoundarySelector(
-                DurablePositionRef(empty_name, BoundarySide.BEFORE),
+                DurableBoundaryRef(empty_name, BoundarySide.BEFORE),
             ),
         ) == evaluate_selection(
             empty,
             BoundarySelector(
-                DurablePositionRef(empty_name, BoundarySide.AFTER),
+                DurableBoundaryRef(empty_name, BoundarySide.AFTER),
             ),
         )
 
@@ -258,8 +258,8 @@ class SelectionLawSuite:
             (ItemRef(tier_name, 0),),
             attributes=(value(AttributeDomain.RELATION_INSTANCE),),
         )
-        position = Position(
-            PositionRef(tier_name, 0), (value(AttributeDomain.POSITION),)
+        boundary = Boundary(
+            BoundaryRef(tier_name, 0), (value(AttributeDomain.POSITION),)
         )
         declarations = tuple(
             AttributeDeclaration(names[domain], domain, XsdType.STRING)
@@ -277,7 +277,7 @@ class SelectionLawSuite:
             (members, link, correspondence),
             (relation,),
             declarations,
-            (position,),
+            (boundary,),
             (value(AttributeDomain.DOCUMENT),),
             (polyadic,),
         )
@@ -286,7 +286,7 @@ class SelectionLawSuite:
             AttributeDomain.TIER: Node(NodeKind.TIER, tier_name),
             AttributeDomain.ITEM: Node(NodeKind.ITEM, ItemRef(tier_name, 0)),
             AttributeDomain.POSITION: Node(
-                NodeKind.POSITION, PositionRef(tier_name, 0)
+                NodeKind.POSITION, BoundaryRef(tier_name, 0)
             ),
             AttributeDomain.RELATION_DECLARATION: Node(
                 NodeKind.RELATION_DECLARATION, members.name
@@ -341,8 +341,8 @@ class SelectionLawSuite:
         )
         boundary_relation = RelationInstance(
             boundary_link.name,
-            DurablePositionRef(self.name("left"), BoundarySide.BEFORE),
-            DurablePositionRef(self.name("right"), BoundarySide.AFTER),
+            DurableBoundaryRef(self.name("left"), BoundarySide.BEFORE),
+            DurableBoundaryRef(self.name("right"), BoundarySide.AFTER),
         )
         extended = Graph(
             graph.namespaces,

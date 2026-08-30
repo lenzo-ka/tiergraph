@@ -7,8 +7,8 @@ import pytest
 from tiergraph import (
     BipartiteRelationDeclaration,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -219,7 +219,7 @@ def test_runtime_endpoint_kind_refusal_names_corrupt_instance() -> None:
     """Traversal never narrows a corrupt item-only incidence by filtering it."""
     value = graph()
     instance = value.polyadic_relations[0]
-    boundary = DurablePositionRef(DurableItemRef("root"), BoundarySide.AFTER)
+    boundary = DurableBoundaryRef(DurableItemRef("root"), BoundarySide.AFTER)
     object.__setattr__(instance, "targets", (*instance.targets, boundary))
 
     with pytest.raises(ValueError) as caught:

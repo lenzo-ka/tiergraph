@@ -18,9 +18,11 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     GraphValidationError,
     Item,
@@ -28,8 +30,6 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -205,7 +205,7 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
         TierDeclaration(notes, "Notes"),
         (Item("intro"), Item("outro")),
     )
-    boundary = DurablePositionRef(DurableItemRef("bed"), BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(DurableItemRef("bed"), BoundarySide.BEFORE)
     namespaces: tuple[NamespaceDeclaration, ...] = (
         NamespaceDeclaration("w", NS),
         NamespaceDeclaration("meta", META_NS),
@@ -232,7 +232,7 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
         (RelationInstance(cues.name, ItemRef(placements, 0), boundary, "cue-1"),),
         attribute_declarations,
         (
-            Position(
+            Boundary(
                 boundary,
                 (
                     AttributeValue(marker.name, XsdType.BOOLEAN, "1"),
@@ -272,11 +272,11 @@ def canonical_variants() -> tuple[Graph, Graph]:
         relation_declarations=(*original.relation_declarations, polyadic),
         polyadic_relations=(instance,),
     )
-    extra_position = Position(
-        PositionRef(name("placements"), 0),
+    extra_boundary = Boundary(
+        BoundaryRef(name("placements"), 0),
         tuple(
             AttributeValue(value.name, value.value_type, "0")
-            for value in baseline.position_values[0].attributes
+            for value in baseline.boundary_values[0].attributes
         ),
     )
     left = Graph(
@@ -285,7 +285,7 @@ def canonical_variants() -> tuple[Graph, Graph]:
         baseline.relation_declarations,
         baseline.relations,
         baseline.attribute_declarations,
-        (*baseline.position_values, extra_position),
+        (*baseline.boundary_values, extra_boundary),
         baseline.attributes,
         baseline.polyadic_relations,
     )
@@ -326,9 +326,9 @@ def canonical_variants() -> tuple[Graph, Graph]:
             )
             for tier in supplied.tiers
         ),
-        position_values=tuple(
-            replace(position, attributes=tuple(reversed(position.attributes)))
-            for position in reversed((*supplied.position_values, extra_position))
+        boundary_values=tuple(
+            replace(boundary, attributes=tuple(reversed(boundary.attributes)))
+            for boundary in reversed((*supplied.boundary_values, extra_boundary))
         ),
         attributes=tuple(reversed(supplied.attributes)),
     )
@@ -351,7 +351,7 @@ def ordered_variants() -> tuple[Graph, Graph, Graph]:
             graph.relation_declarations,
             graph.relations,
             graph.attribute_declarations,
-            graph.position_values,
+            graph.boundary_values,
             graph.attributes,
         ),
         Graph(
@@ -360,7 +360,7 @@ def ordered_variants() -> tuple[Graph, Graph, Graph]:
             graph.relation_declarations,
             graph.relations,
             graph.attribute_declarations,
-            graph.position_values,
+            graph.boundary_values,
             graph.attributes,
         ),
     )
@@ -396,7 +396,7 @@ def _attribute_graph(*, attribute_local_name: str, lexical: str) -> Graph:
 
 
 def read_back_corpus() -> tuple[Graph, ...]:
-    """Exercise canonical read-back across every user-controlled string position."""
+    """Exercise canonical read-back across every user-controlled string location."""
     return (
         Graph((), (), ()),
         rich_graph(),
@@ -418,7 +418,7 @@ def read_back_corpus() -> tuple[Graph, ...]:
 
 
 def refused_corpus() -> tuple[tuple[Graph, str], ...]:
-    """Cover every constructible wire string position with a lone surrogate."""
+    """Cover every constructible wire string location with a lone surrogate."""
     surrogate = "\ud800"
     return (
         (
@@ -551,7 +551,7 @@ def polyadic_document() -> dict[str, object]:
         (*original.relation_declarations, declaration),
         original.relations,
         original.attribute_declarations,
-        original.position_values,
+        original.boundary_values,
         original.attributes,
         (relation,),
     )
@@ -739,7 +739,7 @@ def test_presentation_only_xsd_variation_returns_to_canonical_bytes() -> None:
 def test_reference_kinds_and_anchor_union_round_trip_distinguishably() -> None:
     """Structural items and both durable boundary anchors retain their tags."""
     graph = rich_graph()
-    tier_anchor = DurablePositionRef(name("placements"), BoundarySide.AFTER)
+    tier_anchor = DurableBoundaryRef(name("placements"), BoundarySide.AFTER)
     extended = Graph(
         graph.namespaces,
         graph.tiers,
@@ -747,16 +747,16 @@ def test_reference_kinds_and_anchor_union_round_trip_distinguishably() -> None:
         graph.relations,
         graph.attribute_declarations,
         (
-            *graph.position_values,
-            Position(tier_anchor, graph.position_values[0].attributes),
+            *graph.boundary_values,
+            Boundary(tier_anchor, graph.boundary_values[0].attributes),
         ),
         graph.attributes,
     )
     decoded = loads(dump_bytes(extended))
     assert isinstance(decoded.relations[0].left, ItemRef)
-    item_anchor = cast(DurablePositionRef, decoded.relations[0].right)
+    item_anchor = cast(DurableBoundaryRef, decoded.relations[0].right)
     assert isinstance(item_anchor.anchor, DurableItemRef)
-    outer_anchor = cast(DurablePositionRef, decoded.position_values[1].reference)
+    outer_anchor = cast(DurableBoundaryRef, decoded.boundary_values[1].reference)
     assert isinstance(outer_anchor.anchor, QualifiedName)
     assert item_anchor != outer_anchor
 
@@ -793,18 +793,18 @@ def test_contradictory_xsd_lexical_form_refuses_at_value_construction() -> None:
 def test_missing_durable_anchor_refuses_at_position_resolution() -> None:
     """A durable boundary names the absent item anchor during graph construction."""
     document = mutable_document()
-    positions = cast(list[dict[str, object]], graph_data(document)["position_values"])
-    reference = cast(dict[str, object], positions[0]["reference"])
+    boundaries = cast(list[dict[str, object]], graph_data(document)["position_values"])
+    reference = cast(dict[str, object], boundaries[0]["reference"])
     anchor = cast(dict[str, object], reference["anchor"])
     anchor["durable_id"] = "absent"
-    LAWS.check_refusal("durable position anchor item 'absent' was not found", document)
+    LAWS.check_refusal("durable boundary anchor item 'absent' was not found", document)
 
 
 def test_structural_position_and_anonymous_values_round_trip() -> None:
-    """Structural positions and absent durable ids take their distinct wire branches."""
+    """Structural boundaries and absent durable ids take their distinct wire branches."""
     graph = rich_graph()
-    structural = Position(
-        PositionRef(name("placements"), 2), graph.position_values[0].attributes
+    structural = Boundary(
+        BoundaryRef(name("placements"), 2), graph.boundary_values[0].attributes
     )
     anonymous_tier = Tier(TierDeclaration(name("anonymous"), "Anonymous"), (Item(),))
     extended = Graph(
@@ -892,10 +892,10 @@ def test_wire_shape_guards_name_their_paths() -> None:
     )
 
     bad_anchor_kind = mutable_document()
-    positions = cast(
+    boundaries = cast(
         list[dict[str, object]], graph_data(bad_anchor_kind)["position_values"]
     )
-    reference = cast(dict[str, object], positions[0]["reference"])
+    reference = cast(dict[str, object], boundaries[0]["reference"])
     anchor = cast(dict[str, object], reference["anchor"])
     anchor["kind"] = "document"
     cases.append(

@@ -32,6 +32,8 @@ from examples.mix_paths import (
 from tiergraph import (
     AlternativeRef,
     AttributeValue,
+    BoundaryBinding,
+    BoundaryRef,
     CanonicalPath,
     DurableItemRef,
     Graph,
@@ -40,12 +42,10 @@ from tiergraph import (
     PathKind,
     PathRefusal,
     PathRefusalCode,
-    PositionBinding,
-    PositionRef,
     QualifiedName,
     ResolvedAlternative,
+    ResolvedBoundary,
     ResolvedItem,
-    ResolvedPosition,
     Tier,
     XsdType,
     resolve_path,
@@ -60,32 +60,32 @@ def refusal(profile: MixPathProfile, text: str) -> PathRefusal:
 
 
 def test_resolves_and_round_trips_all_three_path_kinds() -> None:
-    """Items, shared-clock positions, and both diamond routes stay distinct."""
+    """Items, shared-clock boundaries, and both diamond routes stay distinct."""
     graph = build_graph()
     profile = MixPathProfile(graph)
     item = resolve_path(graph, profile, "/mix/midi/note/0", require=PathKind.ITEM)
     bus = resolve_path(graph, profile, "/mix/mix/bus/0")
-    position = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
+    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
     first = resolve_path(
         graph, profile, "/mix/arrangement/0", require=PathKind.ALTERNATIVE
     )
     second = resolve_path(graph, profile, "/mix/arrangement/1")
     assert isinstance(item, ResolvedItem)
     assert isinstance(bus, ResolvedItem)
-    assert isinstance(position, ResolvedPosition)
+    assert isinstance(boundary, ResolvedBoundary)
     assert isinstance(first, ResolvedAlternative)
     assert isinstance(second, ResolvedAlternative)
     assert item.current == ItemRef(NOTE, 0)
     assert bus.current == ItemRef(BUS, 0)
-    assert position.current == PositionRef(CLOCK, 2)
+    assert boundary.current == BoundaryRef(CLOCK, 2)
     assert first.value == tuple(ItemRef(NOTE, index) for index in range(26))
     assert second.value == tuple(ItemRef(NOTE, index) for index in range(26, 52))
     bindings = (
         ItemBinding(item.current),
-        PositionBinding(position.current),
+        BoundaryBinding(boundary.current),
         AlternativeRef(first.owner, first.relation, first.index),
     )
-    paths = (item.path, position.path, first.path)
+    paths = (item.path, boundary.path, first.path)
     assert tuple(profile.spell(binding, graph) for binding in bindings) == paths
     assert tuple(profile.bind(path, graph) for path in paths) == bindings
 
@@ -157,7 +157,7 @@ def test_spell_refuses_bindings_outside_the_mix_vocabulary() -> None:
         ItemBinding(DurableItemRef("bed")),
         ItemBinding(ItemRef(CLOCK, 0)),
         ItemBinding(ItemRef(QualifiedName(MIDI_NAMESPACE, "other"), 0)),
-        PositionBinding(PositionRef(STEM, 0)),
+        BoundaryBinding(BoundaryRef(STEM, 0)),
         AlternativeRef(ItemRef(BUS, 1), ARRANGEMENT, 0),
         AlternativeRef(
             ItemRef(BUS, 0), QualifiedName(ARRANGEMENT.namespace, "other"), 0

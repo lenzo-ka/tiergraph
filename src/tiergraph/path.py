@@ -1,4 +1,4 @@
-"""Canonical, profile-owned paths over tiergraph item and position references."""
+"""Canonical, profile-owned paths over tiergraph item and boundary references."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from enum import StrEnum
 from typing import Protocol
 
 from tiergraph.core import (
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     ItemRef,
-    PositionRef,
     QualifiedName,
 )
 
@@ -101,10 +101,10 @@ class ItemBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class PositionBinding:
-    """Request resolution of one structural or durable position reference."""
+class BoundaryBinding:
+    """Request resolution of one structural or durable boundary reference."""
 
-    reference: PositionRef | DurablePositionRef
+    reference: BoundaryRef | DurableBoundaryRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +116,7 @@ class AlternativeRef:
     index: int
 
 
-type PathBinding = ItemBinding | PositionBinding | AlternativeRef
+type PathBinding = ItemBinding | BoundaryBinding | AlternativeRef
 
 
 class PathProfile(Protocol):
@@ -180,11 +180,11 @@ class ResolvedItem:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedPosition:
+class ResolvedBoundary:
     """Pair the parsed path with its current structural boundary coordinate."""
 
     path: CanonicalPath
-    current: PositionRef
+    current: BoundaryRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,13 +204,13 @@ def resolve_path(
     text: str,
     *,
     require: PathKind | None = None,
-) -> ResolvedItem | ResolvedPosition | ResolvedAlternative:
+) -> ResolvedItem | ResolvedBoundary | ResolvedAlternative:
     """Parse, bind, kind-check, and resolve a profile-owned graph path."""
     path = CanonicalPath.parse(text)
     binding = profile.bind(path, graph)
     if isinstance(binding, ItemBinding):
         actual = PathKind.ITEM
-    elif isinstance(binding, PositionBinding):
+    elif isinstance(binding, BoundaryBinding):
         actual = PathKind.POSITION
     else:
         actual = PathKind.ALTERNATIVE
@@ -259,10 +259,10 @@ def resolve_path(
             alternatives[binding.index],
         )
     try:
-        current_position = graph.resolve_position(binding.reference)
+        current_boundary = graph.resolve_boundary(binding.reference)
     except (TypeError, ValueError) as error:
-        raise _position_resolution_refusal(text, path, binding, graph, error) from error
-    return ResolvedPosition(path, current_position)
+        raise _boundary_resolution_refusal(text, path, binding, graph, error) from error
+    return ResolvedBoundary(path, current_boundary)
 
 
 class StructuralPathProfile:
@@ -288,8 +288,8 @@ class StructuralPathProfile:
         if len(segments) == 3 and segments[:2] == ("items", "durable"):
             return ItemBinding(DurableItemRef(_nonempty(segments[2], 2, path)))
         if len(segments) == 5 and segments[:2] == ("positions", "structural"):
-            return PositionBinding(
-                PositionRef(
+            return BoundaryBinding(
+                BoundaryRef(
                     _tier(segments[2], segments[3], path),
                     _index(segments[4], 4, path),
                 )
@@ -299,8 +299,8 @@ class StructuralPathProfile:
             "durable",
             "item",
         ):
-            return PositionBinding(
-                DurablePositionRef(
+            return BoundaryBinding(
+                DurableBoundaryRef(
                     DurableItemRef(_nonempty(segments[3], 3, path)),
                     _side(segments[4], 4, path),
                 )
@@ -310,8 +310,8 @@ class StructuralPathProfile:
             "durable",
             "tier",
         ):
-            return PositionBinding(
-                DurablePositionRef(
+            return BoundaryBinding(
+                DurableBoundaryRef(
                     _tier(segments[3], segments[4], path, 3, 4),
                     _side(segments[5], 5, path),
                 )
@@ -333,11 +333,11 @@ class StructuralPathProfile:
             segments = _structural_segments("items", reference.tier, reference.index)
         elif isinstance(reference, DurableItemRef):
             segments = ("items", "durable", reference.durable_id)
-        elif isinstance(reference, PositionRef):
+        elif isinstance(reference, BoundaryRef):
             segments = _structural_segments(
                 "positions", reference.tier, reference.index
             )
-        elif isinstance(reference, DurablePositionRef):
+        elif isinstance(reference, DurableBoundaryRef):
             if isinstance(reference.anchor, DurableItemRef):
                 segments = (
                     "positions",
@@ -457,10 +457,10 @@ def _item_resolution_refusal(
     return PathRefusal(code, offender, cause)
 
 
-def _position_resolution_refusal(
+def _boundary_resolution_refusal(
     text: str,
     path: CanonicalPath,
-    binding: PositionBinding,
+    binding: BoundaryBinding,
     graph: Graph,
     cause: TypeError | ValueError,
 ) -> PathRefusal:
@@ -469,11 +469,11 @@ def _position_resolution_refusal(
         return PathRefusal(
             PathRefusalCode.PROFILE_REFUSED,
             PathOffender(
-                text=text, path=path, profile_reason="invalid_position_reference"
+                text=text, path=path, profile_reason="invalid_boundary_reference"
             ),
             cause,
         )
-    if isinstance(reference, DurablePositionRef):
+    if isinstance(reference, DurableBoundaryRef):
         if isinstance(reference.anchor, DurableItemRef):
             return PathRefusal(
                 PathRefusalCode.UNKNOWN_DURABLE_ANCHOR,

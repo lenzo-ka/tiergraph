@@ -100,7 +100,7 @@ include_empty_tiers=False)` follows graph and relation order, so its output is
 byte-stable. A clock profile passed here must be the one built for this exact
 graph instance. `presentation` customizes labels and relation styling; `binding`
 places non-clock items when rendering a structural clock built with
-`ClockProfile.from_position_values`.
+`ClockProfile.from_boundary_values`.
 
 ```python
 import tiergraph_dot

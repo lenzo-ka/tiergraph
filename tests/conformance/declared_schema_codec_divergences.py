@@ -48,7 +48,7 @@ LIVE_DIVERGENCES = (
         "structural indices must address an item in the referenced tier",
     ),
     DeclaredDivergence(
-        "position cardinality",
+        "boundary cardinality",
         r"\.(?:minimum:integer-2|maximum:integer-0)$",
         "relation-side bounds and instance cardinalities must be coherent",
     ),

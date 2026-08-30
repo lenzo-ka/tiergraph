@@ -13,16 +13,16 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
-    ClockPosition,
+    Boundary,
+    BoundaryRef,
+    ClockCoordinate,
     ClockProfile,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     NamespaceDeclaration,
     PhysicalTiming,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -30,7 +30,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
-    anchored_position,
+    anchored_boundary,
 )
 
 NS = "urn:tiergraph:profile:clock:test"
@@ -89,8 +89,8 @@ def fixture(rate: str = "10") -> Graph:
     relations = tuple(
         RelationInstance(
             BINDING,
-            anchored_position(bare, PositionRef(SEGMENT, source)),
-            anchored_position(bare, PositionRef(CLOCK, target)),
+            anchored_boundary(bare, BoundaryRef(SEGMENT, source)),
+            anchored_boundary(bare, BoundaryRef(CLOCK, target)),
         )
         for source, target in ((0, 1), (1, 2), (2, 3))
     )
@@ -105,11 +105,11 @@ def fixture(rate: str = "10") -> Graph:
 
 
 def test_real_reference_rate_derives_timing_on_a_partial_document_tier() -> None:
-    """The source fixture's 0.1-second units occupy clock positions 1 through 3."""
+    """The source fixture's 0.1-second units occupy clock coordinates 1 through 3."""
     profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
     assert profile.rate == Decimal("10.0")
-    assert profile.extent(SEGMENT) == (ClockPosition(1), ClockPosition(3))
-    assert profile.clock_position(PositionRef(SEGMENT, 1)) == 2
+    assert profile.extent(SEGMENT) == (ClockCoordinate(1), ClockCoordinate(3))
+    assert profile.clock_index(BoundaryRef(SEGMENT, 1)) == 2
     assert profile.duration(SEGMENT, 0) == (1, Decimal("10.0"))
     assert profile.duration(SEGMENT, 1) == (1, Decimal("10.0"))
 
@@ -140,7 +140,7 @@ def test_nonterminating_duration_is_exact_and_ignores_decimal_context() -> None:
 def test_structural_positions_remain_integral() -> None:
     """A continuous profile does not relax the kernel's structural indices."""
     with pytest.raises(ValueError, match="non-integral index 1.5"):
-        PositionRef(SEGMENT, 1.5)  # type: ignore[arg-type]
+        BoundaryRef(SEGMENT, 1.5)  # type: ignore[arg-type]
 
 
 def test_zero_span_is_shared_and_cannot_carry_per_event_duration() -> None:
@@ -175,8 +175,8 @@ def test_unrelated_boundary_relations_do_not_enter_the_binding() -> None:
         ),
     )
     assert ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).extent(SEGMENT) == (
-        ClockPosition(1),
-        ClockPosition(3),
+        ClockCoordinate(1),
+        ClockCoordinate(3),
     )
 
 
@@ -237,10 +237,10 @@ def test_profile_refusals_name_incomplete_or_contradictory_bindings() -> None:
         graph.attribute_declarations,
         attributes=graph.attributes,
     )
-    first_target = cast(DurablePositionRef, graph.relations[0].right)
+    first_target = cast(DurableBoundaryRef, graph.relations[0].right)
     wrong_target = replace(
         graph.relations[0],
-        right=DurablePositionRef(shadow, first_target.side),
+        right=DurableBoundaryRef(shadow, first_target.side),
     )
     with pytest.raises(ValueError, match="target is not on the clock"):
         ClockProfile(
@@ -265,8 +265,8 @@ def test_profile_refusals_name_incomplete_or_contradictory_bindings() -> None:
     )
     self_relation = RelationInstance(
         BINDING,
-        anchored_position(graph, PositionRef(CLOCK, 0)),
-        anchored_position(graph, PositionRef(CLOCK, 1)),
+        anchored_boundary(graph, BoundaryRef(CLOCK, 0)),
+        anchored_boundary(graph, BoundaryRef(CLOCK, 1)),
     )
     self_graph = replace(
         graph,
@@ -336,8 +336,8 @@ def test_profile_declaration_and_lookup_refusals_are_explicit() -> None:
     with pytest.raises(ValueError, match="tier.*not declared"):
         ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).extent(missing)
     with pytest.raises(ValueError, match="has no clock binding"):
-        ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).clock_position(
-            PositionRef(CLOCK, 0)
+        ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).clock_index(
+            BoundaryRef(CLOCK, 0)
         )
 
 
@@ -346,18 +346,18 @@ def test_anchor_helper_refuses_missing_tiers_positions_and_anchors() -> None:
     graph = fixture()
     missing = QualifiedName(NS, "missing")
     with pytest.raises(ValueError, match="outside its tier"):
-        anchored_position(graph, PositionRef(missing, 0))
+        anchored_boundary(graph, BoundaryRef(missing, 0))
     with pytest.raises(ValueError, match="outside its tier"):
-        anchored_position(graph, PositionRef(SEGMENT, 3))
+        anchored_boundary(graph, BoundaryRef(SEGMENT, 3))
     unanchored = replace(
         graph,
         tiers=(graph.tiers[0], replace(graph.tiers[1], items=(Item(), Item()))),
         relations=(),
     )
     with pytest.raises(ValueError, match="needs a durable right-hand anchor"):
-        anchored_position(unanchored, PositionRef(SEGMENT, 1))
+        anchored_boundary(unanchored, BoundaryRef(SEGMENT, 1))
     assert isinstance(
-        anchored_position(graph, PositionRef(SEGMENT, 0)), DurablePositionRef
+        anchored_boundary(graph, BoundaryRef(SEGMENT, 0)), DurableBoundaryRef
     )
 
 
@@ -431,9 +431,9 @@ def reference_shape(*, rate: str | None = None) -> Graph:
             AttributeDeclaration(RATE, AttributeDomain.DOCUMENT, XsdType.DECIMAL),
         )
         attributes = (*attributes, AttributeValue(RATE, XsdType.DECIMAL, rate))
-    positions = tuple(
-        Position(
-            anchored_position(
+    boundaries = tuple(
+        Boundary(
+            anchored_boundary(
                 Graph(
                     (NamespaceDeclaration("clock", NS),),
                     (clock, segments, alternate, syntax),
@@ -441,7 +441,7 @@ def reference_shape(*, rate: str | None = None) -> Graph:
                     attribute_declarations=attribute_declarations,
                     attributes=attributes,
                 ),
-                PositionRef(CLOCK, index),
+                BoundaryRef(CLOCK, index),
             ),
             (
                 AttributeValue(TICK, XsdType.INTEGER, str(tick)),
@@ -455,14 +455,14 @@ def reference_shape(*, rate: str | None = None) -> Graph:
         (clock, segments, alternate, syntax),
         declarations,
         attribute_declarations=attribute_declarations,
-        position_values=positions,
+        boundary_values=boundaries,
         attributes=attributes,
     )
     relations = tuple(
         RelationInstance(
             BINDING,
-            anchored_position(bare, PositionRef(source_tier, source)),
-            anchored_position(bare, PositionRef(CLOCK, target)),
+            anchored_boundary(bare, BoundaryRef(source_tier, source)),
+            anchored_boundary(bare, BoundaryRef(CLOCK, target)),
         )
         for source_tier, source, target in (
             (SEGMENT, 0, 1),
@@ -511,7 +511,7 @@ def test_clock_profile_from_data_is_strict_and_constructs_full_profile() -> None
     graph = reference_shape()
     decoded = ClockProfile.from_data(graph, clock_profile_data())
     expected = advanced_profile(graph)
-    assert decoded.positions == expected.positions
+    assert decoded.coordinates == expected.coordinates
     assert decoded.structural_span(SEGMENT, 1) == expected.structural_span(SEGMENT, 1)
     assert decoded.timing(SEGMENT, 1) == expected.timing(SEGMENT, 1)
 
@@ -580,12 +580,12 @@ def test_repeated_reference_points_have_ordered_refined_spans() -> None:
     """Two point occurrences at tick one retain distinct gap endpoints for DOT."""
     profile = advanced_profile(reference_shape())
     assert profile.structural_span(SEGMENT, 0) == (
-        ClockPosition(1, 0),
-        ClockPosition(1, 1),
+        ClockCoordinate(1, 0),
+        ClockCoordinate(1, 1),
     )
     assert profile.structural_span(SEGMENT, 1) == (
-        ClockPosition(1, 1),
-        ClockPosition(2, 0),
+        ClockCoordinate(1, 1),
+        ClockCoordinate(2, 0),
     )
 
 
@@ -619,8 +619,8 @@ def test_relaxations_refuse_partial_binding_and_timing_contradictions() -> None:
         advanced_profile(replace(graph, relations=graph.relations[:-1]))
     syntax_binding = RelationInstance(
         BINDING,
-        anchored_position(graph, PositionRef(SYNTAX, 0)),
-        anchored_position(graph, PositionRef(CLOCK, 0)),
+        anchored_boundary(graph, BoundaryRef(SYNTAX, 0)),
+        anchored_boundary(graph, BoundaryRef(CLOCK, 0)),
     )
     with pytest.raises(ValueError, match="untimed tier.*has 1 clock bindings"):
         advanced_profile(replace(graph, relations=(*graph.relations, syntax_binding)))
@@ -631,7 +631,7 @@ def test_relaxations_refuse_partial_binding_and_timing_contradictions() -> None:
 def test_refinement_and_stored_timing_refusals_name_the_offender() -> None:
     """Malformed refinement, partial timing, and fractional structure fail loudly."""
     graph = reference_shape()
-    bad_positions = list(graph.position_values)
+    bad_positions = list(graph.boundary_values)
     bad_positions[2] = replace(
         bad_positions[2],
         attributes=(
@@ -640,7 +640,7 @@ def test_refinement_and_stored_timing_refusals_name_the_offender() -> None:
         ),
     )
     with pytest.raises(ValueError, match="not strictly ordered"):
-        advanced_profile(replace(graph, position_values=tuple(bad_positions)))
+        advanced_profile(replace(graph, boundary_values=tuple(bad_positions)))
     items = list(graph.tiers[1].items)
     items[1] = replace(
         items[1], attributes=(AttributeValue(START, XsdType.DECIMAL, "0.2"),)
@@ -650,7 +650,7 @@ def test_refinement_and_stored_timing_refusals_name_the_offender() -> None:
     with pytest.raises(ValueError, match="item.*partial stored timing"):
         advanced_profile(replace(graph, tiers=tuple(tiers)))
     with pytest.raises(ValueError, match="non-integral index 1.5"):
-        PositionRef(SEGMENT, 1.5)  # type: ignore[arg-type]
+        BoundaryRef(SEGMENT, 1.5)  # type: ignore[arg-type]
 
 
 def test_new_clock_role_declarations_and_values_are_checked() -> None:
@@ -661,7 +661,7 @@ def test_new_clock_role_declarations_and_values_are_checked() -> None:
     with pytest.raises(ValueError, match="requires both start and duration"):
         ClockProfile(graph, CLOCK, BINDING, None, UNIT, TICK, GAP, UNTIMED, START)
     with pytest.raises(ValueError, match="lacks refinement"):
-        advanced_profile(replace(graph, position_values=graph.position_values[:-1]))
+        advanced_profile(replace(graph, boundary_values=graph.boundary_values[:-1]))
     bad_unit = replace(
         graph,
         attributes=tuple(
@@ -809,7 +809,7 @@ def test_untimed_structural_queries_name_the_tier_opt_out() -> None:
     """Structural queries identify an explicit untimed-tier refusal."""
     profile = advanced_profile(reference_shape())
     with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
-        profile.refined_position(PositionRef(SYNTAX, 0))
+        profile.refined_coordinate(BoundaryRef(SYNTAX, 0))
     with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
         profile.structural_span(SYNTAX, 0)
 
@@ -823,7 +823,7 @@ def test_refined_coordinate_values_remain_nonnegative_integral_structure() -> No
         (0, -1, "negative"),
     ):
         with pytest.raises(ValueError, match=message):
-            ClockPosition(tick, gap)  # type: ignore[arg-type]
+            ClockCoordinate(tick, gap)  # type: ignore[arg-type]
 
 
 SPINE_TICK = QualifiedName(NS, "spine-tick")
@@ -834,7 +834,7 @@ SPINE_UNIT = QualifiedName(NS, "spine-unit")
 def spine_fixture(
     raw: tuple[tuple[int, int], ...], *, with_unit: bool = False
 ) -> Graph:
-    """Build a clock-only graph carrying tick/gap position values alone.
+    """Build a clock-only graph carrying tick/gap boundary values alone.
 
     Relations and document attributes stay empty, mirroring the structural
     input the DOT spine is derived from without any tier-to-clock binding.
@@ -854,9 +854,9 @@ def spine_fixture(
             *declarations,
             AttributeDeclaration(SPINE_UNIT, AttributeDomain.DOCUMENT, XsdType.STRING),
         )
-    positions = tuple(
-        Position(
-            PositionRef(CLOCK, index),
+    boundaries = tuple(
+        Boundary(
+            BoundaryRef(CLOCK, index),
             (
                 AttributeValue(SPINE_TICK, XsdType.INTEGER, str(tick)),
                 AttributeValue(SPINE_GAP, XsdType.INTEGER, str(gap)),
@@ -869,33 +869,33 @@ def spine_fixture(
         tiers,
         (),
         attribute_declarations=declarations,
-        position_values=positions,
+        boundary_values=boundaries,
         attributes=(
             (AttributeValue(SPINE_UNIT, XsdType.STRING, "cell"),) if with_unit else ()
         ),
     )
 
 
-def test_from_position_values_derives_the_spine_without_relations_or_unit() -> None:
-    """The structural factory reads the spine from position values alone."""
+def test_from_boundary_values_derives_the_spine_without_relations_or_unit() -> None:
+    """The structural factory reads the spine from boundary values alone."""
     graph = spine_fixture(((0, 0), (0, 1), (1, 0)))
-    profile = ClockProfile.from_position_values(
+    profile = ClockProfile.from_boundary_values(
         graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
     )
-    assert profile.positions == (
-        ClockPosition(0, 0),
-        ClockPosition(0, 1),
-        ClockPosition(1, 0),
+    assert profile.coordinates == (
+        ClockCoordinate(0, 0),
+        ClockCoordinate(0, 1),
+        ClockCoordinate(1, 0),
     )
     assert profile.clock_tier == CLOCK
     assert profile.rate is None
     assert profile.unit == ""
 
 
-def test_from_position_values_reads_an_optional_unit_when_named() -> None:
+def test_from_boundary_values_reads_an_optional_unit_when_named() -> None:
     """A unit is read only when its attribute is supplied."""
     graph = spine_fixture(((0, 0), (0, 1)), with_unit=True)
-    profile = ClockProfile.from_position_values(
+    profile = ClockProfile.from_boundary_values(
         graph,
         CLOCK,
         tick_attribute=SPINE_TICK,
@@ -905,7 +905,7 @@ def test_from_position_values_reads_an_optional_unit_when_named() -> None:
     assert profile.unit == "cell"
 
 
-def test_from_position_values_collapse_folds_each_tick_trailing_gap() -> None:
+def test_from_boundary_values_collapse_folds_each_tick_trailing_gap() -> None:
     """Collapsing drops each tick's closing boundary, leaving occupied gaps."""
     raw = (
         (0, 0),
@@ -920,35 +920,35 @@ def test_from_position_values_collapse_folds_each_tick_trailing_gap() -> None:
         (2, 2),
     )
     graph = spine_fixture(raw)
-    raw_profile = ClockProfile.from_position_values(
+    raw_profile = ClockProfile.from_boundary_values(
         graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
     )
-    assert len(raw_profile.positions) == len(raw)
-    collapsed = ClockProfile.from_position_values(
+    assert len(raw_profile.coordinates) == len(raw)
+    collapsed = ClockProfile.from_boundary_values(
         graph,
         CLOCK,
         tick_attribute=SPINE_TICK,
         gap_attribute=SPINE_GAP,
         collapse_shared_boundaries=True,
     )
-    assert collapsed.positions == (
-        ClockPosition(0, 0),
-        ClockPosition(0, 1),
-        ClockPosition(1, 0),
-        ClockPosition(1, 1),
-        ClockPosition(1, 2),
-        ClockPosition(2, 0),
-        ClockPosition(2, 1),
+    assert collapsed.coordinates == (
+        ClockCoordinate(0, 0),
+        ClockCoordinate(0, 1),
+        ClockCoordinate(1, 0),
+        ClockCoordinate(1, 1),
+        ClockCoordinate(1, 2),
+        ClockCoordinate(2, 0),
+        ClockCoordinate(2, 1),
     )
     # Sanity: sum(R_t) - num_ticks == 10 - 3 == 7.
-    assert len(collapsed.positions) == len(raw) - 3
+    assert len(collapsed.coordinates) == len(raw) - 3
 
 
-def test_from_position_values_collapse_refuses_single_boundary_tick() -> None:
+def test_from_boundary_values_collapse_refuses_single_boundary_tick() -> None:
     """A tick with one raw boundary cannot be collapsed away."""
     graph = spine_fixture(((0, 0), (1, 0), (1, 1)))
     with pytest.raises(ValueError, match="single raw boundary"):
-        ClockProfile.from_position_values(
+        ClockProfile.from_boundary_values(
             graph,
             CLOCK,
             tick_attribute=SPINE_TICK,
@@ -960,26 +960,26 @@ def test_from_position_values_collapse_refuses_single_boundary_tick() -> None:
 def test_structural_profile_refuses_every_non_spine_timing_query() -> None:
     """A spine-only profile refuses queries needing tier-to-clock bindings."""
     graph = spine_fixture(((0, 0), (0, 1), (1, 0)))
-    profile = ClockProfile.from_position_values(
+    profile = ClockProfile.from_boundary_values(
         graph, CLOCK, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
     )
     for call in (
         lambda: profile.is_timed(SEGMENT),
-        lambda: profile.clock_position(PositionRef(SEGMENT, 0)),
-        lambda: profile.refined_position(PositionRef(SEGMENT, 0)),
+        lambda: profile.clock_index(BoundaryRef(SEGMENT, 0)),
+        lambda: profile.refined_coordinate(BoundaryRef(SEGMENT, 0)),
         lambda: profile.extent(SEGMENT),
         lambda: profile.structural_span(SEGMENT, 0),
         lambda: profile.timing(SEGMENT, 0),
         lambda: profile.duration(SEGMENT, 0),
     ):
-        with pytest.raises(ValueError, match="from_position_values"):
+        with pytest.raises(ValueError, match="from_boundary_values"):
             call()
 
 
-def test_from_position_values_refuses_bad_graph_and_missing_clock_tier() -> None:
+def test_from_boundary_values_refuses_bad_graph_and_missing_clock_tier() -> None:
     """Construction refusals name the offending input."""
     with pytest.raises(TypeError, match="got str"):
-        ClockProfile.from_position_values(
+        ClockProfile.from_boundary_values(
             "graph",  # type: ignore[arg-type]
             CLOCK,
             tick_attribute=SPINE_TICK,
@@ -987,7 +987,7 @@ def test_from_position_values_refuses_bad_graph_and_missing_clock_tier() -> None
         )
     graph = spine_fixture(((0, 0), (0, 1)))
     with pytest.raises(ValueError, match="not declared"):
-        ClockProfile.from_position_values(
+        ClockProfile.from_boundary_values(
             graph, SEGMENT, tick_attribute=SPINE_TICK, gap_attribute=SPINE_GAP
         )
 
@@ -1003,7 +1003,7 @@ def test_clock_profile_modes_and_required_full_profile_fields_are_explicit() -> 
         ClockProfile(graph, CLOCK, BINDING, RATE, None)
 
     structural_graph = spine_fixture(((0, 0), (0, 1)))
-    structural = ClockProfile.from_position_values(
+    structural = ClockProfile.from_boundary_values(
         structural_graph,
         CLOCK,
         tick_attribute=SPINE_TICK,

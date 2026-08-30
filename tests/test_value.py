@@ -405,7 +405,7 @@ def test_frozen_json_carriers_are_accepted() -> None:
 
 
 def test_aliased_membership_occurrence_is_refused_and_neighbour_passes() -> None:
-    """One occurrence cannot stand for two written JSON array positions."""
+    """One occurrence cannot stand for two written JSON array indices."""
     graph, profile, root = json_value_graph(("x", "y"))  # type: ignore[arg-type]
     assert profile.value(root) == ["x", "y"]
     relation = next(

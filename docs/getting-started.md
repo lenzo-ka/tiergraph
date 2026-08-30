@@ -7,7 +7,7 @@ requires Python 3.12 or later.
 ## Align words and phones
 
 The convenience builder declares two ordered tiers and the links between them.
-Selecting `cat` and walking forward across `aligns` reaches phone positions 1,
+Selecting `cat` and walking forward across `aligns` reaches phone items 1,
 2, and 3: `K`, `AE`, `T`.
 
 ```python

@@ -18,22 +18,22 @@ from tiergraph.action import (
     ActionDeclaration,
     ActionEquivalenceError,
     DistributionWitness,
+    OrderedDelivery,
     ReactDeclaration,
     ReactMode,
     Semimodule,
-    WitnessCoordinate,
     YieldNormalization,
 )
-from tiergraph.fold import Provenance
+from tiergraph.fold import DerivationProvenance
 from tiergraph.semiring import DECIMAL_TROPICAL, Semiring
 
 POSITIONS = {"start": 0, "bed": 4, "sting": 8, "out": 12}
 
 
-def coordinates(provenance: Provenance) -> tuple[WitnessCoordinate, ...]:
-    """Extract coordinates in hostile arrival order to expose order dependence."""
+def deliveries(provenance: DerivationProvenance) -> tuple[OrderedDelivery, ...]:
+    """Extract deliveries in hostile arrival order to expose order dependence."""
     return tuple(
-        WitnessCoordinate((POSITIONS[label],), POSITIONS[label])
+        OrderedDelivery((POSITIONS[label],), POSITIONS[label])
         for path in reversed(provenance)
         for label in reversed(path)
     )
@@ -49,12 +49,12 @@ def mix(carrier: object, values: tuple[object, ...]) -> object:
 
 
 def append(carrier: object, values: tuple[object, ...]) -> object:
-    """Append coordinates to an ordered effect carrier."""
+    """Append deliveries to an ordered effect carrier."""
     return [*cast(list[object], carrier), *values]
 
 
 def mark(carrier: object, values: tuple[object, ...]) -> object:
-    """Mark coordinate presence without accumulating repeated applications."""
+    """Mark delivery presence without accumulating repeated applications."""
     marked = dict(cast(dict[str, int], carrier))
     for value in values:
         marked[str(cast(int, value))] = 1
@@ -124,7 +124,7 @@ def transactional(carrier: object) -> ReactDeclaration[object, object, object]:
     return ReactDeclaration(
         "mix-react",
         declaration(),
-        coordinates,
+        deliveries,
         MIX,
     )
 
@@ -143,7 +143,7 @@ def test_semimodule_claim_satisfies_bound_laws() -> None:
 
 
 def test_gain_mix_does_not_claim_integer_semimodule_scaling() -> None:
-    """Coordinate mixing is not the claimed integer scaling operation."""
+    """IndexCoordinate mixing is not the claimed integer scaling operation."""
     assert MIX.semimodule is None
     with pytest.raises(ValueError, match=r"gain-mix.*does not implement.*scale"):
         replace(MIX, semimodule=GAIN_MODULE)
@@ -203,7 +203,7 @@ def test_normalization_mismatch_is_refused_at_declaration(
         ReactDeclaration(
             "bad-normalization",
             declaration(),
-            coordinates,
+            deliveries,
             action,
             normalization,
         )
@@ -215,7 +215,7 @@ def test_unique_requires_commutativity_and_names_the_action() -> None:
         ReactDeclaration(
             "bad-unique-order",
             declaration("tie"),
-            coordinates,
+            deliveries,
             replace(CHAIN, idempotent=True),
             YieldNormalization(unique=True),
         )
@@ -238,7 +238,7 @@ def test_distribution_witness_rejects_the_bound_nonlinear_action() -> None:
         ReactDeclaration(
             "bad-per-item",
             declaration(),
-            coordinates,
+            deliveries,
             nonlinear,
             mode=ReactMode.ONE_FOR_ONE,
             distribution=witness,
@@ -253,7 +253,7 @@ def test_distribution_witness_refuses_transactional_mode_at_construction() -> No
         ReactDeclaration(
             "default-mode",
             declaration(),
-            coordinates,
+            deliveries,
             ADD,
             distribution=DistributionWitness("bound-paths"),
         )
@@ -271,7 +271,7 @@ def test_equivalence_refusal_is_carrier_dependent_and_names_results() -> None:
     react = ReactDeclaration(
         "carrier-bound",
         declaration(),
-        coordinates,
+        deliveries,
         action,
         mode=ReactMode.ONE_FOR_ONE,
         distribution=DistributionWitness("per-run"),
@@ -294,7 +294,7 @@ def test_equivalence_certification_controls_batch_computation() -> None:
 
     action = replace(ADD, name="measured-sum", apply=measured)
     base = ReactDeclaration(
-        "measured", declaration(), coordinates, action, mode=ReactMode.ONE_FOR_ONE
+        "measured", declaration(), deliveries, action, mode=ReactMode.ONE_FOR_ONE
     )
     assert base.run(0)["result"] == 20
     assert lengths == [1, 1, 1]
@@ -317,7 +317,7 @@ def test_action_law_suite_exposes_broken_mode_equivalence() -> None:
 
     def broken(carrier: object) -> ReactDeclaration[object, object, object]:
         del carrier
-        return ReactDeclaration("broken-law", declaration(), coordinates, nonlinear)
+        return ReactDeclaration("broken-law", declaration(), deliveries, nonlinear)
 
     with pytest.raises(AssertionError, match=r"one-for-one.*transactional"):
         ActionLawSuite(broken, (0, 10)).check_one_for_one_equivalence()
@@ -327,7 +327,7 @@ def test_one_for_one_certification_is_optional_and_normalization_is_forbidden() 
     """Per-recognition execution need not double-compute, but cannot normalize."""
     fold = declaration()
     accepted = ReactDeclaration(
-        "per-item", fold, coordinates, MIX, mode=ReactMode.ONE_FOR_ONE
+        "per-item", fold, deliveries, MIX, mode=ReactMode.ONE_FOR_ONE
     ).run({})
     assert accepted["result"] == {0: 1, 8: 1, 12: 1}
     witness = DistributionWitness("bound-paths")
@@ -335,7 +335,7 @@ def test_one_for_one_certification_is_optional_and_normalization_is_forbidden() 
         ReactDeclaration(
             "per-item-normalized",
             fold,
-            coordinates,
+            deliveries,
             replace(MIX, idempotent=True),
             YieldNormalization(unique=True),
             ReactMode.ONE_FOR_ONE,
@@ -344,20 +344,20 @@ def test_one_for_one_certification_is_optional_and_normalization_is_forbidden() 
 
 
 def test_structural_order_overrides_yield_arrival_for_ordered_action() -> None:
-    """The chain follows positions even though extraction returns reverse arrival."""
-    result = ReactDeclaration("ordered", declaration(), coordinates, CHAIN).run([])
+    """The chain follows declared order even though extraction returns reverse arrival."""
+    result = ReactDeclaration("ordered", declaration(), deliveries, CHAIN).run([])
     assert result["result"] == [0, 8, 12]
 
 
 def test_page_sized_tie_exposes_double_counting_before_action() -> None:
     """The tied diamond names the shared endpoints twice and uniquing removes them."""
     tied = declaration("tie")
-    raw = ReactDeclaration("raw-tie", tied, coordinates, MIX).run({})
+    raw = ReactDeclaration("raw-tie", tied, deliveries, MIX).run({})
     assert raw["result"] == {0: 2, 4: 1, 8: 1, 12: 2}
     unique = ReactDeclaration(
         "unique-tie",
         tied,
-        coordinates,
+        deliveries,
         MARK,
         YieldNormalization(unique=True),
     ).run({})
@@ -370,14 +370,14 @@ def test_collapse_refuses_counting_and_accepts_idempotent_action() -> None:
         ReactDeclaration(
             "bad-collapse",
             declaration("tie"),
-            coordinates,
+            deliveries,
             MIX,
             YieldNormalization(collapse=True),
         )
     accepted = ReactDeclaration(
         "mark-collapse",
         declaration("tie"),
-        coordinates,
+        deliveries,
         MARK,
         YieldNormalization(collapse=True),
     ).run({})
@@ -390,7 +390,7 @@ def test_collapse_accepts_noncommutative_idempotent_action() -> None:
     accepted = ReactDeclaration(
         "chain-collapse",
         declaration("tie"),
-        coordinates,
+        deliveries,
         action,
         YieldNormalization(collapse=True),
     ).run([])
@@ -400,7 +400,7 @@ def test_collapse_accepts_noncommutative_idempotent_action() -> None:
 def test_action_result_must_be_strict_json() -> None:
     """A public carrier result names its action when it cannot be serialized."""
     bad = replace(MIX, name="opaque", apply=lambda carrier, values: {Decimal("1")})
-    declaration_value = ReactDeclaration("bad-result", declaration(), coordinates, bad)
+    declaration_value = ReactDeclaration("bad-result", declaration(), deliveries, bad)
     with pytest.raises(ValueError, match=r"action 'opaque' result.*strict-JSON"):
         declaration_value.run({})
 
@@ -408,10 +408,10 @@ def test_action_result_must_be_strict_json() -> None:
 def test_normalization_operations_execute_on_hostile_yield() -> None:
     """Collapse, unique, and reorder each change a measured hostile sequence."""
     values = (
-        WitnessCoordinate((3,), 2),
-        WitnessCoordinate((1,), 1),
-        WitnessCoordinate((2,), 1),
-        WitnessCoordinate((0,), 2),
+        OrderedDelivery((3,), 2),
+        OrderedDelivery((1,), 1),
+        OrderedDelivery((2,), 1),
+        OrderedDelivery((0,), 2),
     )
     assert tuple(
         item.value for item in YieldNormalization(collapse=True).apply(values)
@@ -435,7 +435,7 @@ def test_declaration_and_distribution_names_are_required() -> None:
 
 
 @pytest.mark.parametrize("bridge", [lambda value: (), lambda value: (0,)])
-def test_distribution_witness_has_no_caller_supplied_coordinate_bridge(
+def test_distribution_witness_has_no_caller_supplied_delivery_bridge(
     bridge: object,
 ) -> None:
     """Vacuous and constant legacy bridges cannot enter a certificate."""
@@ -443,13 +443,13 @@ def test_distribution_witness_has_no_caller_supplied_coordinate_bridge(
         DistributionWitness("launder", (1, 2), 0, bridge)  # type: ignore[call-arg]
 
 
-def test_one_for_one_executes_each_structurally_ordered_coordinate() -> None:
-    """A distributing action receives each structurally ordered coordinate."""
+def test_one_for_one_executes_each_structurally_ordered_delivery() -> None:
+    """A distributing action receives each structurally ordered delivery."""
     witness = DistributionWitness("bound-paths")
     result = ReactDeclaration(
         "per-item",
         declaration(),
-        coordinates,
+        deliveries,
         MARK,
         mode=ReactMode.ONE_FOR_ONE,
         distribution=witness,
@@ -457,16 +457,16 @@ def test_one_for_one_executes_each_structurally_ordered_coordinate() -> None:
     assert result["result"] == {"0": 1, "8": 1, "12": 1}
 
 
-def test_missing_witness_and_opaque_coordinate_are_named() -> None:
+def test_missing_witness_and_opaque_delivery_are_named() -> None:
     """Yield failures identify the react declaration before action begins."""
     scalar = declaration("cost", cast(Semiring[object], DECIMAL_TROPICAL))
     with pytest.raises(ValueError, match=r"no-witness.*no witnesses"):
-        ReactDeclaration("no-witness", scalar, coordinates, MIX).run({})
+        ReactDeclaration("no-witness", scalar, deliveries, MIX).run({})
 
-    def opaque(provenance: Provenance) -> tuple[WitnessCoordinate, ...]:
-        """Return one coordinate whose value cannot cross the public boundary."""
+    def opaque(provenance: DerivationProvenance) -> tuple[OrderedDelivery, ...]:
+        """Return one delivery whose value cannot cross the public boundary."""
         del provenance
-        return (WitnessCoordinate((0,), {Decimal("1")}),)
+        return (OrderedDelivery((0,), {Decimal("1")}),)
 
-    with pytest.raises(ValueError, match=r"opaque-coordinate.*coordinate.*strict-JSON"):
-        ReactDeclaration("opaque-coordinate", declaration(), opaque, MIX).run({})
+    with pytest.raises(ValueError, match=r"opaque-delivery.*delivery.*strict-JSON"):
+        ReactDeclaration("opaque-delivery", declaration(), opaque, MIX).run({})

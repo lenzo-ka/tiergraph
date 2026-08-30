@@ -16,22 +16,22 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundaryRef,
     BoundarySide,
     DeclareAttribute,
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     ExecutionError,
     ItemRef,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    PositionRef,
     Program,
+    PromoteBoundary,
     PromoteItem,
-    PromotePosition,
     QualifiedName,
     Relate,
     RelationEndpointKind,
@@ -97,7 +97,7 @@ class MachineLawSuite:
                 *self.declarations(),
                 AddItem(tier),
                 PromoteItem(ItemRef(tier, 0), "event-0"),
-                PromotePosition(PositionRef(tier, 1), "after-event-0"),
+                PromoteBoundary(BoundaryRef(tier, 1), "after-event-0"),
                 AttachValue(
                     AttributeDomain.ITEM,
                     DurableItemRef("event-0"),
@@ -400,7 +400,7 @@ class MachineLawSuite:
                             RelationInstance(
                                 self.name("boundary-link"),
                                 ItemRef(tier, 0),
-                                DurablePositionRef(
+                                DurableBoundaryRef(
                                     DurableItemRef("missing"), BoundarySide.BEFORE
                                 ),
                             )
@@ -541,8 +541,8 @@ class MachineLawSuite:
                 "duplicate attribute value",
             ),
             (
-                "position promotion",
-                self.build((*base, PromotePosition(PositionRef(tier, 2), "position"))),
+                "boundary promotion",
+                self.build((*base, PromoteBoundary(BoundaryRef(tier, 2), "position"))),
                 "is outside tier",
             ),
         )

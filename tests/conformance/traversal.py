@@ -11,8 +11,8 @@ import pytest
 from tiergraph import (
     BipartiteRelationDeclaration,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -210,7 +210,7 @@ class TraversalLawSuite:
                 RelationInstance(
                     boundary_relation.name,
                     ItemRef(self.name("nodes"), 0),
-                    DurablePositionRef(DurableItemRef("node-2"), BoundarySide.BEFORE),
+                    DurableBoundaryRef(DurableItemRef("node-2"), BoundarySide.BEFORE),
                 ),
             ),
         )
@@ -223,8 +223,8 @@ class TraversalLawSuite:
         assert result.nodes.nodes == (
             Node(
                 NodeKind.POSITION,
-                extended.resolve_position(
-                    DurablePositionRef(DurableItemRef("node-2"), BoundarySide.BEFORE)
+                extended.resolve_boundary(
+                    DurableBoundaryRef(DurableItemRef("node-2"), BoundarySide.BEFORE)
                 ),
             ),
         )

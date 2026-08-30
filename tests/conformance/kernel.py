@@ -14,12 +14,12 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationInstance,
     SimpleRelationDeclaration,
@@ -68,10 +68,10 @@ class KernelLawSuite:
         """Every tier owns one more boundary than it has items."""
         graph = self.typed_graph()
         references = tuple(
-            position.reference for position in graph.positions(self.name("phon"))
+            boundary.reference for boundary in graph.boundaries(self.name("phon"))
         )
-        assert all(isinstance(reference, PositionRef) for reference in references)
-        assert [cast(PositionRef, reference).index for reference in references] == [
+        assert all(isinstance(reference, BoundaryRef) for reference in references)
+        assert [cast(BoundaryRef, reference).index for reference in references] == [
             0,
             1,
             2,
@@ -147,8 +147,8 @@ class KernelLawSuite:
             ItemRef(tier_name, 0),
             attributes=(value(AttributeDomain.RELATION_INSTANCE),),
         )
-        position = Position(
-            PositionRef(tier_name, 1), (value(AttributeDomain.POSITION),)
+        boundary = Boundary(
+            BoundaryRef(tier_name, 1), (value(AttributeDomain.POSITION),)
         )
         graph = self.build(
             (NamespaceDeclaration("t", "urn:test"),),
@@ -156,10 +156,10 @@ class KernelLawSuite:
             (simple, link),
             (instance,),
             declarations,
-            (position,),
+            (boundary,),
             (value(AttributeDomain.DOCUMENT),),
         )
-        assert graph.positions(tier_name)[1] == position
+        assert graph.boundaries(tier_name)[1] == boundary
         json.dumps(graph.to_data(), allow_nan=False)
 
     def check_single_parent_refusal(self) -> None:

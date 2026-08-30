@@ -324,7 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "path": str(resolved.path),
                         "current": resolved.current.to_data(),
                     }
-                elif isinstance(resolved, tiergraph.ResolvedPosition):
+                elif isinstance(resolved, tiergraph.ResolvedBoundary):
                     value = {
                         "kind": "position",
                         "path": str(resolved.path),
@@ -442,9 +442,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _clock_position_data(position: tiergraph.ClockPosition) -> dict[str, int]:
-    """Encode one refined clock position without inventing a public codec."""
-    return {"tick": position.tick, "gap": position.gap}
+def _clock_coordinate_data(boundary: tiergraph.ClockCoordinate) -> dict[str, int]:
+    """Encode one refined clock boundary without inventing a public codec."""
+    return {"tick": boundary.tick, "gap": boundary.gap}
 
 
 def _clock_decimal(value: Decimal) -> str:
@@ -454,12 +454,12 @@ def _clock_decimal(value: Decimal) -> str:
 
 def _resolved_reference(
     graph: tiergraph.Graph, text: str, kind: str, subject: str
-) -> tiergraph.ItemRef | tiergraph.PositionRef:
+) -> tiergraph.ItemRef | tiergraph.BoundaryRef:
     """Resolve one structural path and require the requested reference kind."""
     resolved = tiergraph.resolve_path(graph, tiergraph.StructuralPathProfile(), text)
     if kind == "item" and isinstance(resolved, tiergraph.ResolvedItem):
         return resolved.current
-    if kind == "position" and isinstance(resolved, tiergraph.ResolvedPosition):
+    if kind == "position" and isinstance(resolved, tiergraph.ResolvedBoundary):
         return resolved.current
     article = "an" if kind == "item" else "a"
     raise ValueError(
@@ -599,20 +599,20 @@ def _clock_query(
         return {
             "clock_tier": profile.clock_tier.to_data(),
             "positions": [
-                {"index": index, **_clock_position_data(position)}
-                for index, position in enumerate(profile.positions)
+                {"index": index, **_clock_coordinate_data(boundary)}
+                for index, boundary in enumerate(profile.coordinates)
             ],
         }
     if args.clock_command == "position":
-        position_reference = cast(
-            tiergraph.PositionRef,
+        boundary_reference = cast(
+            tiergraph.BoundaryRef,
             _resolved_reference(graph, args.position, "position", "clock"),
         )
         return {
-            "position": position_reference.to_data(),
-            "clock_index": profile.clock_position(position_reference),
-            "refined": _clock_position_data(
-                profile.refined_position(position_reference)
+            "position": boundary_reference.to_data(),
+            "clock_index": profile.clock_index(boundary_reference),
+            "refined": _clock_coordinate_data(
+                profile.refined_coordinate(boundary_reference)
             ),
         }
     if args.clock_command == "extent":
@@ -620,8 +620,8 @@ def _clock_query(
         start, end = profile.extent(tier)
         return {
             "tier": tier.to_data(),
-            "start": _clock_position_data(start),
-            "end": _clock_position_data(end),
+            "start": _clock_coordinate_data(start),
+            "end": _clock_coordinate_data(end),
         }
     item_reference = cast(
         tiergraph.ItemRef, _resolved_reference(graph, args.item, "item", "clock")
@@ -638,8 +638,8 @@ def _clock_query(
     return {
         "item": item_reference.to_data(),
         "structural": {
-            "start": _clock_position_data(start),
-            "end": _clock_position_data(end),
+            "start": _clock_coordinate_data(start),
+            "end": _clock_coordinate_data(end),
         },
         "physical": (
             None
@@ -665,7 +665,7 @@ def _walk_source(
         return tiergraph.evaluate_selection(
             graph, tiergraph.ItemSelector(resolved.current)
         )
-    if isinstance(resolved, tiergraph.ResolvedPosition):
+    if isinstance(resolved, tiergraph.ResolvedBoundary):
         return tiergraph.evaluate_selection(
             graph, tiergraph.BoundarySelector(resolved.current)
         )
@@ -720,8 +720,8 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
             raise ValueError("structural position flags cannot include durable anchors")
         if args.side is not None:
             raise ValueError("structural position flags cannot include --side")
-        return tiergraph.PositionBinding(
-            tiergraph.PositionRef(
+        return tiergraph.BoundaryBinding(
+            tiergraph.BoundaryRef(
                 tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
                 args.index,
             )
@@ -734,14 +734,14 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
         raise ValueError("durable position requires --side")
     side = tiergraph.BoundarySide(args.side)
     if args.anchor_item_id is not None and all(value is None for value in anchor_tier):
-        return tiergraph.PositionBinding(
-            tiergraph.DurablePositionRef(
+        return tiergraph.BoundaryBinding(
+            tiergraph.DurableBoundaryRef(
                 tiergraph.DurableItemRef(args.anchor_item_id), side
             )
         )
     if args.anchor_item_id is None and all(value is not None for value in anchor_tier):
-        return tiergraph.PositionBinding(
-            tiergraph.DurablePositionRef(
+        return tiergraph.BoundaryBinding(
+            tiergraph.DurableBoundaryRef(
                 tiergraph.QualifiedName(
                     args.anchor_tier_namespace, args.anchor_tier_local
                 ),

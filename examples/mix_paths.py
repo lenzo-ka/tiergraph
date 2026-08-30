@@ -20,6 +20,8 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundaryBinding,
+    BoundaryRef,
     CanonicalPath,
     Graph,
     Item,
@@ -33,15 +35,13 @@ from tiergraph import (
     PathRefusalCode,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    PositionBinding,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
     RelationSideDeclaration,
     ResolvedAlternative,
+    ResolvedBoundary,
     ResolvedItem,
-    ResolvedPosition,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -243,7 +243,7 @@ def build_graph() -> Graph:
 
 @dataclass(frozen=True, slots=True)
 class MixPathProfile:
-    """Interpret mix items, shared-clock positions, and arrangements in one snapshot."""
+    """Interpret mix items, shared-clock boundaries, and arrangements in one snapshot."""
 
     graph: Graph
 
@@ -276,7 +276,7 @@ class MixPathProfile:
                 )
             )
         if len(segments) == 3 and segments[:2] == ("mix", "clock"):
-            return PositionBinding(PositionRef(CLOCK, _index(segments[2], 2, path)))
+            return BoundaryBinding(BoundaryRef(CLOCK, _index(segments[2], 2, path)))
         if len(segments) == 3 and segments[:2] == ("mix", "arrangement"):
             return AlternativeRef(
                 ItemRef(BUS, 0), ARRANGEMENT, _index(segments[2], 2, path)
@@ -296,8 +296,8 @@ class MixPathProfile:
                 return CanonicalPath(
                     ("mix", ring, reference.tier.local_name, str(reference.index))
                 )
-        elif isinstance(binding, PositionBinding) and isinstance(
-            binding.reference, PositionRef
+        elif isinstance(binding, BoundaryBinding) and isinstance(
+            binding.reference, BoundaryRef
         ):
             if binding.reference.tier == CLOCK:
                 return CanonicalPath(("mix", "clock", str(binding.reference.index)))
@@ -481,18 +481,18 @@ def run_example() -> dict[str, object]:
     graph = build_graph()
     profile = MixPathProfile(graph)
     item = resolve_path(graph, profile, "/mix/midi/note/0", require=PathKind.ITEM)
-    position = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
+    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
     alternative = resolve_path(
         graph, profile, "/mix/arrangement/0", require=PathKind.ALTERNATIVE
     )
     assert isinstance(item, ResolvedItem)
-    assert isinstance(position, ResolvedPosition)
+    assert isinstance(boundary, ResolvedBoundary)
     assert isinstance(alternative, ResolvedAlternative)
     path = alternative.value
     assert isinstance(path, tuple)
     return {
         "item": item.current.to_data(),
-        "position": position.current.to_data(),
+        "position": boundary.current.to_data(),
         "arrangement": [reference.to_data() for reference in path],
         "midi": render_midi(graph, profile),
     }

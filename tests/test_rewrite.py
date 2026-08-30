@@ -11,12 +11,14 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
     DeclareAttribute,
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
-    DurablePositionRef,
+    DurableBoundaryRef,
     EffectRefusal,
     Graph,
     Item,
@@ -24,10 +26,8 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
+    PromoteBoundary,
     PromoteItem,
-    PromotePosition,
     QualifiedName,
     Relate,
     RelationEndpointKind,
@@ -79,7 +79,7 @@ def graph(
     words: tuple[Item, ...] = (),
     phrases: tuple[Item, ...] = (),
     relations: tuple[RelationInstance, ...] = (),
-    positions: tuple[Position, ...] = (),
+    boundaries: tuple[Boundary, ...] = (),
     tier_attributes: tuple[AttributeValue, ...] = (),
     word_long_name: str = "Word",
 ) -> Graph:
@@ -93,7 +93,7 @@ def graph(
         DECLARATIONS,
         relations,
         ATTRIBUTES,
-        positions,
+        boundaries,
     )
 
 
@@ -192,15 +192,15 @@ def test_every_build_machine_opcode_decorates() -> None:
         ),
         AddItem(WORD, labeled("c")),
         PromoteItem(ItemRef(WORD, 0), "w0"),
-        PromotePosition(PositionRef(WORD, 1), "p1"),
-        PromotePosition(PositionRef(WORD, 0), "p0"),
+        PromoteBoundary(BoundaryRef(WORD, 1), "p1"),
+        PromoteBoundary(BoundaryRef(WORD, 0), "p0"),
         Relate(RelationInstance(name("covers"), ItemRef(PHRASE, 0), ItemRef(WORD, 1))),
         AttachValue(
             AttributeDomain.TIER, WORD, AttributeValue(TIER_NOTE, XsdType.STRING, "n")
         ),
         AttachValue(
             AttributeDomain.POSITION,
-            PositionRef(WORD, 1),
+            BoundaryRef(WORD, 1),
             AttributeValue(EDGE, XsdType.STRING, "e"),
         ),
     )
@@ -226,8 +226,8 @@ def test_appending_an_item_collapses_a_value_at_the_tier_outer_boundary() -> Non
         (),
         (),
         (
-            Position(
-                DurablePositionRef(WORD, BoundarySide.AFTER),
+            Boundary(
+                DurableBoundaryRef(WORD, BoundarySide.AFTER),
                 (AttributeValue(EDGE, XsdType.STRING, "final"),),
             ),
         ),
@@ -236,17 +236,17 @@ def test_appending_an_item_collapses_a_value_at_the_tier_outer_boundary() -> Non
 
     # The counterexample is verified to be one: the source really does carry a
     # value at this coordinate and the result really does not.
-    coordinate = PositionRef(WORD, 2)
-    assert source.resolve_position(DurablePositionRef(WORD, BoundarySide.AFTER)) == (
+    coordinate = BoundaryRef(WORD, 2)
+    assert source.resolve_boundary(DurableBoundaryRef(WORD, BoundarySide.AFTER)) == (
         coordinate
     )
-    assert source.positions(WORD)[2].attributes != ()
-    assert result.positions(WORD)[2].attributes == ()
+    assert source.boundaries(WORD)[2].attributes != ()
+    assert result.boundaries(WORD)[2].attributes == ()
 
     claim = RewriteDeclaration("append", source, result, RewriteEffect.DECORATE)
     with pytest.raises(EffectRefusal) as refusal:
         claim.check_effect()
-    assert "position '{urn:rewrite}word'[2] has no counterpart" in str(refusal.value)
+    assert "boundary '{urn:rewrite}word'[2] has no counterpart" in str(refusal.value)
     assert "Declare COLLAPSE." in str(refusal.value)
     assert [item.effect for item in claim.disturbances()] == [RewriteEffect.COLLAPSE]
 

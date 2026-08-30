@@ -42,7 +42,8 @@ class JsonValueProfile:
     lexical order so equivalent objects have one encoding.
     Scalar leaves retain the kernel's canonical XSD lexical spelling.
 
-    Provenance is deliberately not interpreted or constrained by this profile.
+    Derivation provenance is deliberately not interpreted or constrained by this
+    profile.
     """
 
     graph: Graph

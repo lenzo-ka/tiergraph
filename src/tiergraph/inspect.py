@@ -25,7 +25,7 @@ def graph_summary(graph: Graph) -> dict[str, object]:
         "binary_relation_instances": len(graph.relations),
         "polyadic_relation_instances": len(graph.polyadic_relations),
         "attribute_declarations": len(graph.attribute_declarations),
-        "populated_position_values": len(graph.position_values),
+        "populated_position_values": len(graph.boundary_values),
         "document_attributes": len(graph.attributes),
         "tier_summaries": [
             {

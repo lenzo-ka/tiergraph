@@ -30,7 +30,7 @@ Value = TypeVar("Value")
 Carrier = TypeVar("Carrier", contravariant=True)
 ActionResult = TypeVar("ActionResult", covariant=True)
 State = tuple[ItemRef, str]
-Provenance = tuple[tuple[str, ...], ...]
+DerivationProvenance = tuple[tuple[str, ...], ...]
 
 
 class Valuation(Protocol):
@@ -54,7 +54,7 @@ class Recognition[Value]:
     """Keep a state value and reconstruction provenance as separate products."""
 
     value: Value
-    provenance: Provenance | None
+    provenance: DerivationProvenance | None
     truncated: bool
 
     def to_data(self, semiring: Semiring[Value]) -> dict[str, object]:
@@ -210,7 +210,9 @@ class FoldFixture:
 
         return read
 
-    def coordinates(self, graph: Graph, provenance: Provenance) -> tuple[int, ...]:
+    def coordinates(
+        self, graph: Graph, provenance: DerivationProvenance
+    ) -> tuple[int, ...]:
         """Yield structural coordinates after recognition has finished."""
         by_id = {
             item.durable_id: item
@@ -240,7 +242,7 @@ def recognize[Value](
     valuation: Valuation,
     semiring: Semiring[Value],
     lift: Callable[[Decimal, str], Value],
-    provenance: Callable[[Value], Provenance | None],
+    provenance: Callable[[Value], DerivationProvenance | None],
     *,
     output_cap: int,
 ) -> Recognition[Value]:

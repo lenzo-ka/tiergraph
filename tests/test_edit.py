@@ -9,9 +9,11 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     GraphEditor,
     GraphValidationError,
@@ -20,8 +22,6 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -75,7 +75,7 @@ def score(value: int) -> AttributeValue:
 
 
 def weight(value: str) -> AttributeValue:
-    """Return one position-domain decimal value."""
+    """Return one boundary-domain decimal value."""
     return AttributeValue(WEIGHT, XsdType.DECIMAL, value)
 
 
@@ -87,10 +87,10 @@ def base(
         Item("w2", (score(2),)),
         Item("w3", (score(3),)),
     ),
-    positions: tuple[Position, ...] = (
-        Position(PositionRef(PHRASE, 1), (weight("0.5"),)),
-        Position(
-            DurablePositionRef(DurableItemRef("w2"), BoundarySide.BEFORE),
+    boundaries: tuple[Boundary, ...] = (
+        Boundary(BoundaryRef(PHRASE, 1), (weight("0.5"),)),
+        Boundary(
+            DurableBoundaryRef(DurableItemRef("w2"), BoundarySide.BEFORE),
             (weight("1.5"),),
         ),
     ),
@@ -105,7 +105,7 @@ def base(
             RelationInstance(
                 ANCHORS,
                 ItemRef(PHRASE, 1),
-                DurablePositionRef(DurableItemRef("w1"), BoundarySide.BEFORE),
+                DurableBoundaryRef(DurableItemRef("w1"), BoundarySide.BEFORE),
             ),
         )
     return Graph(
@@ -131,7 +131,7 @@ def base(
         ),
         relations,
         DECLARATIONS,
-        positions,
+        boundaries,
         (),
     )
 
@@ -306,32 +306,32 @@ def test_an_item_value_is_reached_through_a_durable_reference() -> None:
 
 def test_a_boundary_without_a_stored_value_gains_one() -> None:
     """A boundary value is created where the graph stored none."""
-    graph = base().set_attribute(PositionRef(WORD, 0), weight("2.5"))
-    assert graph.positions(WORD)[0].attributes == (weight("2.5"),)
+    graph = base().set_attribute(BoundaryRef(WORD, 0), weight("2.5"))
+    assert graph.boundaries(WORD)[0].attributes == (weight("2.5"),)
 
 
 def test_a_boundary_is_reached_through_either_spelling() -> None:
     """A coordinate and its durable anchor address one stored boundary."""
-    graph = base().set_attribute(PositionRef(WORD, 2), weight("3.5"))
-    assert len(graph.position_values) == 2
-    assert graph.positions(WORD)[2].attributes == (weight("3.5"),)
+    graph = base().set_attribute(BoundaryRef(WORD, 2), weight("3.5"))
+    assert len(graph.boundary_values) == 2
+    assert graph.boundaries(WORD)[2].attributes == (weight("3.5"),)
 
 
-def test_removing_a_boundary_last_value_drops_the_stored_position() -> None:
+def test_removing_a_boundary_last_value_drops_the_stored_boundary() -> None:
     """An empty boundary is derived, so its stored entry goes with its value."""
-    graph = base().remove_attribute(PositionRef(WORD, 2), WEIGHT)
-    assert len(graph.position_values) == 1
-    assert graph.positions(WORD)[2].attributes == ()
+    graph = base().remove_attribute(BoundaryRef(WORD, 2), WEIGHT)
+    assert len(graph.boundary_values) == 1
+    assert graph.boundaries(WORD)[2].attributes == ()
 
 
-def test_removing_one_of_two_boundary_values_keeps_the_position() -> None:
+def test_removing_one_of_two_boundary_values_keeps_the_boundary() -> None:
     """A boundary carrying more than one value keeps its stored entry."""
     mark = AttributeValue(MARK, XsdType.STRING, "x")
-    graph = base().set_attribute(PositionRef(PHRASE, 1), mark)
-    assert graph.positions(PHRASE)[1].attributes == (mark, weight("0.5"))
-    kept = graph.remove_attribute(PositionRef(PHRASE, 1), WEIGHT)
-    assert kept.positions(PHRASE)[1].attributes == (mark,)
-    assert len(kept.position_values) == 2
+    graph = base().set_attribute(BoundaryRef(PHRASE, 1), mark)
+    assert graph.boundaries(PHRASE)[1].attributes == (mark, weight("0.5"))
+    kept = graph.remove_attribute(BoundaryRef(PHRASE, 1), WEIGHT)
+    assert kept.boundaries(PHRASE)[1].attributes == (mark,)
+    assert len(kept.boundary_values) == 2
 
 
 def test_a_relation_declaration_value_is_set_and_removed() -> None:
@@ -395,7 +395,7 @@ def test_an_undeclared_attribute_is_refused_before_the_target_is_read() -> None:
         (WORD, AttributeValue(TITLE, XsdType.STRING, "x"), "must be None"),
         (None, AttributeValue(LABEL, XsdType.STRING, "x"), "qualified name"),
         (None, AttributeValue(SCORE, XsdType.INTEGER, "1"), "item reference"),
-        (None, AttributeValue(WEIGHT, XsdType.DECIMAL, "1.0"), "position reference"),
+        (None, AttributeValue(WEIGHT, XsdType.DECIMAL, "1.0"), "boundary reference"),
         (
             None,
             AttributeValue(CONFIDENCE, XsdType.DOUBLE, "1.0"),
@@ -432,16 +432,16 @@ def test_removing_an_absent_value_is_refused_on_every_carrier(
 def test_removing_an_absent_value_from_a_stored_boundary_is_refused() -> None:
     """A boundary that stores another value still carries no missing one."""
     graph = base().set_attribute(
-        PositionRef(WORD, 0), AttributeValue(MARK, XsdType.STRING, "x")
+        BoundaryRef(WORD, 0), AttributeValue(MARK, XsdType.STRING, "x")
     )
     with pytest.raises(GraphValidationError, match="carries no attribute"):
-        graph.remove_attribute(PositionRef(WORD, 0), WEIGHT)
+        graph.remove_attribute(BoundaryRef(WORD, 0), WEIGHT)
 
 
 def test_removing_a_value_from_an_empty_boundary_is_refused() -> None:
     """A boundary the graph never stored carries nothing to remove."""
     with pytest.raises(GraphValidationError, match="carries no attribute"):
-        base().remove_attribute(PositionRef(WORD, 0), WEIGHT)
+        base().remove_attribute(BoundaryRef(WORD, 0), WEIGHT)
 
 
 def test_a_tier_attribute_names_a_declared_tier() -> None:
@@ -534,7 +534,7 @@ def test_insertion_carries_later_references_with_their_items() -> None:
 
 
 def test_insertion_at_the_item_count_appends() -> None:
-    """The index one past the last item is the append position."""
+    """The index one past the last item is the append index."""
     graph = base().insert_item(WORD, 4, Item("wx"))
     assert graph.tiers[0].items[4].durable_id == "wx"
     assert covered(graph) == (
@@ -545,7 +545,7 @@ def test_insertion_at_the_item_count_appends() -> None:
 
 
 def test_an_insertion_index_outside_the_tier_is_refused() -> None:
-    """An index past the append position addresses no place."""
+    """An index past the append index addresses no place."""
     with pytest.raises(GraphValidationError, match="insertion index 5 is outside"):
         base().insert_item(WORD, 5, Item("wx"))
     with pytest.raises(GraphValidationError, match="insertion index -1 is outside"):
@@ -561,19 +561,19 @@ def test_inserting_into_an_undeclared_tier_is_refused() -> None:
 def test_a_boundary_value_before_the_insertion_keeps_its_coordinate() -> None:
     """A boundary whose neighbors both keep their places keeps its index."""
     graph = with_word_boundary(0).insert_item(WORD, 2, Item("wx"))
-    assert graph.positions(WORD)[0].attributes == (weight("7.5"),)
+    assert graph.boundaries(WORD)[0].attributes == (weight("7.5"),)
 
 
 def test_a_boundary_after_the_insertion_moves_with_its_neighbors() -> None:
     """A boundary between two items follows both of them."""
     graph = with_word_boundary(3).insert_item(WORD, 1, Item("wx"))
-    assert graph.positions(WORD)[4].attributes == (weight("7.5"),)
+    assert graph.boundaries(WORD)[4].attributes == (weight("7.5"),)
 
 
 def test_the_last_boundary_follows_an_insertion_before_it() -> None:
     """The boundary after the last item stays after the last item."""
     graph = with_word_boundary(4).insert_item(WORD, 1, Item("wx"))
-    assert graph.positions(WORD)[5].attributes == (weight("7.5"),)
+    assert graph.boundaries(WORD)[5].attributes == (weight("7.5"),)
 
 
 @pytest.mark.parametrize(("boundary", "index"), [(0, 0), (2, 2), (4, 4)])
@@ -591,7 +591,7 @@ def test_the_first_insertion_into_a_tier_with_a_boundary_value_is_refused() -> N
         (SimpleRelationDeclaration(WORDS, WORD, WORD_TYPE),),
         (),
         DECLARATIONS,
-        (Position(PositionRef(WORD, 0), (weight("7.5"),)),),
+        (Boundary(BoundaryRef(WORD, 0), (weight("7.5"),)),),
     )
     with pytest.raises(GraphValidationError, match="without one boundary"):
         graph.insert_item(WORD, 0, Item("wx"))
@@ -600,9 +600,9 @@ def test_the_first_insertion_into_a_tier_with_a_boundary_value_is_refused() -> N
 def with_word_boundary(index: int) -> Graph:
     """Return the fixture with one coordinate boundary value on the word tier."""
     return base(
-        positions=(
-            Position(PositionRef(PHRASE, 1), (weight("0.5"),)),
-            Position(PositionRef(WORD, index), (weight("7.5"),)),
+        boundaries=(
+            Boundary(BoundaryRef(PHRASE, 1), (weight("0.5"),)),
+            Boundary(BoundaryRef(WORD, index), (weight("7.5"),)),
         )
     )
 
@@ -658,7 +658,7 @@ def test_removal_refuses_a_boundary_value_beside_the_removed_item(
     """The two boundaries a removal merges have no one image between them."""
     graph = base(
         relations=(),
-        positions=(Position(PositionRef(WORD, boundary), (weight("7.5"),)),),
+        boundaries=(Boundary(BoundaryRef(WORD, boundary), (weight("7.5"),)),),
     )
     with pytest.raises(GraphValidationError, match="without one boundary"):
         graph.remove_item(ItemRef(WORD, 1))
@@ -668,9 +668,9 @@ def test_removal_moves_a_boundary_value_past_the_removed_item() -> None:
     """A boundary clear of the removal keeps its meaning at a new index."""
     graph = base(
         relations=(),
-        positions=(Position(PositionRef(WORD, 3), (weight("7.5"),)),),
+        boundaries=(Boundary(BoundaryRef(WORD, 3), (weight("7.5"),)),),
     ).remove_item(ItemRef(WORD, 0))
-    assert graph.positions(WORD)[2].attributes == (weight("7.5"),)
+    assert graph.boundaries(WORD)[2].attributes == (weight("7.5"),)
 
 
 # --- structure: move and swap ---------------------------------------------
@@ -748,7 +748,7 @@ def test_a_swap_refuses_a_boundary_value_between_the_swapped_items() -> None:
 
 
 def test_a_relation_instance_is_added_and_removed_by_index() -> None:
-    """The bipartite collection is addressed by position."""
+    """The bipartite collection is addressed by index."""
     added = base().add_relation(
         RelationInstance(COVERS, ItemRef(PHRASE, 1), ItemRef(WORD, 3))
     )

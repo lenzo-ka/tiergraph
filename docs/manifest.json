@@ -6,14 +6,14 @@
       "ReactDeclaration",
       "ReactMode",
       "Semimodule",
-      "WitnessCoordinate",
+      "OrderedDelivery",
       "YieldNormalization"
     ],
     "clock": [
       "ClockProfile",
-      "ClockPosition",
+      "ClockCoordinate",
       "PhysicalTiming",
-      "anchored_position"
+      "anchored_boundary"
     ],
     "construction": [
       "AddItem",
@@ -26,7 +26,7 @@
       "ExecutionError",
       "Program",
       "PromoteItem",
-      "PromotePosition",
+      "PromoteBoundary",
       "Relate",
       "Repeat",
       "Step",
@@ -69,6 +69,7 @@
       "AttributeDomain",
       "AttributeValue",
       "BipartiteRelationDeclaration",
+      "Boundary",
       "BoundarySide",
       "Graph",
       "GraphValidationError",
@@ -76,7 +77,6 @@
       "NamespaceDeclaration",
       "PolyadicRelationDeclaration",
       "PolyadicRelationInstance",
-      "Position",
       "QualifiedName",
       "RelationEndpointKind",
       "RelationInstance",
@@ -100,6 +100,7 @@
     ],
     "paths": [
       "AlternativeRef",
+      "BoundaryBinding",
       "CanonicalPath",
       "ItemBinding",
       "PathBinding",
@@ -108,10 +109,9 @@
       "PathProfile",
       "PathRefusal",
       "PathRefusalCode",
-      "PositionBinding",
       "ResolvedAlternative",
+      "ResolvedBoundary",
       "ResolvedItem",
-      "ResolvedPosition",
       "StructuralPathProfile",
       "resolve_path"
     ],
@@ -136,10 +136,10 @@
       "to_text"
     ],
     "references": [
+      "BoundaryRef",
+      "DurableBoundaryRef",
       "DurableItemRef",
-      "DurablePositionRef",
-      "ItemRef",
-      "PositionRef"
+      "ItemRef"
     ],
     "rewrite": [
       "EffectRefusal",

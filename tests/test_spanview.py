@@ -14,7 +14,7 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     BoundarySide,
-    DurablePositionRef,
+    DurableBoundaryRef,
     Graph,
     Item,
     ItemRef,
@@ -326,7 +326,7 @@ def test_boundary_coverage_projects_anchor_at_leading_offset() -> None:
         relations=(
             RelationInstance(
                 COVERAGE,
-                DurablePositionRef(BASE, BoundarySide.BEFORE),
+                DurableBoundaryRef(BASE, BoundarySide.BEFORE),
                 ItemRef(SPANS, 0),
             ),
         ),
@@ -358,12 +358,12 @@ def test_conflicting_boundary_coverage_refuses() -> None:
         relations=(
             RelationInstance(
                 COVERAGE,
-                DurablePositionRef(BASE, BoundarySide.BEFORE),
+                DurableBoundaryRef(BASE, BoundarySide.BEFORE),
                 ItemRef(SPANS, 0),
             ),
             RelationInstance(
                 COVERAGE,
-                DurablePositionRef(BASE, BoundarySide.AFTER),
+                DurableBoundaryRef(BASE, BoundarySide.AFTER),
                 ItemRef(SPANS, 0),
             ),
         ),
@@ -408,7 +408,7 @@ def test_coverage_ignores_item_and_boundary_endpoints_outside_base_tier() -> Non
         relations=(
             RelationInstance(
                 COVERAGE,
-                DurablePositionRef(SHADOW, BoundarySide.BEFORE),
+                DurableBoundaryRef(SHADOW, BoundarySide.BEFORE),
                 ItemRef(SPANS, 0),
             ),
         ),

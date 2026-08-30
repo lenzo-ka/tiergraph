@@ -800,7 +800,7 @@ def test_scalar_result_and_empty_index_product_are_serializable() -> None:
     scalar = replace(
         declaration("cost", cast(Semiring[object], DECIMAL_TROPICAL)), index_axes=()
     )
-    assert scalar.coordinates() == ((),)
+    assert scalar.index_coordinates() == ((),)
     data = scalar.run().to_data(scalar.semiring)
     assert data["provenance"] is None
 

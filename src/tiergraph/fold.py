@@ -25,10 +25,10 @@ Value = TypeVar("Value")
 OtherValue = TypeVar("OtherValue")
 LiftValue = TypeVar("LiftValue", covariant=True)
 ReadValue = TypeVar("ReadValue", contravariant=True)
-Coordinate = tuple[str, ...]
-State = tuple[ItemRef, Coordinate]
+IndexCoordinate = tuple[str, ...]
+State = tuple[ItemRef, IndexCoordinate]
 Path = tuple[str, ...]
-Provenance = tuple[Path, ...]
+DerivationProvenance = tuple[Path, ...]
 type RankedWitness[Value] = tuple[Value, Path]
 type _Outgoing = dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]]
 type _DependencyGraph = tuple[
@@ -279,7 +279,7 @@ class FoldResult[Value]:
     values: tuple[tuple[State, Value], ...]
     roots: tuple[State, ...]
     value: Value
-    provenance: Provenance | None
+    provenance: DerivationProvenance | None
     truncated: bool
     cost: FoldCost
     ranked_witnesses: tuple[RankedWitness[Value], ...] | None = None
@@ -508,7 +508,7 @@ class FoldDeclaration[Value]:
             if reference.tier in tiers
         )
 
-    def coordinates(self) -> tuple[Coordinate, ...]:
+    def index_coordinates(self) -> tuple[IndexCoordinate, ...]:
         """Construct the declared finite index product in lexical axis order."""
         if not self.index_axes:
             return ((),)
@@ -518,7 +518,7 @@ class FoldDeclaration[Value]:
         """Construct the finite domain-item by index-product state space."""
         return tuple(
             (reference, coordinate)
-            for coordinate in self.coordinates()
+            for coordinate in self.index_coordinates()
             for reference in self._references()
         )
 
@@ -597,7 +597,7 @@ class FoldDeclaration[Value]:
             for component in cyclic_components
             for reference in component
         }
-        coordinates = self.coordinates()
+        coordinates = self.index_coordinates()
         additions = 0
         multiplications = 0
         ranked_multiplications = 0
@@ -607,12 +607,14 @@ class FoldDeclaration[Value]:
         all_values: list[tuple[State, Value]] = []
         root_states: list[State] = []
         total = self.semiring.zero
-        selected: tuple[Value, Provenance] | None = None
+        selected: tuple[Value, DerivationProvenance] | None = None
         ranked_roots: list[RankedWitness[Value]] = []
         for coordinate in coordinates:
             cache: dict[
                 ItemRef,
-                tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+                tuple[
+                    Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
+                ],
             ] = {}
             solving: set[tuple[ItemRef, ...]] = set()
 
@@ -620,7 +622,12 @@ class FoldDeclaration[Value]:
                 component: tuple[ItemRef, ...],
                 component_cache: dict[
                     ItemRef,
-                    tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+                    tuple[
+                        Value,
+                        DerivationProvenance,
+                        tuple[RankedWitness[Value], ...],
+                        int,
+                    ],
                 ] = cache,
                 active_components: set[tuple[ItemRef, ...]] = solving,
             ) -> None:
@@ -689,7 +696,7 @@ class FoldDeclaration[Value]:
                         label = _item(
                             self.graph, member
                         ).durable_id or _structural_label(member)
-                        paths: Provenance = (
+                        paths: DerivationProvenance = (
                             () if value == self.semiring.zero else ((label,),)
                         )
                         ranked = (
@@ -858,7 +865,7 @@ class FoldDeclaration[Value]:
                     label = _item(self.graph, member).durable_id or _structural_label(
                         member
                     )
-                    member_paths: Provenance = (
+                    member_paths: DerivationProvenance = (
                         () if value == self.semiring.zero else ((label,),)
                     )
                     ranked = (
@@ -878,9 +885,16 @@ class FoldDeclaration[Value]:
                 reference: ItemRef,
                 state_cache: dict[
                     ItemRef,
-                    tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int],
+                    tuple[
+                        Value,
+                        DerivationProvenance,
+                        tuple[RankedWitness[Value], ...],
+                        int,
+                    ],
                 ] = cache,
-            ) -> tuple[Value, Provenance, tuple[RankedWitness[Value], ...], int]:
+            ) -> tuple[
+                Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
+            ]:
                 """Evaluate one state once for the current index coordinate."""
                 nonlocal additions, multiplications, ranked_multiplications
                 component = component_by_item.get(reference)
@@ -917,7 +931,7 @@ class FoldDeclaration[Value]:
 
                     local, label = prepared.pop(current)
                     value = local
-                    paths: Provenance = ((label,),)
+                    paths: DerivationProvenance = ((label,),)
                     ranked: tuple[RankedWitness[Value], ...] = (
                         ()
                         if not self.ranked_output or local == self.semiring.zero
@@ -933,7 +947,7 @@ class FoldDeclaration[Value]:
                         child_results = [state_cache[child] for child in children]
                         if transition.combination is ChildCombination.AND:
                             relation_value = self.semiring.one
-                            relation_paths: Provenance = ((),)
+                            relation_paths: DerivationProvenance = ((),)
                             relation_ranked: tuple[RankedWitness[Value], ...] = (
                                 (self.semiring.one, ()),
                             )
@@ -1417,9 +1431,9 @@ class FoldDeclaration[Value]:
 
     def _select_paths(
         self,
-        left: tuple[Value, Provenance],
-        right: tuple[Value, Provenance],
-    ) -> tuple[Value, Provenance]:
+        left: tuple[Value, DerivationProvenance],
+        right: tuple[Value, DerivationProvenance],
+    ) -> tuple[Value, DerivationProvenance]:
         """Apply the declared witness ordering and executable tie policy.
 
         Both the surviving value and its paths are returned together, so a
@@ -1561,7 +1575,7 @@ def _state_data(state: State) -> dict[str, object]:
 __all__ = [
     "AttributeValuation",
     "ChildCombination",
-    "Coordinate",
+    "IndexCoordinate",
     "ExactnessRefusal",
     "FoldCertificate",
     "FoldCost",
@@ -1572,7 +1586,7 @@ __all__ = [
     "FoldTransition",
     "Lift",
     "Path",
-    "Provenance",
+    "DerivationProvenance",
     "TiePolicy",
     "WitnessOrder",
     "State",
