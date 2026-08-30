@@ -39,7 +39,7 @@ from tests.test_clock import (
 )
 from tests.test_clock import (
     clock_profile_data,
-    ipakit_shape,
+    reference_shape,
     with_stored_timing,
 )
 from tests.test_clock import (
@@ -395,7 +395,7 @@ def test_clock_commands_query_full_declarative_profile(
     """All four clock queries emit exact structural and physical JSON data."""
     graph_path = tmp_path / "graph.json"
     profile_path = tmp_path / "clock.json"
-    graph_path.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    graph_path.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
     common = [str(graph_path), "--profile", str(profile_path)]
 
@@ -464,7 +464,7 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
     """Clock decoding and query refusals use the ordinary exit-one path."""
     graph_path = tmp_path / "graph.json"
     profile_path = tmp_path / "clock.json"
-    graph_path.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    graph_path.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile_path.write_text("{}", encoding="utf-8")
     common = [str(graph_path), "--profile", str(profile_path)]
     assert main(["clock", "positions", *common]) == 1
@@ -590,7 +590,7 @@ def test_clock_item_encodes_null_and_canonical_small_physical_timing(
         item,
     ]
 
-    graph = ipakit_shape()
+    graph = reference_shape()
     tiers = tuple(
         replace(
             tier,
@@ -605,7 +605,7 @@ def test_clock_item_encodes_null_and_canonical_small_physical_timing(
     assert value["exact_duration"] is None
 
     graph = with_stored_timing(
-        ipakit_shape(), CLOCK_SEGMENT, 0, "0.0000001", "0.0000001"
+        reference_shape(), CLOCK_SEGMENT, 0, "0.0000001", "0.0000001"
     )
     graph_path.write_bytes(tiergraph.dump_bytes(graph))
     assert main(args) == 0
@@ -1512,7 +1512,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
         walk_graph.read_bytes().replace(b"urn:test:traversal", b"\\ud800")
     )
 
-    graph = ipakit_shape()
+    graph = reference_shape()
     clock_graph = tmp_path / "clock-graph.json"
     clock_graph.write_bytes(
         tiergraph.dump_bytes(graph).replace(
@@ -1626,7 +1626,7 @@ def test_invalid_utf8_profile_remains_an_exit_three_decode_failure(
     keeps it honest: a side-car document whose bytes are not UTF-8 at all.
     """
     graph = tmp_path / "graph.json"
-    graph.write_bytes(tiergraph.dump_bytes(ipakit_shape()))
+    graph.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile = tmp_path / "profile.json"
     profile.write_bytes(b'{"clock_tier":"\xff\xfe"}')
     assert main(["clock", "positions", str(graph), "--profile", str(profile)]) == 3

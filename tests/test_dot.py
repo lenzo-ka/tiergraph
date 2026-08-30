@@ -660,8 +660,8 @@ def _structural_spine(raw: tuple[tuple[int, int], ...]) -> str:
     return rendered[start:end]
 
 
-def test_structural_spine_matches_ipakit_embedded_golden() -> None:
-    """The collapsed spine reproduces ipakit's '#a..b#' golden byte-for-byte."""
+def test_structural_spine_matches_reference_embedded_golden() -> None:
+    """The collapsed spine reproduces the '#a..b#' golden byte-for-byte."""
     raw = (
         (0, 0),
         (0, 1),
@@ -677,8 +677,8 @@ def test_structural_spine_matches_ipakit_embedded_golden() -> None:
     assert _structural_spine(raw) == _EMBEDDED_SPINE
 
 
-def test_structural_spine_matches_ipakit_kat_golden() -> None:
-    """The collapsed spine reproduces ipakit's 'kat' golden byte-for-byte."""
+def test_structural_spine_matches_reference_kat_golden() -> None:
+    """The collapsed spine reproduces the 'kat' golden byte-for-byte."""
     raw = ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1))
     assert _structural_spine(raw) == _KAT_SPINE
 
@@ -696,21 +696,21 @@ def test_structural_spine_draws_without_raising_and_graphviz_accepts() -> None:
 
 # --- Occupied-spine full goldens + anchor model (Deliverable B) -------------
 #
-# These pin the exact DOT bytes of ipakit's four authoritative to_dot goldens
+# These pin the exact DOT bytes of the four authoritative to_dot goldens
 # (flat, kat, interval, degenerate). The graph fixtures are rebuilt here
 # (goldens live outside the repo), and the binding/presentation hooks mirror
-# exactly what ipakit computes: a render-time binding derived from the
+# exactly what the fixture computes: a render-time binding derived from the
 # /clock/N/tier/I durable ids and, for interval tiers, the span-start/span-end
 # attributes (the kernel parses none of these); plus tier-name, node-id, and
 # item-label(item, tier) hooks. The item-label hook falls back to the tier's
 # long name when an item has no text attribute (syllable/mora), exercising the
 # widened call shape.
 
-_IPAKIT_NS = "urn:ipakit:todot:test"
+_FIXTURE_NS = "urn:tiergraph:todot:test"
 
 
 def _ik(local: str) -> QualifiedName:
-    return QualifiedName(_IPAKIT_NS, local)
+    return QualifiedName(_FIXTURE_NS, local)
 
 
 _IK_CLOCK = _ik("clock")
@@ -749,18 +749,18 @@ def _ik_item(
     return Item(durable, tuple(attributes))
 
 
-def build_ipakit_graph(
+def build_fixture_graph(
     clock_raw: tuple[tuple[int, int], ...],
     tier_specs: tuple[tuple[str, tuple[Item, ...]], ...],
 ) -> Graph:
-    """Rebuild an ipakit containment projection: named tiers plus a clock tier."""
+    """Rebuild a containment projection with named tiers and a clock tier."""
     tiers = tuple(
         Tier(TierDeclaration(_ik(f"tier-{index}"), long_name), items)
         for index, (long_name, items) in enumerate(tier_specs)
     ) + (
         Tier(
             TierDeclaration(_IK_CLOCK, "clock"),
-            tuple(Item(f"ipakit-clockcell-{i}") for i in range(len(clock_raw) - 1)),
+            tuple(Item(f"fixture-clockcell-{i}") for i in range(len(clock_raw) - 1)),
         ),
     )
     declarations = (
@@ -782,7 +782,7 @@ def build_ipakit_graph(
         for index, (tick, gap) in enumerate(clock_raw)
     )
     return Graph(
-        (NamespaceDeclaration("k", _IPAKIT_NS),),
+        (NamespaceDeclaration("k", _FIXTURE_NS),),
         tiers,
         (),
         attribute_declarations=declarations,
@@ -790,7 +790,7 @@ def build_ipakit_graph(
     )
 
 
-def _ipakit_node_id(durable: str) -> str:
+def _fixture_node_id(durable: str) -> str:
     return "event_" + "".join(
         character if character.isalnum() else f"_{ord(character):02x}_"
         for character in durable
@@ -809,13 +809,13 @@ def _attr(item: Item, local: str) -> str | None:
     return None
 
 
-def ipakit_hooks_and_binding(
+def fixture_hooks_and_binding(
     graph: Graph,
 ) -> tuple[
     tiergraph_dot.DotPresentation,
     Callable[[Item], tuple[ClockPosition, ClockPosition]],
 ]:
-    """Mirror ipakit's render-time hooks and clock binding.
+    """Mirror the fixture's render-time hooks and clock binding.
 
     Placement comes from span-start/span-end (``/clock/<tick>/gaps/<gap>``) for
     interval tiers and from the durable-id tick plus structural-duration for
@@ -856,7 +856,7 @@ def ipakit_hooks_and_binding(
 
     presentation = tiergraph_dot.DotPresentation(
         tier_name=lambda tier: tier.declaration.long_name,
-        node_id=lambda reference: _ipakit_node_id(_durable(items_by_ref[reference])),
+        node_id=lambda reference: _fixture_node_id(_durable(items_by_ref[reference])),
         item_label=item_label,
         relation_name=relation_name,
         relation_style=relation_style,
@@ -864,7 +864,7 @@ def ipakit_hooks_and_binding(
     return presentation, binding
 
 
-def _render_ipakit(graph: Graph) -> str:
+def _render_fixture(graph: Graph) -> str:
     clock = ClockProfile.from_position_values(
         graph,
         _IK_CLOCK,
@@ -872,14 +872,14 @@ def _render_ipakit(graph: Graph) -> str:
         gap_attribute=_IK_GAP,
         collapse_shared_boundaries=True,
     )
-    presentation, binding = ipakit_hooks_and_binding(graph)
+    presentation, binding = fixture_hooks_and_binding(graph)
     return tiergraph_dot.dumps(
         graph, clock=clock, presentation=presentation, binding=binding
     )
 
 
 def _embedded_graph() -> Graph:
-    return build_ipakit_graph(
+    return build_fixture_graph(
         (
             (0, 0),
             (0, 1),
@@ -914,7 +914,7 @@ def _embedded_graph() -> Graph:
 
 
 def _kat_graph() -> Graph:
-    return build_ipakit_graph(
+    return build_fixture_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
         (
             (
@@ -930,7 +930,7 @@ def _kat_graph() -> Graph:
 
 
 def _interval_graph() -> Graph:
-    return build_ipakit_graph(
+    return build_fixture_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
         (
             ("syllable", (_ik_item("/clock/0/syllable/0", span=((0, 0), (3, 0))),)),
@@ -948,7 +948,7 @@ def _interval_graph() -> Graph:
 
 
 def _degenerate_graph() -> Graph:
-    return build_ipakit_graph(
+    return build_fixture_graph(
         ((0, 0), (0, 1), (0, 2), (0, 3)),
         (
             (
@@ -964,7 +964,7 @@ def _degenerate_graph() -> Graph:
 
 def _held_graph() -> Graph:
     """A held syllable pair plus a gap-refined mora, over the flat '#a..b#' base."""
-    return build_ipakit_graph(
+    return build_fixture_graph(
         (
             (0, 0),
             (0, 1),
@@ -1009,11 +1009,11 @@ def _held_graph() -> Graph:
 def _hierarchy_graph() -> Graph:
     """An utterance containing three segments via a bipartite-styled polyadic.
 
-    ipakit derives the utterance's clock extent from its containment; the test
+    The fixture derives the utterance's clock extent from its containment; the test
     supplies it directly as a span, since the renderer consumes only the
     binding's (start, end). ``roots`` (empty sources) is present and omitted.
     """
-    base = build_ipakit_graph(
+    base = build_fixture_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)),
         (
             ("utterance", (_ik_item("/clock/0/utterance/0", span=((0, 0), (3, 0))),)),
@@ -1339,30 +1339,30 @@ GOLDEN_TODOT_DEGENERATE = """digraph tiergraph {
 """
 
 
-def test_occupied_spine_reproduces_ipakit_embedded_golden() -> None:
-    """dumps() reproduces ipakit's flat '#a..b#' golden byte-for-byte."""
-    rendered = _render_ipakit(_embedded_graph())
+def test_occupied_spine_reproduces_reference_embedded_golden() -> None:
+    """dumps() reproduces the flat '#a..b#' golden byte-for-byte."""
+    rendered = _render_fixture(_embedded_graph())
     assert rendered == GOLDEN_TODOT_EMBEDDED
     assert_graphviz_accepts(rendered)
 
 
-def test_occupied_spine_reproduces_ipakit_kat_golden() -> None:
-    """dumps() reproduces ipakit's 'kat' golden byte-for-byte (collapsed==1)."""
-    rendered = _render_ipakit(_kat_graph())
+def test_occupied_spine_reproduces_reference_kat_golden() -> None:
+    """dumps() reproduces the 'kat' golden byte-for-byte (collapsed==1)."""
+    rendered = _render_fixture(_kat_graph())
     assert rendered == GOLDEN_TODOT_KAT
     assert_graphviz_accepts(rendered)
 
 
-def test_occupied_spine_reproduces_ipakit_interval_golden() -> None:
-    """dumps() reproduces ipakit's interval golden: span placement + co-location."""
-    rendered = _render_ipakit(_interval_graph())
+def test_occupied_spine_reproduces_reference_interval_golden() -> None:
+    """dumps() reproduces the interval golden: span placement + co-location."""
+    rendered = _render_fixture(_interval_graph())
     assert rendered == GOLDEN_TODOT_INTERVAL
     assert_graphviz_accepts(rendered)
 
 
-def test_occupied_spine_reproduces_ipakit_degenerate_golden() -> None:
-    """dumps() reproduces ipakit's degenerate '##' golden: same-tier co-location."""
-    rendered = _render_ipakit(_degenerate_graph())
+def test_occupied_spine_reproduces_reference_degenerate_golden() -> None:
+    """dumps() reproduces the degenerate '##' golden: same-tier co-location."""
+    rendered = _render_fixture(_degenerate_graph())
     assert rendered == GOLDEN_TODOT_DEGENERATE
     assert_graphviz_accepts(rendered)
 
@@ -1599,29 +1599,29 @@ GOLDEN_TODOT_HIERARCHY = """digraph tiergraph {
 """
 
 
-def test_occupied_spine_reproduces_ipakit_held_golden() -> None:
-    """dumps() reproduces ipakit's held golden: gap-refined placement + ordering."""
-    rendered = _render_ipakit(_held_graph())
+def test_occupied_spine_reproduces_reference_held_golden() -> None:
+    """dumps() reproduces the held golden: gap-refined placement + ordering."""
+    rendered = _render_fixture(_held_graph())
     assert rendered == GOLDEN_TODOT_HELD
     assert_graphviz_accepts(rendered)
 
 
-def test_occupied_spine_reproduces_ipakit_hierarchy_golden() -> None:
-    """dumps() reproduces ipakit's hierarchy golden: bipartite-styled containment."""
-    rendered = _render_ipakit(_hierarchy_graph())
+def test_occupied_spine_reproduces_reference_hierarchy_golden() -> None:
+    """dumps() reproduces the hierarchy golden: bipartite-styled containment."""
+    rendered = _render_fixture(_hierarchy_graph())
     assert rendered == GOLDEN_TODOT_HIERARCHY
     assert_graphviz_accepts(rendered)
 
 
 def test_trigger_edges_order_by_coarse_tick_then_declaration_then_event() -> None:
     """A gap-refined item sorts by its coarse tick, not its collapsed column."""
-    rendered = _render_ipakit(_held_graph())
+    rendered = _render_fixture(_held_graph())
     trigger = rendered.split(
         "// Trigger every event from the clock position it occupies."
     )[1]
-    mora = _ipakit_node_id("/clock/0/mora/0")
-    seg0 = _ipakit_node_id("/clock/0/segment/0")
-    syllable0 = _ipakit_node_id("/clock/0/syllable/0")
+    mora = _fixture_node_id("/clock/0/mora/0")
+    seg0 = _fixture_node_id("/clock/0/segment/0")
+    syllable0 = _fixture_node_id("/clock/0/syllable/0")
     # mora starts at (0, gap1): its edge source is the refined column clock_0_gap_1,
     # but it sorts within coarse tick 0, after syllable (decl 0) and before
     # segment (decl 7).
@@ -1631,13 +1631,13 @@ def test_trigger_edges_order_by_coarse_tick_then_declaration_then_event() -> Non
 
 def test_bipartite_styled_polyadic_renders_as_parent_child_edges() -> None:
     """contains-* is drawn as labeled parent->child edges under one header."""
-    rendered = _render_ipakit(_hierarchy_graph())
+    rendered = _render_fixture(_hierarchy_graph())
     assert "// Declared relations." in rendered
     assert "// Declared polyadic relations." not in rendered
     assert "// Declared bipartite relations." not in rendered
-    parent = _ipakit_node_id("/clock/0/utterance/0")
+    parent = _fixture_node_id("/clock/0/utterance/0")
     for child in ("0", "1", "2"):
-        target = _ipakit_node_id(f"/clock/{child}/segment/0")
+        target = _fixture_node_id(f"/clock/{child}/segment/0")
         assert (
             f'{parent} -> {target} [label="contains", color="#5555aa", '
             "constraint=false];" in rendered
@@ -1648,9 +1648,9 @@ def test_bipartite_styled_polyadic_renders_as_parent_child_edges() -> None:
 
 def test_same_tier_colocated_items_share_one_column_anchor() -> None:
     """Two items of one tier at a tick: both drawn/adjacent/triggered, one anchor."""
-    rendered = _render_ipakit(_degenerate_graph())
-    first = _ipakit_node_id("/clock/0/boundary/0")
-    second = _ipakit_node_id("/clock/0/boundary/1")
+    rendered = _render_fixture(_degenerate_graph())
+    first = _fixture_node_id("/clock/0/boundary/0")
+    second = _fixture_node_id("/clock/0/boundary/1")
     # Both occupants are defined and both are triggered from their shared column.
     assert f"{first} [shape=box" in rendered
     assert f"{second} [shape=box" in rendered
@@ -1674,7 +1674,7 @@ def test_structural_default_item_label_holds_without_a_hook() -> None:
         gap_attribute=_IK_GAP,
         collapse_shared_boundaries=True,
     )
-    _, binding = ipakit_hooks_and_binding(graph)
+    _, binding = fixture_hooks_and_binding(graph)
     rendered = tiergraph_dot.dumps(graph, clock=clock, binding=binding)
     # The default label carries the durable id and attributes, no clock timing.
     assert "/clock/0/segment/0" in rendered
@@ -1684,7 +1684,7 @@ def test_structural_default_item_label_holds_without_a_hook() -> None:
 
 def test_structural_raw_single_boundary_tick_is_refused() -> None:
     """A tick with one raw boundary cannot be collapsed and is refused."""
-    graph = build_ipakit_graph(
+    graph = build_fixture_graph(
         ((0, 0), (1, 0), (1, 1)),
         (("segment", (_ik_item("/clock/1/segment/0", text="x", duration=1),)),),
     )
@@ -1828,7 +1828,7 @@ def test_structural_boundary_relation_endpoint_is_refused() -> None:
         tiergraph_dot.dumps(
             graph,
             clock=_structural_clock(graph),
-            binding=ipakit_hooks_and_binding(graph)[1],
+            binding=fixture_hooks_and_binding(graph)[1],
         )
 
 
@@ -1856,20 +1856,20 @@ def test_structural_clock_tier_relation_target_is_refused() -> None:
         tiergraph_dot.dumps(
             graph,
             clock=_structural_clock(graph),
-            binding=ipakit_hooks_and_binding(graph)[1],
+            binding=fixture_hooks_and_binding(graph)[1],
         )
 
 
 def test_structural_ids_are_sanitized_and_collision_broken() -> None:
     """Unsafe tier long names are escaped and equal ones get a numeric suffix."""
-    graph = build_ipakit_graph(
+    graph = build_fixture_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1)),
         (
             ("m-n", (_ik_item("/clock/0/first/0", text="p", duration=0),)),
             ("m-n", (_ik_item("/clock/1/second/0", text="q", duration=0),)),
         ),
     )
-    rendered = _render_ipakit(graph)
+    rendered = _render_fixture(graph)
     # The hyphen is escaped; the second identical name is disambiguated.
     assert "subgraph tier_m_2d_n {" in rendered
     assert "subgraph tier_m_2d_n_2 {" in rendered
@@ -1901,12 +1901,12 @@ def test_structural_renders_valid_item_relations() -> None:
             ),
         ),
     )
-    rendered = _render_ipakit(graph)
+    rendered = _render_fixture(graph)
     assert "// Declared bipartite relations." in rendered
     assert "// Declared polyadic relations." in rendered
-    seg0 = _ipakit_node_id("/clock/0/segment/0")
-    seg1 = _ipakit_node_id("/clock/1/segment/0")
-    seg2 = _ipakit_node_id("/clock/2/segment/0")
+    seg0 = _fixture_node_id("/clock/0/segment/0")
+    seg1 = _fixture_node_id("/clock/1/segment/0")
+    seg2 = _fixture_node_id("/clock/2/segment/0")
     assert f'{seg0} -> {seg1} [label="link"' in rendered
     assert f'{seg0} -> {seg2} [label="choose"' in rendered
     assert_graphviz_accepts(rendered)
@@ -1914,7 +1914,7 @@ def test_structural_renders_valid_item_relations() -> None:
 
 def test_structural_non_monotonic_placement_is_refused() -> None:
     """Items must be supplied in non-decreasing clock order, else refused."""
-    graph = build_ipakit_graph(
+    graph = build_fixture_graph(
         ((0, 0), (0, 1), (1, 0), (1, 1)),
         (
             (
@@ -1926,7 +1926,7 @@ def test_structural_non_monotonic_placement_is_refused() -> None:
             ),
         ),
     )
-    _, binding = ipakit_hooks_and_binding(graph)
+    _, binding = fixture_hooks_and_binding(graph)
     with pytest.raises(ValueError, match="non-decreasing clock order"):
         tiergraph_dot.dumps(graph, clock=_structural_clock(graph), binding=binding)
 
@@ -1934,7 +1934,7 @@ def test_structural_non_monotonic_placement_is_refused() -> None:
 def test_bipartite_relation_label_falls_back_to_local_name() -> None:
     """A bipartite edge falls back to the local name with no or None relation_name."""
     graph = _hierarchy_graph()
-    base_presentation, binding = ipakit_hooks_and_binding(graph)
+    base_presentation, binding = fixture_hooks_and_binding(graph)
     for relation_name in (None, lambda relation: None):
         presentation = replace(base_presentation, relation_name=relation_name)
         rendered = tiergraph_dot.dumps(
@@ -1968,7 +1968,7 @@ def test_structural_polyadic_without_presentation_uses_default_rendering() -> No
             ),
         ),
     )
-    _, binding = ipakit_hooks_and_binding(graph)
+    _, binding = fixture_hooks_and_binding(graph)
     rendered = tiergraph_dot.dumps(
         graph, clock=_structural_clock(graph), binding=binding
     )
@@ -1984,7 +1984,7 @@ def test_relation_style_hook_is_evaluated_exactly_once_per_relation() -> None:
     exclude the relation from both sections, silently dropping it.
     """
     graph = _hierarchy_graph()  # one non-empty polyadic (contains) + empty roots
-    base_presentation, binding = ipakit_hooks_and_binding(graph)
+    base_presentation, binding = fixture_hooks_and_binding(graph)
     calls: list[str] = []
     styles = iter(("bipartite", None, None))
 
@@ -2005,7 +2005,7 @@ def test_relation_style_hook_is_evaluated_exactly_once_per_relation() -> None:
     assert "// Declared relations." in rendered
     assert "// Declared polyadic relations." not in rendered
     edge = (
-        f"{_ipakit_node_id('/clock/0/utterance/0')} -> "
-        f'{_ipakit_node_id("/clock/0/segment/0")} [label="contains"'
+        f"{_fixture_node_id('/clock/0/utterance/0')} -> "
+        f'{_fixture_node_id("/clock/0/segment/0")} [label="contains"'
     )
     assert rendered.count(edge) == 1

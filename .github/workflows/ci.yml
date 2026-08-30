@@ -72,6 +72,7 @@ jobs:
               - 'pyproject.toml'
               - 'Makefile'
               - 'README.md'
+              - 'denied-name-digests.txt'
               - '.github/workflows/ci.yml'
       - if: steps.changes.outputs.gated == 'true'
         uses: actions/setup-python@v6

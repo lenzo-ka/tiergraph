@@ -1,4 +1,4 @@
-"""Exercise the clock profile against timings already carried by ipakit."""
+"""Exercise the clock profile against timings drawn from a real domain."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ ALTERNATE = QualifiedName(NS, "alternate")
 
 
 def fixture(rate: str = "10") -> Graph:
-    """Encode ipakit's 0.1-second unit timing on a tier with a partial extent."""
+    """Encode a 0.1-second unit timing on a tier with a partial extent."""
     clock = Tier(
         TierDeclaration(CLOCK, "Clock ticks"),
         tuple(Item(f"clock-{index}") for index in range(4)),
@@ -104,7 +104,7 @@ def fixture(rate: str = "10") -> Graph:
     )
 
 
-def test_real_ipakit_rate_derives_timing_on_a_partial_document_tier() -> None:
+def test_real_reference_rate_derives_timing_on_a_partial_document_tier() -> None:
     """The source fixture's 0.1-second units occupy clock positions 1 through 3."""
     profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
     assert profile.rate == Decimal("10.0")
@@ -361,7 +361,7 @@ def test_anchor_helper_refuses_missing_tiers_positions_and_anchors() -> None:
     )
 
 
-def ipakit_shape(*, rate: str | None = None) -> Graph:
+def reference_shape(*, rate: str | None = None) -> Graph:
     """Build repeated IPA points, an untimed tier, and independently timed events."""
     clock = Tier(
         TierDeclaration(CLOCK, "Clock gaps"),
@@ -476,7 +476,7 @@ def ipakit_shape(*, rate: str | None = None) -> Graph:
 
 
 def advanced_profile(graph: Graph, rate: QualifiedName | None = None) -> ClockProfile:
-    """Apply every optional clock role used by the ipakit-shaped fixture."""
+    """Apply every optional clock role used by the reference-shaped fixture."""
     return ClockProfile(
         graph,
         CLOCK,
@@ -508,7 +508,7 @@ def clock_profile_data(rate: QualifiedName | None = None) -> dict[str, object]:
 
 def test_clock_profile_from_data_is_strict_and_constructs_full_profile() -> None:
     """Declarative profiles use exact fields and explicit nullable roles."""
-    graph = ipakit_shape()
+    graph = reference_shape()
     decoded = ClockProfile.from_data(graph, clock_profile_data())
     expected = advanced_profile(graph)
     assert decoded.positions == expected.positions
@@ -576,9 +576,9 @@ def with_stored_timing(
     return replace(graph, tiers=tuple(tiers))
 
 
-def test_repeated_ipakit_points_have_ordered_refined_spans() -> None:
+def test_repeated_reference_points_have_ordered_refined_spans() -> None:
     """Two point occurrences at tick one retain distinct gap endpoints for DOT."""
-    profile = advanced_profile(ipakit_shape())
+    profile = advanced_profile(reference_shape())
     assert profile.structural_span(SEGMENT, 0) == (
         ClockPosition(1, 0),
         ClockPosition(1, 1),
@@ -591,7 +591,7 @@ def test_repeated_ipakit_points_have_ordered_refined_spans() -> None:
 
 def test_one_graph_mixes_complete_timing_with_a_wholly_untimed_tier() -> None:
     """The syntax tier opts out while both event tiers retain total bindings."""
-    profile = advanced_profile(ipakit_shape())
+    profile = advanced_profile(reference_shape())
     assert not profile.is_timed(SYNTAX)
     assert profile.is_timed(SEGMENT)
     with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
@@ -599,8 +599,8 @@ def test_one_graph_mixes_complete_timing_with_a_wholly_untimed_tier() -> None:
 
 
 def test_same_span_events_keep_different_nonuniform_physical_timings() -> None:
-    """Independent ipakit timings need neither a uniform rate nor span identity."""
-    profile = advanced_profile(ipakit_shape())
+    """Independent timings need neither a uniform rate nor span identity."""
+    profile = advanced_profile(reference_shape())
     assert profile.structural_span(SEGMENT, 1) == profile.structural_span(ALTERNATE, 0)
     assert profile.timing(SEGMENT, 1) == PhysicalTiming(
         Decimal("0.1"), Decimal("0.04"), "s"
@@ -614,7 +614,7 @@ def test_same_span_events_keep_different_nonuniform_physical_timings() -> None:
 
 def test_relaxations_refuse_partial_binding_and_timing_contradictions() -> None:
     """Opt-outs are whole-tier and dual physical sources must agree exactly."""
-    graph = ipakit_shape()
+    graph = reference_shape()
     with pytest.raises(ValueError, match="has no clock binding"):
         advanced_profile(replace(graph, relations=graph.relations[:-1]))
     syntax_binding = RelationInstance(
@@ -625,12 +625,12 @@ def test_relaxations_refuse_partial_binding_and_timing_contradictions() -> None:
     with pytest.raises(ValueError, match="untimed tier.*has 1 clock bindings"):
         advanced_profile(replace(graph, relations=(*graph.relations, syntax_binding)))
     with pytest.raises(ValueError, match="stored timing contradicts clock"):
-        advanced_profile(ipakit_shape(rate="10"), RATE)
+        advanced_profile(reference_shape(rate="10"), RATE)
 
 
 def test_refinement_and_stored_timing_refusals_name_the_offender() -> None:
     """Malformed refinement, partial timing, and fractional structure fail loudly."""
-    graph = ipakit_shape()
+    graph = reference_shape()
     bad_positions = list(graph.position_values)
     bad_positions[2] = replace(
         bad_positions[2],
@@ -655,7 +655,7 @@ def test_refinement_and_stored_timing_refusals_name_the_offender() -> None:
 
 def test_new_clock_role_declarations_and_values_are_checked() -> None:
     """Every optional role is paired and typed, and every coordinate has values."""
-    graph = ipakit_shape()
+    graph = reference_shape()
     with pytest.raises(ValueError, match="requires both tick and gap"):
         ClockProfile(graph, CLOCK, BINDING, None, UNIT, TICK)
     with pytest.raises(ValueError, match="requires both start and duration"):
@@ -684,7 +684,7 @@ def test_new_clock_role_declarations_and_values_are_checked() -> None:
 
 def test_stored_timing_value_refusals_and_exact_agreement() -> None:
     """Untimed and negative values fail while exact stored/derived values reconcile."""
-    graph = ipakit_shape()
+    graph = reference_shape()
     tiers = list(graph.tiers)
     syntax = tiers[3]
     tiers[3] = replace(
@@ -719,7 +719,7 @@ def test_stored_timing_value_refusals_and_exact_agreement() -> None:
     with pytest.raises(ValueError, match="item.*has negative duration"):
         advanced_profile(replace(graph, tiers=tuple(tiers)))
 
-    calibrated = ipakit_shape(rate="10")
+    calibrated = reference_shape(rate="10")
     calibrated_tiers = list(calibrated.tiers)
     for tier_index, item_index, start, duration in (
         (1, 1, "0.1", "0.1"),
@@ -749,7 +749,7 @@ def test_stored_timing_value_refusals_and_exact_agreement() -> None:
 @pytest.mark.parametrize("precision", (3, 12, 28, 40))
 def test_timing_and_exact_agreement_ignore_decimal_context(precision: int) -> None:
     """Every stored and derived timing decision is independent of Decimal context."""
-    graph = ipakit_shape(rate="8")
+    graph = reference_shape(rate="8")
     graph = with_stored_timing(graph, SEGMENT, 1, "0.125", "0.125")
     graph = with_stored_timing(graph, ALTERNATE, 0, "0.125", "0.125")
     with localcontext() as context:
@@ -769,7 +769,7 @@ def test_inexact_stored_and_derived_timing_refuse_in_every_context(
 ) -> None:
     """A finite approximation cannot masquerade as the exact ratio one seventh."""
     rounded = "0.1428571428571428571428571429"
-    graph = ipakit_shape(rate="7")
+    graph = reference_shape(rate="7")
     graph = with_stored_timing(graph, SEGMENT, 1, rounded, rounded)
     graph = with_stored_timing(graph, ALTERNATE, 0, rounded, rounded)
     with localcontext() as context:
@@ -786,7 +786,7 @@ def test_inexact_stored_and_derived_timing_refuse_in_every_context(
 
 def test_low_precision_cannot_accept_two_disagreeing_timing_sources() -> None:
     """A rounded match is not exact agreement with the clock-derived ratio."""
-    graph = ipakit_shape(rate="7")
+    graph = reference_shape(rate="7")
     graph = with_stored_timing(graph, SEGMENT, 1, "0.14", "0.14")
     graph = with_stored_timing(graph, ALTERNATE, 0, "0.14", "0.14")
     with localcontext() as context:
@@ -798,8 +798,8 @@ def test_low_precision_cannot_accept_two_disagreeing_timing_sources() -> None:
 
 def test_timing_is_silent_for_untimed_tiers_regardless_of_rate() -> None:
     """An untimed tier has no physical timing under either calibration mode."""
-    assert advanced_profile(ipakit_shape()).timing(SYNTAX, 0) is None
-    graph = ipakit_shape(rate="8")
+    assert advanced_profile(reference_shape()).timing(SYNTAX, 0) is None
+    graph = reference_shape(rate="8")
     graph = with_stored_timing(graph, SEGMENT, 1, "0.125", "0.125")
     graph = with_stored_timing(graph, ALTERNATE, 0, "0.125", "0.125")
     assert advanced_profile(graph, RATE).timing(SYNTAX, 0) is None
@@ -807,7 +807,7 @@ def test_timing_is_silent_for_untimed_tiers_regardless_of_rate() -> None:
 
 def test_untimed_structural_queries_name_the_tier_opt_out() -> None:
     """Structural queries identify an explicit untimed-tier refusal."""
-    profile = advanced_profile(ipakit_shape())
+    profile = advanced_profile(reference_shape())
     with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
         profile.refined_position(PositionRef(SYNTAX, 0))
     with pytest.raises(ValueError, match="tier .*syntax.* is untimed"):
@@ -1016,7 +1016,7 @@ def test_clock_profile_modes_and_required_full_profile_fields_are_explicit() -> 
 
 def test_extent_distinguishes_missing_clock_and_untimed_tiers() -> None:
     """Each unsupported extent request identifies its distinct cause."""
-    profile = advanced_profile(ipakit_shape())
+    profile = advanced_profile(reference_shape())
     with pytest.raises(ValueError, match="is the clock tier"):
         profile.extent(CLOCK)
     with pytest.raises(ValueError, match="is untimed"):

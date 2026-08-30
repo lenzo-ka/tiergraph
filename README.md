@@ -81,8 +81,6 @@ relation graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps
 their emphasis on explicit tiered structure while defining a typed, immutable
 model and a versioned interchange format.
 
-Downstream migration (ipakit). ipakit is migrating onto tiergraph: Form's timed representation — units, intervals, positional lookup, and DOT rendering — is authoritative on the tiergraph library via a containment projection, with graph-independent identity hashing. The remaining backend subsystem graphs (such as pronunciation/CMU, mora, pinyin, gesture, and rewrite) and their JSON wire are still on ipakit's embedded graph engine and are being migrated to the library; when that completes the embedded engine is removed.
-
 ## What you can do with it
 
 - Build a graph directly, or record an ordered edit stream as a `Program` and run

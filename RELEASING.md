@@ -1,7 +1,7 @@
 # Releasing tiergraph
 
-*Internal maintainer note — not part of the user-facing docs or the published
-package.*
+*Maintainer release checklist. This file ships in the source distribution but
+is not part of the user-facing documentation set.*
 
 Publishing is automated via `.github/workflows/publish.yml` using **PyPI Trusted
 Publishing (OIDC)** — no API tokens. You cut a GitHub Release; the workflow
@@ -9,9 +9,10 @@ builds and uploads. This doc is the operator checklist.
 
 ---
 
-## One-time setup (before the first release)
+## One-time setup (completed)
 
-Do these once. The automation cannot run until they exist.
+These prerequisites were completed for the first release. Recheck them only if
+the repository, workflow, or publishing environment changes.
 
 ### 1. GitHub repository
 
@@ -19,20 +20,18 @@ Do these once. The automation cannot run until they exist.
   `pyproject.toml` point there).
 - Push `main`.
 
-### 2. PyPI trusted publisher  ⚠️ pending-publisher gotcha
+### 2. PyPI trusted publisher
 
-`tiergraph` does **not** exist on PyPI yet (first release). You cannot attach a
-trusted publisher to a project that doesn't exist, so use a **pending
-publisher**:
+`tiergraph` exists on PyPI and uses a normal trusted publisher configured with:
 
-- PyPI → account → **Publishing** → *Add a pending publisher*:
+- PyPI project → **Publishing** → trusted publisher:
   - PyPI Project Name: `tiergraph`
   - Owner: `lenzo-ka`   Repository: `tiergraph`
   - Workflow name: `publish.yml`
   - Environment name: `pypi`
 
-After the first successful upload the pending publisher becomes a normal one
-automatically.
+The pending-publisher setup used for the first release is complete; it became
+this normal publisher after that upload.
 
 ### 3. GitHub Environment
 
@@ -79,6 +78,22 @@ job references it; the OIDC identity is scoped to it).
 
 ## Notes / gotchas
 
+### Adding a denied-name digest
+
+Read the name without displaying it or recording it in shell history, then use
+the tracked salt and the gate's normalization to calculate its digest:
+
+```python
+from getpass import getpass
+from scripts.check_tracked_clean import DENIED_DIGESTS_PATH, denied_digests, digest
+
+denylist = denied_digests(DENIED_DIGESTS_PATH)
+print(digest(getpass("Name: "), denylist.salt))
+```
+
+Paste only the resulting digest into `denied-name-digests.txt`, preserving
+ascending sort order.
+
 - **Tag ↔ version**: the release step compares `${TAG#v}` against
   `tiergraph.__version__`. A mismatch fails the build — bump the version *and*
   tag together.
@@ -89,7 +104,6 @@ job references it; the OIDC identity is scoped to it).
   once it passes.
 - **Re-releases**: PyPI is immutable — you cannot overwrite `X.Y.Z`. If a build
   is bad, bump to `X.Y.Z+1` (or a post-release `X.Y.Z.postN`).
-- **Consumer pin (ipakit cutover)**: while the cutover is in progress ipakit pins
-  tiergraph by git commit (`tiergraph @ git+…@<sha>`). Once tiergraph is on PyPI,
-  switch ipakit to a version constraint (`tiergraph>=X.Y`) — a git-URL dependency
-  makes the *consumer* unpublishable to PyPI. See the cutover plan (TG-PUBLISH).
+- **Consumer dependencies**: published consumers should use a released version
+  constraint such as `tiergraph>=X.Y`; a git-URL dependency makes the consumer
+  unpublishable to PyPI.

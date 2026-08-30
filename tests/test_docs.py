@@ -181,6 +181,24 @@ def test_python_fence_runtime_and_type_errors(
         generate_docs.execute_python_fences({page})
 
 
+def test_python_fence_output_must_match_adjacent_text_fence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Printed output is exact only when the immediately following fence records it."""
+    monkeypatch.setattr(generate_docs, "ROOT", tmp_path)
+    page = tmp_path / "guide.md"
+    page.write_text(
+        "```python\nprint('actual')\n```\n```text\nexpected\n```\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"guide\.md #1: got 'actual\\n'"):
+        generate_docs.execute_python_fences({page})
+
+    page.write_text("```python\nprint('unrecorded')\n```\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected ''"):
+        generate_docs.execute_python_fences({page})
+
+
 def test_page_inventory_and_fence_classification_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

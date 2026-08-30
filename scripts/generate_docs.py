@@ -224,6 +224,31 @@ def cli_bytes() -> bytes:
     help_text = "\n\n".join(
         f"### `{name}`\n\n```text\n{body}\n```" for name, body in helps
     )
+    program = (
+        '{"machine_version":"1"}\n'
+        '{"opcode":"declare_namespace","declaration":'
+        '{"namespace":"urn:step","prefix":"s"}}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        program_path = Path(directory) / "program.jsonl"
+        program_path.write_text(program, encoding="utf-8")
+        execution = subprocess.run(
+            (sys.executable, "-m", "tiergraph", "step", str(program_path)),
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    if execution.stderr:
+        raise ValueError("CLI stepping example wrote to stderr")
+    for index, line in enumerate(execution.stdout.splitlines(), start=1):
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"CLI stepping example line {index} is not JSON: {error}"
+            ) from error
+    step_output = execution.stdout.rstrip("\n")
     return (
         "# CLI reference\n\n"
         "The `tiergraph` command prints help when called without arguments. "
@@ -264,7 +289,7 @@ def cli_bytes() -> bytes:
         "its exact public step states:\n\n"
         "```console\n"
         "$ tiergraph step program.jsonl\n"
-        '{"graph":{"attribute_declarations":[],"attributes":[],"namespaces":[{"namespace":"urn:step","prefix":"s"}],"polyadic_relations":[],"position_values":[],"relation_declarations":[],"relations":[],"tiers":[]},"index":0,"opcode":{"declaration":{"namespace":"urn:step","prefix":"s"},"opcode":"declare_namespace"}}\n'
+        f"{step_output}\n"
         "```\n\n"
         "Each output line is independently parseable JSON.\n\n"
         "## Help\n\n" + help_text + "\n"
@@ -382,24 +407,42 @@ def check_live_claims(manifest: Mapping[str, Any]) -> None:
 
 def execute_python_fences(pages: set[Path]) -> None:
     """Execute and type-check reader Python fences, with one module per page."""
-    pattern = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
+    pattern = re.compile(r"^```([A-Za-z0-9_-]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
     with tempfile.TemporaryDirectory() as directory:
         modules = []
         for page_number, page in enumerate(sorted(pages)):
-            sources = pattern.findall(page.read_text(encoding="utf-8"))
+            fences = pattern.findall(page.read_text(encoding="utf-8"))
+            sources = [body for language, body in fences if language == "python"]
             namespace: dict[str, object] = {"__name__": "__docs_fence__"}
-            for index, source in enumerate(sources):
+            python_index = 0
+            for fence_index, (language, source) in enumerate(fences):
+                if language != "python":
+                    continue
+                python_index += 1
+                output = io.StringIO()
                 try:
-                    with contextlib.redirect_stdout(io.StringIO()):
+                    with contextlib.redirect_stdout(output):
                         exec(
-                            compile(source, f"{page} fence {index + 1}", "exec"),
+                            compile(source, f"{page} fence {python_index}", "exec"),
                             namespace,
                         )
                 except Exception as error:
                     raise ValueError(
                         f"python fence failed in {page.relative_to(ROOT)} "
-                        f"#{index + 1}: {type(error).__name__}: {error}"
+                        f"#{python_index}: {type(error).__name__}: {error}"
                     ) from error
+                expected = (
+                    fences[fence_index + 1][1]
+                    if fence_index + 1 < len(fences)
+                    and fences[fence_index + 1][0] == "text"
+                    else ""
+                )
+                actual = output.getvalue()
+                if actual != expected:
+                    raise ValueError(
+                        f"python fence output mismatch in {page.relative_to(ROOT)} "
+                        f"#{python_index}: got {actual!r}; expected {expected!r}"
+                    )
             if sources:
                 module = Path(directory) / f"reader_fences_{page_number}.py"
                 module.write_text("\n\n".join(sources), encoding="utf-8")

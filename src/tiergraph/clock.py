@@ -309,8 +309,8 @@ class ClockProfile:
         object.__setattr__(profile, "duration_attribute", None)
         positions = profile._read_clock_positions(len(clock.items))
         if collapse_shared_boundaries:
-            # Apply ipakit's raw-boundary -> occupied-position collapse rule by
-            # folding away each coarse tick's trailing gap.
+            # Collapse raw boundaries to occupied positions by folding away
+            # each coarse tick's trailing gap.
             positions = _collapse_shared_boundaries(positions)
         unit = ""
         if unit_attribute is not None:
@@ -625,8 +625,8 @@ def _collapse_shared_boundaries(
 ) -> tuple[ClockPosition, ...]:
     """Fold each coarse tick's trailing gap, keeping one node per occupied gap.
 
-    ipakit lays a tick's closing boundary and the next tick's opening boundary
-    on the same instant. Collapsing drops each tick's final raw gap so the
+    A tick's closing boundary and the next tick's opening boundary lie on the
+    same instant. Collapsing drops each tick's final raw gap so the
     spine shows exactly the occupied positions: a tick with ``R`` raw
     boundaries keeps gaps ``0`` through ``R - 2``. The terminal tick's closing
     boundary is dropped the same way. The input is strictly ordered, so equal
