@@ -32,7 +32,7 @@ class AttributeDomain(StrEnum):
     TIER = "tier"
     RELATION_DECLARATION = "relation_declaration"
     RELATION_INSTANCE = "relation_instance"
-    POSITION = "boundary"
+    BOUNDARY = "boundary"
     DOCUMENT = "document"
 
 
@@ -954,7 +954,7 @@ class Graph:
                     "empty boundaries are derived"
                 )
             _validate_attributes(
-                boundary.attributes, AttributeDomain.POSITION, attributes
+                boundary.attributes, AttributeDomain.BOUNDARY, attributes
             )
         boundaries_by_ref = _unique_by_name(valued_boundaries, "boundary value")
         object.__setattr__(
@@ -1459,7 +1459,7 @@ class GraphEditor:
             member.items[coordinate.index] = Item(
                 item.durable_id, _with_value(item.attributes, value)
             )
-        elif domain is AttributeDomain.POSITION:
+        elif domain is AttributeDomain.BOUNDARY:
             reference = _require_boundary_target(target, domain)
             index = self._boundary_index(self._resolve_boundary(reference))
             if index is None:
@@ -1505,7 +1505,7 @@ class GraphEditor:
                 item.durable_id,
                 _without_value(item.attributes, name, f"item {str(coordinate)!r}"),
             )
-        elif domain is AttributeDomain.POSITION:
+        elif domain is AttributeDomain.BOUNDARY:
             reference = _require_boundary_target(target, domain)
             index = self._boundary_index(self._resolve_boundary(reference))
             if index is None:

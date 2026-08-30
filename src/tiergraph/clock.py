@@ -370,10 +370,10 @@ class ClockProfile:
         if self.tick_attribute is None or self.gap_attribute is None:
             return tuple(ClockCoordinate(index) for index in range(item_count + 1))
         self._declaration(
-            self.tick_attribute, AttributeDomain.POSITION, XsdType.INTEGER, "clock tick"
+            self.tick_attribute, AttributeDomain.BOUNDARY, XsdType.INTEGER, "clock tick"
         )
         self._declaration(
-            self.gap_attribute, AttributeDomain.POSITION, XsdType.INTEGER, "clock gap"
+            self.gap_attribute, AttributeDomain.BOUNDARY, XsdType.INTEGER, "clock gap"
         )
         coordinates = []
         for index in range(item_count + 1):

@@ -68,9 +68,9 @@ class BoundaryFixture:
         )
         attributes = (
             AttributeDeclaration(LABEL, AttributeDomain.ITEM, XsdType.STRING),
-            AttributeDeclaration(CUE, AttributeDomain.POSITION, XsdType.STRING),
-            AttributeDeclaration(AUTOMATION, AttributeDomain.POSITION, XsdType.STRING),
-            AttributeDeclaration(COORDINATE, AttributeDomain.POSITION, XsdType.INTEGER),
+            AttributeDeclaration(CUE, AttributeDomain.BOUNDARY, XsdType.STRING),
+            AttributeDeclaration(AUTOMATION, AttributeDomain.BOUNDARY, XsdType.STRING),
+            AttributeDeclaration(COORDINATE, AttributeDomain.BOUNDARY, XsdType.INTEGER),
         )
         boundaries = (
             Boundary(

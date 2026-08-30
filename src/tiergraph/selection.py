@@ -382,7 +382,7 @@ class AttributeSelector:
                 for index, item in enumerate(tier.items)
                 if self._has(item.attributes)
             )
-        elif self.domain is AttributeDomain.POSITION:
+        elif self.domain is AttributeDomain.BOUNDARY:
             nodes.extend(
                 Node(NodeKind.POSITION, graph.resolve_boundary(boundary.reference))
                 for boundary in graph.boundary_values

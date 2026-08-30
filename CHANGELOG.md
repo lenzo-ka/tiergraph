@@ -155,7 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"kind": "durable-item", "durable_id": "..."}`, so an item endpoint can
   retain its identity when insertions move its structural index. An unresolved
   durable item endpoint is now reported as naming no item instead of being
-  falsely classified as a boundary. `AttributeDomain.POSITION` remains the
+  falsely classified as a boundary. `AttributeDomain.BOUNDARY` remains the
   public Python member, while its wire value changes from `"position"` to
   `"boundary"`; existing format documents using `"position"` must be rewritten
   for 0.2.0. No public Python names were added or removed by this format break.

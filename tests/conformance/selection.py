@@ -259,7 +259,7 @@ class SelectionLawSuite:
             attributes=(value(AttributeDomain.RELATION_INSTANCE),),
         )
         boundary = Boundary(
-            BoundaryRef(tier_name, 0), (value(AttributeDomain.POSITION),)
+            BoundaryRef(tier_name, 0), (value(AttributeDomain.BOUNDARY),)
         )
         declarations = tuple(
             AttributeDeclaration(names[domain], domain, XsdType.STRING)
@@ -285,7 +285,7 @@ class SelectionLawSuite:
             AttributeDomain.DOCUMENT: Node(NodeKind.DOCUMENT, None),
             AttributeDomain.TIER: Node(NodeKind.TIER, tier_name),
             AttributeDomain.ITEM: Node(NodeKind.ITEM, ItemRef(tier_name, 0)),
-            AttributeDomain.POSITION: Node(
+            AttributeDomain.BOUNDARY: Node(
                 NodeKind.POSITION, BoundaryRef(tier_name, 0)
             ),
             AttributeDomain.RELATION_DECLARATION: Node(

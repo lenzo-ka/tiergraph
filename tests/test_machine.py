@@ -386,7 +386,7 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
             *declarations,
             DeclareAttribute(
                 AttributeDeclaration(
-                    name("position-second"), AttributeDomain.POSITION, XsdType.STRING
+                    name("position-second"), AttributeDomain.BOUNDARY, XsdType.STRING
                 )
             ),
             AddItem(tier),
@@ -415,17 +415,17 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
                 value(AttributeDomain.RELATION_INSTANCE),
             ),
             AttachValue(
-                AttributeDomain.POSITION,
+                AttributeDomain.BOUNDARY,
                 BoundaryRef(tier, 0),
-                value(AttributeDomain.POSITION),
+                value(AttributeDomain.BOUNDARY),
             ),
             AttachValue(
-                AttributeDomain.POSITION,
+                AttributeDomain.BOUNDARY,
                 BoundaryRef(tier, 1),
-                value(AttributeDomain.POSITION, "other"),
+                value(AttributeDomain.BOUNDARY, "other"),
             ),
             AttachValue(
-                AttributeDomain.POSITION,
+                AttributeDomain.BOUNDARY,
                 BoundaryRef(tier, 1),
                 AttributeValue(name("position-second"), XsdType.STRING, "second"),
             ),
@@ -457,7 +457,7 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
             "is not declared",
         ),
         (AttributeDomain.RELATION_INSTANCE, 0, "not an existing relation index"),
-        (AttributeDomain.POSITION, 0, "must be a boundary reference"),
+        (AttributeDomain.BOUNDARY, 0, "must be a boundary reference"),
     ],
 )
 def test_attribute_target_refusals_name_the_target(
@@ -532,7 +532,7 @@ def test_promoted_references_drive_later_checked_operations() -> None:
             *LAWS.declarations(),
             DeclareAttribute(
                 AttributeDeclaration(
-                    boundary_name, AttributeDomain.POSITION, XsdType.STRING
+                    boundary_name, AttributeDomain.BOUNDARY, XsdType.STRING
                 )
             ),
             AddItem(tier),
@@ -544,7 +544,7 @@ def test_promoted_references_drive_later_checked_operations() -> None:
                 item_value,
             ),
             AttachValue(
-                AttributeDomain.POSITION,
+                AttributeDomain.BOUNDARY,
                 DurableBoundaryRef(tier, BoundarySide.BEFORE),
                 position_value,
             ),
@@ -566,7 +566,7 @@ def test_linear_unroll_matches_reference_execution_for_rich_graph() -> None:
         *LAWS.declarations(),
         DeclareAttribute(
             AttributeDeclaration(
-                boundary_name, AttributeDomain.POSITION, XsdType.STRING
+                boundary_name, AttributeDomain.BOUNDARY, XsdType.STRING
             )
         ),
         AddItem(tier),
@@ -574,7 +574,7 @@ def test_linear_unroll_matches_reference_execution_for_rich_graph() -> None:
         PromoteBoundary(BoundaryRef(tier, 1), "outer-unused"),
         AddItem(tier),
         AttachValue(
-            AttributeDomain.POSITION,
+            AttributeDomain.BOUNDARY,
             DurableBoundaryRef(tier, BoundarySide.AFTER),
             AttributeValue(boundary_name, XsdType.STRING, "tick"),
         ),
@@ -609,7 +609,7 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
         *LAWS.declarations(),
         DeclareAttribute(
             AttributeDeclaration(
-                boundary_attribute, AttributeDomain.POSITION, XsdType.STRING
+                boundary_attribute, AttributeDomain.BOUNDARY, XsdType.STRING
             )
         ),
         DeclareAttribute(
@@ -623,14 +623,14 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
         PromoteItem(ItemRef(tier, 0), "already"),
         AddItem(tier),
         AttachValue(
-            AttributeDomain.POSITION,
+            AttributeDomain.BOUNDARY,
             BoundaryRef(tier, 1),
             AttributeValue(boundary_attribute, XsdType.STRING, "middle"),
         ),
         PromoteBoundary(BoundaryRef(tier, 1), "middle-anchor"),
         PromoteBoundary(BoundaryRef(tier, 1), "middle-anchor"),
         AttachValue(
-            AttributeDomain.POSITION,
+            AttributeDomain.BOUNDARY,
             BoundaryRef(tier, 2),
             AttributeValue(boundary_attribute, XsdType.STRING, "after"),
         ),

@@ -380,7 +380,7 @@ def test_boundary_values_are_sparse_and_checked() -> None:
     """Only valued boundaries are stored while all boundaries remain addressable."""
     tier_name = name("x")
     declaration = AttributeDeclaration(
-        name("mark"), AttributeDomain.POSITION, XsdType.BOOLEAN
+        name("mark"), AttributeDomain.BOUNDARY, XsdType.BOOLEAN
     )
     stored = Boundary(
         BoundaryRef(tier_name, 1),
@@ -508,7 +508,7 @@ def test_relation_and_position_value_refusals() -> None:
     )
     with pytest.raises(ValueError, match="belongs to untyped tier"):
         Graph(NAMESPACES, (tier, untyped_tier), (simple, link), (untyped_edge,))
-    mark = AttributeDeclaration(name("mark"), AttributeDomain.POSITION, XsdType.STRING)
+    mark = AttributeDeclaration(name("mark"), AttributeDomain.BOUNDARY, XsdType.STRING)
     valued = Boundary(
         BoundaryRef(tier_name, 0),
         (AttributeValue(mark.name, XsdType.STRING, "x"),),
@@ -1116,7 +1116,7 @@ def test_position_promotion_uses_an_existing_anchor_id() -> None:
 def test_position_promotion_returns_the_anchor_that_already_stores_values() -> None:
     """A promoted handle continues to identify its stored values after insertion."""
     tier_name = name("x")
-    mark = AttributeDeclaration(name("mark"), AttributeDomain.POSITION, XsdType.STRING)
+    mark = AttributeDeclaration(name("mark"), AttributeDomain.BOUNDARY, XsdType.STRING)
     after_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.AFTER)
     stored = Boundary(
         after_a,
