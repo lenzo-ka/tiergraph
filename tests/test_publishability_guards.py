@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import subprocess
+import tarfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from hatchling.builders.sdist import SdistBuilder
 from scripts import check_documented, check_tracked_clean
 
 TOKEN = "sentineltoken"
 SALT = bytes.fromhex("00112233445566778899aabbccddeeff")
+# Joined at run time: this module is itself a shipped surface, so a literal
+# counter-example would be extracted from it and refused.
+LEAK_URL = "https:" + "//unknown.invalid/project"
 
 
 def _synthetic_denylist() -> check_tracked_clean.Denylist:
@@ -468,3 +474,163 @@ def test_documented_main_accepts_a_fully_documented_package(
     monkeypatch.setattr(check_documented, "PACKAGES", (package,))
     assert check_documented.main() == 0
     assert capsys.readouterr().err == ""
+
+
+def _distribution_members(destination: Path) -> list[str]:
+    """Return every file path inside a freshly built source distribution."""
+    builder = SdistBuilder(str(check_tracked_clean.ROOT))
+    artifact = next(iter(builder.build(directory=str(destination))))
+    with tarfile.open(artifact) as archive:
+        return [
+            member.name.split("/", 1)[1]
+            for member in archive.getmembers()
+            if member.isfile()
+        ]
+
+
+def test_every_file_in_the_built_distribution_is_gated(tmp_path: Path) -> None:
+    """REGRESSION: the checked set is derived from what ships, not listed by hand.
+
+    A hand-kept list of shipped directories drifts the moment packaging changes,
+    and drift is invisible until something unpublishable rides out in a file
+    nobody remembered to name. Building the distribution and reading its members
+    back is the only statement of the shipped set that cannot go stale.
+    """
+    members = _distribution_members(tmp_path)
+    # PKG-INFO is generated at build time from metadata that is itself gated:
+    # the readme, the description, and the project URLs all live in files the
+    # gate reads. The gate script is the single named exemption, and naming it
+    # here is deliberate: a second entry in this set is a second file shipping
+    # unread, and has to be argued for in review rather than appearing quietly.
+    ungated = {
+        name
+        for name in members
+        if name != "PKG-INFO" and not check_tracked_clean.is_shipped_surface(Path(name))
+    }
+    assert ungated == {"scripts/check_tracked_clean.py"}
+    # The build has to have produced something, or the assertion above is vacuous.
+    assert "pyproject.toml" in members
+    assert "SECURITY.md" in members
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        ".github/workflows/ci.yml",
+        ".gitignore",
+        ".pre-commit-config.yaml",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "Makefile",
+        "RELEASING.md",
+        "SECURITY.md",
+        "denied-name-digests.txt",
+        "examples/mixing.py",
+        "schema/tiergraph.schema.json",
+    ),
+)
+def test_main_refuses_an_external_reference_in_each_shipped_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    """REGRESSION: no shipped file is outside the reference check.
+
+    Each of these ships and each once sat outside the gate, so an unapproved
+    reference in any of them passed. The release checklist carried exactly that
+    class of reference and had to be corrected by hand.
+    """
+    monkeypatch.chdir(tmp_path)
+    path = Path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    digest_path = tmp_path / "digests.txt"
+    _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
+    monkeypatch.setattr(check_tracked_clean, "tracked_files", lambda: [path])
+    monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
+    # A comment line reads as prose in Markdown, a recipe, a workflow, and an
+    # ignore file, and parses as Python, so one payload covers every shipped
+    # file kind without tripping the import parser on the source ones.
+    path.write_text(f"# See {LEAK_URL} for details.\n", encoding="utf-8")
+    assert check_tracked_clean.main() == 1
+    path.write_text("# A portable paragraph.\n", encoding="utf-8")
+    assert check_tracked_clean.main() == 0
+
+
+def test_only_the_gate_script_itself_is_exempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CHARACTERIZATION: the one exemption is by file name and covers nothing else.
+
+    The gate has to write down the patterns it forbids and the references it
+    allows, so it cannot pass its own check. Every other file can.
+    """
+    monkeypatch.chdir(tmp_path)
+    digest_path = tmp_path / "digests.txt"
+    _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
+    monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
+    scripts = Path("scripts")
+    scripts.mkdir()
+    exempt = scripts / check_tracked_clean.SELF
+    neighbor = scripts / "generate_something.py"
+    for path in (exempt, neighbor):
+        path.write_text(f"# See {LEAK_URL}\n", encoding="utf-8")
+    monkeypatch.setattr(check_tracked_clean, "tracked_files", lambda: [exempt])
+    assert check_tracked_clean.main() == 0
+    monkeypatch.setattr(check_tracked_clean, "tracked_files", lambda: [neighbor])
+    assert check_tracked_clean.main() == 1
+
+
+def test_a_tracked_entry_that_is_not_a_file_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CHARACTERIZATION: the index can name a directory, and reading one would raise."""
+    monkeypatch.chdir(tmp_path)
+    digest_path = tmp_path / "digests.txt"
+    _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
+    monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
+    submodule = Path("vendored")
+    submodule.mkdir()
+    monkeypatch.setattr(check_tracked_clean, "tracked_files", lambda: [submodule])
+    assert check_tracked_clean.main() == 0
+
+
+@pytest.mark.parametrize("suffix", (".md", ".py"))
+def test_shipped_content_that_is_not_utf8_fails_closed_with_a_reason(
+    tmp_path: Path, suffix: str
+) -> None:
+    """REGRESSION: a shipped file the gate cannot decode is refused, not skipped.
+
+    Widening the checked set to everything that ships admits file kinds the old
+    set could not contain. An undecodable one has to fail with a message that
+    says what to do, rather than ending the run in a decoder traceback.
+    """
+    path = (tmp_path / "shipped").with_suffix(suffix)
+    path.write_bytes(b"\xff\xfe not text")
+    checks: tuple[Callable[[], list[str]], ...] = (
+        lambda: check_tracked_clean.reference_leaks(path),
+        lambda: check_tracked_clean.name_leaks(path, _synthetic_denylist()),
+    )
+    for check in checks:
+        with pytest.raises(ValueError) as excinfo:
+            check()
+        assert "ships but is not UTF-8 text" in str(excinfo.value)
+        assert str(path) in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "name", ("Makefile", "workflow.yml", "config.yaml", ".gitignore")
+)
+def test_non_python_shipped_files_are_never_parsed_as_python(
+    tmp_path: Path, name: str
+) -> None:
+    """CHARACTERIZATION: only .py sources and Markdown fences reach the import parser.
+
+    The widened set carries build recipes and workflow definitions. Their text is
+    not Python, so parsing them would raise on content that is perfectly correct.
+    """
+    path = tmp_path / name
+    path.write_text(
+        "check: venv lint\n\t@$(VENV_PYTHON) -m ruff check .\n"
+        "  - uses: actions/checkout@v5\n",
+        encoding="utf-8",
+    )
+    assert check_tracked_clean.reference_leaks(path) == []

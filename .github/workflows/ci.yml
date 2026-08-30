@@ -54,11 +54,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # The full gate runs whenever code or gate-checked docs change. A change
-      # confined to inert files -- the release workflow, release notes, the
-      # license -- skips it, and the job still reports success so the required
-      # check does not hang. Anything under src, tests, docs, examples, scripts,
-      # or the build files keeps docs currency and code gated.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # The publishability gate reads every tracked file, and every tracked file
+      # ships, so no change to this repository is inert to it. It runs before the
+      # path filter and outside it: a green check that ran nothing reads as
+      # verification without being any, and a filter list naming the files it
+      # covers is exactly the hand-kept list this gate stopped trusting. It needs
+      # nothing installed beyond the standard library and finishes in under a
+      # second.
+      - run: python scripts/check_tracked_clean.py
+      # Everything below is expensive -- the suite under three hash seeds,
+      # coverage, strict types, schema and documentation currency -- and depends
+      # only on code, documentation, the schema, and the build files. A change
+      # confined to release notes or the release workflow cannot affect it, so it
+      # stays filtered, and the job still reports success so the required check
+      # does not hang.
       - uses: dorny/paths-filter@v3
         id: changes
         with:
@@ -69,20 +83,17 @@ jobs:
               - 'examples/**'
               - 'scripts/**'
               - 'docs/**'
+              - 'schema/**'
               - 'pyproject.toml'
               - 'Makefile'
               - 'README.md'
               - 'denied-name-digests.txt'
               - '.github/workflows/ci.yml'
-      - if: steps.changes.outputs.gated == 'true'
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       # make check builds its own environment, so CI runs the same path as a
-      # developer rather than a parallel one that can drift.
+      # developer rather than a parallel one that can drift. It runs the
+      # publishability gate a second time; that is a second of duplicated work,
+      # and it keeps the developer-facing command complete.
       - if: steps.changes.outputs.gated == 'true'
         run: make check
       - if: steps.changes.outputs.gated != 'true'
-        run: echo "Only inert files changed (workflow or release notes); skipping the full gate."
+        run: echo "No code, documentation, schema, or build file changed; the publishability gate above still ran over every tracked file."

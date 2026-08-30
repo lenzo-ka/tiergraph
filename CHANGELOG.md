@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared surface like every other semiring it defines. It is the second
   component of `PATH` and the one a caller needs to build a witness-carrying
   composition over a different cost algebra.
+- The publishability check now reads every tracked file rather than a listed set
+  of directories, so the files it reads and the files the source distribution
+  ships are the same set. The release checklist, the contributor guide, the
+  security policy, these release notes, the license, the build recipe, the
+  workflows, the schema, and the runnable examples all ship and were all
+  previously unread. The test suite builds the distribution and compares its
+  contents against what the check reads, so the two cannot drift apart, and CI
+  runs the check on every pull request instead of behind a path filter that
+  could classify a shipped file as inert.
 
 ### Removed
 
