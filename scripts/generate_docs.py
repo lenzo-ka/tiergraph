@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import inspect
 import io
 import json
@@ -44,7 +45,7 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
 
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
-    """Require exact, one-to-one coverage of both shipped export lists."""
+    """Require exact, one-to-one coverage of every shipped export list."""
     groups = manifest.get("api_groups")
     if not isinstance(groups, dict):
         raise ValueError("api_groups must be an object")
@@ -67,20 +68,22 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             "tiergraph_dot export mismatch; "
             f"manifest={list(dot)!r}; package={list(tiergraph_dot.__all__)!r}"
         )
-    semiring = manifest.get("secondary", {}).get("tiergraph.semiring", [])
-    semiring_module = __import__("tiergraph.semiring", fromlist=["*"])
-    if list(semiring_module.__all__) != list(semiring):
-        raise ValueError(
-            "tiergraph.semiring export mismatch; "
-            f"manifest={list(semiring)!r}; package={list(semiring_module.__all__)!r}"
-        )
-    build = manifest.get("secondary", {}).get("tiergraph.build", [])
-    build_module = __import__("tiergraph.build", fromlist=["*"])
-    if list(build_module.__all__) != list(build):
-        raise ValueError(
-            "tiergraph.build export mismatch; "
-            f"manifest={list(build)!r}; package={list(build_module.__all__)!r}"
-        )
+    secondary = manifest.get("secondary")
+    if not isinstance(secondary, dict):
+        raise ValueError("secondary must be an object")
+    for module_name, published in secondary.items():
+        module = importlib.import_module(module_name)
+        declared = getattr(module, "__all__", None)
+        if declared is None:
+            raise ValueError(
+                f"{module_name} declares no __all__; a documented surface "
+                "is declared by its module, not by the manifest"
+            )
+        if list(declared) != list(published):
+            raise ValueError(
+                f"{module_name} export mismatch; "
+                f"manifest={list(published)!r}; package={list(declared)!r}"
+            )
 
 
 def _signature(value: object) -> str:
@@ -166,7 +169,7 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
         )
     parts.extend(("", "## Supported secondary surface", ""))
     for module_name, names in manifest["secondary"].items():
-        module = __import__(module_name, fromlist=["*"])
+        module = importlib.import_module(module_name)
         stability = (
             "This module is a supported secondary API."
             if module_name == "tiergraph.semiring"

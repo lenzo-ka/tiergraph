@@ -535,3 +535,6 @@ def _json_schema(shape: Shape) -> JsonValue:
     if shape.min_length is not None:
         result["minLength"] = shape.min_length
     return result
+
+
+__all__ = ["json_schema", "shape_hash"]

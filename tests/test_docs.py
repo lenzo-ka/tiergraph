@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
+import re
 import subprocess
 import sys
 from copy import deepcopy
@@ -18,7 +20,7 @@ from scripts import generate_docs
 from scripts.generate_docs import load_manifest, validate_manifest
 from scripts.generate_docs import main as docs_main
 
-import tiergraph.semiring
+import tiergraph.schema
 import tiergraph_dot
 
 
@@ -270,22 +272,44 @@ def test_companion_export_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) 
         validate_manifest(load_manifest())
 
 
-def test_semiring_export_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The supported secondary surface has exact export coverage."""
+@pytest.mark.parametrize("module_name", sorted(load_manifest()["secondary"]))
+def test_secondary_export_mutation_is_rejected(
+    module_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every published secondary surface is held to its module's own `__all__`."""
+    module = importlib.import_module(module_name)
+    declared = list(getattr(module, "__all__", []))
     monkeypatch.setattr(
-        tiergraph.semiring, "__all__", [*tiergraph.semiring.__all__, "x"]
+        module, "__all__", [*declared, "adversarial_alias"], raising=False
     )
-    with pytest.raises(ValueError, match="tiergraph.semiring export mismatch"):
+    with pytest.raises(ValueError, match=f"{re.escape(module_name)} export mismatch"):
         validate_manifest(load_manifest())
 
 
-def test_build_export_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The builder's supported surface has exact export coverage."""
-    import tiergraph.build
+@pytest.mark.parametrize("module_name", sorted(load_manifest()["secondary"]))
+def test_secondary_manifest_omission_is_rejected(module_name: str) -> None:
+    """Dropping a declared name from a published list cannot pass unnoticed."""
+    manifest = deepcopy(load_manifest())
+    removed = manifest["secondary"][module_name].pop()
+    with pytest.raises(ValueError, match=f"package=.*{re.escape(removed)}"):
+        validate_manifest(manifest)
 
-    monkeypatch.setattr(tiergraph.build, "__all__", [*tiergraph.build.__all__, "x"])
-    with pytest.raises(ValueError, match="tiergraph.build export mismatch"):
+
+def test_published_module_without_declared_exports_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A module cannot have a surface published for it that it never declares."""
+    monkeypatch.delattr(tiergraph.schema, "__all__", raising=False)
+    with pytest.raises(ValueError, match=r"tiergraph\.schema declares no __all__"):
         validate_manifest(load_manifest())
+
+
+def test_missing_secondary_section_is_rejected() -> None:
+    """An absent secondary section would silence the whole surface check."""
+    manifest = deepcopy(load_manifest())
+    del manifest["secondary"]
+    with pytest.raises(ValueError, match="secondary must be an object"):
+        validate_manifest(manifest)
 
 
 def test_mixing_example_subprocess_oracle() -> None:
