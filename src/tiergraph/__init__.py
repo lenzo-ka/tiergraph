@@ -112,6 +112,13 @@ from tiergraph.path import (
     StructuralPathProfile,
     resolve_path,
 )
+from tiergraph.rewrite import (
+    EffectRefusal,
+    RewriteCertificate,
+    RewriteDeclaration,
+    RewriteDisturbance,
+    RewriteEffect,
+)
 from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
 from tiergraph.selection import (
     AttributeSelector,
@@ -203,6 +210,7 @@ __all__ = [
     "DifferenceSelector",
     "DurableItemRef",
     "DurablePositionRef",
+    "EffectRefusal",
     "ExactnessRefusal",
     "ExecutionError",
     "FoldCertificate",
@@ -272,6 +280,10 @@ __all__ = [
     "RelationSideDeclaration",
     "RelationInstance",
     "Repeat",
+    "RewriteCertificate",
+    "RewriteDeclaration",
+    "RewriteDisturbance",
+    "RewriteEffect",
     "ResolvedItem",
     "ResolvedAlternative",
     "ResolvedPosition",

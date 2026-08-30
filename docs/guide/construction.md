@@ -131,6 +131,75 @@ The tier `missing` was never declared, so the `AddItem` at position 0 cannot
 make its transition. Because each step is validated in full, a program either
 produces a valid graph or stops at the exact opcode that broke.
 
+## What a rewrite did to what it rewrote
+
+Every edit here outputs a new graph, so any two graphs can be read as one
+rewrite's before and after. What that rewrite did to the graph it read is a
+real question with a real answer, and `RewriteEffect` is where a declaration
+answers it. `DECORATE` says the result added and took nothing back: every
+structure the source asserts stands in the result at the same coordinate,
+carrying everything it carried. `REVISE` says every structure still stands but
+some value stands in place of another. `COLLAPSE` says some structure has no
+counterpart at all. `UNDECLARED` is the default.
+
+"Tiers can only decorate" is not a law of this kernel, and the API does not
+state it as one. Nothing stops a new graph from standing in any relation to the
+old one. What can be said, and held to account, is that a *particular* rewrite
+decorated. `check_effect()` demands that claim and returns a
+`RewriteCertificate`. The two ways of getting it wrong are answered differently
+on purpose: **omitting** the claim is answered with the declaration to be made,
+and **asserting it falsely** is answered with a semantic counterexample naming
+the structure and what happened to it.
+
+```python
+from tiergraph import Graph, RewriteDeclaration, RewriteEffect, Tier
+
+grown = execute((*built.trace, AddItem(words)))
+certificate = RewriteDeclaration(
+    "grow", graph, grown, RewriteEffect.DECORATE
+).check_effect()
+print("subjects examined:", certificate.subjects)
+print("disturbances:", certificate.disturbances)
+
+stripped = Graph(
+    graph.namespaces,
+    (Tier(graph.tiers[0].declaration, graph.tiers[0].items[:2]),),
+    graph.relation_declarations,
+    graph.relations,
+    graph.attribute_declarations,
+)
+try:
+    RewriteDeclaration("drop", graph, stripped, RewriteEffect.DECORATE).check_effect()
+except ValueError as error:
+    print(str(error).split(". ")[0] + ".")
+```
+
+```text
+subjects examined: 8
+disturbances: 0
+rewrite 'drop' declares DECORATE, but item '{https://example.com/doc}words'[2] has no counterpart in the result.
+```
+
+`subjects` is the honest part of the certificate. It counts the structures the
+source asserts, every one of which was examined, so a claim over a graph that
+asserts almost nothing cannot be read as a strong one.
+
+A discharged `DECORATE` licenses one thing. Every reading taken over the source
+is still a correct reading of the result without re-reading it: an item's
+attributes, a position's values, a relation's endpoints, whatever a reference
+resolved to. It does not license any reading that counts, quantifies over
+everything, or turns on absence, such as a tier's extent, the canonical bytes,
+or the construction fingerprint. Decoration adds, so those must be taken again.
+Put shortly, a positive property proved of the source transfers to the result
+and a negative or counting one does not.
+
+The effect belongs to the pair of graphs rather than to the operation, and
+`AddItem` shows why. It decorates against the graph above. Against a graph
+carrying a value at the boundary anchored to its tier's last edge it does not,
+because growing the tier moves that edge and leaves the value's old coordinate
+empty. Neither the opcode nor the anchor is at fault; the claim is declared per
+rewrite because a pair of graphs is the only place it can be true.
+
 ## Error boundary
 
 Invalid declarations or graph content at a graph-construction boundary raise

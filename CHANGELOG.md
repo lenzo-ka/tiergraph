@@ -66,6 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every required law exactly, and a `STRUCTURAL` claim over an algebra that
   declares no star warrant. `tiergraph.semiring.inexact_laws` publishes the law
   reader that both composite constructions and the new check share.
+- Made what a rewrite did to the graph it rewrote a declared, refutable claim.
+  A new `tiergraph.rewrite` module publishes `RewriteDeclaration`,
+  `RewriteEffect`, `RewriteCertificate`, `RewriteDisturbance`, and
+  `EffectRefusal`. `RewriteEffect` orders three effects by how much they
+  disturb the graph they read: `DECORATE`, where every structure the source
+  asserts stands in the result at the same coordinate carrying everything it
+  carried; `REVISE`, where every structure still stands but some value stands
+  in place of another; and `COLLAPSE`, where some structure has no counterpart
+  at all. `check_effect()` demands the claim and returns a certificate
+  reporting how many of the source's structures it was held to. Omitting the
+  claim and asserting it falsely are answered differently: `UNDECLARED` returns
+  the declaration to be made, and a false claim returns a semantic
+  counterexample naming the structure, its tier, and what happened to it,
+  followed by how many further disturbances also apply. A claim that cannot be
+  exhibited is refused as well, so `REVISE` or `COLLAPSE` over a rewrite that
+  only decorated is answered rather than accepted. The module produces no
+  graphs and edits nothing; it measures the relation between two graph values.
+  "Tiers can only decorate" is deliberately not stated as a law of the kernel,
+  because it is false as one: a graph is an immutable value and its successor
+  may stand in any relation to it. Every one of the build machine's nine
+  primitive opcodes is measured as decorating and a test records it, with one
+  case that shows why the claim belongs to a pair of graphs rather than to an
+  operation: `AddItem` does not decorate a graph that carries a value at the
+  boundary anchored to its tier's last edge, because growing the tier moves
+  that edge and leaves the value's old coordinate empty. The document format is
+  untouched.
 
 ### Changed
 
