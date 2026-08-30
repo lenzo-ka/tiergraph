@@ -1,0 +1,23 @@
+# Salted SHA-256 digests of the repository names the publishability gate refuses
+# anywhere in the shipped surface. The names are not written down here, or
+# anywhere else in this repository: a digest is not a name, so the rule that
+# nothing here may name them is not broken by the file that enforces it.
+#
+# The salt is tracked, because the gate has to reproduce these digests in CI
+# from a clean checkout. That is a deliberate trade and it is worth stating
+# plainly: this is not secrecy. A reader holding this file can confirm any name
+# they already guess in milliseconds, and a short lowercase name falls to an
+# ordinary dictionary sweep. What the salt buys is that no precomputed table
+# answers the question for free. What the hashing buys is the property actually
+# required -- that no forbidden name appears in a tracked artifact.
+#
+# Format: one `salt` line of hex, then one lowercase 64-hex digest per line,
+# unique and sorted. Comments and blank lines are ignored. A missing, empty, or
+# malformed file fails the gate closed. RELEASING.md records how to add an entry
+# without writing the name into any file.
+
+salt 896ec3ff778a160e5269db6a5f2b286e
+62d5545d6d73c032ebe9e09204236e1bdbdf3d5b2a014f6ff16f4beb02eeae72
+67be50a907ac271f46bb9ae5b54586b5b596210f925f87805a4131ed9fbabac3
+aa524815d9cc58e7d4f711fb8a549b57424f39f74b971065221d36acde9a9214
+e5bb53ae9587a93de5ad8625a39b9a103e69cbe766d458bfb8f7ab246154d488

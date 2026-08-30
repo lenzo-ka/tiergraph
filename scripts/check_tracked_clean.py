@@ -3,17 +3,22 @@
 The external-reference check is inverted: URLs, imports, dependency names,
 email addresses, and bare domains must be explicitly allowed. It therefore
 fails closed when a cited project uses an unanticipated spelling or is renamed.
-Bare prose has no reference syntax, so a denylist read from denied-names.txt
-covers it instead. Packaging excludes that file from the sdist and the wheel.
-A rule that nothing shipped may name something cannot be enforced by a shipped
-artifact that names it, so the names live in the repository, not the distribution.
+Bare prose has no reference syntax, so salted SHA-256 digests cover it instead.
+The forbidden names are not written down anywhere in the repository, and no
+precomputed rainbow table answers the question for free. This does not provide
+secrecy: the salt is tracked so CI can reproduce digests from a clean checkout.
+A reader can confirm a name they already guess in milliseconds, and a short
+lowercase name falls to an ordinary dictionary sweep.
 
 A denylist pins the spellings listed, so a sibling nobody listed is still
 invisible in bare prose. A name that is also ordinary vocabulary cannot be listed
-without false positives. Inverting this check would require reviewing a prose
-vocabulary of 1,683 tokens churning by 11 per commit. Even its 107-token
-non-English slice churns by one per commit and needs a shipped inflected word list
-of about 2.5 MB against a 573 KB distribution.
+without false positives. Inverting this check -- allowlisting known-good prose
+instead -- would mean reviewing every distinct word the documentation uses:
+2,007 unique alphanumeric tokens across README.md and docs/** as of this commit,
+a set that moves whenever the prose does. Reviewing that on every commit costs
+more than the check is worth, and a non-English word would have to be
+allowlisted by hand or covered by an inflected word list larger than the
+distribution shipping it.
 
 Both checks run over the git index rather than the working tree: untracked
 scratch is exactly where local material is allowed to live.
@@ -22,10 +27,12 @@ scratch is exactly where local material is allowed to live.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -146,7 +153,16 @@ PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 # necessarily contains both and is exempt from both of its own checks.
 SELF = Path(__file__).name
 ROOT = Path(__file__).resolve().parent.parent
-DENIED_NAMES_PATH: Path = ROOT / "denied-names.txt"
+CANDIDATE = re.compile(r"[A-Za-z0-9]+")
+DENIED_DIGESTS_PATH: Path = ROOT / "denied-name-digests.txt"
+
+
+@dataclass(frozen=True)
+class Denylist:
+    """Hold the salt and accepted digests for denied-name matching."""
+
+    salt: bytes
+    digests: frozenset[str]
 
 
 def tracked_files() -> list[Path]:
@@ -170,8 +186,16 @@ def leaks(path: Path) -> list[str]:
     ]
 
 
-def denied_names(path: Path) -> tuple[str, ...]:
-    """Return the sorted unique lowercase names declared by one denylist."""
+def digest(name: str, salt: bytes) -> str:
+    """Return the salted digest of one normalized alphanumeric candidate."""
+    normalized = name.strip().lower()
+    if CANDIDATE.fullmatch(normalized) is None:
+        raise ValueError("candidate must be exactly one nonempty alphanumeric run")
+    return hashlib.sha256(salt + normalized.encode("utf-8")).hexdigest()
+
+
+def denied_digests(path: Path) -> Denylist:
+    """Parse and validate a repository denied-name digest file."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
@@ -179,33 +203,44 @@ def denied_names(path: Path) -> tuple[str, ...]:
             f"denylist {path} is missing; this check runs from a repository "
             "checkout, not from an installed distribution"
         ) from error
-    names = {
-        line.strip().lower()
+    lines = [
+        line.strip()
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
-    }
-    if not names:
-        raise ValueError(f"denylist {path} contains no names")
-    return tuple(sorted(names))
+    ]
+    salt_lines = [line for line in lines if line.startswith("salt ")]
+    if not salt_lines:
+        raise ValueError(f"denylist {path} contains no salt line")
+    if len(salt_lines) != 1 or lines[0] != salt_lines[0]:
+        raise ValueError(f"denylist {path} has an invalid salt line")
+    salt_hex = salt_lines[0].removeprefix("salt ")
+    if len(salt_hex) < 16:
+        raise ValueError(f"denylist {path} salt is shorter than 16 hex characters")
+    if len(salt_hex) % 2 or re.fullmatch(r"[0-9A-Fa-f]+", salt_hex) is None:
+        raise ValueError(f"denylist {path} salt is malformed")
+    salt = bytes.fromhex(salt_hex)
+    digests = lines[1:]
+    if not digests:
+        raise ValueError(f"denylist {path} contains no digests")
+    if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in digests):
+        raise ValueError(f"denylist {path} contains an invalid digest line")
+    if len(digests) != len(set(digests)):
+        raise ValueError(f"denylist {path} contains duplicate digests")
+    if digests != sorted(digests):
+        raise ValueError(f"denylist {path} digests are not sorted")
+    return Denylist(salt=salt, digests=frozenset(digests))
 
 
-def name_leaks(path: Path, names: tuple[str, ...]) -> list[str]:
+def name_leaks(path: Path, denylist: Denylist) -> list[str]:
     """Return one line-numbered message per denied name in one shipped file."""
     text = path.read_text(encoding="utf-8")
-    matches = [
-        match
-        for name in names
-        for match in re.finditer(
-            rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])",
-            text,
-            re.IGNORECASE,
-        )
-    ]
-    matches.sort(key=lambda match: match.start())
+    # Maximal runs preserve the old case-insensitive, alphanumeric-boundary
+    # regex behavior for every name that digest() accepts.
     return [
         f"{path}:{text.count(chr(10), 0, match.start()) + 1}: "
-        f"a sibling repository named in shipped text ({match.group(0)!r})"
-        for match in matches
+        "a denied name written in shipped text"
+        for match in CANDIDATE.finditer(text)
+        if digest(match.group(0), denylist.salt) in denylist.digests
     ]
 
 
@@ -308,12 +343,12 @@ def main() -> int:
         if path.name != SELF and path.is_file() and is_shipped_surface(path)
         for message in reference_leaks(path)
     )
-    names = denied_names(DENIED_NAMES_PATH)
+    denylist = denied_digests(DENIED_DIGESTS_PATH)
     found.extend(
         message
         for path in paths
         if path.name != SELF and path.is_file() and is_shipped_surface(path)
-        for message in name_leaks(path, names)
+        for message in name_leaks(path, denylist)
     )
     if not found:
         return 0

@@ -78,6 +78,22 @@ job references it; the OIDC identity is scoped to it).
 
 ## Notes / gotchas
 
+### Adding a denied-name digest
+
+Read the name without displaying it or recording it in shell history, then use
+the tracked salt and the gate's normalization to calculate its digest:
+
+```python
+from getpass import getpass
+from scripts.check_tracked_clean import DENIED_DIGESTS_PATH, denied_digests, digest
+
+denylist = denied_digests(DENIED_DIGESTS_PATH)
+print(digest(getpass("Name: "), denylist.salt))
+```
+
+Paste only the resulting digest into `denied-name-digests.txt`, preserving
+ascending sort order.
+
 - **Tag ↔ version**: the release step compares `${TAG#v}` against
   `tiergraph.__version__`. A mismatch fails the build — bump the version *and*
   tag together.

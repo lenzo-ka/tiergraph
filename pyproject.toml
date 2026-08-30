@@ -45,13 +45,8 @@ Repository = "https://github.com/lenzo-ka/tiergraph"
 [tool.hatch.version]
 path = "src/tiergraph/__init__.py"
 
-# The gate needs these names, but the distribution must not carry them.
-[tool.hatch.build.targets.sdist]
-exclude = ["denied-names.txt"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/tiergraph", "src/tiergraph_dot"]
-exclude = ["denied-names.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
