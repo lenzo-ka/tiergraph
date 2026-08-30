@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 157 top-level `tiergraph` exports exactly once.
+It covers 158 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -742,6 +742,151 @@ steps(source: 'Program | AsBuilt | Iterable[object]') -> 'Iterator[Step]'
 ```
 
 Yield each primitive opcode with its validated resulting graph.
+
+## Editing
+
+### `GraphEditor`
+
+```text
+GraphEditor(graph: 'Graph') -> 'None'
+```
+
+Carry graph content in mutable form and validate it once at freeze.
+
+A frozen ``Graph`` answers this operation set by returning a new graph.
+This carrier answers the same operations by changing itself, so a caller
+chooses rewriting or mutation by choosing which carrier to hold.  Every
+operation returns this editor so operations chain, and nothing it returns
+is a graph until ``freeze()`` builds and validates one.
+
+Structural operations keep the graph's own references denoting what they
+denoted before the edit.  Item coordinates stored inside the graph are
+rewritten to follow their items, and durable identifiers resolve again at
+freeze.  A stored boundary value addressed by coordinate is rewritten when
+the edit leaves its boundary exactly one image, and refuses the edit when
+it does not: a bare coordinate has no anchor to follow, while a boundary
+promoted through ``Graph.promote_position`` does.
+
+An operation that refuses changes nothing, so a refused edit leaves this
+editor exactly as it was.  What one operation cannot see on its own -- a
+second parent, a cycle, a membership subset -- is caught by the single
+validation at freeze, which is the same validation a frozen graph runs.
+
+#### `GraphEditor.freeze`
+
+Method.
+
+```text
+GraphEditor.freeze(self) -> 'Graph'
+```
+
+Return a fully validated graph without consuming this editor.
+
+#### `GraphEditor.declare`
+
+Method.
+
+```text
+GraphEditor.declare(self, declaration: 'EditDeclaration') -> 'GraphEditor'
+```
+
+Add one namespace, tier, attribute, or relation declaration.
+
+Declarations are added, never changed or withdrawn.  Retyping or
+withdrawing one retroactively decides the meaning of every value and
+reference that already depends on it, which is a migration of the
+whole graph rather than an edit to a place in it.
+
+#### `GraphEditor.set_attribute`
+
+Method.
+
+```text
+GraphEditor.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'GraphEditor'
+```
+
+Give one carrier this value, replacing any value of the same name.
+
+The value's declaration decides which carrier the target names, so a
+caller spells the place and not the domain.  An undeclared attribute
+is refused here rather than at freeze, because without a declaration
+there is no domain to read the target against.
+
+#### `GraphEditor.remove_attribute`
+
+Method.
+
+```text
+GraphEditor.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'GraphEditor'
+```
+
+Take the named value off one carrier, refusing when it is absent.
+
+#### `GraphEditor.insert_item`
+
+Method.
+
+```text
+GraphEditor.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'GraphEditor'
+```
+
+Insert one item at a tier index, carrying later references with it.
+
+An index equal to the tier's item count appends.
+
+#### `GraphEditor.remove_item`
+
+Method.
+
+```text
+GraphEditor.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'GraphEditor'
+```
+
+Remove one item, refusing while the graph still references it.
+
+#### `GraphEditor.move_item`
+
+Method.
+
+```text
+GraphEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'GraphEditor'
+```
+
+Move one item to another index of its own tier, carrying references.
+
+A move across tiers is not this operation.  Membership decides an
+item's type, so carrying an item into another tier retypes it, and a
+caller who means that says so with a removal and an insertion.
+
+#### `GraphEditor.swap_items`
+
+Method.
+
+```text
+GraphEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'GraphEditor'
+```
+
+Exchange two items of one tier, carrying their references with them.
+
+#### `GraphEditor.add_relation`
+
+Method.
+
+```text
+GraphEditor.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance') -> 'GraphEditor'
+```
+
+Add one relation instance to the collection its arity belongs to.
+
+#### `GraphEditor.remove_relation`
+
+Method.
+
+```text
+GraphEditor.remove_relation(self, target: 'int | str') -> 'GraphEditor'
+```
+
+Remove one relation instance by bipartite index or by durable id.
 
 ## Fold
 
@@ -1553,6 +1698,111 @@ Graph.to_data(self) -> 'dict[str, JsonValue]'
 
 Return graph content in canonical declaration order as JSON data.
 
+#### `Graph.edit`
+
+Method.
+
+```text
+Graph.edit(self) -> 'GraphEditor'
+```
+
+Return a mutable editor holding a copy of this graph's content.
+
+The editor answers the same operations this graph answers, and answers
+them in place: one validation runs at ``freeze()`` instead of one per
+operation.  Whether an operation rewrites or mutates follows from the
+carrier the caller holds, never from an argument passed to it.
+
+#### `Graph.declare`
+
+Method.
+
+```text
+Graph.declare(self, declaration: 'EditDeclaration') -> 'Graph'
+```
+
+Return a new graph carrying one more declaration.
+
+#### `Graph.set_attribute`
+
+Method.
+
+```text
+Graph.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'Graph'
+```
+
+Return a new graph whose target carries this value under its name.
+
+#### `Graph.remove_attribute`
+
+Method.
+
+```text
+Graph.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'Graph'
+```
+
+Return a new graph whose target no longer carries this name.
+
+#### `Graph.insert_item`
+
+Method.
+
+```text
+Graph.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'Graph'
+```
+
+Return a new graph with one more item at this tier index.
+
+#### `Graph.remove_item`
+
+Method.
+
+```text
+Graph.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'Graph'
+```
+
+Return a new graph without this item.
+
+#### `Graph.move_item`
+
+Method.
+
+```text
+Graph.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'Graph'
+```
+
+Return a new graph with this item at another index of its own tier.
+
+#### `Graph.swap_items`
+
+Method.
+
+```text
+Graph.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'Graph'
+```
+
+Return a new graph with two items of one tier exchanged.
+
+#### `Graph.add_relation`
+
+Method.
+
+```text
+Graph.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance') -> 'Graph'
+```
+
+Return a new graph carrying one more relation instance.
+
+#### `Graph.remove_relation`
+
+Method.
+
+```text
+Graph.remove_relation(self, target: 'int | str') -> 'Graph'
+```
+
+Return a new graph without the relation instance this names.
+
 ### `GraphValidationError`
 
 Report a declaration or graph-contract validation failure.
@@ -2330,8 +2580,12 @@ different intentions even when ``a`` and ``b`` are adjacent.  Likewise,
 ``before(tier)`` and ``after(tier)`` are distinct first-edge and last-edge
 anchors that coincide only while the tier is empty.
 
-Removing an anchor is deliberately unsettled: removal destroys the anchor,
-and the kernel has no ratified rule for that case.
+Removing an anchor is refused rather than reinterpreted.  Removal destroys
+the anchor, a boundary whose anchor is gone has no identity left to keep,
+and the kernel will not choose a replacement anchor on a caller's behalf.
+An edit that would remove such an item is therefore refused, immediately by
+a frozen graph's operation and at ``GraphEditor.freeze()`` by the editor's,
+and a caller who means to keep the boundary anchors it elsewhere first.
 
 #### `DurablePositionRef.to_data`
 

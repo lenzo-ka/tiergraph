@@ -471,8 +471,12 @@ class DurablePositionRef:
     ``before(tier)`` and ``after(tier)`` are distinct first-edge and last-edge
     anchors that coincide only while the tier is empty.
 
-    Removing an anchor is deliberately unsettled: removal destroys the anchor,
-    and the kernel has no ratified rule for that case.
+    Removing an anchor is refused rather than reinterpreted.  Removal destroys
+    the anchor, a boundary whose anchor is gone has no identity left to keep,
+    and the kernel will not choose a replacement anchor on a caller's behalf.
+    An edit that would remove such an item is therefore refused, immediately by
+    a frozen graph's operation and at ``GraphEditor.freeze()`` by the editor's,
+    and a caller who means to keep the boundary anchors it elsewhere first.
     """
 
     anchor: DurableItemRef | QualifiedName
@@ -1008,6 +1012,692 @@ class Graph:
             ],
             "attributes": _attributes_data(self.attributes),
         }
+
+    def edit(self) -> GraphEditor:
+        """Return a mutable editor holding a copy of this graph's content.
+
+        The editor answers the same operations this graph answers, and answers
+        them in place: one validation runs at ``freeze()`` instead of one per
+        operation.  Whether an operation rewrites or mutates follows from the
+        carrier the caller holds, never from an argument passed to it.
+        """
+        return GraphEditor(self)
+
+    def declare(self, declaration: EditDeclaration) -> Graph:
+        """Return a new graph carrying one more declaration."""
+        return self.edit().declare(declaration).freeze()
+
+    def set_attribute(self, target: EditTarget, value: AttributeValue) -> Graph:
+        """Return a new graph whose target carries this value under its name."""
+        return self.edit().set_attribute(target, value).freeze()
+
+    def remove_attribute(self, target: EditTarget, name: QualifiedName) -> Graph:
+        """Return a new graph whose target no longer carries this name."""
+        return self.edit().remove_attribute(target, name).freeze()
+
+    def insert_item(self, tier: QualifiedName, index: int, item: Item) -> Graph:
+        """Return a new graph with one more item at this tier index."""
+        return self.edit().insert_item(tier, index, item).freeze()
+
+    def remove_item(self, reference: ItemRef | DurableItemRef) -> Graph:
+        """Return a new graph without this item."""
+        return self.edit().remove_item(reference).freeze()
+
+    def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> Graph:
+        """Return a new graph with this item at another index of its own tier."""
+        return self.edit().move_item(reference, index).freeze()
+
+    def swap_items(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+    ) -> Graph:
+        """Return a new graph with two items of one tier exchanged."""
+        return self.edit().swap_items(first, second).freeze()
+
+    def add_relation(
+        self, instance: RelationInstance | PolyadicRelationInstance
+    ) -> Graph:
+        """Return a new graph carrying one more relation instance."""
+        return self.edit().add_relation(instance).freeze()
+
+    def remove_relation(self, target: int | str) -> Graph:
+        """Return a new graph without the relation instance this names."""
+        return self.edit().remove_relation(target).freeze()
+
+
+type EditTarget = (
+    None
+    | QualifiedName
+    | ItemRef
+    | DurableItemRef
+    | PositionRef
+    | DurablePositionRef
+    | int
+    | str
+)
+
+type EditDeclaration = (
+    NamespaceDeclaration | TierDeclaration | AttributeDeclaration | RelationDeclaration
+)
+
+
+class GraphEditor:
+    """Carry graph content in mutable form and validate it once at freeze.
+
+    A frozen ``Graph`` answers this operation set by returning a new graph.
+    This carrier answers the same operations by changing itself, so a caller
+    chooses rewriting or mutation by choosing which carrier to hold.  Every
+    operation returns this editor so operations chain, and nothing it returns
+    is a graph until ``freeze()`` builds and validates one.
+
+    Structural operations keep the graph's own references denoting what they
+    denoted before the edit.  Item coordinates stored inside the graph are
+    rewritten to follow their items, and durable identifiers resolve again at
+    freeze.  A stored boundary value addressed by coordinate is rewritten when
+    the edit leaves its boundary exactly one image, and refuses the edit when
+    it does not: a bare coordinate has no anchor to follow, while a boundary
+    promoted through ``Graph.promote_position`` does.
+
+    An operation that refuses changes nothing, so a refused edit leaves this
+    editor exactly as it was.  What one operation cannot see on its own -- a
+    second parent, a cycle, a membership subset -- is caught by the single
+    validation at freeze, which is the same validation a frozen graph runs.
+    """
+
+    def __init__(self, graph: Graph) -> None:
+        """Copy one graph's content into carriers this editor may change."""
+        self._namespaces = list(graph.namespaces)
+        self._tiers = [
+            _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
+            for tier in graph.tiers
+        ]
+        self._relation_declarations = list(graph.relation_declarations)
+        self._relations = list(graph.relations)
+        self._attribute_declarations = list(graph.attribute_declarations)
+        self._position_values = list(graph.position_values)
+        self._attributes = list(graph.attributes)
+        self._polyadic_relations = list(graph.polyadic_relations)
+
+    def freeze(self) -> Graph:
+        """Return a fully validated graph without consuming this editor."""
+        return Graph(
+            tuple(self._namespaces),
+            tuple(
+                Tier(tier.declaration, tuple(tier.items), tuple(tier.attributes))
+                for tier in self._tiers
+            ),
+            tuple(self._relation_declarations),
+            tuple(self._relations),
+            tuple(self._attribute_declarations),
+            tuple(self._position_values),
+            tuple(self._attributes),
+            tuple(self._polyadic_relations),
+        )
+
+    def declare(self, declaration: EditDeclaration) -> GraphEditor:
+        """Add one namespace, tier, attribute, or relation declaration.
+
+        Declarations are added, never changed or withdrawn.  Retyping or
+        withdrawing one retroactively decides the meaning of every value and
+        reference that already depends on it, which is a migration of the
+        whole graph rather than an edit to a place in it.
+        """
+        if isinstance(declaration, NamespaceDeclaration):
+            self._namespaces.append(declaration)
+        elif isinstance(declaration, TierDeclaration):
+            self._tiers.append(_MutableTier(declaration, [], []))
+        elif isinstance(declaration, AttributeDeclaration):
+            self._attribute_declarations.append(declaration)
+        elif isinstance(
+            declaration,
+            SimpleRelationDeclaration
+            | BipartiteRelationDeclaration
+            | PolyadicRelationDeclaration,
+        ):
+            self._relation_declarations.append(declaration)
+        else:
+            raise GraphValidationError(
+                "declare expected a namespace, tier, attribute, or relation "
+                f"declaration; got {type(declaration).__name__}"
+            )
+        return self
+
+    def set_attribute(self, target: EditTarget, value: AttributeValue) -> GraphEditor:
+        """Give one carrier this value, replacing any value of the same name.
+
+        The value's declaration decides which carrier the target names, so a
+        caller spells the place and not the domain.  An undeclared attribute
+        is refused here rather than at freeze, because without a declaration
+        there is no domain to read the target against.
+        """
+        domain = self._declared(value.name).domain
+        if domain is AttributeDomain.DOCUMENT:
+            _require_absent_target(target, domain)
+            self._attributes = list(_with_value(self._attributes, value))
+        elif domain is AttributeDomain.TIER:
+            member = self._member(
+                _require_named_target(target, domain), "tier attribute"
+            )
+            member.attributes = list(_with_value(member.attributes, value))
+        elif domain is AttributeDomain.ITEM:
+            coordinate = self._item_target(target, domain)
+            member = self._member(coordinate.tier, "item attribute")
+            item = member.items[coordinate.index]
+            member.items[coordinate.index] = Item(
+                item.durable_id, _with_value(item.attributes, value)
+            )
+        elif domain is AttributeDomain.POSITION:
+            reference = _require_position_target(target, domain)
+            index = self._position_index(self._resolve_position(reference))
+            if index is None:
+                self._position_values.append(Position(reference, (value,)))
+            else:
+                stored = self._position_values[index]
+                self._position_values[index] = Position(
+                    stored.reference, _with_value(stored.attributes, value)
+                )
+        elif domain is AttributeDomain.RELATION_DECLARATION:
+            name = _require_named_target(target, domain)
+            index = self._declaration_index(name)
+            self._relation_declarations[index] = _relation_declaration_with(
+                self._relation_declarations[index],
+                _with_value(self._relation_declarations[index].attributes, value),
+            )
+        else:
+            polyadic, index = self._relation_site(target)
+            self._set_relation_attributes(
+                polyadic, index, _with_value(self._instance(polyadic, index), value)
+            )
+        return self
+
+    def remove_attribute(self, target: EditTarget, name: QualifiedName) -> GraphEditor:
+        """Take the named value off one carrier, refusing when it is absent."""
+        domain = self._declared(name).domain
+        if domain is AttributeDomain.DOCUMENT:
+            _require_absent_target(target, domain)
+            self._attributes = list(
+                _without_value(self._attributes, name, "the document")
+            )
+        elif domain is AttributeDomain.TIER:
+            qualified = _require_named_target(target, domain)
+            member = self._member(qualified, "tier attribute")
+            member.attributes = list(
+                _without_value(member.attributes, name, f"tier {str(qualified)!r}")
+            )
+        elif domain is AttributeDomain.ITEM:
+            coordinate = self._item_target(target, domain)
+            member = self._member(coordinate.tier, "item attribute")
+            item = member.items[coordinate.index]
+            member.items[coordinate.index] = Item(
+                item.durable_id,
+                _without_value(item.attributes, name, f"item {str(coordinate)!r}"),
+            )
+        elif domain is AttributeDomain.POSITION:
+            reference = _require_position_target(target, domain)
+            index = self._position_index(self._resolve_position(reference))
+            if index is None:
+                raise GraphValidationError(
+                    f"boundary {str(reference)!r} carries no attribute {str(name)!r}"
+                )
+            stored = self._position_values[index]
+            kept = _without_value(
+                stored.attributes, name, f"boundary {str(stored.reference)!r}"
+            )
+            if kept:
+                self._position_values[index] = Position(stored.reference, kept)
+            else:
+                del self._position_values[index]
+        elif domain is AttributeDomain.RELATION_DECLARATION:
+            qualified = _require_named_target(target, domain)
+            index = self._declaration_index(qualified)
+            declaration = self._relation_declarations[index]
+            self._relation_declarations[index] = _relation_declaration_with(
+                declaration,
+                _without_value(
+                    declaration.attributes, name, f"relation {str(qualified)!r}"
+                ),
+            )
+        else:
+            polyadic, index = self._relation_site(target)
+            self._set_relation_attributes(
+                polyadic,
+                index,
+                _without_value(
+                    self._instance(polyadic, index),
+                    name,
+                    f"relation instance {index}",
+                ),
+            )
+        return self
+
+    def insert_item(self, tier: QualifiedName, index: int, item: Item) -> GraphEditor:
+        """Insert one item at a tier index, carrying later references with it.
+
+        An index equal to the tier's item count appends.
+        """
+        member = self._member(tier, "item insertion")
+        count = len(member.items)
+        if index < 0 or index > count:
+            raise GraphValidationError(
+                f"item insertion index {index} is outside tier {str(tier)!r}"
+            )
+        self._restructure(
+            member,
+            [*member.items[:index], item, *member.items[index:]],
+            {old: old if old < index else old + 1 for old in range(count)},
+            "item insertion",
+        )
+        return self
+
+    def remove_item(self, reference: ItemRef | DurableItemRef) -> GraphEditor:
+        """Remove one item, refusing while the graph still references it."""
+        coordinate = self._resolve_item(reference)
+        member = self._member(coordinate.tier, "item removal")
+        count = len(member.items)
+        self._restructure(
+            member,
+            [*member.items[: coordinate.index], *member.items[coordinate.index + 1 :]],
+            {
+                old: old if old < coordinate.index else old - 1
+                for old in range(count)
+                if old != coordinate.index
+            },
+            "item removal",
+        )
+        return self
+
+    def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:
+        """Move one item to another index of its own tier, carrying references.
+
+        A move across tiers is not this operation.  Membership decides an
+        item's type, so carrying an item into another tier retypes it, and a
+        caller who means that says so with a removal and an insertion.
+        """
+        coordinate = self._resolve_item(reference)
+        member = self._member(coordinate.tier, "item move")
+        count = len(member.items)
+        if index < 0 or index >= count:
+            raise GraphValidationError(
+                f"item move index {index} is outside tier {str(coordinate.tier)!r}"
+            )
+        items = list(member.items)
+        items.insert(index, items.pop(coordinate.index))
+        order = list(range(count))
+        order.insert(index, order.pop(coordinate.index))
+        self._restructure(
+            member,
+            items,
+            {old: new for new, old in enumerate(order)},
+            "item move",
+        )
+        return self
+
+    def swap_items(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+    ) -> GraphEditor:
+        """Exchange two items of one tier, carrying their references with them."""
+        left = self._resolve_item(first)
+        right = self._resolve_item(second)
+        if left.tier != right.tier:
+            raise GraphValidationError(
+                f"item swap names {str(left)!r} and {str(right)!r} in different "
+                "tiers; an item's tier decides its type"
+            )
+        member = self._member(left.tier, "item swap")
+        items = list(member.items)
+        items[left.index], items[right.index] = items[right.index], items[left.index]
+        mapping = {old: old for old in range(len(items))}
+        mapping[left.index] = right.index
+        mapping[right.index] = left.index
+        self._restructure(member, items, mapping, "item swap")
+        return self
+
+    def add_relation(
+        self, instance: RelationInstance | PolyadicRelationInstance
+    ) -> GraphEditor:
+        """Add one relation instance to the collection its arity belongs to."""
+        if isinstance(instance, RelationInstance):
+            self._relations.append(instance)
+        else:
+            self._polyadic_relations.append(instance)
+        return self
+
+    def remove_relation(self, target: int | str) -> GraphEditor:
+        """Remove one relation instance by bipartite index or by durable id."""
+        polyadic, index = self._relation_site(target)
+        if polyadic:
+            del self._polyadic_relations[index]
+        else:
+            del self._relations[index]
+        return self
+
+    def _declared(self, name: QualifiedName) -> AttributeDeclaration:
+        for declaration in self._attribute_declarations:
+            if declaration.name == name:
+                return declaration
+        raise GraphValidationError(f"attribute {str(name)!r} is undeclared")
+
+    def _member(self, name: QualifiedName, subject: str) -> _MutableTier:
+        for member in self._tiers:
+            if member.declaration.name == name:
+                return member
+        raise GraphValidationError(f"{subject} names undeclared tier {str(name)!r}")
+
+    def _declaration_index(self, name: QualifiedName) -> int:
+        for index, declaration in enumerate(self._relation_declarations):
+            if declaration.name == name:
+                return index
+        raise GraphValidationError(f"relation {str(name)!r} is undeclared")
+
+    def _instance(self, polyadic: bool, index: int) -> tuple[AttributeValue, ...]:
+        if polyadic:
+            return self._polyadic_relations[index].attributes
+        return self._relations[index].attributes
+
+    def _set_relation_attributes(
+        self, polyadic: bool, index: int, attributes: tuple[AttributeValue, ...]
+    ) -> None:
+        if polyadic:
+            relation = self._polyadic_relations[index]
+            self._polyadic_relations[index] = PolyadicRelationInstance(
+                relation.declaration,
+                relation.sources,
+                relation.targets,
+                relation.durable_id,
+                attributes,
+            )
+        else:
+            instance = self._relations[index]
+            self._relations[index] = RelationInstance(
+                instance.declaration,
+                instance.left,
+                instance.right,
+                instance.durable_id,
+                attributes,
+            )
+
+    def _relation_site(self, target: EditTarget) -> tuple[bool, int]:
+        if isinstance(target, int) and not isinstance(target, bool):
+            if target < 0 or target >= len(self._relations):
+                raise GraphValidationError(
+                    f"relation instance index {target} is outside the graph's "
+                    f"{len(self._relations)} bipartite relation instances"
+                )
+            return False, target
+        if not isinstance(target, str):
+            raise GraphValidationError(
+                "relation instance target must be a bipartite instance index "
+                "or a durable id"
+            )
+        for index, relation in enumerate(self._relations):
+            if relation.durable_id == target:
+                return False, index
+        for index, polyadic_relation in enumerate(self._polyadic_relations):
+            if polyadic_relation.durable_id == target:
+                return True, index
+        raise GraphValidationError(
+            f"no relation instance carries durable id {target!r}"
+        )
+
+    def _tier_views(self) -> dict[QualifiedName, Tier]:
+        # The validators inspect only declaration identity and item indexing.
+        return cast(
+            dict[QualifiedName, Tier],
+            {member.declaration.name: member for member in self._tiers},
+        )
+
+    def _items_by_id(self) -> dict[str, ItemRef]:
+        return {
+            item.durable_id: ItemRef(member.declaration.name, index)
+            for member in self._tiers
+            for index, item in enumerate(member.items)
+            if item.durable_id is not None
+        }
+
+    def _resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
+        if isinstance(reference, ItemRef):
+            _validate_reference(
+                reference, "item reference", self._tier_views(), GraphValidationError
+            )
+            return reference
+        coordinate = self._items_by_id().get(reference.durable_id)
+        if coordinate is None:
+            raise GraphValidationError(
+                f"unknown durable item id {reference.durable_id!r}"
+            )
+        return coordinate
+
+    def _resolve_position(
+        self, reference: PositionRef | DurablePositionRef
+    ) -> PositionRef:
+        return _resolve_position_reference(
+            reference, self._tier_views(), self._items_by_id(), GraphValidationError
+        )
+
+    def _position_index(self, coordinate: PositionRef) -> int | None:
+        for index, position in enumerate(self._position_values):
+            if self._resolve_position(position.reference) == coordinate:
+                return index
+        return None
+
+    def _item_target(self, target: EditTarget, domain: AttributeDomain) -> ItemRef:
+        if not isinstance(target, ItemRef | DurableItemRef):
+            raise GraphValidationError(
+                f"{domain.value} attribute target must be an item reference"
+            )
+        return self._resolve_item(target)
+
+    def _restructure(
+        self,
+        member: _MutableTier,
+        items: list[Item],
+        mapping: dict[int, int],
+        subject: str,
+    ) -> None:
+        # Everything a refusal can see is computed before anything is written,
+        # so a refused operation leaves this editor exactly as it was.
+        name = member.declaration.name
+        images = _boundary_images(len(member.items), len(items), mapping)
+        positions = [
+            self._remapped_position(position, name, images, subject)
+            for position in self._position_values
+        ]
+        relations = [
+            self._remapped_relation(relation, name, mapping, subject)
+            for relation in self._relations
+        ]
+        polyadic = [
+            self._remapped_polyadic(relation, name, mapping, subject)
+            for relation in self._polyadic_relations
+        ]
+        member.items = items
+        self._position_values = positions
+        self._relations = relations
+        self._polyadic_relations = polyadic
+
+    @staticmethod
+    def _remapped_position(
+        position: Position,
+        name: QualifiedName,
+        images: dict[int, int],
+        subject: str,
+    ) -> Position:
+        reference = position.reference
+        if not isinstance(reference, PositionRef) or reference.tier != name:
+            return position
+        image = images.get(reference.index)
+        if image is None:
+            raise GraphValidationError(
+                f"{subject} leaves boundary value {str(reference)!r} without one "
+                "boundary to hold it; promote the boundary so it follows its anchor"
+            )
+        return Position(PositionRef(name, image), position.attributes)
+
+    @staticmethod
+    def _remapped_endpoint(
+        endpoint: RelationEndpointRef,
+        name: QualifiedName,
+        mapping: dict[int, int],
+        subject: str,
+    ) -> RelationEndpointRef:
+        if not isinstance(endpoint, ItemRef) or endpoint.tier != name:
+            return endpoint
+        image = mapping.get(endpoint.index)
+        if image is None:
+            raise GraphValidationError(
+                f"{subject} would drop {str(endpoint)!r}, which the graph still "
+                "references"
+            )
+        return ItemRef(name, image)
+
+    def _remapped_relation(
+        self,
+        relation: RelationInstance,
+        name: QualifiedName,
+        mapping: dict[int, int],
+        subject: str,
+    ) -> RelationInstance:
+        left = self._remapped_endpoint(relation.left, name, mapping, subject)
+        right = self._remapped_endpoint(relation.right, name, mapping, subject)
+        if left is relation.left and right is relation.right:
+            return relation
+        return RelationInstance(
+            relation.declaration, left, right, relation.durable_id, relation.attributes
+        )
+
+    def _remapped_polyadic(
+        self,
+        relation: PolyadicRelationInstance,
+        name: QualifiedName,
+        mapping: dict[int, int],
+        subject: str,
+    ) -> PolyadicRelationInstance:
+        sources = tuple(
+            self._remapped_endpoint(endpoint, name, mapping, subject)
+            for endpoint in relation.sources
+        )
+        targets = tuple(
+            self._remapped_endpoint(endpoint, name, mapping, subject)
+            for endpoint in relation.targets
+        )
+        if sources == relation.sources and targets == relation.targets:
+            return relation
+        return PolyadicRelationInstance(
+            relation.declaration,
+            sources,
+            targets,
+            relation.durable_id,
+            relation.attributes,
+        )
+
+
+def _boundary_images(
+    old_count: int, new_count: int, mapping: dict[int, int]
+) -> dict[int, int]:
+    """Map each old boundary to the one new boundary that still means it.
+
+    A boundary is the place between the items on either side of it, so it
+    survives an edit exactly when both of those items survive and are still
+    adjacent afterward.  A boundary with no such image, or with more than one,
+    is left out and refuses any stored value that sits there.
+    """
+    images: dict[int, int] = {}
+    for boundary in range(old_count + 1):
+        left = None if boundary == 0 else mapping.get(boundary - 1)
+        right = None if boundary == old_count else mapping.get(boundary)
+        if boundary > 0 and left is None:
+            continue
+        if boundary < old_count and right is None:
+            continue
+        if left is None and right is None:
+            continue
+        if left is None:
+            if right == 0:
+                images[boundary] = 0
+        elif right is None:
+            if left == new_count - 1:
+                images[boundary] = new_count
+        elif right == left + 1:
+            images[boundary] = right
+    return images
+
+
+def _with_value(
+    values: Iterable[AttributeValue], value: AttributeValue
+) -> tuple[AttributeValue, ...]:
+    return (
+        *(existing for existing in values if existing.name != value.name),
+        value,
+    )
+
+
+def _without_value(
+    values: Iterable[AttributeValue], name: QualifiedName, subject: str
+) -> tuple[AttributeValue, ...]:
+    remaining = tuple(values)
+    kept = tuple(existing for existing in remaining if existing.name != name)
+    if len(kept) == len(remaining):
+        raise GraphValidationError(
+            f"{subject} carries no attribute {str(name)!r} to remove"
+        )
+    return kept
+
+
+def _relation_declaration_with(
+    declaration: RelationDeclaration, attributes: tuple[AttributeValue, ...]
+) -> RelationDeclaration:
+    if isinstance(declaration, SimpleRelationDeclaration):
+        return SimpleRelationDeclaration(
+            declaration.name, declaration.tier, declaration.item_type, attributes
+        )
+    if isinstance(declaration, BipartiteRelationDeclaration):
+        return BipartiteRelationDeclaration(
+            declaration.name,
+            declaration.left_type,
+            declaration.right_type,
+            declaration.left_endpoint,
+            declaration.right_endpoint,
+            declaration.single_parent,
+            declaration.acyclic,
+            attributes,
+        )
+    return PolyadicRelationDeclaration(
+        declaration.name,
+        declaration.sources,
+        declaration.targets,
+        declaration.unique_sources,
+        declaration.distinct_targets,
+        declaration.single_parent,
+        declaration.acyclic,
+        declaration.targets_subset_of,
+        attributes,
+    )
+
+
+def _require_absent_target(target: EditTarget, domain: AttributeDomain) -> None:
+    if target is not None:
+        raise GraphValidationError(f"{domain.value} attribute target must be None")
+
+
+def _require_named_target(target: EditTarget, domain: AttributeDomain) -> QualifiedName:
+    if not isinstance(target, QualifiedName):
+        raise GraphValidationError(
+            f"{domain.value} attribute target must be a qualified name"
+        )
+    return target
+
+
+def _require_position_target(
+    target: EditTarget, domain: AttributeDomain
+) -> PositionRef | DurablePositionRef:
+    if not isinstance(target, PositionRef | DurablePositionRef):
+        raise GraphValidationError(
+            f"{domain.value} attribute target must be a position reference"
+        )
+    return target
 
 
 @dataclass(slots=True)
