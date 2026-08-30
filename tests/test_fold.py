@@ -18,8 +18,11 @@ from tiergraph import (
     Graph,
     Item,
     ItemRef,
+    PolyadicRelationDeclaration,
     QualifiedName,
+    RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -580,6 +583,42 @@ def test_declaration_refusals_name_the_offender(
         change["tie_policy"] = TiePolicy.ALL
     with pytest.raises(ValueError, match=message):
         replace(base, **change)  # type: ignore[arg-type]
+
+
+def test_a_declared_non_bipartite_dependency_is_named_for_what_it_is() -> None:
+    """A fold reports the declaration it found, not that the name is undeclared.
+
+    A fold reads one parent and one child per incidence, so a polyadic relation
+    is outside what it can express.  Reporting a declared name as undeclared
+    sends the reader looking for a missing declaration that is present.
+    """
+    base = declaration()
+    aligns = FIXTURE.name("aligns")
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,),
+        tiers=(FIXTURE.name("placement"),),
+        maximum=None,
+    )
+    extended = replace(
+        base.graph,
+        relation_declarations=(
+            *base.graph.relation_declarations,
+            PolyadicRelationDeclaration(aligns, side, side),
+        ),
+    )
+    with pytest.raises(ValueError, match="is declared polyadic"):
+        replace(
+            base,
+            graph=extended,
+            transitions=(FoldTransition(aligns, ChildCombination.OR),),
+        )
+    with pytest.raises(ValueError, match="is declared simple"):
+        replace(
+            base,
+            transitions=(
+                FoldTransition(FIXTURE.name("placements"), ChildCombination.OR),
+            ),
+        )
 
 
 def test_valuation_declaration_refusals() -> None:

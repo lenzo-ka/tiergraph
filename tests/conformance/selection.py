@@ -28,11 +28,14 @@ from tiergraph import (
     Node,
     NodeKind,
     NodeSet,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     Position,
     PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -243,6 +246,18 @@ class SelectionLawSuite:
             ItemRef(tier_name, 0),
             attributes=(value(AttributeDomain.RELATION_INSTANCE),),
         )
+        side = RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), tiers=(tier_name,), maximum=None
+        )
+        correspondence = PolyadicRelationDeclaration(
+            self.name("valued-correspondence"), side, side
+        )
+        polyadic = PolyadicRelationInstance(
+            correspondence.name,
+            (ItemRef(tier_name, 0),),
+            (ItemRef(tier_name, 0),),
+            attributes=(value(AttributeDomain.RELATION_INSTANCE),),
+        )
         position = Position(
             PositionRef(tier_name, 0), (value(AttributeDomain.POSITION),)
         )
@@ -259,11 +274,12 @@ class SelectionLawSuite:
         graph = Graph(
             (NamespaceDeclaration("s", self.namespace),),
             (tier,),
-            (members, link),
+            (members, link, correspondence),
             (relation,),
             declarations,
             (position,),
             (value(AttributeDomain.DOCUMENT),),
+            (polyadic,),
         )
         expected = {
             AttributeDomain.DOCUMENT: Node(NodeKind.DOCUMENT, None),
@@ -275,12 +291,23 @@ class SelectionLawSuite:
             AttributeDomain.RELATION_DECLARATION: Node(
                 NodeKind.RELATION_DECLARATION, members.name
             ),
-            AttributeDomain.RELATION_INSTANCE: Node(NodeKind.RELATION_INSTANCE, 0),
         }
         for domain, node in expected.items():
             result = evaluate_selection(graph, AttributeSelector(names[domain], domain))
             assert result.nodes == (node,)
             json.dumps(result.to_data(), allow_nan=False)
+        # The kernel admits relation-instance values on both instance
+        # collections, so the axis must report both carriers.  Written as data
+        # so the law states the observable rather than a symbol.
+        instance_domain = AttributeDomain.RELATION_INSTANCE
+        carriers = evaluate_selection(
+            graph, AttributeSelector(names[instance_domain], instance_domain)
+        )
+        assert carriers.to_data() == [
+            {"kind": "relation_instance", "reference": 0},
+            {"kind": "polyadic_relation_instance", "reference": 0},
+        ]
+        json.dumps(carriers.to_data(), allow_nan=False)
         assert not evaluate_selection(
             graph,
             AttributeSelector(self.name("unvalued-document"), AttributeDomain.DOCUMENT),

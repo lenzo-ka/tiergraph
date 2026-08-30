@@ -12,6 +12,16 @@ sorts its nodes into the graph's canonical order and supports union (`|`),
 intersection (`&`), and difference (`-`) with another set from the same graph.
 Because the order is canonical, set algebra between selections is stable.
 
+Relation instances live in two collections -- bipartite pairs and polyadic
+instances -- that index separately, so index `0` names a different fact in each.
+They are two node kinds accordingly, `relation_instance` and
+`polyadic_relation_instance`, each over its own index. An attribute selection on
+the `relation_instance` domain reads both collections, because the kernel admits
+that domain's values on either, and it reports each carrier under its own kind.
+A polyadic node sorts by its declaration, then by its two side arities, then by
+its endpoints read in stored order, so two instances that differ only in the
+order of one side stay distinct and sort apart.
+
 The example is a small acyclic `links` relation over four hosts: `a -> b`,
 `b -> c`, and `a -> d`.
 
@@ -134,6 +144,16 @@ deduplicated into canonical graph order. When stored order is the question,
 for that particular relation instance instead. Either side may be selected as
 the traversal source, and item and boundary endpoints are resolved without
 assigning them domain roles.
+
+Those operations all key on an origin endpoint. A correspondence read as a
+whole -- one ordered side against another, with no positional pairing between
+them -- has no origin to key on, so `instances()` enumerates it: each
+`PolyadicIncidence` carries the instance's graph-local index and both sides as
+`NodeSequence` values in stored order. The sides are named for the declaration,
+not for the traversal direction, and their arities need not match. That is what
+makes the shape usable for a correspondence that reorders one side: the order is
+graph content, and reading either side as a bag of endpoints, or pairing the two
+sides off position by position, would lose it.
 
 `OrderedContainment` below is the item-only, source-unique, acyclic profile over
 this shared engine. Its existing result types and ordering remain unchanged.

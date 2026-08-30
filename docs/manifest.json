@@ -14,7 +14,7 @@
     "semirings": ["BOOLEAN", "COUNTING", "DECIMAL_TROPICAL", "PATH", "StarRefusal", "StarSelector", "ZeroClosedStar"],
     "serialization": ["dump_bytes", "dump_compact", "dumps", "load_program", "loads", "program_dumps", "program_loads", "to_data"],
     "inspection": ["graph_summary"],
-    "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
+    "traversal": ["NodeSequence", "OrderedContainment", "OrderedPolyadicTraversal", "PolyadicIncidence", "PolyadicSide", "Walk", "WalkDirection", "WalkResult"]
   },
   "companion_exports": {"tiergraph_dot": ["DotPresentation", "dumps", "dumps_spans"]},
   "live_claims": [

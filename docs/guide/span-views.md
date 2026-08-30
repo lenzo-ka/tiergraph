@@ -20,6 +20,13 @@ include those candidates only when requested and rank them by descending
 numeric score, then ascending path. JSON, JSON Lines, text, HTML, and the
 companion `tiergraph_dot.dumps_spans` renderer all consume the same projection.
 
+Both roles must name bipartite declarations, and naming anything else is
+refused when the profile is validated. A span is an interval over the base
+tier, so each fact this view reads is one left endpoint against one span item;
+a polyadic instance carries two ordered sides with no such pairing. Refusing is
+the point: reading only the bipartite collection would report a partial
+segmentation as a complete one.
+
 A span is a live rule over coverage membership, not an origin-plus-extent
 snapshot. The kernel graph stores coverage and no extent at all; the view
 derives `start` and `end` for projection and rendering. (Origin plus extent

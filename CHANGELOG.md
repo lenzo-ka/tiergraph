@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StarRefusal`, `StarSelector`, and `ZeroClosedStar` public names; retired the
   ineffective per-relation acyclic check, and added `collapse_units` to grammar
   recognition (#73).
+- Made polyadic relation instances reachable above the kernel. The
+  `relation_instance` attribute axis now reads both instance collections and
+  reports polyadic carriers under a new `polyadic_relation_instance` node kind,
+  ordered by their declaration, side arities, and endpoints in stored order;
+  `OrderedPolyadicTraversal.instances()` enumerates each instance as a new
+  public `PolyadicIncidence`, carrying both sides as ordered `NodeSequence`
+  values. Views that are genuinely binary now refuse a non-bipartite
+  declaration by name instead of skipping it: a span-view profile refuses a
+  non-bipartite coverage or alternative role, and a fold names a declared
+  non-bipartite dependency for the kind it is rather than reporting it as
+  undeclared.
 - Added `tiergraph fold`, which evaluates a declared dependency relation with a
   named semiring and emits the public `FoldResult` report, and `tiergraph
   semirings`, which lists every algebra a fold can name with its carrier

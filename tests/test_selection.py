@@ -196,6 +196,7 @@ def test_every_node_kind_has_a_leaf_selector() -> None:
         NodeKind.POSITION: BoundarySelector,
         NodeKind.RELATION_DECLARATION: AttributeSelector,
         NodeKind.RELATION_INSTANCE: AttributeSelector,
+        NodeKind.POLYADIC_RELATION_INSTANCE: AttributeSelector,
     }
     assert all(kind in leaf_by_kind for kind in NodeKind)
 

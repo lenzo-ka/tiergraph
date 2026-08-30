@@ -73,6 +73,30 @@ class PolyadicSide(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class PolyadicIncidence:
+    """Hold one instance's graph-local index and both sides in stored order.
+
+    Sides are named for the declaration, not for a traversal direction, so
+    ``sources`` and ``targets`` mean the same thing whichever way a caller
+    walks.  Each side is a :class:`NodeSequence` because its order is graph
+    content: a correspondence that reorders its two sides is a different fact
+    from one that does not, and a pair-per-endpoint reading would lose that.
+    """
+
+    index: int
+    sources: NodeSequence
+    targets: NodeSequence
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the index and both ordered sides as strict-JSON data."""
+        return {
+            "index": self.index,
+            "sources": self.sources.to_data(),
+            "targets": self.targets.to_data(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class OrderedPolyadicTraversal:
     """Traverse between either pair of sides of one ordered polyadic relation.
 
@@ -350,6 +374,23 @@ class OrderedPolyadicTraversal:
             if target in opposite:
                 result.extend(selected)
         return NodeSet(self.graph, tuple(result))
+
+    def instances(self) -> tuple[PolyadicIncidence, ...]:
+        """Return every validated instance of this relation in stored order.
+
+        Origin-keyed steps answer "what does this endpoint correspond to"; a
+        correspondence read as a whole, one ordered side against another with
+        no positional pairing between them, has no origin to key on, so it is
+        reachable only by enumeration.  Both sides keep their stored order.
+        """
+        return tuple(
+            PolyadicIncidence(
+                index,
+                NodeSequence(self.graph, sources),
+                NodeSequence(self.graph, targets),
+            )
+            for index, sources, targets in self._instances(check_cycle=False)
+        )
 
     def stored_opposite(self, instance_index: int) -> NodeSequence:
         """Return one instance's stored target-side sequence without inversion."""
