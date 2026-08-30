@@ -1,0 +1,9 @@
+# These are the names the publishability gate refuses anywhere in the shipped
+# surface. This file is deliberately excluded from the sdist and the wheel so
+# the gate has the names without the distribution publishing them. A name that
+# is also ordinary technical vocabulary cannot go here without false positives.
+
+ipakit
+icukit
+irn
+hsg

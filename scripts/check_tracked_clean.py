@@ -3,11 +3,17 @@
 The external-reference check is inverted: URLs, imports, dependency names,
 email addresses, and bare domains must be explicitly allowed. It therefore
 fails closed when a cited project uses an unanticipated spelling or is renamed.
-It cannot see a project named only in bare prose, with no reference-shaped
-syntax. A shipped-vocabulary manifest would cover that gap, but a lowercase
-alphabetic-word measurement found 3,167 tokens and +103/-2 churn over seven commits;
-that review noise would train maintainers to append words without scrutiny. Green
-here is consequently not proof that bare prose satisfies the ruling.
+Bare prose has no reference syntax, so a denylist read from denied-names.txt
+covers it instead. Packaging excludes that file from the sdist and the wheel.
+A rule that nothing shipped may name something cannot be enforced by a shipped
+artifact that names it, so the names live in the repository, not the distribution.
+
+A denylist pins the spellings listed, so a sibling nobody listed is still
+invisible in bare prose. A name that is also ordinary vocabulary cannot be listed
+without false positives. Inverting this check would require reviewing a prose
+vocabulary of 1,683 tokens churning by 11 per commit. Even its 107-token
+non-English slice churns by one per commit and needs a shipped inflected word list
+of about 2.5 MB against a 573 KB distribution.
 
 Both checks run over the git index rather than the working tree: untracked
 scratch is exactly where local material is allowed to live.
@@ -140,6 +146,7 @@ PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 # necessarily contains both and is exempt from both of its own checks.
 SELF = Path(__file__).name
 ROOT = Path(__file__).resolve().parent.parent
+DENIED_NAMES_PATH: Path = ROOT / "denied-names.txt"
 
 
 def tracked_files() -> list[Path]:
@@ -160,6 +167,45 @@ def leaks(path: Path) -> list[str]:
         f"{path}: {reason} ({match.group(0)!r})"
         for pattern, reason in FORBIDDEN
         for match in re.finditer(pattern, text)
+    ]
+
+
+def denied_names(path: Path) -> tuple[str, ...]:
+    """Return the sorted unique lowercase names declared by one denylist."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise ValueError(
+            f"denylist {path} is missing; this check runs from a repository "
+            "checkout, not from an installed distribution"
+        ) from error
+    names = {
+        line.strip().lower()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if not names:
+        raise ValueError(f"denylist {path} contains no names")
+    return tuple(sorted(names))
+
+
+def name_leaks(path: Path, names: tuple[str, ...]) -> list[str]:
+    """Return one line-numbered message per denied name in one shipped file."""
+    text = path.read_text(encoding="utf-8")
+    matches = [
+        match
+        for name in names
+        for match in re.finditer(
+            rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])",
+            text,
+            re.IGNORECASE,
+        )
+    ]
+    matches.sort(key=lambda match: match.start())
+    return [
+        f"{path}:{text.count(chr(10), 0, match.start()) + 1}: "
+        f"a sibling repository named in shipped text ({match.group(0)!r})"
+        for match in matches
     ]
 
 
@@ -261,6 +307,13 @@ def main() -> int:
         for path in paths
         if path.name != SELF and path.is_file() and is_shipped_surface(path)
         for message in reference_leaks(path)
+    )
+    names = denied_names(DENIED_NAMES_PATH)
+    found.extend(
+        message
+        for path in paths
+        if path.name != SELF and path.is_file() and is_shipped_surface(path)
+        for message in name_leaks(path, names)
     )
     if not found:
         return 0

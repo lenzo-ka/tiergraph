@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import subprocess
 from importlib import resources
+from pathlib import Path
 
 import pytest
 
@@ -33,3 +36,28 @@ def test_module_shim_imports() -> None:
     import importlib
 
     assert importlib.import_module("tiergraph.__main__") is not None
+
+
+def test_denylist_reaches_neither_distribution(tmp_path: Path) -> None:
+    """Neither real distribution archive contains the repository-only denylist."""
+    pytest.importorskip("hatchling")
+
+    root = Path(__file__).resolve().parent.parent
+    sdist_module = importlib.import_module("hatchling.builders.sdist")
+    wheel_module = importlib.import_module("hatchling.builders.wheel")
+    sdist = Path(
+        next(sdist_module.SdistBuilder(str(root)).build(directory=str(tmp_path)))
+    )
+    wheel = Path(
+        next(wheel_module.WheelBuilder(str(root)).build(directory=str(tmp_path)))
+    )
+    sdist_members = subprocess.run(
+        ["tar", "-tf", sdist], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    wheel_members = subprocess.run(
+        ["unzip", "-Z1", wheel], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    assert not any(Path(name).name == "denied-names.txt" for name in sdist_members)
+    assert "denied-names.txt" not in wheel_members
+    assert any(name.startswith("tiergraph/") for name in wheel_members)
+    assert any(name.startswith("tiergraph_dot/") for name in wheel_members)

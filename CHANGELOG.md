@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI reports now apply the writer's refusal before encoding. Invalid report
   data exits with status 1 instead of leaking `UnicodeEncodeError` at status 3
   (#78).
+- The publishability gate now also refuses sibling-repository names written as
+  bare prose, reading them from a file the distribution excludes.
 
 ### Removed
 
