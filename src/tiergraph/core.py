@@ -86,6 +86,50 @@ class QualifiedName:
         return f"{{{self.namespace}}}{self.local_name}"
 
 
+class GraphCarrier(StrEnum):
+    """Name the graph's ordered carriers that are not a tier's items."""
+
+    RELATIONS = "relations"
+    POLYADIC_RELATIONS = "polyadic_relations"
+
+
+type SealedCarrier = QualifiedName | GraphCarrier
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class Seal:
+    """State how much of one ordered carrier may not be disturbed."""
+
+    carrier: SealedCarrier
+    sealed: int
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the tagged carrier and sealed prefix for wire encoding."""
+        carrier: dict[str, JsonValue]
+        if isinstance(self.carrier, QualifiedName):
+            carrier = {"kind": "tier", "tier": self.carrier.to_data()}
+        else:
+            carrier = {"kind": "graph", "name": self.carrier.value}
+        return {"carrier": carrier, "sealed": self.sealed}
+
+
+@dataclass(frozen=True, slots=True)
+class SealBreach:
+    """Name one sealed member that the result did not leave where it stood."""
+
+    carrier: SealedCarrier
+    index: int
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class SealCertificate:
+    """Report what a seal check compared, and over how much."""
+
+    carriers: int
+    sealed_members: int
+
+
 @dataclass(frozen=True, slots=True)
 class NamespaceDeclaration:
     """Bind a document-local prefix to one namespace URI."""
@@ -598,6 +642,7 @@ class Graph:
     boundary_values: tuple[Boundary, ...] = ()
     attributes: tuple[AttributeValue, ...] = ()
     polyadic_relations: tuple[PolyadicRelationInstance, ...] = ()
+    seals: tuple[Seal, ...] = ()
     _tiers_by_name: dict[QualifiedName, Tier] = field(
         init=False, repr=False, compare=False
     )
@@ -627,6 +672,7 @@ class Graph:
             "attribute_declarations",
             tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
         )
+        object.__setattr__(self, "seals", tuple(sorted(self.seals, key=_seal_key)))
         namespaces = _unique_by_name(
             ((binding.prefix, binding) for binding in self.namespaces),
             "namespace prefix",
@@ -640,6 +686,21 @@ class Graph:
         tiers_by_name = _unique_by_name(
             ((tier.declaration.name, tier) for tier in self.tiers), "tier"
         )
+        seals = _unique_by_name(
+            ((seal.carrier, seal) for seal in self.seals), "seal carrier"
+        )
+        for carrier, seal in seals.items():
+            count = _carrier_count(self, carrier, tiers_by_name)
+            if seal.sealed < 0:
+                raise GraphValidationError(
+                    f"seal on {str(carrier)!r} must not be negative"
+                )
+            if seal.sealed > count:
+                raise GraphValidationError(
+                    f"seal on {str(carrier)!r} at {seal.sealed} names more members "
+                    f"than the {_carrier_kind(carrier)} holds, which is {count}; a "
+                    "seal covers members that exist"
+                )
         declarations = _unique_by_name(
             (
                 (declaration.name, declaration)
@@ -990,6 +1051,7 @@ class Graph:
             self.boundary_values if boundary_values is None else boundary_values,
             self.attributes,
             self.polyadic_relations,
+            self.seals,
         )
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -1012,7 +1074,44 @@ class Graph:
                 boundary.to_data() for boundary in self.boundary_values
             ],
             "attributes": _attributes_data(self.attributes),
+            "seals": [seal.to_data() for seal in self.seals],
         }
+
+    def seal(self, carrier: SealedCarrier, sealed: int) -> Graph:
+        """Return a graph sealing this much of one carrier, refusing a retreat."""
+        current = next((item for item in self.seals if item.carrier == carrier), None)
+        if current is not None and sealed < current.sealed:
+            raise GraphValidationError(
+                f"seal on {str(carrier)!r} stands at {current.sealed} and cannot be "
+                f"set to {sealed}; sealing advances. Use unseal to say that what you "
+                "were given is what you mean to change."
+            )
+        return self._with_seal(carrier, sealed)
+
+    def unseal(self, carrier: SealedCarrier, sealed: int) -> Graph:
+        """Return a graph whose seal on one carrier stands lower than it did."""
+        return self._with_seal(carrier, sealed)
+
+    def is_sealed(self, coordinate: ItemRef | BoundaryRef) -> bool:
+        """Report whether this coordinate stands inside its carrier's seal."""
+        return any(
+            seal.carrier == coordinate.tier and coordinate.index < seal.sealed
+            for seal in self.seals
+        )
+
+    def _with_seal(self, carrier: SealedCarrier, sealed: int) -> Graph:
+        kept = tuple(item for item in self.seals if item.carrier != carrier)
+        return Graph(
+            self.namespaces,
+            self.tiers,
+            self.relation_declarations,
+            self.relations,
+            self.attribute_declarations,
+            self.boundary_values,
+            self.attributes,
+            self.polyadic_relations,
+            (*kept, Seal(carrier, sealed)),
+        )
 
     def edit(self) -> GraphEditor:
         """Return a mutable editor holding a copy of this graph's content.
@@ -1067,6 +1166,79 @@ class Graph:
         return self.edit().remove_relation(target).freeze()
 
 
+@dataclass(frozen=True, slots=True)
+class SealDeclaration:
+    """Bind the seals one graph carries to the graph that claims to honor them."""
+
+    name: str
+    source: Graph
+    result: Graph
+
+    def __post_init__(self) -> None:
+        """Require a rewrite name because refusals report it."""
+        if not self.name:
+            raise ValueError("rewrite name '' must not be empty")
+
+    def breaches(self) -> tuple[SealBreach, ...]:
+        """Return every sealed member the result disturbed, in carrier order."""
+        breaches: list[SealBreach] = []
+        result_seals = {seal.carrier: seal.sealed for seal in self.result.seals}
+        for seal in self.source.seals:
+            if result_seals.get(seal.carrier, -1) < seal.sealed:
+                breaches.append(
+                    SealBreach(seal.carrier, 0, "the result carries no matching seal")
+                )
+                continue
+            before = _carrier_members(self.source, seal.carrier)
+            after = _carrier_members(self.result, seal.carrier)
+            for index in range(seal.sealed):
+                if index >= len(after) or _member_identity(
+                    before[index]
+                ) != _member_identity(after[index]):
+                    breaches.append(
+                        SealBreach(
+                            seal.carrier,
+                            index,
+                            _seal_breach_detail(
+                                seal.carrier, index, before[index], after[index]
+                            ),
+                        )
+                    )
+        return tuple(breaches)
+
+    def check_seals(self) -> SealCertificate:
+        """Demand that the result honor the source's seals, or refuse."""
+        breaches = self.breaches()
+        if breaches:
+            breach = breaches[0]
+            source_seal = next(
+                seal for seal in self.source.seals if seal.carrier == breach.carrier
+            )
+            result_seal = next(
+                (seal for seal in self.result.seals if seal.carrier == breach.carrier),
+                None,
+            )
+            if result_seal is None or result_seal.sealed < source_seal.sealed:
+                detail = (
+                    "the result carries no seal on that carrier. A seal is not "
+                    "withdrawn by omission; a graph that means to unseal says so."
+                )
+            else:
+                detail = (
+                    f"{breach.detail}. A seal is honored when every member up to it "
+                    "stands where it stood carrying what it carried. The breach "
+                    "reported is the first in the carrier's own order rather than "
+                    "the only one or the worst one."
+                )
+            raise GraphValidationError(
+                f"rewrite {self.name!r} does not honor the source's seal on "
+                f"{str(breach.carrier)!r} at {source_seal.sealed}: {detail}"
+            )
+        return SealCertificate(
+            len(self.source.seals), sum(seal.sealed for seal in self.source.seals)
+        )
+
+
 type EditTarget = (
     None
     | QualifiedName
@@ -1119,6 +1291,7 @@ class GraphEditor:
         self._boundary_values = list(graph.boundary_values)
         self._attributes = list(graph.attributes)
         self._polyadic_relations = list(graph.polyadic_relations)
+        self._seals = list(graph.seals)
 
     def freeze(self) -> Graph:
         """Return a fully validated graph without consuming this editor."""
@@ -1134,6 +1307,7 @@ class GraphEditor:
             tuple(self._boundary_values),
             tuple(self._attributes),
             tuple(self._polyadic_relations),
+            tuple(self._seals),
         )
 
     def declare(self, declaration: EditDeclaration) -> GraphEditor:
@@ -1369,6 +1543,12 @@ class GraphEditor:
     def remove_relation(self, target: int | str) -> GraphEditor:
         """Remove one relation instance by bipartite index or by durable id."""
         polyadic, index = self._relation_site(target)
+        carrier = (
+            GraphCarrier.POLYADIC_RELATIONS if polyadic else GraphCarrier.RELATIONS
+        )
+        seal = self._seal_for(carrier)
+        if seal is not None and index < seal.sealed:
+            self._refuse_seal_move("relation removal", carrier, index, seal.sealed)
         if polyadic:
             del self._polyadic_relations[index]
         else:
@@ -1501,6 +1681,14 @@ class GraphEditor:
         # Everything a refusal can see is computed before anything is written,
         # so a refused operation leaves this editor exactly as it was.
         name = member.declaration.name
+        seal = self._seal_for(name)
+        if seal is not None:
+            moved = next(
+                (old for old in range(seal.sealed) if mapping.get(old) != old),
+                None,
+            )
+            if moved is not None:
+                self._refuse_seal_move(subject, name, moved, seal.sealed)
         images = _boundary_images(len(member.items), len(items), mapping)
         boundaries = [
             self._remapped_boundary(boundary, name, images, subject)
@@ -1518,6 +1706,26 @@ class GraphEditor:
         self._boundary_values = boundaries
         self._relations = relations
         self._polyadic_relations = polyadic
+
+    def _seal_for(self, carrier: SealedCarrier) -> Seal | None:
+        return next((seal for seal in self._seals if seal.carrier == carrier), None)
+
+    @staticmethod
+    def _refuse_seal_move(
+        subject: str, carrier: SealedCarrier, index: int, sealed: int
+    ) -> None:
+        operation = (
+            f"{subject} at {str(carrier)!r}[{index}]"
+            if subject == "item insertion"
+            else subject
+        )
+        raise GraphValidationError(
+            f"{operation} would move {str(carrier)!r}[{index}], which stands inside "
+            f"this graph's seal on that {_carrier_kind(carrier)} at {sealed}. A seal "
+            "says the coordinates up to it do not move, so an edit that moves one "
+            "is not an edit this graph admits. Unseal that carrier first if the "
+            "base itself is what needs correcting."
+        )
 
     @staticmethod
     def _remapped_boundary(
@@ -2335,3 +2543,81 @@ def _require_acyclic(
             if child not in visited:
                 visiting.add(child)
                 stack.append((child, 0))
+
+
+def _seal_key(seal: Seal) -> tuple[int, str, str]:
+    """Return one total canonical order across tier and graph carriers."""
+    if isinstance(seal.carrier, QualifiedName):
+        return (0, seal.carrier.namespace, seal.carrier.local_name)
+    return (1, seal.carrier.value, "")
+
+
+def _carrier_kind(carrier: SealedCarrier) -> str:
+    """Name a carrier's kind for diagnostics."""
+    return "tier" if isinstance(carrier, QualifiedName) else "carrier"
+
+
+def _carrier_count(
+    graph: Graph,
+    carrier: SealedCarrier,
+    tiers: dict[QualifiedName, Tier] | None = None,
+) -> int:
+    """Return the current extent of one sealable carrier."""
+    if isinstance(carrier, QualifiedName):
+        known = graph._tiers_by_name if tiers is None else tiers
+        tier = known.get(carrier)
+        if tier is None:
+            raise GraphValidationError(f"seal names undeclared tier {str(carrier)!r}")
+        return len(tier.items)
+    return len(_carrier_members(graph, carrier))
+
+
+def _carrier_members(
+    graph: Graph, carrier: SealedCarrier
+) -> tuple[Item | RelationInstance | PolyadicRelationInstance, ...]:
+    """Return one graph carrier in its own order."""
+    if isinstance(carrier, QualifiedName):
+        tier = next(
+            (tier for tier in graph.tiers if tier.declaration.name == carrier), None
+        )
+        return () if tier is None else tier.items
+    if carrier is GraphCarrier.RELATIONS:
+        return graph.relations
+    return graph.polyadic_relations
+
+
+def _member_identity(
+    member: Item | RelationInstance | PolyadicRelationInstance,
+) -> object:
+    """Return geometric identity while deliberately ignoring attribute values."""
+    if isinstance(member, Item):
+        return member.durable_id
+    if isinstance(member, RelationInstance):
+        return (
+            member.declaration,
+            member.left,
+            member.right,
+            member.durable_id,
+        )
+    return (
+        member.declaration,
+        member.sources,
+        member.targets,
+        member.durable_id,
+    )
+
+
+def _seal_breach_detail(
+    carrier: SealedCarrier,
+    index: int,
+    before: Item | RelationInstance | PolyadicRelationInstance,
+    after: Item | RelationInstance | PolyadicRelationInstance,
+) -> str:
+    """Describe the geometric counterexample at one sealed coordinate."""
+    coordinate = f"{str(carrier)!r}[{index}]"
+    if isinstance(before, Item) and isinstance(after, Item):
+        return (
+            f"{coordinate} carried durable id {before.durable_id!r} in the source "
+            f"and carries {after.durable_id!r} here"
+        )
+    return f"{coordinate} did not keep its member"

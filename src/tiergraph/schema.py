@@ -185,6 +185,20 @@ DECLARATIONS: dict[str, Shape] = {
     ),
     "item_reference": ITEM_REFERENCE,
     "durable_position": DURABLE_BOUNDARY,
+    "tier_seal_carrier": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("tier",))),
+        _field("tier", QUALIFIED_NAME),
+    ),
+    "graph_seal_carrier": _object(
+        _field("kind", Shape(ShapeKind.STRING, values=("graph",))),
+        _field(
+            "name",
+            Shape(
+                ShapeKind.STRING,
+                values=("relations", "polyadic_relations"),
+            ),
+        ),
+    ),
     "simple_relation": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("simple",))),
         _field("name", QUALIFIED_NAME),
@@ -316,6 +330,18 @@ GRAPH = _object(
         ),
     ),
     _field("attributes", ATTRIBUTES),
+    _field(
+        "seals",
+        _array(
+            _object(
+                _field(
+                    "carrier",
+                    _reference("tier_seal_carrier", "graph_seal_carrier"),
+                ),
+                _field("sealed", NON_NEGATIVE_INTEGER),
+            )
+        ),
+    ),
 )
 DOCUMENT = _object(_field("format_version", STRING), _field("graph", GRAPH))
 

@@ -253,6 +253,29 @@
       ],
       "type": "object"
     },
+    "graph_seal_carrier": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "graph"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "enum": [
+            "relations",
+            "polyadic_relations"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
     "integer_attribute_value": {
       "additionalProperties": false,
       "properties": {
@@ -614,15 +637,36 @@
         "tier"
       ],
       "type": "object"
+    },
+    "tier_seal_carrier": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "tier"
+          ],
+          "type": "string"
+        },
+        "tier": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tier"
+      ],
+      "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-6.json",
+  "$id": "https://tiergraph.org/schema/format-0.2.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, durable-id, position, and relation names; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty position attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "6"
+      "const": "0.2.0"
     },
     "graph": {
       "additionalProperties": false,
@@ -780,6 +824,33 @@
                 "$ref": "#/$defs/polyadic_relation_instance"
               }
             ]
+          },
+          "type": "array"
+        },
+        "seals": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "carrier": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/tier_seal_carrier"
+                  },
+                  {
+                    "$ref": "#/$defs/graph_seal_carrier"
+                  }
+                ]
+              },
+              "sealed": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "carrier",
+              "sealed"
+            ],
+            "type": "object"
           },
           "type": "array"
         },

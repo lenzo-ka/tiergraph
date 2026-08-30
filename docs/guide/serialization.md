@@ -51,7 +51,7 @@ print("round-trip equal:", loads(text) == graph)
 
 ```text
 {
-  "format_version": "6",
+  "format_version": "0.2.0",
   "graph": {
     "namespaces": [
       {
@@ -74,8 +74,8 @@ print("round-trip equal:", loads(text) == graph)
     ]
   }
 }
-format version: 6
-byte length: 393
+format version: 0.2.0
+byte length: 397
 round-trip equal: True
 ```
 

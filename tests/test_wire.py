@@ -53,7 +53,7 @@ META_NS = "urn:wire-meta"
 
 def test_compact_serializer_has_exact_canonical_spelling() -> None:
     graph = Graph((), (), ())
-    assert dump_compact(graph) == '{"format_version":"6","graph":{}}\n'
+    assert dump_compact(graph) == '{"format_version":"0.2.0","graph":{}}\n'
 
 
 def test_deep_json_is_cleanly_refused_before_parser_recursion() -> None:
@@ -123,11 +123,11 @@ def test_reasonable_nested_json_reaches_normal_typed_validation() -> None:
     "document, key",
     (
         (
-            '{"format_version":"7","format_version":"6","graph":{"namespaces":[]}}',
+            '{"format_version":"0.2.0","format_version":"0.2.0","graph":{"namespaces":[]}}',
             "format_version",
         ),
         (
-            '{"format_version":"6","graph":{"namespaces":[],"namespaces":[]}}',
+            '{"format_version":"0.2.0","graph":{"namespaces":[],"namespaces":[]}}',
             "namespaces",
         ),
     ),
@@ -503,7 +503,7 @@ def test_canonical_read_back_corpus_denominator_is_pinned() -> None:
 def test_no_writer_returns_text_this_reader_would_refuse() -> None:
     """The reader-accepted surrogate document cannot become unreadable output.
 
-    This is the whole defect in one place: the reader accepts this 83-byte
+    This is the whole defect in one place: the reader accepts this 87-byte
     ASCII document, and every writer used to hand back either a string holding
     a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  All four
     writers must now make the same decision, name the same field path, and
@@ -511,10 +511,10 @@ def test_no_writer_returns_text_this_reader_would_refuse() -> None:
     encoder exception.
     """
     document = (
-        '{"format_version":"6","graph":'
+        '{"format_version":"0.2.0","graph":'
         '{"namespaces":[{"namespace":"\\ud800","prefix":"p"}]}}'
     )
-    assert len(document.encode("ascii")) == 83
+    assert len(document.encode("ascii")) == 87
     graph = loads(document)
     for writer in (to_data, dumps, dump_compact, dump_bytes):
         with pytest.raises(ValueError) as refusal:
@@ -835,7 +835,7 @@ def test_wire_shape_guards_name_their_paths() -> None:
     cases: list[tuple[dict[str, object], str]] = []
 
     wrong_version = mutable_document()
-    wrong = str(int(FORMAT_VERSION) + 1)
+    wrong = "foreign"
     wrong_version["format_version"] = wrong
     cases.append((wrong_version, rf"format_version '{wrong}' is unsupported"))
 

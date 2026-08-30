@@ -3,7 +3,7 @@
 The version 6 wire representation is strict JSON: object keys are strings,
 arrays retain order, and scalar attribute values retain their declared XSD type
 and canonical lexical form. The top-level document carries
-`"format_version": "6"`.
+`"format_version": "0.2.0"`.
 
 Empty arrays and null-valued fields are not emitted, with one presence-sensitive
 exception: a relation side's explicit `"tiers": []` means that no tier is

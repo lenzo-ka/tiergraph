@@ -896,8 +896,14 @@ def test_only_a_bare_agreeing_stamp_is_recognized(document: object) -> None:
 
 
 def test_the_stamp_the_project_ships_is_recognized() -> None:
-    """REGRESSION. Predict the shipped schema's own stamp is read as one."""
-    assert growth.stamp(RELEASED) == "6"
+    """REGRESSION. Predict the shipped schema's own stamp is read as one.
+
+    The expected value is written out rather than read from ``FORMAT_VERSION``.
+    The schema is generated from that constant, so comparing the two would
+    check the generator and not the value, and this assertion exists to make a
+    format change visible to whoever takes it.
+    """
+    assert growth.stamp(RELEASED) == "0.2.0"
 
 
 def test_a_pointer_that_names_nothing_returns_nothing() -> None:

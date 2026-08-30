@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tiergraph import (
@@ -15,6 +17,7 @@ from tiergraph import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphCarrier,
     GraphEditor,
     GraphValidationError,
     Item,
@@ -26,11 +29,14 @@ from tiergraph import (
     RelationEndpointKind,
     RelationInstance,
     RelationSideDeclaration,
+    Seal,
+    SealDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
     XsdType,
     dumps,
+    loads,
 )
 from tiergraph.core import EditDeclaration, EditTarget
 
@@ -851,3 +857,127 @@ def test_a_reference_held_across_an_edit_silently_resolves_elsewhere() -> None:
     assert edited.resolve_item(held) == held
     assert item_score(edited, held.index) == "2"
     assert graph.canonical_items() != edited.canonical_items()
+
+
+def test_sealed_member_cannot_move_but_its_value_can_change() -> None:
+    """REGRESSION (parent: dependency failure): the seal is geometric."""
+    sealed = base().seal(WORD, 3)
+    with pytest.raises(GraphValidationError) as refusal:
+        sealed.insert_item(WORD, 1, Item("new"))
+    carrier = f"'{WORD}'"
+    assert str(refusal.value) == (
+        f"item insertion at {carrier}[1] would move {carrier}[1], which stands "
+        "inside this graph's seal on that tier at 3. A seal says the coordinates "
+        "up to it do not move, so an edit that moves one is not an edit this graph "
+        "admits. Unseal that carrier first if the base itself is what needs "
+        "correcting."
+    )
+    changed = sealed.set_attribute(ItemRef(WORD, 1), score(20))
+    assert item_score(changed, 1) == "20"
+    assert changed.seals == sealed.seals
+
+
+def test_edits_beyond_a_seal_succeed_and_retreat_is_explicit() -> None:
+    """REGRESSION (parent: dependency failure): only the prefix is fixed."""
+    sealed = base().seal(WORD, 2)
+    assert (
+        sealed.insert_item(WORD, 4, Item("new")).tiers[0].items[-1].durable_id == "new"
+    )
+    with pytest.raises(GraphValidationError, match="sealing advances"):
+        sealed.seal(WORD, 1)
+    assert sealed.unseal(WORD, 1).seals == (Seal(WORD, 1),)
+    assert sealed.is_sealed(ItemRef(WORD, 1))
+    assert not sealed.is_sealed(ItemRef(WORD, 2))
+
+
+def test_seal_bounds_and_graph_carrier_edits_are_checked() -> None:
+    """REGRESSION (parent: dependency failure): every ordered carrier bites."""
+    graph = base()
+    with pytest.raises(GraphValidationError, match="must not be negative"):
+        graph.seal(WORD, -1)
+    with pytest.raises(GraphValidationError, match="members that exist"):
+        graph.seal(WORD, 5)
+    with pytest.raises(GraphValidationError, match="undeclared tier"):
+        graph.seal(name("missing"), 0)
+    with pytest.raises(GraphValidationError, match="duplicate seal carrier"):
+        replace(graph, seals=(Seal(WORD, 0), Seal(WORD, 1)))
+
+    relations = graph.seal(GraphCarrier.RELATIONS, 2)
+    with pytest.raises(GraphValidationError, match="relation removal would move"):
+        relations.remove_relation(1)
+    assert len(relations.remove_relation(3).relations) == 3
+    assert graph.seal(GraphCarrier.POLYADIC_RELATIONS, 0).seals
+
+
+def test_seal_declarations_report_vacuity_breaches_and_omission() -> None:
+    """REGRESSION (parent: dependency failure): certificates remain honest."""
+    graph = base(relations=())
+    certificate = SealDeclaration("identity", graph, graph).check_seals()
+    assert (certificate.carriers, certificate.sealed_members) == (0, 0)
+    with pytest.raises(ValueError, match="must not be empty"):
+        SealDeclaration("", graph, graph)
+
+    source = graph.seal(WORD, 3)
+    tier = source.tiers[0]
+    moved = replace(
+        source,
+        tiers=(
+            replace(
+                tier,
+                items=(tier.items[0], Item("replacement"), *tier.items[2:]),
+            ),
+            source.tiers[1],
+        ),
+    )
+    with pytest.raises(GraphValidationError) as semantic:
+        SealDeclaration("replace-word", source, moved).check_seals()
+    assert (
+        "carried durable id 'w1' in the source and carries 'replacement' here"
+        in str(semantic.value)
+    )
+    with pytest.raises(GraphValidationError, match="not withdrawn by omission"):
+        SealDeclaration("strip", source, replace(source, seals=())).check_seals()
+
+    relation_source = base().seal(GraphCarrier.RELATIONS, 1)
+    relation_result = replace(
+        relation_source,
+        relations=(relation_source.relations[1], *relation_source.relations[1:]),
+    )
+    assert (
+        SealDeclaration("relations", relation_source, relation_result)
+        .breaches()[0]
+        .detail.endswith("did not keep its member")
+    )
+
+    poly_name = name("poly")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORD,), 1, 1, False)
+    poly_declaration = PolyadicRelationDeclaration(poly_name, side, side)
+    poly = PolyadicRelationInstance(poly_name, (ItemRef(WORD, 0),), (ItemRef(WORD, 1),))
+    poly_source = replace(
+        base(relations=()),
+        relation_declarations=(poly_declaration,),
+        polyadic_relations=(poly,),
+    ).seal(GraphCarrier.POLYADIC_RELATIONS, 1)
+    poly_result = replace(
+        poly_source,
+        polyadic_relations=(replace(poly, targets=(ItemRef(WORD, 2),)),),
+    )
+    assert SealDeclaration("poly", poly_source, poly_result).breaches()[0].index == 0
+
+
+def test_seals_are_canonical_optional_and_round_trip() -> None:
+    """REGRESSION (parent: dependency failure): wire seals preserve guarantees."""
+    graph = base(relations=())
+    sealed = replace(
+        graph,
+        seals=(Seal(GraphCarrier.RELATIONS, 0), Seal(WORD, 2)),
+    )
+    assert sealed.seals == (Seal(WORD, 2), Seal(GraphCarrier.RELATIONS, 0))
+    assert loads(dumps(sealed)) == sealed
+    with pytest.raises(ValueError, match="carrier.kind 'bad' is unsupported"):
+        loads(dumps(sealed).replace('"kind": "tier"', '"kind": "bad"', 1))
+
+    current = dumps(Graph((), (), ()))
+    format_six = '{\n  "format_version": "6",\n  "graph": {}\n}\n'
+    assert current == '{\n  "format_version": "0.2.0",\n  "graph": {}\n}\n'
+    assert current.replace('"0.2.0"', '"6"', 1) == format_six

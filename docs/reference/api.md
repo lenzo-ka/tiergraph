@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 166 top-level `tiergraph` exports exactly once.
+It covers 172 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1628,7 +1628,7 @@ Choose the boundary immediately before or after an anchor.
 ### `Graph`
 
 ```text
-Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = ()) -> None
+Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = ()) -> None
 ```
 
 Hold a validated immutable graph and derive order and empty boundaries.
@@ -1727,6 +1727,36 @@ Graph.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return graph content in canonical declaration order as JSON data.
+
+#### `Graph.seal`
+
+Method.
+
+```text
+Graph.seal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'Graph'
+```
+
+Return a graph sealing this much of one carrier, refusing a retreat.
+
+#### `Graph.unseal`
+
+Method.
+
+```text
+Graph.unseal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'Graph'
+```
+
+Return a graph whose seal on one carrier stands lower than it did.
+
+#### `Graph.is_sealed`
+
+Method.
+
+```text
+Graph.is_sealed(self, coordinate: 'ItemRef | BoundaryRef') -> 'bool'
+```
+
+Report whether this coordinate stands inside its carrier's seal.
 
 #### `Graph.edit`
 
@@ -1832,6 +1862,19 @@ Graph.remove_relation(self, target: 'int | str') -> 'Graph'
 ```
 
 Return a new graph without the relation instance this names.
+
+### `GraphCarrier`
+
+```text
+GraphCarrier(*values)
+```
+
+Name the graph's ordered carriers that are not a tier's items.
+
+#### `GraphCarrier` members
+
+- `RELATIONS` = `relations`
+- `POLYADIC_RELATIONS` = `polyadic_relations`
 
 ### `GraphValidationError`
 
@@ -1999,6 +2042,93 @@ RelationSideDeclaration.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the side contract without inventing order for its allowed sets.
 
+### `Seal`
+
+```text
+Seal(carrier: 'SealedCarrier', sealed: 'int') -> None
+```
+
+State how much of one ordered carrier may not be disturbed.
+
+#### `Seal.to_data`
+
+Method.
+
+```text
+Seal.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the tagged carrier and sealed prefix for wire encoding.
+
+### `SealBreach`
+
+```text
+SealBreach(carrier: 'SealedCarrier', index: 'int', detail: 'str') -> None
+```
+
+Name one sealed member that the result did not leave where it stood.
+
+### `SealCertificate`
+
+```text
+SealCertificate(carriers: 'int', sealed_members: 'int') -> None
+```
+
+Report what a seal check compared, and over how much.
+
+### `SealDeclaration`
+
+```text
+SealDeclaration(name: 'str', source: 'Graph', result: 'Graph') -> None
+```
+
+Bind the seals one graph carries to the graph that claims to honor them.
+
+#### `SealDeclaration.breaches`
+
+Method.
+
+```text
+SealDeclaration.breaches(self) -> 'tuple[SealBreach, ...]'
+```
+
+Return every sealed member the result disturbed, in carrier order.
+
+#### `SealDeclaration.check_seals`
+
+Method.
+
+```text
+SealDeclaration.check_seals(self) -> 'SealCertificate'
+```
+
+Demand that the result honor the source's seals, or refuse.
+
+### `SealedCarrier`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
 ### `SimpleRelationDeclaration`
 
 ```text
@@ -2088,7 +2218,7 @@ validate what it denotes.
 
 ### `FORMAT_VERSION`
 
-Version tag written by the JSON wire codec. Current value: `6`.
+Version tag written by the JSON wire codec. Current value: `0.2.0`.
 
 ### `MACHINE_VERSION`
 
