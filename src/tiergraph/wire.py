@@ -18,6 +18,7 @@ from tiergraph.core import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphCarrier,
     Item,
     ItemRef,
     JsonValue,
@@ -30,6 +31,7 @@ from tiergraph.core import (
     RelationEndpointRef,
     RelationInstance,
     RelationSideDeclaration,
+    Seal,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -56,7 +58,7 @@ from tiergraph.schema import (
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
 # artifact. Version 6 omits empty collections and nulls and spells qualified names
 # with document prefixes. Older documents are deliberately refused.
-FORMAT_VERSION = "6"
+FORMAT_VERSION = "0.2.0"
 # Owner-tunable policy: bound parser memory while admitting substantial graphs.
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 # Owner-tunable policy: stay well below interpreter/parser recursion limits.
@@ -400,7 +402,38 @@ def _decode_graph(data: dict[str, object]) -> Graph:
             for relation in decoded_relations
             if isinstance(relation, PolyadicRelationInstance)
         ),
+        tuple(
+            _seal(entry, index)
+            for index, entry in enumerate(
+                _objects(
+                    data["seals"],
+                    "seals",
+                    object_fields(array_item(field_shape(GRAPH, "seals"))),
+                )
+            )
+        ),
     )
+
+
+def _seal(data: dict[str, object], index: int) -> Seal:
+    """Decode one tagged tier or graph carrier seal."""
+    path = f"seals[{index}]"
+    carrier = _object(data["carrier"], f"{path}.carrier")
+    kind = _string(carrier.get("kind"), f"{path}.carrier.kind")
+    if kind == "tier":
+        _keys(carrier, {"kind", "tier"}, f"{path}.carrier")
+        target: QualifiedName | GraphCarrier = _name(
+            carrier["tier"], f"{path}.carrier.tier"
+        )
+    elif kind == "graph":
+        _keys(carrier, {"kind", "name"}, f"{path}.carrier")
+        target = _enum(GraphCarrier, carrier["name"], f"{path}.carrier.name")
+    else:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"{path}.carrier.kind {kind!r} is unsupported",
+        )
+    return Seal(target, _integer(data["sealed"], f"{path}.sealed"))
 
 
 def _tier(data: dict[str, object], index: int) -> Tier:

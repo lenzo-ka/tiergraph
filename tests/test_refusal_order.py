@@ -113,10 +113,10 @@ def test_a_foreign_version_suppresses_the_conditions_it_explains() -> None:
 
     refusal = refuse(loads, json.dumps(value))
     assert refusal.stage is RefusalStage.DISCRIMINATOR
-    assert str(refusal) == "format_version '7' is unsupported; expected '6'"
+    assert str(refusal) == "format_version '7' is unsupported; expected '0.2.0'"
     assert refusal.also == ()
     assert validation_errors(value, FORMAT_VERSION) == [
-        "format_version '7' is unsupported; expected '6'"
+        "format_version '7' is unsupported; expected '0.2.0'"
     ]
 
 
@@ -187,7 +187,7 @@ def test_a_stamped_machine_header_is_still_held_to_its_field_set() -> None:
         ("{", RefusalStage.SYNTAX),
         ("[]", RefusalStage.CONSTRUCTION),
         ('{"graph":{}}', RefusalStage.DISCRIMINATOR),
-        ('{"format_version":"6","graph":{},"zz":1}', RefusalStage.SHAPE),
+        ('{"format_version":"0.2.0","graph":{},"zz":1}', RefusalStage.SHAPE),
     ],
 )
 def test_each_document_reading_stage_is_reachable(

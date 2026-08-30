@@ -110,7 +110,7 @@ def test_shape_or_artifact_change_requires_format_version_change() -> None:
             match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
         ):
             refuse_unversioned_shape_change(prior, altered)
-        altered["format_version"] = str(int(FORMAT_VERSION) - 1)
+        altered["format_version"] = "foreign"
         refuse_unversioned_shape_change(prior, altered)
 
 
@@ -225,7 +225,7 @@ def test_generation_writes_artifacts_that_the_check_then_accepts(
 def test_validation_rejects_each_declared_json_construction() -> None:
     """Near-valid edits exercise the validator produced from every shape kind."""
     valid = to_data(rich_graph())
-    unsupported = str(int(FORMAT_VERSION) + 1)
+    unsupported = "foreign"
     assert validation_errors(valid, unsupported) == [
         f"format_version {FORMAT_VERSION!r} is unsupported; expected {unsupported!r}"
     ]

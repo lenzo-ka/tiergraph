@@ -1418,9 +1418,9 @@ def test_schema_outputs_current_selected_version_and_hash(
     )
 
     output = tmp_path / "schema.json"
-    assert main(["schema", "--format-version", "6", "-o", str(output)]) == 0
+    assert main(["schema", "--format-version", "0.2.0", "-o", str(output)]) == 0
     selected = json.loads(output.read_text())
-    assert selected["properties"]["format_version"] == {"const": "6"}
+    assert selected["properties"]["format_version"] == {"const": "0.2.0"}
 
     assert main(["schema", "--hash"]) == 0
     assert capsys.readouterr().out == f"{shape_hash()}\n"
@@ -1889,7 +1889,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
     """Every CLI report refuses surrogate data with its report or graph path."""
     source = tmp_path / "path-graph.json"
     source.write_text(
-        '{"format_version":"6","graph":{"namespaces":'
+        '{"format_version":"0.2.0","graph":{"namespaces":'
         '[{"namespace":"\\ud800","prefix":"p"}],"tiers":[{"declaration":'
         '{"long_name":"T","name":"p:t"},"items":[{"durable_id":"a"}]}]}}'
     )
