@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 158 top-level `tiergraph` exports exactly once.
+It covers 166 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2367,6 +2367,59 @@ Parse, bind, kind-check, and resolve a profile-owned graph path.
 
 ## Profiles
 
+### `GraphProfile`
+
+```text
+GraphProfile()
+```
+
+Declare a graph role whose satisfaction one check decides.
+
+A subclass names the profile, names the roles it reads, states in prose the
+conditions its check decides and any it leaves undecided, and implements
+:meth:`check`. Those are claims, and :meth:`ProfileRegistry.register` tests
+them before admitting the profile.
+
+``decides`` must name at least one condition. ``leaves_undecided`` names
+conditions the profile declares in its own documentation but whose truth
+this check does not establish; naming one costs a weaker outcome rather than
+a refusal, which is the point -- an honest partial check outranks a silent
+one.
+
+#### `GraphProfile.check`
+
+Class method.
+
+```text
+GraphProfile.check(cls, graph: 'Graph', roles: 'RoleBinding') -> 'None'
+```
+
+Return when ``graph`` satisfies this role, raise ``ValueError`` when not.
+
+Every required role is bound when this runs. Any other exception is a
+fault in the check rather than a verdict about the graph, and travels
+out to the caller unchanged.
+
+#### `GraphProfile.satisfaction_witness`
+
+Class method.
+
+```text
+GraphProfile.satisfaction_witness(cls) -> 'tuple[Graph, RoleBinding]'
+```
+
+Return an arrangement this profile's check must accept.
+
+#### `GraphProfile.refusal_witness`
+
+Class method.
+
+```text
+GraphProfile.refusal_witness(cls) -> 'tuple[Graph, RoleBinding]'
+```
+
+Return an arrangement this profile's check must refuse.
+
 ### `JsonValueProfile`
 
 ```text
@@ -2449,6 +2502,19 @@ Return whether declared roots include every inferred parentless item.
 A subset is sound because every declared root is parentless; exhaustive
 consumers can use this check to require the complete inferred set.
 
+### `PROFILES`
+
+Hold explicitly registered profiles and enumerate the ones a graph satisfies.
+
+Population is explicit. Nothing here scans modules or subclasses for
+profiles to adopt, because a discovered profile is one nobody decided to
+trust: import order would determine what a caller is told a graph satisfies,
+and an accidental subclass would answer for a role its author never
+published. A caller registers what it means to offer.
+
+Enumeration is ordered by profile name, so the answer does not depend on
+registration order or on interpreter hash state.
+
 ### `PersistedChoiceProfile`
 
 ```text
@@ -2476,6 +2542,179 @@ PersistedChoiceProfile.default(self, source: 'ItemRef') -> 'ItemRef | None'
 ```
 
 Return the persisted default for a source when one is stored.
+
+### `ProfileOutcome`
+
+```text
+ProfileOutcome(*values)
+```
+
+Say what one profile's check established about one graph.
+
+#### `ProfileOutcome` members
+
+- `SATISFIED` = `satisfied`
+- `SATISFIED_AS_CHECKED` = `satisfied_as_checked`
+- `REFUSED` = `refused`
+- `NOT_APPLICABLE` = `not_applicable`
+
+### `ProfileRegistrationRefusal`
+
+Refuse a profile whose registration claims do not hold.
+
+### `ProfileRegistry`
+
+```text
+ProfileRegistry() -> 'None'
+```
+
+Hold explicitly registered profiles and enumerate the ones a graph satisfies.
+
+Population is explicit. Nothing here scans modules or subclasses for
+profiles to adopt, because a discovered profile is one nobody decided to
+trust: import order would determine what a caller is told a graph satisfies,
+and an accidental subclass would answer for a role its author never
+published. A caller registers what it means to offer.
+
+Enumeration is ordered by profile name, so the answer does not depend on
+registration order or on interpreter hash state.
+
+#### `ProfileRegistry.register`
+
+Method.
+
+```text
+ProfileRegistry.register(self, profile: 'type[P]') -> 'type[P]'
+```
+
+Admit one profile after testing the claims it registers under.
+
+Refuses a profile that leaves :meth:`GraphProfile.check` or either
+witness abstract, that names no condition its check decides, that
+names one role or condition twice -- a role both required and optional,
+or a condition both decided and left open, is named twice -- that
+repeats a registered name, or whose check does not tell its own two
+witnesses apart. The profile is returned so a definition can register
+itself in place.
+
+#### `ProfileRegistry.names`
+
+Method.
+
+```text
+ProfileRegistry.names(self) -> 'tuple[str, ...]'
+```
+
+Return every registered profile name in sorted order.
+
+#### `ProfileRegistry.profile`
+
+Method.
+
+```text
+ProfileRegistry.profile(self, name: 'str') -> 'type[GraphProfile]'
+```
+
+Return one registered profile by name.
+
+#### `ProfileRegistry.report`
+
+Method.
+
+```text
+ProfileRegistry.report(self, name: 'str', graph: 'Graph', roles: 'RoleBinding') -> 'ProfileReport'
+```
+
+Report what one named profile's check establishes about a graph.
+
+#### `ProfileRegistry.reports`
+
+Method.
+
+```text
+ProfileRegistry.reports(self, graph: 'Graph', roles: 'RoleBinding') -> 'tuple[ProfileReport, ...]'
+```
+
+Report every registered profile against a graph, in profile-name order.
+
+#### `ProfileRegistry.satisfied`
+
+Method.
+
+```text
+ProfileRegistry.satisfied(self, graph: 'Graph', roles: 'RoleBinding') -> 'tuple[ProfileReport, ...]'
+```
+
+Return the reports of the profiles whose check refused nothing.
+
+Reports are returned rather than bare names because a name alone would
+read as a whole guarantee. A report carries its outcome and its
+unconfirmed conditions, so a caller holding one can see how far the
+answer reaches.
+
+### `ProfileReport`
+
+```text
+ProfileReport(profile: 'str', outcome: 'ProfileOutcome', confirmed: 'tuple[str, ...]', unconfirmed: 'tuple[str, ...]', reason: 'str | None' = None) -> None
+```
+
+Carry what one check established about one graph, and what it did not.
+
+``confirmed`` holds the conditions this run decided in the graph's favor and
+``unconfirmed`` the ones it did not, so the two together always name every
+condition the profile declares. A refused or inapplicable run confirms
+nothing, so all of them are unconfirmed: the check stopped, and which
+conditions it had already passed over is not evidence a caller can use.
+
+### `RoleBinding`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `RoleValue`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
 
 ### `SpanViewProfile`
 
@@ -2519,6 +2758,14 @@ span_view(graph: 'Graph', profile: 'SpanViewProfile', *, alternatives: 'bool' = 
 
 Read a segmentation and its coverage entirely through the public graph API.
 
+### `to_html`
+
+```text
+to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a self-contained, injection-safe HTML segmentation report.
+
 ### `to_json`
 
 ```text
@@ -2542,14 +2789,6 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 ```
 
 Return a deterministic ruler and aligned plain-text span table.
-
-### `to_html`
-
-```text
-to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
-```
-
-Return a self-contained, injection-safe HTML segmentation report.
 
 ## References
 

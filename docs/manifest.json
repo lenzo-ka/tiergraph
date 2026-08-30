@@ -116,16 +116,24 @@
       "resolve_path"
     ],
     "profiles": [
+      "GraphProfile",
       "JsonValueProfile",
       "OrderedRootsProfile",
+      "PROFILES",
       "PersistedChoiceProfile",
+      "ProfileOutcome",
+      "ProfileRegistrationRefusal",
+      "ProfileRegistry",
+      "ProfileReport",
+      "RoleBinding",
+      "RoleValue",
       "SpanViewProfile",
       "json_value_graph",
       "span_view",
+      "to_html",
       "to_json",
       "to_jsonl",
-      "to_text",
-      "to_html"
+      "to_text"
     ],
     "references": [
       "DurableItemRef",
@@ -261,6 +269,8 @@
       "console"
     ],
     "docs/guide/profiles.md": [
+      "python",
+      "text",
       "python",
       "text",
       "python",
