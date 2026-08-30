@@ -3,7 +3,7 @@
     "action": ["ActionDeclaration", "DistributionWitness", "ReactDeclaration", "ReactMode", "Semimodule", "WitnessCoordinate", "YieldNormalization"],
     "clock": ["ClockProfile", "ClockPosition", "PhysicalTiming", "anchored_position"],
     "construction": ["AddItem", "AsBuilt", "AttachValue", "DeclareAttribute", "DeclareNamespace", "DeclareRelation", "DeclareTier", "ExecutionError", "Program", "PromoteItem", "PromotePosition", "Relate", "Repeat", "Step", "execute", "steps"],
-    "fold": ["AttributeValuation", "ChildCombination", "FoldCost", "FoldDeclaration", "FoldHomomorphism", "FoldResult", "FoldTransition", "TiePolicy"],
+    "fold": ["AttributeValuation", "ChildCombination", "ExactnessRefusal", "FoldCertificate", "FoldCost", "FoldDeclaration", "FoldExactness", "FoldHomomorphism", "FoldResult", "FoldTransition", "TiePolicy"],
     "grammar": ["BestDerivation", "GrammarChartProfile", "GrammarDeclaration", "GrammarHole", "GrammarRule", "GrammarTerminal", "LoweredGrammar", "ParseForest", "best", "count", "grammar_loads", "lower_grammar", "recognize"],
     "kernel": ["AttributeDeclaration", "AttributeDomain", "AttributeValue", "BipartiteRelationDeclaration", "BoundarySide", "Graph", "GraphValidationError", "Item", "NamespaceDeclaration", "PolyadicRelationDeclaration", "PolyadicRelationInstance", "Position", "QualifiedName", "RelationEndpointKind", "RelationInstance", "RelationSideDeclaration", "SimpleRelationDeclaration", "Tier", "TierDeclaration", "XsdType"],
     "metadata": ["FORMAT_VERSION", "MACHINE_VERSION", "MAX_DOCUMENT_BYTES", "MAX_JSON_DEPTH", "MAX_REPEAT_COUNT", "MAX_TOTAL_OPCODES", "GRAMMAR_NAMESPACE", "CHART_NAMESPACE", "COMPLETE_BOUNDARY", "__version__"],
@@ -34,7 +34,7 @@
     "docs/concepts.md": ["python", "text"],
     "docs/getting-started.md": ["python", "python", "python", "text", "python", "text", "python", "text", "python", "text"],
     "docs/guide/construction.md": ["python", "text", "python", "text"],
-    "docs/guide/folding.md": ["python", "python", "text", "python", "text", "python", "text", "console"],
+    "docs/guide/folding.md": ["python", "python", "text", "python", "text", "python", "text", "python", "text", "python", "text", "console"],
     "docs/guide/profiles.md": ["python", "text", "python", "text"],
     "docs/guide/recognize-and-act.md": ["python", "json"],
     "docs/guide/selection-and-traversal.md": ["python", "python", "text", "python", "text", "python", "text"],
@@ -66,7 +66,7 @@
   ],
   "secondary": {
     "tiergraph.build": ["Document", "document", "item"],
-    "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "PATH_WITNESSES", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "PathWitnessSemiring", "ProductSemiring", "Semiring", "StarRefusal", "StarSelector", "TropicalSemiring", "ZeroClosedStar"],
+    "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "PATH_WITNESSES", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "PathWitnessSemiring", "ProductSemiring", "Semiring", "StarRefusal", "StarSelector", "TropicalSemiring", "ZeroClosedStar", "inexact_laws"],
     "tiergraph.schema": ["json_schema", "shape_hash"],
     "tiergraph.cli": ["build_parser", "main"],
     "tiergraph.spanview": ["SpanViewProfile", "SpanView", "Span", "SpanAlternative", "span_view", "to_json", "to_jsonl", "to_text", "to_html", "SPANVIEW_FORMAT_VERSION"]

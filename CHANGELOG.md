@@ -50,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reservation no observable here can decide is registered as unenforceable with
   the reason. The gate also refuses a docstring that announces a reservation
   without registering one, and its own docstring states which surfaces it reads.
+- Added a declared, refutable exactness claim on a fold. `FoldDeclaration` takes
+  a `FoldExactness` — `DISTRIBUTIVE`, `APPROXIMATE`, `STRUCTURAL`, or the
+  default `UNDECLARED` — and `check_exactness()` demands it and returns a new
+  `FoldCertificate`. Omitting the claim and asserting it falsely are different
+  refusals, both raising the new `ExactnessRefusal`: an undeclared exactness is
+  answered with the declaration to be made and runs no fold, while a false
+  `DISTRIBUTIVE` claim is answered with a semantic counterexample naming the
+  law, the operands, and both sides evaluated. The claim is checked against
+  probes the fold produces itself and, within `derivation_budget`, against the
+  derivations enumerated with no sharing at all; the certificate reports whether
+  that comparison happened, because a search that found no counterexample has
+  not proved anything. Two refusals are settled from the declaration alone and
+  never run a fold: a `DISTRIBUTIVE` claim over an algebra that does not check
+  every required law exactly, and a `STRUCTURAL` claim over an algebra that
+  declares no star warrant. `tiergraph.semiring.inexact_laws` publishes the law
+  reader that both composite constructions and the new check share.
 
 ### Changed
 

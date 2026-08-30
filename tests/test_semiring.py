@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from hypothesis import given
@@ -36,6 +36,7 @@ from tiergraph.semiring import (
     ProductSemiring,
     Semiring,
     TropicalSemiring,
+    inexact_laws,
 )
 
 from .semiring_laws import (
@@ -500,6 +501,33 @@ def test_lexicographic_and_path_witness_refusals() -> None:
             witnesses.decode(invalid)
     with pytest.raises(ValueError, match="array of arrays"):
         witnesses.decode(["not-a-path"])
+
+
+def test_inexact_laws_names_the_unchecked_laws_in_precondition_order() -> None:
+    """REGRESSION: the first name is stable, so a refusal can quote it."""
+    assert inexact_laws(DECIMAL_TROPICAL) == ()
+    assert inexact_laws(COUNTING) == ()
+    assert inexact_laws(TROPICAL) == ("multiply_associativity",)
+    assert inexact_laws(ARCTIC) == ("multiply_associativity",)
+
+
+def test_inexact_laws_reports_the_declaration_and_not_the_behavior() -> None:
+    """REGRESSION: an empty result is about the declaration, and can be a lie."""
+
+    class Liar:
+        add_associativity = multiply_associativity = LawCheck.EXACT
+        add_commutativity = LawCheck.EXACT
+        left_distributivity = right_distributivity = LawCheck.EXACT
+
+    assert inexact_laws(cast(Semiring[object], Liar())) == ()
+
+
+def test_composite_constructions_quote_the_first_unchecked_law() -> None:
+    """REGRESSION: both composites refuse through the same shared law reader."""
+    with pytest.raises(ValueError, match="lexicographic component lacks exact "):
+        LexicographicSemiring(TROPICAL, PATH_WITNESSES)
+    with pytest.raises(ValueError, match="expectation base lacks exact "):
+        ExpectationSemiring(TROPICAL)
 
 
 def test_every_semiring_the_module_defines_is_declared_public() -> None:
