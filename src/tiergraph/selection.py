@@ -16,6 +16,7 @@ from tiergraph.core import (
     ItemRef,
     JsonValue,
     QualifiedName,
+    RelationEndpointRef,
     SimpleRelationDeclaration,
 )
 from tiergraph.machine import _decode_qname
@@ -137,9 +138,9 @@ class NodeSet:
             detail = ()
         return (kind_order[node.kind], *detail)
 
-    def _endpoint_key(self, reference: ItemRef | DurableBoundaryRef) -> tuple[int, int]:
-        if isinstance(reference, ItemRef):
-            resolved: ItemRef | BoundaryRef = reference
+    def _endpoint_key(self, reference: RelationEndpointRef) -> tuple[int, int]:
+        if isinstance(reference, ItemRef | DurableItemRef):
+            resolved: ItemRef | BoundaryRef = self.graph.resolve_item(reference)
         else:
             resolved = self.graph.resolve_boundary(reference)
         tier_order = {

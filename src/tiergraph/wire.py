@@ -579,6 +579,9 @@ def _relation(
 
 def _endpoint(value: object, path: str) -> RelationEndpointRef:
     data = _object(value, path)
+    if data.get("kind") == "durable-item":
+        _keys(data, object_fields(DECLARATIONS["durable_item_endpoint"]), path)
+        return DurableItemRef(_string(data["durable_id"], f"{path}.durable_id"))
     if "anchor" in data:
         return _durable_boundary(data, path)
     _keys(data, object_fields(ITEM_REFERENCE), path)

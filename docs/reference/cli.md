@@ -2,7 +2,7 @@
 
 The `tiergraph` command prints help when called without arguments. `--version` prints one JSON object and exits successfully.
 
-`tiergraph.cli.build_parser()` is importable and usable, but carries no API-stability promise at version 0.1.0.
+`tiergraph.cli.build_parser()` is importable and usable, but carries no API-stability promise at version 0.2.0.
 
 ## Contracts
 

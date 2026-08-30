@@ -47,6 +47,9 @@
               "$ref": "#/$defs/item_reference"
             },
             {
+              "$ref": "#/$defs/durable_item_endpoint"
+            },
+            {
               "$ref": "#/$defs/durable_position"
             }
           ]
@@ -55,6 +58,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/item_reference"
+            },
+            {
+              "$ref": "#/$defs/durable_item_endpoint"
             },
             {
               "$ref": "#/$defs/durable_position"
@@ -223,6 +229,26 @@
         "name",
         "value_type",
         "lexical"
+      ],
+      "type": "object"
+    },
+    "durable_item_endpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "durable_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "durable-item"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durable_id"
       ],
       "type": "object"
     },
@@ -472,6 +498,9 @@
                 "$ref": "#/$defs/item_reference"
               },
               {
+                "$ref": "#/$defs/durable_item_endpoint"
+              },
+              {
                 "$ref": "#/$defs/durable_position"
               }
             ]
@@ -483,6 +512,9 @@
             "oneOf": [
               {
                 "$ref": "#/$defs/item_reference"
+              },
+              {
+                "$ref": "#/$defs/durable_item_endpoint"
               },
               {
                 "$ref": "#/$defs/durable_position"
@@ -681,7 +713,7 @@
                   "tier",
                   "relation_declaration",
                   "relation_instance",
-                  "position",
+                  "boundary",
                   "document"
                 ],
                 "type": "string"

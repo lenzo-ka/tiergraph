@@ -8,6 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from tiergraph import __version__
 from tiergraph.schema import json_schema, shape_hash
 from tiergraph.wire import FORMAT_VERSION
 
@@ -52,23 +53,33 @@ def committed_stamp() -> object:
         raise ValueError("committed schema stamp is not valid JSON") from error
 
 
-def refuse_unversioned_shape_change(baseline: object, current: object) -> None:
-    """Guard declaration and artifact digests, not codec acceptance semantics."""
+def refuse_unversioned_shape_change(
+    baseline: object, current: object, declared: str = __version__
+) -> None:
+    """Require the release named by a changed format stamp to have been taken."""
     if not isinstance(baseline, dict) or not isinstance(current, dict):
         raise ValueError("schema stamp must be an object")
     changed = any(
         baseline.get(field) != current.get(field)
         for field in ("shape_sha256", "schema_sha256")
     )
-    if changed and baseline.get("format_version") == current.get("format_version"):
+    if (
+        changed
+        and baseline.get("format_version") == current.get("format_version")
+        and declared != current.get("format_version")
+    ):
         raise ValueError(
             "schema declaration or generated artifact changed without moving "
-            "FORMAT_VERSION; codec semantics are not checked and require a manual "
-            "FORMAT_VERSION decision"
+            "the package to the release named by FORMAT_VERSION; codec semantics "
+            "are not checked and require a manual version decision"
         )
 
 
-def main(argv: list[str] | None = None, baseline: object | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    baseline: object | None = None,
+    declared: str = __version__,
+) -> int:
     """Write artifacts or check that the committed copies match generation."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -78,7 +89,7 @@ def main(argv: list[str] | None = None, baseline: object | None = None) -> int:
     current = json.loads(expected_stamp)
     try:
         refuse_unversioned_shape_change(
-            committed_stamp() if baseline is None else baseline, current
+            committed_stamp() if baseline is None else baseline, current, declared
         )
     except ValueError as error:
         raise SystemExit(str(error)) from error

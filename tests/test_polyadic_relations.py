@@ -14,6 +14,7 @@ from tiergraph import (
     AttributeValue,
     BoundarySide,
     DurableBoundaryRef,
+    DurableItemRef,
     Graph,
     Item,
     ItemRef,
@@ -101,8 +102,8 @@ def graph(
 
 
 def edge(
-    sources: tuple[ItemRef | DurableBoundaryRef, ...],
-    targets: tuple[ItemRef | DurableBoundaryRef, ...],
+    sources: tuple[ItemRef | DurableItemRef | DurableBoundaryRef, ...],
+    targets: tuple[ItemRef | DurableItemRef | DurableBoundaryRef, ...],
     relation: QualifiedName = MEMBERS,
 ) -> PolyadicRelationInstance:
     """Build one ordered polyadic instance."""

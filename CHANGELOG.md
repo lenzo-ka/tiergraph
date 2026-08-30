@@ -150,6 +150,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** relation endpoints now admit `DurableItemRef` directly, encoded
+  as the disjoint tagged wire arm
+  `{"kind": "durable-item", "durable_id": "..."}`, so an item endpoint can
+  retain its identity when insertions move its structural index. An unresolved
+  durable item endpoint is now reported as naming no item instead of being
+  falsely classified as a boundary. `AttributeDomain.POSITION` remains the
+  public Python member, while its wire value changes from `"position"` to
+  `"boundary"`; existing format documents using `"position"` must be rewritten
+  for 0.2.0. No public Python names were added or removed by this format break.
 - **BREAKING:** the published vocabulary now says *coordinate* for an identity
   and reserves *position* for nothing else, so the boundary family is renamed
   rather than kept. `Position`, `PositionRef`, `DurablePositionRef`,
