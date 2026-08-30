@@ -29,8 +29,20 @@ make check
 The gate runs Ruff linting and formatting checks, strict mypy checks, pytest,
 the test suite in separate processes with hash seeds 0, 12345, and 999, JSON
 Schema currency checks, documentation currency checks, the tracked-file hygiene
-check, and the public-docstring check. Coverage is measured only for the shipped
-`tiergraph` and `tiergraph_dot` packages and must remain at 100% branch coverage.
+check, and the public-docstring check. Coverage is measured for the `tiergraph`
+and `tiergraph_dot` packages and for the `scripts` gates, and must remain at
+100% branch coverage.
+
+The tracked-file hygiene check reads **every tracked file**, not a listed set of
+directories. That is not a convenience: the source distribution ships the whole
+tracked tree, so anything committed here is published, and a check that read
+less than everything would leave shipped files unread. The one exemption is the
+check's own source, which has to write down the patterns it forbids. The
+distribution is built during the test suite and compared against what the check
+reads, so the two cannot drift apart silently.
+
+Because no tracked file is inert to it, CI runs this check on every pull
+request, outside the path filter that governs the more expensive jobs.
 
 The repository also provides a pre-commit configuration. After installing
 `pre-commit` separately, enable it in your checkout with:

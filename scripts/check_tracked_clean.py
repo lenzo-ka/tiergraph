@@ -21,7 +21,12 @@ allowlisted by hand or covered by an inflected word list larger than the
 distribution shipping it.
 
 Both checks run over the git index rather than the working tree: untracked
-scratch is exactly where local material is allowed to live.
+scratch is exactly where local material is allowed to live. The index is also
+the shipped set: the build backend's default source-distribution include is the
+project tree minus what version control ignores, so every tracked file reaches
+the distribution and every file that ships is checked. That equality is derived,
+not assumed -- tests/test_publishability_guards.py builds the distribution and
+fails if a file inside it falls outside what this gate reads.
 """
 
 from __future__ import annotations
@@ -49,10 +54,19 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
     (r"(?i)generated (?:at|on) \d{4}-\d{2}-\d{2}", "a generated timestamp"),
 )
 
-# Project-owned repository and clone endpoint.
+# Project-owned repository, clone endpoint, and published distribution page.
 ALLOWED_URL_PREFIXES: dict[str, str] = {
     "github.com/lenzo-ka/tiergraph": "the project repository",
     "github.com/lenzo-ka/tiergraph.git": "the project's Git clone endpoint",
+    "pypi.org/p/tiergraph": "the project's published distribution page",
+    # Hook repositories named by the pre-commit configuration, and the
+    # conventions the changelog and version scheme cite. These ship, so they are
+    # allowlisted rather than left unread: the point of reading the file is that
+    # a repository added to it is seen.
+    "github.com/astral-sh/ruff-pre-commit": "a declared pre-commit hook source",
+    "github.com/pre-commit/pre-commit-hooks": "a declared pre-commit hook source",
+    "keepachangelog.com/en": "the changelog format this project follows",
+    "semver.org/spec": "the version scheme this project follows",
     # RFC 2606 example-domain namespaces used by runnable documentation.
     "example.com/caption": "an example namespace",
     "example.com/captions": "an example namespace",
@@ -64,10 +78,13 @@ ALLOWED_URL_PREFIXES: dict[str, str] = {
     "example.com/score": "an example namespace",
     "example.com/timeline": "an example namespace",
     "example.com/tree": "an example namespace",
-    # Published schema and worked-example identifiers.
+    # Published schema and worked-example identifiers. Both are namespaces: the
+    # runnable examples mint one identifier apiece, and the schema identifier
+    # carries the format version, so pinning either to a single spelling would
+    # refuse the next one written.
     "json-schema.org/draft/2020-12": "the JSON Schema vocabulary",
-    "tiergraph.dev/examples/mixing": "the worked-example namespace",
-    "tiergraph.org/schema/format-": "the published schema identifier family",
+    "tiergraph.dev/examples": "the worked-example namespace",
+    "tiergraph.org/schema": "the published schema identifier namespace",
 }
 
 # Python language and standard-library modules used by shipped code and examples.
@@ -83,6 +100,7 @@ _STDLIB_IMPORTS = {
     "enum",
     "fractions",
     "functools",
+    "getpass",
     "hashlib",
     "html",
     "importlib",
@@ -97,6 +115,7 @@ _STDLIB_IMPORTS = {
     "shutil",
     "subprocess",
     "sys",
+    "tarfile",
     "tempfile",
     "time",
     "tomllib",
@@ -114,8 +133,10 @@ _PROJECT_IMPORTS = {
     "tiergraph",
     "tiergraph_dot",
 }
-# Declared testing and validation tools imported by the suite.
-_TOOL_IMPORTS = {"hypothesis", "jsonschema", "pytest"}
+# Declared testing and validation tools imported by the suite. The build backend
+# is among them because one test builds the distribution to check this gate's
+# own coverage of it.
+_TOOL_IMPORTS = {"hatchling", "hypothesis", "jsonschema", "pytest"}
 ALLOWED_IMPORTS = _STDLIB_IMPORTS | _PROJECT_IMPORTS | _TOOL_IMPORTS
 
 # Runtime and development distributions declared in pyproject.toml.
@@ -136,6 +157,9 @@ ALLOWED_DOMAINS = {
     "example.com",
     "github.com",
     "json-schema.org",
+    "keepachangelog.com",
+    "pypi.org",
+    "semver.org",
     "tiergraph.dev",
     "tiergraph.org",
 }
@@ -150,8 +174,16 @@ DOMAIN = re.compile(
 PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 
 # This file lists the patterns it forbids and the references it allows, so it
-# necessarily contains both and is exempt from both of its own checks.
+# necessarily contains both and is exempt from its own checks. It is the only
+# exemption. Nothing else is excluded by name, not the license text and not the
+# machine-readable files: a home-directory path is exactly as much of a leak in
+# a version-control ignore file as it is in a guide, and a repository added to
+# the hook configuration is exactly the kind of reference the ruling is about.
+# A file whose content genuinely cannot be edited into compliance -- third-party
+# text such as the license -- would be named here with its reason and a witness
+# in tests/test_publishability_guards.py; none currently needs to be.
 SELF = Path(__file__).name
+EXEMPT_NAMES: frozenset[str] = frozenset({SELF})
 ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE = re.compile(r"[A-Za-z0-9]+")
 DENIED_DIGESTS_PATH: Path = ROOT / "denied-name-digests.txt"
@@ -171,6 +203,17 @@ def tracked_files() -> list[Path]:
         ["git", "ls-files", "-z"], check=True, capture_output=True, text=True
     )
     return [Path(name) for name in listing.stdout.split("\0") if name]
+
+
+def shipped_text(path: Path) -> str:
+    """Return one shipped file's text, refusing content that is not UTF-8."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            f"{path} ships but is not UTF-8 text, so its references cannot be "
+            "read; a shipped binary needs a named exemption with a reason"
+        ) from error
 
 
 def leaks(path: Path) -> list[str]:
@@ -233,7 +276,7 @@ def denied_digests(path: Path) -> Denylist:
 
 def name_leaks(path: Path, denylist: Denylist) -> list[str]:
     """Return one line-numbered message per denied name in one shipped file."""
-    text = path.read_text(encoding="utf-8")
+    text = shipped_text(path)
     # Maximal runs preserve the old case-insensitive, alphanumeric-boundary
     # regex behavior for every name that digest() accepts.
     return [
@@ -279,7 +322,7 @@ def _distribution_name(requirement: str) -> str:
 
 def reference_leaks(path: Path) -> list[str]:
     """Return unallowlisted external references extracted from one shipped file."""
-    text = path.read_text(encoding="utf-8")
+    text = shipped_text(path)
     messages: list[str] = []
     for value in URL.findall(text):
         prefix = _url_prefix(value)
@@ -322,34 +365,19 @@ def reference_leaks(path: Path) -> list[str]:
 
 
 def is_shipped_surface(path: Path) -> bool:
-    """Return whether the ruling includes this tracked path."""
-    return path in {Path("README.md"), Path("pyproject.toml")} or (
-        bool(path.parts) and path.parts[0] in {"docs", "src", "tests", "scripts"}
-    )
+    """Return whether the ruling covers this tracked path."""
+    return path.name not in EXEMPT_NAMES
 
 
 def main() -> int:
-    """Check every tracked file. Returns the process exit status."""
-    paths = tracked_files()
-    found = [
-        message
-        for path in paths
-        if path.name != SELF and path.is_file()
-        for message in leaks(path)
+    """Check every tracked file but the exempt ones. Returns the exit status."""
+    paths = [
+        path for path in tracked_files() if path.is_file() and is_shipped_surface(path)
     ]
-    found.extend(
-        message
-        for path in paths
-        if path.name != SELF and path.is_file() and is_shipped_surface(path)
-        for message in reference_leaks(path)
-    )
     denylist = denied_digests(DENIED_DIGESTS_PATH)
-    found.extend(
-        message
-        for path in paths
-        if path.name != SELF and path.is_file() and is_shipped_surface(path)
-        for message in name_leaks(path, denylist)
-    )
+    found = [message for path in paths for message in leaks(path)]
+    found.extend(message for path in paths for message in reference_leaks(path))
+    found.extend(message for path in paths for message in name_leaks(path, denylist))
     if not found:
         return 0
     print("tracked files must be publishable as they stand:", file=sys.stderr)

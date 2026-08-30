@@ -25,15 +25,18 @@ test = [
     "pytest-cov>=5.0",
     "hypothesis>=6.100",
     "jsonschema>=4.26",
+    # The build backend, which pip otherwise resolves only into an isolated
+    # build environment. The suite builds the source distribution to check that
+    # the publishability gate reads every file that ships; what a build includes
+    # is not inferable from the sources. Naming it here also lets a wheel be
+    # built and inspected by hand without a network fetch, which matters because
+    # this distribution ships two import packages.
+    "hatchling>=1.27",
 ]
 lint = ["ruff>=0.16", "mypy>=1.11"]
 # Development only, never a runtime dependency: pydantic's core is compiled, and
-# the shipped package stays pure Python. hatchling is the build backend, which pip
-# resolves into an isolated build environment; naming it here as well puts it in the
-# development environment so a wheel can be built and inspected without a network
-# fetch. That matters because the distribution ships two import packages, and
-# whether both reach a wheel correctly is otherwise only inferred.
-dev = ["tiergraph[test,lint]", "pydantic>=2.9", "hatchling>=1.27"]
+# the shipped package stays pure Python.
+dev = ["tiergraph[test,lint]", "pydantic>=2.9"]
 
 [project.scripts]
 tiergraph = "tiergraph.cli:main"
