@@ -54,7 +54,9 @@ addopts = "-q"
 
 [tool.coverage.run]
 branch = true
-source = ["tiergraph", "tiergraph_dot"]
+# The gate scripts are held to the same bar as the shipped packages: a check
+# nobody exercises is a check nobody can trust.
+source = ["tiergraph", "tiergraph_dot", "scripts"]
 
 [tool.coverage.report]
 # Ratchets upward, never down.

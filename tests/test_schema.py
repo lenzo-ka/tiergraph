@@ -184,6 +184,44 @@ def test_check_refuses_honestly_regenerated_unversioned_shape(
         object.__setattr__(TIER, "fields", original)
 
 
+@pytest.mark.parametrize(
+    ("baseline", "current"),
+    (("not an object", {}), ({}, "not an object")),
+)
+def test_stamp_comparison_requires_two_objects(
+    baseline: object, current: object
+) -> None:
+    """CHARACTERIZATION: a stamp that is not an object is refused on either side."""
+    with pytest.raises(ValueError, match="schema stamp must be an object"):
+        refuse_unversioned_shape_change(baseline, current)
+
+
+def test_generation_writes_artifacts_that_the_check_then_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHARACTERIZATION: generation writes both artifacts and --check names each staleness."""
+    schema_path = tmp_path / "tiergraph.schema.json"
+    stamp_path = tmp_path / "tiergraph.schema.sha256"
+    monkeypatch.setattr("scripts.generate_schema.SCHEMA_PATH", schema_path)
+    monkeypatch.setattr("scripts.generate_schema.STAMP_PATH", stamp_path)
+    schema_bytes = generated_bytes()
+    baseline = json.loads(stamp_bytes(schema_bytes))
+
+    assert generate_main([], baseline) == 0
+    assert schema_path.read_bytes() == schema_bytes
+    assert stamp_path.read_bytes() == stamp_bytes(schema_bytes)
+    assert generate_main(["--check"], baseline) == 0
+
+    schema_path.write_bytes(b"{}\n")
+    with pytest.raises(SystemExit, match="is stale; regenerate it"):
+        generate_main(["--check"], baseline)
+
+    schema_path.write_bytes(schema_bytes)
+    stamp_path.write_bytes(b"{}\n")
+    with pytest.raises(SystemExit, match="does not match the declaration and artifact"):
+        generate_main(["--check"], baseline)
+
+
 def test_validation_rejects_each_declared_json_construction() -> None:
     """Near-valid edits exercise the validator produced from every shape kind."""
     valid = to_data(rich_graph())

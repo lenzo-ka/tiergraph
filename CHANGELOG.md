@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tiergraph.semiring`, and refuses to publish a surface for a module that
   declares none. `tiergraph.schema` now declares the two names it publishes, so
   the module rather than the manifest states the surface.
+- The gate scripts under `scripts/` are now inside the coverage bar and reach
+  100% with the shipped packages. The bar previously measured only `tiergraph`
+  and `tiergraph_dot`, so the code that enforces publishability, docstrings,
+  documentation currency, and the schema stamp was itself unwitnessed. Every
+  newly covered line has a behavioral witness; no exclusion pragma was needed.
+- `tiergraph.semiring` now declares `PATH_WITNESSES` and `PathWitnessSemiring`
+  in its `__all__`, so the path-witness algebra is reachable from the module's
+  declared surface like every other semiring it defines. It is the second
+  component of `PATH` and the one a caller needs to build a witness-carrying
+  composition over a different cost algebra.
 
 ### Removed
 
@@ -65,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `selection_query_loads`, together with the `tiergraph.selection_query`
   module. Graph-free selectors replace the query classes; `select` was a fold
   of union now expressed by `UnionSelector` (#75).
+- **BREAKING:** renamed `tiergraph.semiring.REQUIRED_LAW_CHECKS` to
+  `_REQUIRED_LAW_CHECKS`. It was never exported, documented, or referenced
+  outside the module: it is the shared precondition list two composite
+  constructions check, and it repeats the protocol's own `LawCheck`-valued
+  properties, which a caller reads from the algebra. The underscore says so.
 
 ## [0.1.0] - 2026-08-23
 

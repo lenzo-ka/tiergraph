@@ -43,7 +43,10 @@ class LawCheck(Enum):
     APPROXIMATE = "approximate"
 
 
-REQUIRED_LAW_CHECKS = (
+# A shared precondition list for the composite constructions below, not a
+# published surface: it repeats the protocol's own LawCheck-valued properties,
+# and a caller reads those from the algebra rather than from this tuple.
+_REQUIRED_LAW_CHECKS = (
     "add_associativity",
     "multiply_associativity",
     "add_commutativity",
@@ -497,7 +500,7 @@ class LexicographicSemiring[T, U](ProductSemiring[T, U]):
 
     def __init__(self, first: Semiring[T], second: Semiring[U]) -> None:
         for component in (first, second):
-            for name in REQUIRED_LAW_CHECKS:
+            for name in _REQUIRED_LAW_CHECKS:
                 if getattr(component, name) is not LawCheck.EXACT:
                     raise ValueError(f"lexicographic component lacks exact {name}")
         for name in ("add_selective", "multiply_strictly_order_preserving"):
@@ -631,7 +634,7 @@ class ExpectationSemiring[T](ProductSemiring[T, T]):
         return None
 
     def __init__(self, base: Semiring[T]) -> None:
-        for name in REQUIRED_LAW_CHECKS:
+        for name in _REQUIRED_LAW_CHECKS:
             if getattr(base, name) is not LawCheck.EXACT:
                 raise ValueError(f"expectation base lacks exact {name}")
         if not base.multiply_commutative:
@@ -720,6 +723,7 @@ __all__ = [
     "DECIMAL_ARCTIC",
     "DECIMAL_TROPICAL",
     "PATH",
+    "PATH_WITNESSES",
     "TROPICAL",
     "BooleanSemiring",
     "ArcticSemiring",
@@ -732,6 +736,7 @@ __all__ = [
     "Path",
     "PathSemiring",
     "PathValue",
+    "PathWitnessSemiring",
     "ProductSemiring",
     "Semiring",
     "StarRefusal",

@@ -25,7 +25,7 @@ types:
 	@$(VENV_PYTHON) -m mypy
 
 test:
-	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov=tiergraph_dot --cov-report=term-missing
+	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov=tiergraph_dot --cov=scripts --cov-report=term-missing
 
 # Separate processes: interpreter hash state is fixed at startup and cannot be
 # changed honestly inside one run.

@@ -3141,6 +3141,10 @@ An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
 The exact decimal tropical semiring enriched with tied best paths.
 
+### `PATH_WITNESSES`
+
+The exact semiring of finite path sets under union and concatenation.
+
 ### `TROPICAL`
 
 The inexact IEEE-double min-plus semiring.
@@ -3671,6 +3675,54 @@ In this case, the type parameters of the alias are stored in the
 __type_params__ attribute.
 
 See PEP 695 for more information.
+
+### `PathWitnessSemiring`
+
+```text
+PathWitnessSemiring()
+```
+
+The exact semiring of finite path sets under union and concatenation.
+
+#### `PathWitnessSemiring.add`
+
+Method.
+
+```text
+PathWitnessSemiring.add(self, left: 'tuple[tuple[str, ...], ...]', right: 'tuple[tuple[str, ...], ...]', /) -> 'tuple[tuple[str, ...], ...]'
+```
+
+Union two path sets.
+
+#### `PathWitnessSemiring.multiply`
+
+Method.
+
+```text
+PathWitnessSemiring.multiply(self, left: 'tuple[tuple[str, ...], ...]', right: 'tuple[tuple[str, ...], ...]', /) -> 'tuple[tuple[str, ...], ...]'
+```
+
+Concatenate every pair of paths.
+
+#### `PathWitnessSemiring.encode`
+
+Method.
+
+```text
+PathWitnessSemiring.encode(self, value: 'tuple[tuple[str, ...], ...]', /) -> 'object'
+```
+
+Encode paths as nested JSON arrays.
+
+#### `PathWitnessSemiring.decode`
+
+Method.
+
+```text
+PathWitnessSemiring.decode(self, value: 'object', /) -> 'tuple[tuple[str, ...], ...]'
+```
+
+Decode nested JSON arrays of path labels.
 
 ### `ProductSemiring`
 
