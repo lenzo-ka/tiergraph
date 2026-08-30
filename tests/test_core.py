@@ -1228,3 +1228,19 @@ def test_empty_names_are_refused(operation: object) -> None:
     assert callable(operation)
     with pytest.raises(ValueError, match="must not be empty"):
         operation()
+
+
+@pytest.mark.parametrize("prefix", [":", "a:b", "trailing:", ":leading"])
+def test_colon_bearing_namespace_prefixes_are_refused_at_construction(
+    prefix: str,
+) -> None:
+    """The colon delimits a qualified name, so no wire spelling can carry it.
+
+    The refusal names the offending prefix and happens at construction: a
+    binding that fails only when something tries to write it is a graph the
+    library accepted and cannot honor.
+    """
+    with pytest.raises(
+        GraphValidationError, match=f"namespace prefix {prefix!r} must not contain"
+    ):
+        NamespaceDeclaration(prefix, NS)

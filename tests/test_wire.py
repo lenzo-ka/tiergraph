@@ -22,6 +22,7 @@ from tiergraph import (
     DurableItemRef,
     DurablePositionRef,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
     NamespaceDeclaration,
@@ -597,9 +598,17 @@ def test_qualified_name_colons_split_once_and_prefix_colons_are_refused() -> Non
     assert '"name": "w:section:voice:entry"' in dumps(graph)
     assert loads(dumps(graph)) == graph
 
-    bad_prefix = replace(graph, namespaces=(NamespaceDeclaration("bad:prefix", NS),))
-    with pytest.raises(ValueError, match="prefix must not contain ':'"):
-        dump_bytes(bad_prefix)
+    with pytest.raises(
+        GraphValidationError, match="namespace prefix 'bad:prefix' must not contain"
+    ):
+        NamespaceDeclaration("bad:prefix", NS)
+
+    # A construction-time refusal does not retire the writer's own guard: a
+    # binding that evaded construction must still not reach a document.
+    smuggled = Graph((NamespaceDeclaration("w", NS),), (), ())
+    object.__setattr__(smuggled.namespaces[0], "prefix", "bad:prefix")
+    with pytest.raises(ValueError, match="prefix must not contain ':' in wire format"):
+        dump_bytes(smuggled)
 
     document = to_data(graph)
     graph_object = cast(dict[str, object], document["graph"])
