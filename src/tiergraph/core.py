@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Protocol, cast
 
 type JsonScalar = str | int | float | bool | None
@@ -481,6 +482,90 @@ class BoundaryRef:
     def __str__(self) -> str:
         """Return a compact coordinate spelling for diagnostics."""
         return f"{self.tier}[{self.index}]"
+
+
+@dataclass(frozen=True, slots=True)
+class Displacement:
+    """Report where every position of one graph stands in another.
+
+    The four maps are total over their source index spaces: an old position is
+    either mapped or departed.  In particular, stationary positions map to
+    themselves rather than being omitted.
+    """
+
+    items: Mapping[ItemRef, ItemRef]
+    boundaries: Mapping[BoundaryRef, BoundaryRef]
+    relations: Mapping[int, int]
+    polyadic_relations: Mapping[int, int]
+    departed_items: frozenset[ItemRef]
+    departed_boundaries: frozenset[BoundaryRef]
+    departed_relations: frozenset[int]
+    departed_polyadic_relations: frozenset[int]
+
+    def __post_init__(self) -> None:
+        """Detach the maps from mutable caller-owned dictionaries."""
+        for name in ("items", "boundaries", "relations", "polyadic_relations"):
+            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+
+    def then(self, later: Displacement) -> Displacement:
+        """Compose two displacements into the one the pair of edits performed."""
+        items, departed_items = _compose_displacement_space(
+            self.items, self.departed_items, later.items, later.departed_items
+        )
+        boundaries, departed_boundaries = _compose_displacement_space(
+            self.boundaries,
+            self.departed_boundaries,
+            later.boundaries,
+            later.departed_boundaries,
+        )
+        relations, departed_relations = _compose_displacement_space(
+            self.relations,
+            self.departed_relations,
+            later.relations,
+            later.departed_relations,
+        )
+        polyadic_relations, departed_polyadic_relations = _compose_displacement_space(
+            self.polyadic_relations,
+            self.departed_polyadic_relations,
+            later.polyadic_relations,
+            later.departed_polyadic_relations,
+        )
+        return Displacement(
+            items,
+            boundaries,
+            relations,
+            polyadic_relations,
+            departed_items,
+            departed_boundaries,
+            departed_relations,
+            departed_polyadic_relations,
+        )
+
+    @classmethod
+    def stationary(cls, graph: Graph) -> Displacement:
+        """Return the displacement of a graph onto itself."""
+        items = {
+            ItemRef(tier.declaration.name, index): ItemRef(tier.declaration.name, index)
+            for tier in graph.tiers
+            for index in range(len(tier.items))
+        }
+        boundaries = {
+            BoundaryRef(tier.declaration.name, index): BoundaryRef(
+                tier.declaration.name, index
+            )
+            for tier in graph.tiers
+            for index in range(len(tier.items) + 1)
+        }
+        return cls(
+            items,
+            boundaries,
+            {index: index for index in range(len(graph.relations))},
+            {index: index for index in range(len(graph.polyadic_relations))},
+            frozenset(),
+            frozenset(),
+            frozenset(),
+            frozenset(),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1280,6 +1365,7 @@ class GraphEditor:
 
     def __init__(self, graph: Graph) -> None:
         """Copy one graph's content into carriers this editor may change."""
+        self._displacement = Displacement.stationary(graph)
         self._namespaces = list(graph.namespaces)
         self._tiers = [
             _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
@@ -1309,6 +1395,10 @@ class GraphEditor:
             tuple(self._polyadic_relations),
             tuple(self._seals),
         )
+
+    def displacement(self) -> Displacement:
+        """Return where every position of this editor's input now stands."""
+        return self._displacement
 
     def declare(self, declaration: EditDeclaration) -> GraphEditor:
         """Add one namespace, tier, attribute, or relation declaration.
@@ -1550,9 +1640,27 @@ class GraphEditor:
         if seal is not None and index < seal.sealed:
             self._refuse_seal_move("relation removal", carrier, index, seal.sealed)
         if polyadic:
+            mapping = {
+                old: old if old < index else old - 1
+                for old in range(len(self._polyadic_relations))
+                if old != index
+            }
+            step = self._current_displacement(
+                polyadic_relations=mapping,
+                departed_polyadic_relations=frozenset({index}),
+            )
             del self._polyadic_relations[index]
         else:
+            mapping = {
+                old: old if old < index else old - 1
+                for old in range(len(self._relations))
+                if old != index
+            }
+            step = self._current_displacement(
+                relations=mapping, departed_relations=frozenset({index})
+            )
             del self._relations[index]
+        self._advance_displacement(step)
         return self
 
     def _declared(self, name: QualifiedName) -> AttributeDeclaration:
@@ -1702,10 +1810,113 @@ class GraphEditor:
             self._remapped_polyadic(relation, name, mapping, subject)
             for relation in self._polyadic_relations
         ]
+        item_mapping = {
+            ItemRef(name, old): ItemRef(name, new) for old, new in mapping.items()
+        }
+        departed_items = frozenset(
+            ItemRef(name, old) for old in range(len(member.items)) if old not in mapping
+        )
+        boundary_mapping = {
+            BoundaryRef(name, old): BoundaryRef(name, new)
+            for old, new in images.items()
+        }
+        departed_boundaries = frozenset(
+            BoundaryRef(name, old)
+            for old in range(len(member.items) + 1)
+            if old not in images
+        )
+        step = self._current_displacement(
+            items=item_mapping,
+            boundaries=boundary_mapping,
+            departed_items=departed_items,
+            departed_boundaries=departed_boundaries,
+        )
         member.items = items
         self._boundary_values = boundaries
         self._relations = relations
         self._polyadic_relations = polyadic
+        self._advance_displacement(step)
+
+    def _advance_displacement(self, step: Displacement) -> None:
+        """Accumulate one editor step independently of public composition."""
+        current = self._displacement
+        items, departed_items = _compose_displacement_space(
+            current.items, current.departed_items, step.items, step.departed_items
+        )
+        boundaries, departed_boundaries = _compose_displacement_space(
+            current.boundaries,
+            current.departed_boundaries,
+            step.boundaries,
+            step.departed_boundaries,
+        )
+        relations, departed_relations = _compose_displacement_space(
+            current.relations,
+            current.departed_relations,
+            step.relations,
+            step.departed_relations,
+        )
+        polyadic_relations, departed_polyadic_relations = _compose_displacement_space(
+            current.polyadic_relations,
+            current.departed_polyadic_relations,
+            step.polyadic_relations,
+            step.departed_polyadic_relations,
+        )
+        self._displacement = Displacement(
+            items,
+            boundaries,
+            relations,
+            polyadic_relations,
+            departed_items,
+            departed_boundaries,
+            departed_relations,
+            departed_polyadic_relations,
+        )
+
+    def _current_displacement(
+        self,
+        *,
+        items: Mapping[ItemRef, ItemRef] | None = None,
+        boundaries: Mapping[BoundaryRef, BoundaryRef] | None = None,
+        relations: Mapping[int, int] | None = None,
+        polyadic_relations: Mapping[int, int] | None = None,
+        departed_items: frozenset[ItemRef] = frozenset(),
+        departed_boundaries: frozenset[BoundaryRef] = frozenset(),
+        departed_relations: frozenset[int] = frozenset(),
+        departed_polyadic_relations: frozenset[int] = frozenset(),
+    ) -> Displacement:
+        """Build one operation's total displacement from the current editor."""
+        item_coordinates = tuple(
+            ItemRef(member.declaration.name, index)
+            for member in self._tiers
+            for index in range(len(member.items))
+        )
+        boundary_coordinates = tuple(
+            BoundaryRef(member.declaration.name, index)
+            for member in self._tiers
+            for index in range(len(member.items) + 1)
+        )
+        return Displacement(
+            dict(_identity_except(item_coordinates, items, departed_items)),
+            dict(
+                _identity_except(boundary_coordinates, boundaries, departed_boundaries)
+            ),
+            dict(
+                _identity_except(
+                    range(len(self._relations)), relations, departed_relations
+                )
+            ),
+            dict(
+                _identity_except(
+                    range(len(self._polyadic_relations)),
+                    polyadic_relations,
+                    departed_polyadic_relations,
+                )
+            ),
+            departed_items,
+            departed_boundaries,
+            departed_relations,
+            departed_polyadic_relations,
+        )
 
     def _seal_for(self, carrier: SealedCarrier) -> Seal | None:
         return next((seal for seal in self._seals if seal.carrier == carrier), None)
@@ -1832,6 +2043,47 @@ def _boundary_images(
         elif right == left + 1:
             images[boundary] = right
     return images
+
+
+type _Coordinate = ItemRef | BoundaryRef | int
+
+
+def _identity_except[Coordinate: _Coordinate](
+    coordinates: Iterable[Coordinate],
+    replacements: Mapping[Coordinate, Coordinate] | None,
+    departed: frozenset[Coordinate],
+) -> Iterable[tuple[Coordinate, Coordinate]]:
+    """Map every coordinate to itself except where replacements say otherwise."""
+    replacement_map = {} if replacements is None else replacements
+    return (
+        (coordinate, replacement_map.get(coordinate, coordinate))
+        for coordinate in coordinates
+        if coordinate not in departed
+    )
+
+
+def _compose_displacement_space[Coordinate: _Coordinate](
+    earlier: Mapping[Coordinate, Coordinate],
+    earlier_departed: frozenset[Coordinate],
+    later: Mapping[Coordinate, Coordinate],
+    later_departed: frozenset[Coordinate],
+) -> tuple[dict[Coordinate, Coordinate], frozenset[Coordinate]]:
+    """Compose one total positional map, refusing an unrelated later domain."""
+    composed: dict[Coordinate, Coordinate] = {}
+    departed = set(earlier_departed)
+    for source, intermediate in earlier.items():
+        if intermediate in later:
+            composed[source] = later[intermediate]
+        elif intermediate in later_departed:
+            departed.add(source)
+        else:
+            raise GraphValidationError(
+                f"displacement composition names {str(intermediate)!r} as an image, "
+                "and the later displacement is not about a graph that has it; a "
+                "composition is defined only where the first displacement's result "
+                "is the second's source"
+            )
+    return composed, frozenset(departed)
 
 
 def _with_value(

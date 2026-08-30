@@ -112,6 +112,7 @@ _STDLIB_IMPORTS = {
     "math",
     "os",
     "pathlib",
+    "random",
     "re",
     "shutil",
     "subprocess",
