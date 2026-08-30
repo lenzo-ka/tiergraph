@@ -1,6 +1,7 @@
 # Construction
 
-There are three ways to make a graph. Most newcomers should start with the
+There are three ways to make a graph, and one way to make a graph from a graph
+you already hold. Most newcomers should start with the
 ergonomic `tiergraph.build` builder used in [Getting started](../getting-started.md).
 Direct constructors build an immutable value in one step, which suits data
 already held in memory. The build machine records an ordered stream of edits as
@@ -27,6 +28,107 @@ Pass namespaces, tiers, relation declarations, and the rest to `Graph`. Declare
 a name before referring to it, because `Graph` performs the cross-object
 validation when it is constructed. Use this lower-level path when the complete
 immutable content is already available to the caller.
+
+## Editing an existing graph
+
+`Graph` and `GraphEditor` answer one operation set over two carriers. A frozen
+graph answers `declare()`, `set_attribute()`, `remove_attribute()`,
+`insert_item()`, `remove_item()`, `move_item()`, `swap_items()`,
+`add_relation()`, and `remove_relation()` by returning a new graph. The editor
+`Graph.edit()` returns answers the same nine by changing itself, and
+`GraphEditor.freeze()` runs the one validation at the end. Whether an operation
+rewrites or mutates follows from the carrier a caller holds, never from an
+argument, so nothing has to decide at run time which kind of object it has.
+
+Setting a value replaces any value of the same name on that carrier. The value's
+own declaration says which domain it belongs to, so a caller spells the place
+and not the domain: `None` is the document, a qualified name is a tier or a
+relation declaration, an item or durable reference is an item, a position or
+durable boundary reference is a boundary, and an index or a durable id is a
+relation instance.
+
+Structural operations keep the graph's own references denoting what they
+denoted. Item coordinates stored inside the graph move with their items, and
+durable identifiers resolve again at freeze. A stored boundary value addressed
+by coordinate moves when the edit leaves its boundary exactly one image and
+refuses the edit when it does not, because a bare coordinate has no anchor to
+follow; `promote_position()` gives it one. A removal is refused while the graph
+still references the item, and a refused operation writes nothing.
+
+```python
+from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValue,
+    Graph,
+    Item,
+    ItemRef,
+    NamespaceDeclaration,
+    QualifiedName,
+    SimpleRelationDeclaration,
+    Tier,
+    TierDeclaration,
+    XsdType,
+)
+
+edit_ns = "https://example.com/plan"
+edit_tier = QualifiedName(edit_ns, "steps")
+edit_score = QualifiedName(edit_ns, "score")
+
+edit_graph = Graph(
+    (NamespaceDeclaration("plan", edit_ns),),
+    (Tier(TierDeclaration(edit_tier, "Steps"), (Item("a"), Item("b"), Item("c"))),),
+    (
+        SimpleRelationDeclaration(
+            QualifiedName(edit_ns, "membership"),
+            edit_tier,
+            QualifiedName(edit_ns, "Step"),
+        ),
+    ),
+    (),
+    (AttributeDeclaration(edit_score, AttributeDomain.ITEM, XsdType.INTEGER),),
+)
+
+
+def edit_value(number: int) -> AttributeValue:
+    return AttributeValue(edit_score, XsdType.INTEGER, str(number))
+
+
+edit_once = edit_graph.set_attribute(ItemRef(edit_tier, 0), edit_value(1))
+print("a new graph:", edit_once is not edit_graph)
+print("the graph asked still stands:", edit_graph.tiers[0].items[0].attributes == ())
+
+edit_editor = edit_graph.edit()
+for edit_round in range(3):
+    for edit_index in range(3):
+        edit_editor.set_attribute(
+            ItemRef(edit_tier, edit_index), edit_value(edit_round * 3 + edit_index)
+        )
+edit_settled = edit_editor.freeze()
+print(
+    "scores:",
+    [
+        value.lexical
+        for item in edit_settled.tiers[0].items
+        for value in item.attributes
+    ],
+)
+
+edit_grown = edit_settled.insert_item(edit_tier, 0, Item("z"))
+print("items:", [item.durable_id for item in edit_grown.tiers[0].items])
+```
+
+```text
+a new graph: True
+the graph asked still stands: True
+scores: ['6', '7', '8']
+items: ['z', 'a', 'b', 'c']
+```
+
+The sweep runs nine edits and validates once. The same nine on the frozen
+carrier would build and validate nine graphs, which is the cost the editor
+exists to avoid; the frozen carrier is for the single edit, where building one
+graph is the whole job.
 
 ## The build machine
 
@@ -207,5 +309,8 @@ Invalid declarations or graph content at a graph-construction boundary raise
 performed while decoding a serialized document into a graph. Once a `Graph` is
 valid, invalid arguments to lookup and mutation-style methods such as
 `resolve_item()`, `positions()`, and `promote_item()` deliberately remain plain
-`ValueError`; wrong Python argument kinds may raise `TypeError`. The build
-machine reports a refused opcode as `ExecutionError` and retains its cause.
+`ValueError`; wrong Python argument kinds may raise `TypeError`. The editing
+operations on `Graph` and `GraphEditor` refuse with `GraphValidationError`,
+because each one is a construction boundary: the frozen carrier builds a graph
+on the spot, and the editor builds one at `freeze()`. The build machine reports
+a refused opcode as `ExecutionError` and retains its cause.

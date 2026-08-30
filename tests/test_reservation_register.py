@@ -88,21 +88,6 @@ def test_construction_helpers_that_have_not_arrived_report_nothing() -> None:
     assert check_reservations._build_ergonomics_have_landed() is None
 
 
-def test_a_kernel_removal_operation_is_named(tmp_path: Path) -> None:
-    """A kernel operation that removes reports the unsettled rule as overtaken."""
-    source = _module(
-        tmp_path / "core.py",
-        "def remove_item() -> None:\n    return None\n",
-    )
-    evidence = check_reservations._anchor_removal_has_landed([source])
-    assert evidence == "the kernel now publishes core.py:remove_item"
-
-
-def test_a_kernel_without_removal_reports_nothing() -> None:
-    """The shipped kernel publishes no removal, so the rule stays hypothetical."""
-    assert check_reservations._anchor_removal_has_landed() is None
-
-
 def test_stale_reports_the_condition_that_now_holds() -> None:
     """A stale reservation names its site, the evidence, and its condition."""
     reservation = check_reservations.Reservation(

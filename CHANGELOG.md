@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added enum-member emission and made `NodeSet` ordering an explicit contract (#71).
+- Added a public editing API: one operation set over two carriers. A frozen
+  `Graph` answers `declare`, `set_attribute`, `remove_attribute`, `insert_item`,
+  `remove_item`, `move_item`, `swap_items`, `add_relation`, and `remove_relation`
+  by returning a new graph; the new public `GraphEditor`, reached through
+  `Graph.edit()`, answers the same nine in place and validates once at
+  `freeze()`. Which behavior a caller gets follows from the carrier held, not
+  from a mode argument. Structural operations carry the graph's own item
+  coordinates with their items and refuse an edit that would leave a stored
+  coordinate boundary value without one boundary to hold it. This settles the
+  rule for removing a durable boundary's anchor: the removal is refused rather
+  than reinterpreted. The wire format is untouched.
 - Added zero-width span support throughout projection, rendering, and the text,
   JSON, JSON Lines, HTML, and DOT emitters; `to_jsonl` now stamps its format
   version (#72).

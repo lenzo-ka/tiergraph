@@ -226,27 +226,6 @@ def _build_ergonomics_have_landed(paths: Sequence[Path] | None = None) -> str | 
     return "convenience construction now publishes " + ", ".join(landed)
 
 
-# The roots a kernel operation that destroys an anchor would be named after.
-REMOVAL_SPELLINGS: tuple[str, ...] = ("remove", "delete", "drop")
-
-
-def _anchor_removal_has_landed(paths: Sequence[Path] | None = None) -> str | None:
-    """Report a kernel operation that removes, which the unsettled rule assumes absent.
-
-    Reach: a public definition in ``core.py`` whose name contains ``remove``,
-    ``delete``, or ``drop``. The reservation is about the kernel's rule, and a
-    ratified kernel rule would be written in the kernel, so a removal offered by
-    a layer above and lowered to core would not be seen here.
-    """
-    landed = public_arrivals(
-        REMOVAL_SPELLINGS,
-        [ROOT / "src" / "tiergraph" / "core.py"] if paths is None else paths,
-    )
-    if not landed:
-        return None
-    return "the kernel now publishes " + ", ".join(landed)
-
-
 RESERVATIONS: tuple[Reservation, ...] = (
     Reservation(
         name="position-not-in-parent",
@@ -275,20 +254,6 @@ RESERVATIONS: tuple[Reservation, ...] = (
             "alternatives, or selection"
         ),
         overtaken=_build_ergonomics_have_landed,
-    ),
-    Reservation(
-        name="anchor-removal",
-        site="src/tiergraph/core.py",
-        symbol="DurablePositionRef",
-        text=(
-            "Removing an anchor is deliberately unsettled: removal destroys the "
-            "anchor,\nand the kernel has no ratified rule for that case."
-        ),
-        condition=(
-            "the kernel publishes an operation that removes, which is the point "
-            "at which the missing rule stops being hypothetical"
-        ),
-        overtaken=_anchor_removal_has_landed,
     ),
 )
 
