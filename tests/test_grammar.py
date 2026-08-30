@@ -737,7 +737,7 @@ def test_best_candidates_are_produced_by_declared_fold_transitions() -> None:
     """Changing alternative incidence changes the fold's ranked result."""
     forest = recognize(lower_grammar(diamond()), ("x", "y"))
     declared = _best_fold(forest, 2)
-    assert declared.tie_policy is TiePolicy.CHOOSE_FIRST
+    assert declared.tie_policy is None
     assert declared.run().ranked_witnesses is not None
     broken = replace(
         declared,
@@ -766,8 +766,26 @@ def test_ranked_fold_refuses_a_custom_noncanonical_order() -> None:
     declared = _best_fold(recognize(lower_grammar(diamond()), ("x", "y")), 2)
     with pytest.raises(ValueError, match="canonical order.*custom witness_order"):
         replace(declared, witness_order=lambda left, right: 0)
-    with pytest.raises(ValueError, match="ranked witnesses.*no tie policy"):
-        replace(declared, tie_policy=None)
+    with pytest.raises(ValueError, match="ranked output.*canonical witness path"):
+        replace(declared, tie_policy=TiePolicy.CHOOSE_FIRST)
+
+
+def test_best_ranks_a_genuine_tie_without_declaring_a_tie_policy() -> None:
+    """REGRESSION: n-best keeps every tied derivation, ordered by canonical path.
+
+    The tied grammar gives two derivations of the same exact cost, so the order
+    between them is decided after the carrier has run out of things to say. This
+    pins that ``best`` asks for no tie policy, and that the one derivation a
+    1-best keeps is the canonically earlier of the two rather than whichever the
+    enumeration reached first.
+    """
+    lowered = lower_grammar(diamond(tied=True))
+    both = best(lowered, ("x", "y"), count=2)
+    assert [candidate.weight for candidate in both] == ["1.75", "1.75"]
+    assert both[0].witness < both[1].witness
+    assert _best_fold(recognize(lowered, ("x", "y")), 1).tie_policy is None
+    one = best(lowered, ("x", "y"), count=1)
+    assert one == (both[0],)
 
 
 def test_nonroot_pruning_does_not_report_root_truncation() -> None:

@@ -190,6 +190,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format is unchanged: `FORMAT_VERSION` stays `"6"`, the schema artifact and its
   stamp are byte-identical, and all 2,967 conformance probes keep their outcome
   with no drift.
+- **BREAKING:** a fold with `ranked_output` now refuses a `tie_policy` instead of
+  requiring one. The requirement demanded the one declaration that configuration
+  could never read: ranked selection asks the semiring's addition which value it
+  prefers and then orders equal-valued witnesses by their canonical witness path,
+  which is total over distinct witnesses, so the executable policy in
+  `_select_paths` was reached only through a `witness_order`, which ranked output
+  already refuses. Every tied witness is retained, in canonical path order, up to
+  `output_cap`, and that is now stated where the tie is broken rather than left to
+  be inferred. `witness_order` and `tie_policy` remain one mechanism, declared
+  together or not at all. `grammar.best()` and `tiergraph fold --ranked` declare no
+  tie policy and return exactly what they returned before, tied derivations
+  included. The document format is unchanged: `FORMAT_VERSION` stays `"6"`, the
+  schema artifact and its stamp are byte-identical, and the conformance probes
+  keep their outcome.
 
 ### Removed
 
