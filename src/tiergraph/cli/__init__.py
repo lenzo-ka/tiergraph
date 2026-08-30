@@ -17,17 +17,8 @@ import tiergraph
 import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program
 from tiergraph import core as _core
-from tiergraph import machine as _machine_codec
 from tiergraph import wire as _wire
 from tiergraph.schema import json_schema, shape_hash
-
-_attributes = _machine_codec._decode_attributes
-_endpoint = _machine_codec._decode_endpoint
-_object = _machine_codec._decode_object
-_relation_declaration = _machine_codec._decode_relation_declaration
-_relation_instance = _machine_codec._decode_relation_instance
-_side = _machine_codec._decode_side
-_opcode = _machine_codec._decode_opcode
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -182,9 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
     )
 
-    selection = subparsers.add_parser("select", help="evaluate a selection query")
+    selection = subparsers.add_parser("select", help="evaluate a selector")
     selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    selection.add_argument("--query", required=True, metavar="FILE")
+    selection.add_argument("--selector", required=True, metavar="FILE")
     selection.add_argument(
         "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
     )
@@ -323,9 +314,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
         elif args.command == "select":
             graph = tiergraph.loads(_read_bytes(args.file))
-            query = tiergraph.selection_loads(_read_bytes(args.query))
-            _check_distinct(args.query, args.output)
-            selection_result = tiergraph.evaluate_selection(graph, query)
+            selector = tiergraph.selection_loads(_read_bytes(args.selector))
+            _check_distinct(args.selector, args.output)
+            selection_result = tiergraph.evaluate_selection(graph, selector)
             _write_output(
                 args.file,
                 args.output,

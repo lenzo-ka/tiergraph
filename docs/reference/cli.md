@@ -50,7 +50,7 @@ positional arguments:
     grammar             recognize with tiergraph grammars
     clock               query declarative clock timing
     span                render declarative span views
-    select              evaluate a selection query
+    select              evaluate a selector
 
 options:
   -h, --help            show this help message and exit
@@ -424,13 +424,13 @@ options:
 ### `tiergraph select`
 
 ```text
-usage: tiergraph select [-h] --query FILE [-o OUT] GRAPH
+usage: tiergraph select [-h] --selector FILE [-o OUT] GRAPH
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
 
 options:
   -h, --help            show this help message and exit
-  --query FILE
+  --selector FILE
   -o OUT, --output OUT  output file (default: -)
 ```

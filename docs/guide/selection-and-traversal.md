@@ -1,8 +1,8 @@
 # Selection and traversal
 
 Selection names a set of graph nodes. Traversal follows relations from one set
-to another. Both return canonical results, so the same query on the same graph
-always gives the same order.
+to another. Both return canonical results, so the same selector on the same
+graph always gives the same order.
 
 ## Selecting nodes
 

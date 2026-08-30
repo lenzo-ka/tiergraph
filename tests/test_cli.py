@@ -17,6 +17,7 @@ import pytest
 
 import tiergraph
 import tiergraph.cli as cli
+import tiergraph.machine as machine
 import tiergraph.machine_codec as machine_codec
 from tests.conformance.traversal import TraversalLawSuite
 from tests.test_clock import (
@@ -126,12 +127,12 @@ def _item_path(index: int) -> str:
     return f"/items/structural/urn:test:traversal/nodes/{index}"
 
 
-def test_select_query_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """The selection command evaluates compounds and diagnoses refused queries."""
+def test_select_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The selection command evaluates compounds and diagnoses refused selectors."""
     source = tmp_path / "graph.json"
-    query = tmp_path / "query.json"
+    selector = tmp_path / "selector.json"
     _path_graph(source)
-    query.write_text(
+    selector.write_text(
         json.dumps(
             {
                 "op": "difference",
@@ -153,7 +154,7 @@ def test_select_query_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         ),
         encoding="utf-8",
     )
-    assert main(["select", str(source), "--query", str(query)]) == 0
+    assert main(["select", str(source), "--selector", str(selector)]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output == {
         "nodes": [
@@ -167,16 +168,67 @@ def test_select_query_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         ]
     }
 
-    query.write_text('{"op":"union","args":[]}', encoding="utf-8")
-    assert main(["select", str(source), "--query", str(query)]) == 1
+    selector.write_text('{"op":"union","args":[]}', encoding="utf-8")
+    assert main(["select", str(source), "--selector", str(selector)]) == 1
     assert "ValueError" in capsys.readouterr().err
 
-    query.write_text(
+    selector.write_text(
         '{"select":"item","path":"/positions/structural/urn:path/tokens/0"}',
         encoding="utf-8",
     )
-    assert main(["select", str(source), "--query", str(query)]) == 1
+    assert main(["select", str(source), "--selector", str(selector)]) == 1
     assert "did not resolve to an item" in capsys.readouterr().err
+
+
+def test_select_spells_the_library_concept(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`select` reads a `--selector`; the retired `--query` spelling is refused."""
+    source = tmp_path / "graph.json"
+    _path_graph(source)
+    selector = tmp_path / "selector.json"
+    selector.write_text(
+        '{"select":"item","path":"/items/durable/alpha"}', encoding="utf-8"
+    )
+
+    assert main(["select", str(source), "--selector", str(selector)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "nodes": [
+            {
+                "kind": "item",
+                "reference": {
+                    "tier": {"namespace": "urn:path", "local_name": "tokens"},
+                    "index": 0,
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(SystemExit) as raised:
+        main(["select", str(source), "--query", str(selector)])
+    assert raised.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "required: --selector" in captured.err
+
+
+def test_select_help_retires_the_query_spelling(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Neither the subcommand listing nor `select --help` says `query`."""
+    with pytest.raises(SystemExit) as raised:
+        main(["--help"])
+    assert raised.value.code == 0
+    listing = capsys.readouterr().out
+    assert "evaluate a selector" in listing
+    assert "selection query" not in listing
+
+    with pytest.raises(SystemExit) as raised:
+        main(["select", "--help"])
+    assert raised.value.code == 0
+    select_help = capsys.readouterr().out
+    assert "--selector FILE" in select_help
+    assert "query" not in select_help
 
 
 def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
@@ -1488,6 +1540,32 @@ def test_cli_output_emitters_are_audited() -> None:
     )
 
 
+def test_cli_binds_no_private_name_from_another_module() -> None:
+    """The CLI keeps no module-level handle on another module's private name.
+
+    A module-level alias to a private decoder executes on import, so linting,
+    typing, and branch coverage all report it as live even when nothing reads
+    it.  This reads the module and names every such binding, so a test seam
+    reintroduced through the CLI fails here instead of surviving every gate.
+    """
+    tree = ast.parse(Path(cli.__file__).read_text(encoding="utf-8"))
+    aliases: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Attribute) or not value.attr.startswith("_"):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                aliases.add(f"{target.id} = {ast.unparse(value)}")
+    assert aliases == set(), (
+        "the CLI is a thin API client and never reaches past it; point a test at "
+        "the module that owns the private name instead of aliasing it through "
+        f"the CLI (found {sorted(aliases)!r})"
+    )
+
+
 def test_surrogate_reports_are_refused_with_field_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1501,8 +1579,8 @@ def test_surrogate_reports_are_refused_with_field_paths(
     surrogate = "\ud800"
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
-    query = tmp_path / "query.json"
-    query.write_text(json.dumps({"select": "item", "path": "/items/durable/a"}))
+    selector = tmp_path / "selector.json"
+    selector.write_text(json.dumps({"select": "item", "path": "/items/durable/a"}))
     program = tmp_path / "program.jsonl"
     _program(program, DeclareNamespace(NamespaceDeclaration("p", surrogate)))
 
@@ -1571,7 +1649,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
             "path",
         ),
         (
-            ["select", str(source), "--query", str(query)],
+            ["select", str(source), "--selector", str(selector)],
             "nodes[0].reference.tier.namespace",
         ),
         (
@@ -1792,7 +1870,7 @@ def test_public_opcode_data_shapes_decode_exactly() -> None:
         Repeat(1, (AddItem(tier),)),
     ]
     for opcode in opcodes:
-        assert cli._opcode(opcode.to_data(), "record") == opcode
+        assert machine._decode_opcode(opcode.to_data(), "record") == opcode
 
 
 @pytest.mark.parametrize(
@@ -1806,20 +1884,20 @@ def test_public_opcode_data_shapes_decode_exactly() -> None:
 )
 def test_opcode_shape_errors(value: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        cli._opcode(value, "record")
+        machine._decode_opcode(value, "record")
 
 
 def test_reference_and_collection_shape_errors() -> None:
     with pytest.raises(ValueError, match="must be an array"):
-        cli._attributes({}, "attributes")
+        machine._decode_attributes({}, "attributes")
     with pytest.raises(ValueError, match="endpoint object"):
-        cli._endpoint(None, "endpoint")
+        machine._decode_endpoint(None, "endpoint")
     with pytest.raises(ValueError, match="unknown reference shape"):
-        cli._endpoint({}, "endpoint")
+        machine._decode_endpoint({}, "endpoint")
     with pytest.raises(ValueError, match="unknown shape"):
-        cli._endpoint({"anchor": {}, "side": "before"}, "endpoint")
+        machine._decode_endpoint({"anchor": {}, "side": "before"}, "endpoint")
     with pytest.raises(ValueError, match="endpoint_kinds and tiers"):
-        cli._side(
+        machine._decode_side(
             {
                 "endpoint_kinds": {},
                 "tiers": [],
@@ -1832,7 +1910,7 @@ def test_reference_and_collection_shape_errors() -> None:
     polyadic = PolyadicRelationInstance(QualifiedName("urn:x", "r"), (), ()).to_data()
     polyadic["sources"] = {}
     with pytest.raises(ValueError, match="sources and targets must be arrays"):
-        cli._relation_instance(polyadic, "relation")
+        machine._decode_relation_instance(polyadic, "relation")
     with pytest.raises(ValueError, match="must contain at most one"):
         data = PolyadicRelationDeclaration(
             QualifiedName("urn:x", "r"),
@@ -1840,11 +1918,11 @@ def test_reference_and_collection_shape_errors() -> None:
             RelationSideDeclaration((RelationEndpointKind.ITEM,)),
         ).to_data()
         data["targets_subset_of"] = [{}, {}]
-        cli._relation_declaration(data, "declaration")
+        machine._decode_relation_declaration(data, "declaration")
     with pytest.raises(ValueError, match="kind .* is unknown"):
-        cli._relation_declaration({"kind": "bad"}, "declaration")
+        machine._decode_relation_declaration({"kind": "bad"}, "declaration")
     with pytest.raises(ValueError, match="must be an object"):
-        cli._relation_declaration(None, "declaration")
+        machine._decode_relation_declaration(None, "declaration")
 
 
 def test_stdin_stdout_limits_and_type_normalization(
@@ -1958,4 +2036,4 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
         bytes((ord('"'), ord("\\"), ord('"'), ord('"'))), 1
     )
     with pytest.raises(ValueError, match="JSON nesting depth exceeds limit"):
-        cli._opcode({}, "line 2", tiergraph.MAX_JSON_DEPTH + 1)
+        machine._decode_opcode({}, "line 2", tiergraph.MAX_JSON_DEPTH + 1)

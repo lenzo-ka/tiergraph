@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI reports now apply the writer's refusal before encoding. Invalid report
   data exits with status 1 instead of leaking `UnicodeEncodeError` at status 3
   (#78).
+- **BREAKING:** `tiergraph select` now reads its input from `--selector`, and
+  its help text names a selector. The retired `--query` spelling is refused
+  outright; there is no alias, so the library, the flag, and the help now spell
+  one concept one way.
 - The publishability gate now refuses sibling-repository names by comparing
   salted digests, so no forbidden name is written down in the repository.
 
