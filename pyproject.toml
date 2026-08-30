@@ -79,4 +79,6 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests", "examples"]
+# The gate scripts are inside every other bar this project keeps -- lint,
+# format, coverage, docstrings -- so they are inside this one too.
+files = ["src", "tests", "examples", "scripts"]

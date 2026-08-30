@@ -11,3 +11,12 @@ build/
 dist/
 *.egg-info/
 .venv/
+# A lock file records one machine's resolution. This distribution is a library:
+# it declares ranges and pins nothing for the programs that install it, so a
+# resolved lock belongs to whoever resolved it and not to the tree.
+uv.lock
+# Written by the macOS Finder, in any directory, without being asked. It is
+# binary, so it cannot be read as a shipped surface at all, and nothing here
+# would place one deliberately. A contributor's machine-local global ignore
+# file is not a property of this repository, so this repository says it too.
+.DS_Store

@@ -205,6 +205,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructions check, and it repeats the protocol's own `LawCheck`-valued
   properties, which a caller reads from the algebra. The underscore says so.
 
+### Fixed
+
+- Closed a file that could ship without being read. The publishability gate
+  reads the git index while a source distribution is built from the working
+  tree, so a file that is neither tracked nor ignored rode out unscanned; the
+  distribution test compared each shipped name against the gate's exemption
+  predicate, which answers about a name and not about membership, so it passed
+  on exactly that file. The test now asserts that what ships is a subset of the
+  paths the gate selects, and a planted untracked, unignored file fails it. A
+  resolved lock file and a macOS Finder directory record, the two artifacts
+  this tree can acquire in that condition, are now ignored: this project
+  publishes libraries, which declare ranges and pin nothing for the programs
+  that install them, so a lock belongs to whoever resolved it. The gate scripts
+  also join the strict type-checking bar they were already outside of, having
+  been inside every other bar this project keeps.
+
 ## [0.1.0] - 2026-08-23
 
 ### Added
