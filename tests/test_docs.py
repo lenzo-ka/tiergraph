@@ -88,6 +88,49 @@ def test_class_entries_include_public_members_once_in_definition_order() -> None
     assert "Example._private" not in rendered
 
 
+def test_class_entries_render_static_methods_and_omit_unreadable_members() -> None:
+    """CHARACTERIZATION: static methods render; write-only and undocumented members do not."""
+
+    class Example:
+        """Example class."""
+
+        @staticmethod
+        def helper(value: int) -> int:
+            """Return one value."""
+            return value
+
+        def undocumented(self) -> None:
+            pass
+
+        def _store(self, value: int) -> None:
+            """Store a value on the example."""
+
+        write_only = property(None, _store)
+
+    rendered = generate_docs._entry(SimpleNamespace(Example=Example), "Example", {})
+    assert "#### `Example.helper`" in rendered
+    assert "Static method." in rendered
+    assert "Example.undocumented" not in rendered
+    assert "Example.write_only" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "message"),
+    [("", "boom", "wrote to stderr"), ("not JSON\n", "", "line 1 is not JSON")],
+)
+def test_cli_stepping_example_failures_are_rejected(
+    monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str, message: str
+) -> None:
+    """CHARACTERIZATION: the stepping example must be silent on stderr and JSON on stdout."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=stdout, stderr=stderr),
+    )
+    with pytest.raises(ValueError, match=message):
+        generate_docs.cli_bytes()
+
+
 def test_missing_generated_directive_is_rejected() -> None:
     with pytest.raises(ValueError, match="expected one 'copy-example' directive"):
         generate_docs._replace_directive("plain text", "copy-example", "body")

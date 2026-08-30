@@ -66,7 +66,7 @@
   ],
   "secondary": {
     "tiergraph.build": ["Document", "document", "item"],
-    "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "ProductSemiring", "Semiring", "StarRefusal", "StarSelector", "TropicalSemiring", "ZeroClosedStar"],
+    "tiergraph.semiring": ["ARCTIC", "BOOLEAN", "COUNTING", "DECIMAL_ARCTIC", "DECIMAL_TROPICAL", "PATH", "PATH_WITNESSES", "TROPICAL", "BooleanSemiring", "ArcticSemiring", "CountingSemiring", "DecimalExtremumSemiring", "DoubleExtremumSemiring", "ExpectationSemiring", "LexicographicSemiring", "LawCheck", "Path", "PathSemiring", "PathValue", "PathWitnessSemiring", "ProductSemiring", "Semiring", "StarRefusal", "StarSelector", "TropicalSemiring", "ZeroClosedStar"],
     "tiergraph.schema": ["json_schema", "shape_hash"],
     "tiergraph.cli": ["build_parser", "main"],
     "tiergraph.spanview": ["SpanViewProfile", "SpanView", "Span", "SpanAlternative", "span_view", "to_json", "to_jsonl", "to_text", "to_html", "SPANVIEW_FORMAT_VERSION"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -346,3 +347,124 @@ def test_documented_accepts_documented_public_names(
         encoding="utf-8",
     )
     assert check_documented.undocumented(path) == []
+
+
+def test_tracked_files_reads_the_git_index_not_the_working_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHARACTERIZATION: the listing is exactly the index, subdirectories included."""
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / "top.md").write_text("portable prose\n", encoding="utf-8")
+    nested = tmp_path / "docs"
+    nested.mkdir()
+    (nested / "guide.md").write_text("portable prose\n", encoding="utf-8")
+    (tmp_path / "scratch.md").write_text("local scratch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "top.md", "docs/guide.md"], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    assert check_tracked_clean.tracked_files() == [
+        Path("docs/guide.md"),
+        Path("top.md"),
+    ]
+
+
+def test_unparsable_python_fails_closed_rather_than_passing(tmp_path: Path) -> None:
+    """CHARACTERIZATION: source the gate cannot parse is refused, never skipped."""
+    source = tmp_path / "broken.py"
+    source.write_text("def (\n", encoding="utf-8")
+    with pytest.raises(ValueError) as excinfo:
+        check_tracked_clean.reference_leaks(source)
+    assert "cannot inspect imports in" in str(excinfo.value)
+    assert str(source) in str(excinfo.value)
+
+
+def test_from_imports_report_their_top_level_package(tmp_path: Path) -> None:
+    """CHARACTERIZATION: a `from` import names its root; a relative import names none."""
+    source = tmp_path / "sample.py"
+    source.write_text(
+        "from unanticipated_toolkit.inner import helper\nfrom . import sibling\n",
+        encoding="utf-8",
+    )
+    assert check_tracked_clean.reference_leaks(source) == [
+        f"{source}: an unallowlisted top-level import ('unanticipated_toolkit')"
+    ]
+
+
+@pytest.mark.parametrize("requirement", ("", "!broken"))
+def test_unreadable_dependency_requirement_fails_closed(
+    tmp_path: Path, requirement: str
+) -> None:
+    """CHARACTERIZATION: a requirement with no leading name is refused, not ignored."""
+    project = tmp_path / "pyproject.toml"
+    project.write_text(
+        f'[project]\ndependencies = ["{requirement}"]\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="cannot inspect dependency requirement"):
+        check_tracked_clean.reference_leaks(project)
+
+
+def test_unallowlisted_distribution_is_reported_from_every_group(
+    tmp_path: Path,
+) -> None:
+    """CHARACTERIZATION: required and optional requirements are alike normalized and checked."""
+    project = tmp_path / "pyproject.toml"
+    project.write_text(
+        "[project]\n"
+        'dependencies = ["Unanticipated_Toolkit>=1.0"]\n'
+        "[project.optional-dependencies]\n"
+        'extra = ["another.tool"]\n',
+        encoding="utf-8",
+    )
+    assert check_tracked_clean.reference_leaks(project) == [
+        f"{project}: an unallowlisted distribution ('unanticipated-toolkit')",
+        f"{project}: an unallowlisted distribution ('another-tool')",
+    ]
+
+
+def test_allowlisted_email_is_accepted_case_insensitively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHARACTERIZATION: the email allowlist admits exactly the addresses it names."""
+    monkeypatch.setattr(
+        check_tracked_clean, "ALLOWED_EMAILS", {"release" + "@example" + ".com"}
+    )
+    path = tmp_path / "guide.md"
+    path.write_text(
+        "Write to Release" + "@Example" + ".com, never other" + "@example" + ".com\n",
+        encoding="utf-8",
+    )
+    assert check_tracked_clean.reference_leaks(path) == [
+        f"{path}: an unallowlisted email address ('other" + "@example" + ".com')"
+    ]
+
+
+def test_documented_main_names_every_undocumented_public_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CHARACTERIZATION: the gate exits nonzero and reports each offending name on stderr."""
+    package = tmp_path / "sample_package"
+    package.mkdir()
+    (package / "documented.py").write_text('"""Module."""\n', encoding="utf-8")
+    (package / "bare.py").write_text("def public():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(check_documented, "ROOT", tmp_path)
+    monkeypatch.setattr(check_documented, "PACKAGES", (package,))
+    assert check_documented.main() == 1
+    report = capsys.readouterr().err
+    assert "public names must carry a docstring" in report
+    assert "sample_package/bare.py: the module itself" in report
+    assert "sample_package/bare.py:public" in report
+    assert "documented.py" not in report
+
+
+def test_documented_main_accepts_a_fully_documented_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CHARACTERIZATION: a package whose public names all carry docstrings passes silently."""
+    package = tmp_path / "sample_package"
+    package.mkdir()
+    (package / "documented.py").write_text(
+        '"""Module."""\n\ndef public():\n    """Function."""\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(check_documented, "ROOT", tmp_path)
+    monkeypatch.setattr(check_documented, "PACKAGES", (package,))
+    assert check_documented.main() == 0
+    assert capsys.readouterr().err == ""

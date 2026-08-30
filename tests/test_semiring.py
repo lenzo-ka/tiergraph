@@ -12,6 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.strategies import DataObject, SearchStrategy
 
+from tiergraph import semiring as semiring_module
 from tiergraph.semiring import (
     ARCTIC,
     BOOLEAN,
@@ -499,3 +500,25 @@ def test_lexicographic_and_path_witness_refusals() -> None:
             witnesses.decode(invalid)
     with pytest.raises(ValueError, match="array of arrays"):
         witnesses.decode(["not-a-path"])
+
+
+def test_every_semiring_the_module_defines_is_declared_public() -> None:
+    """REGRESSION: an implementation or singleton absent from __all__ is unreachable."""
+    declared = set(semiring_module.__all__)
+    implementations = {
+        name: value
+        for name, value in vars(semiring_module).items()
+        if not name.startswith("_")
+        and isinstance(value, type)
+        and value.__module__ == semiring_module.__name__
+        and name.endswith("Semiring")
+    }
+    singletons = {
+        name
+        for name, value in vars(semiring_module).items()
+        if not name.startswith("_")
+        and not isinstance(value, type)
+        and type(value).__module__ == semiring_module.__name__
+    }
+    assert implementations and singletons
+    assert sorted((set(implementations) | singletons) - declared) == []
