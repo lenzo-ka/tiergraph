@@ -216,3 +216,32 @@ fold 'exact-over-double' valuation 'level' reads xsd:double attribute '{https://
 Use `TROPICAL` or `ARCTIC`, whose associativity check is approximate, for
 `xsd:double` values. The refusal is a declaration-time guard, so a fold that
 runs has already been checked for this mismatch.
+
+## From the command line
+
+`tiergraph semirings` lists the algebras a fold can name, with their carrier
+boundaries and declared laws, and `tiergraph fold` runs the declaration the
+flags describe over a stored document. The two folds above read as:
+
+```console
+tiergraph fold plan.json \
+  --name least-cost \
+  --attribute-namespace https://example.com/plan --attribute-local cost \
+  --tier https://example.com/plan tasks \
+  --semiring decimal-tropical --lift value \
+  --transition https://example.com/plan depends or \
+  --root /items/durable/a --ranked --output-cap 4
+
+tiergraph fold plan.json \
+  --name path-count \
+  --attribute-namespace https://example.com/plan --attribute-local cost \
+  --tier https://example.com/plan tasks \
+  --semiring counting --lift one \
+  --transition https://example.com/plan depends or
+```
+
+The shell names one of two lifts: `value` embeds the read value, and `one`
+embeds the semiring's multiplicative identity whatever the value is. A general
+`lift`, a `witness_order`, and an index product are caller code and stay here in
+the Python API; `--ranked` is the shell's route to witnesses, and it needs an
+algebra that declares `multiply_preserves_witness_order`.

@@ -98,15 +98,16 @@ model and a versioned interchange format.
 ## Command line
 
 The `tiergraph` command validates graph documents, renders them, and exposes the
-same span-view machinery as the Python API. For example:
+same span-view and folding machinery as the Python API. For example:
 
 ```console
 tiergraph validate graph.json
 tiergraph render graph.json -o graph.dot
 tiergraph span render graph.json --profile span-profile.json --format text
+tiergraph semirings
 ```
 
-See the generated [CLI reference](docs/reference/cli.md) for all thirteen
+See the generated [CLI reference](docs/reference/cli.md) for all fifteen
 commands and their options.
 
 ## Documentation

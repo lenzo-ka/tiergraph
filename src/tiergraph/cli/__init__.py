@@ -7,18 +7,31 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import Any, BinaryIO, cast
 
 import tiergraph
 import tiergraph_dot
-from tiergraph import ExecutionError, Program, Step, load_program
+from tiergraph import ExecutionError, Program, Step, load_program, semiring
 from tiergraph import core as _core
 from tiergraph import wire as _wire
 from tiergraph.schema import json_schema, shape_hash
+
+# The published semiring constants of the supported secondary module, spelled for
+# a shell. The listing command and the fold command share this one mapping, so the
+# vocabulary a user can read is exactly the vocabulary a fold can name.
+_SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
+    "arctic": semiring.ARCTIC,
+    "boolean": semiring.BOOLEAN,
+    "counting": semiring.COUNTING,
+    "decimal-arctic": semiring.DECIMAL_ARCTIC,
+    "decimal-tropical": semiring.DECIMAL_TROPICAL,
+    "path": semiring.PATH,
+    "tropical": semiring.TROPICAL,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +192,61 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument(
         "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
     )
+
+    fold = subparsers.add_parser("fold", help="fold a dependency relation")
+    fold.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    fold.add_argument(
+        "--name", default="fold", metavar="NAME", help="name used in refusals"
+    )
+    fold.add_argument("--attribute-namespace", required=True, metavar="NS")
+    fold.add_argument("--attribute-local", required=True, metavar="LOCAL")
+    fold.add_argument(
+        "--tier",
+        action="append",
+        nargs=2,
+        required=True,
+        metavar=("NS", "LOCAL"),
+        help="one valuation domain tier; repeatable",
+    )
+    fold.add_argument("--semiring", choices=tuple(_SEMIRINGS), required=True)
+    fold.add_argument(
+        "--lift",
+        choices=("one", "value"),
+        required=True,
+        help="embed the read value, or the semiring's multiplicative identity",
+    )
+    fold.add_argument(
+        "--transition",
+        action="append",
+        nargs=3,
+        required=True,
+        metavar=("NS", "LOCAL", "COMBINATION"),
+        help="one dependency relation and its and/or meaning; repeatable",
+    )
+    fold.add_argument(
+        "--root",
+        action="append",
+        metavar="TGPATH",
+        help="one declared root item; repeatable, inferred when omitted",
+    )
+    fold.add_argument(
+        "--ranked",
+        action="store_true",
+        help="also report witnesses ranked by the semiring's own order",
+    )
+    fold.add_argument(
+        "--output-cap", type=int, metavar="N", help="witness cap; requires --ranked"
+    )
+    fold.add_argument(
+        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
+    )
+
+    semirings = subparsers.add_parser(
+        "semirings", help="list the semirings a fold can name"
+    )
+    semirings.add_argument(
+        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
+    )
     return parser
 
 
@@ -322,6 +390,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
                 _json_bytes({"nodes": selection_result.to_data()}),
             )
+        elif args.command == "fold":
+            graph = tiergraph.loads(_read_bytes(args.file))
+            fold = _fold_declaration(graph, args)
+            _write_output(
+                args.file,
+                args.output,
+                _json_bytes(fold.run().to_data(fold.semiring)),
+            )
+        elif args.command == "semirings":
+            _write_output("-", args.output, _json_bytes(_semiring_report()))
         elif args.command == "run":
             if args.include_empty_tiers and args.to != "dot":
                 raise ValueError("--include-empty-tiers requires --to dot")
@@ -374,8 +452,8 @@ def _clock_decimal(value: Decimal) -> str:
     return _core._canonical_lexical(tiergraph.XsdType.DECIMAL, format(value, "f"))
 
 
-def _clock_resolved(
-    graph: tiergraph.Graph, text: str, kind: str
+def _resolved_reference(
+    graph: tiergraph.Graph, text: str, kind: str, subject: str
 ) -> tiergraph.ItemRef | tiergraph.PositionRef:
     """Resolve one structural path and require the requested reference kind."""
     resolved = tiergraph.resolve_path(graph, tiergraph.StructuralPathProfile(), text)
@@ -384,7 +462,132 @@ def _clock_resolved(
     if kind == "position" and isinstance(resolved, tiergraph.ResolvedPosition):
         return resolved.current
     article = "an" if kind == "item" else "a"
-    raise ValueError(f"clock {kind} path {text!r} did not resolve to {article} {kind}")
+    raise ValueError(
+        f"{subject} {kind} path {text!r} did not resolve to {article} {kind}"
+    )
+
+
+def _fold_lift(
+    algebra: semiring.Semiring[Any], kind: str
+) -> Callable[[object, str], Any]:
+    """Return the named lift, the only two a command line can spell.
+
+    A general lift is caller code, so the shell offers the two the folding guide
+    uses: the read value itself, and the semiring's multiplicative identity. The
+    value lift asks the algebra to encode each value before embedding it, so a
+    carrier mismatch becomes the house refusal at the offending item instead of
+    a ``TypeError`` escaping from inside the fold.
+    """
+    if kind == "one":
+
+        def one(value: object, label: str) -> object:
+            """Embed every read value as the semiring's multiplicative identity."""
+            return algebra.one
+
+        return one
+
+    def carrier(value: object, label: str) -> object:
+        """Embed one read attribute value, refusing a carrier mismatch."""
+        try:
+            algebra.encode(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"lift 'value' cannot embed item {label!r} value {value!r} in the "
+                f"{type(algebra).__name__} carrier: {error}"
+            ) from error
+        return value
+
+    return carrier
+
+
+def _child_combination(value: str) -> tiergraph.ChildCombination:
+    """Decode one transition's declared child combination."""
+    if value not in {member.value for member in tiergraph.ChildCombination}:
+        raise ValueError(f"transition combination {value!r} must be 'and' or 'or'")
+    return tiergraph.ChildCombination(value)
+
+
+def _fold_declaration(
+    graph: tiergraph.Graph, args: argparse.Namespace
+) -> tiergraph.FoldDeclaration[Any]:
+    """Build one public fold declaration from the parsed command line.
+
+    The valuation carries the attribute's local name, because a valuation name
+    only ever appears in a refusal and a second flag for it would buy nothing.
+    Ranked output needs a declared tie policy that ranked selection then never
+    consults, so the shell supplies one rather than offering an inert flag.
+    """
+    if args.output_cap is not None and not args.ranked:
+        raise ValueError("--output-cap requires --ranked")
+    algebra = _SEMIRINGS[args.semiring]
+    attribute = tiergraph.QualifiedName(args.attribute_namespace, args.attribute_local)
+    return tiergraph.FoldDeclaration(
+        args.name,
+        graph,
+        tiergraph.AttributeValuation(
+            attribute.local_name,
+            attribute,
+            tuple(
+                tiergraph.QualifiedName(namespace, local)
+                for namespace, local in args.tier
+            ),
+        ),
+        algebra,
+        _fold_lift(algebra, args.lift),
+        tuple(
+            tiergraph.FoldTransition(
+                tiergraph.QualifiedName(namespace, local),
+                _child_combination(combination),
+            )
+            for namespace, local, combination in args.transition
+        ),
+        roots=tuple(
+            cast(
+                tiergraph.ItemRef,
+                _resolved_reference(graph, text, "item", "fold root"),
+            )
+            for text in args.root or ()
+        ),
+        tie_policy=tiergraph.TiePolicy.CHOOSE_FIRST if args.ranked else None,
+        output_cap=1 if args.output_cap is None else args.output_cap,
+        ranked_output=args.ranked,
+    )
+
+
+def _semiring_report() -> object:
+    """Report every nameable semiring's carrier boundary and declared laws."""
+    return {
+        "semirings": [
+            {
+                "name": name,
+                "type": type(algebra).__name__,
+                "zero": algebra.encode(algebra.zero),
+                "one": algebra.encode(algebra.one),
+                "laws": {
+                    "add_associativity": algebra.add_associativity.value,
+                    "add_commutativity": algebra.add_commutativity.value,
+                    "left_distributivity": algebra.left_distributivity.value,
+                    "multiply_associativity": algebra.multiply_associativity.value,
+                    "right_distributivity": algebra.right_distributivity.value,
+                },
+                "properties": {
+                    "add_idempotent": algebra.add_idempotent,
+                    "add_selective": algebra.add_selective,
+                    "multiply_commutative": algebra.multiply_commutative,
+                    "multiply_preserves_witness_order": (
+                        algebra.multiply_preserves_witness_order
+                    ),
+                    "multiply_strictly_order_preserving": (
+                        algebra.multiply_strictly_order_preserving
+                    ),
+                    "no_zero_divisors": algebra.no_zero_divisors,
+                    "zero_sum_free": algebra.zero_sum_free,
+                },
+                "star": None if algebra.star is None else algebra.star.name,
+            }
+            for name, algebra in _SEMIRINGS.items()
+        ]
+    }
 
 
 def _clock_query(
@@ -404,7 +607,7 @@ def _clock_query(
     if args.clock_command == "position":
         position_reference = cast(
             tiergraph.PositionRef,
-            _clock_resolved(graph, args.position, "position"),
+            _resolved_reference(graph, args.position, "position", "clock"),
         )
         return {
             "position": position_reference.to_data(),
@@ -421,7 +624,9 @@ def _clock_query(
             "start": _clock_position_data(start),
             "end": _clock_position_data(end),
         }
-    item_reference = cast(tiergraph.ItemRef, _clock_resolved(graph, args.item, "item"))
+    item_reference = cast(
+        tiergraph.ItemRef, _resolved_reference(graph, args.item, "item", "clock")
+    )
     start, end = profile.structural_span(item_reference.tier, item_reference.index)
     physical = profile.timing(item_reference.tier, item_reference.index)
     try:
