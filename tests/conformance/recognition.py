@@ -56,7 +56,7 @@ class FoldLawSuite:
         result = declaration.run()
         assert result.cost.document_size == len(declaration.graph.canonical_items())
         assert result.cost.relation_incidence == len(declaration.graph.relations)
-        assert result.cost.index_product_size == len(declaration.coordinates())
+        assert result.cost.index_product_size == len(declaration.index_coordinates())
         assert result.cost.carrier_additions > result.cost.index_product_size
         assert result.cost.carrier_multiplications == len(declaration.states())
         assert (

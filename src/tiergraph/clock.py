@@ -10,12 +10,12 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     ItemRef,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     XsdType,
@@ -24,7 +24,7 @@ from tiergraph.machine import _decode_object, _decode_qname
 
 
 @dataclass(frozen=True, slots=True, order=True)
-class ClockPosition:
+class ClockCoordinate:
     """Name one integral gap inside an integral coarse tick."""
 
     tick: int
@@ -37,7 +37,7 @@ class ClockPosition:
         if isinstance(self.gap, bool) or not isinstance(self.gap, int):
             raise ValueError(f"clock gap {self.gap!r} is not integral")
         if self.tick < 0 or self.gap < 0:
-            raise ValueError(f"clock position {(self.tick, self.gap)!r} is negative")
+            raise ValueError(f"clock coordinate {(self.tick, self.gap)!r} is negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +60,7 @@ class ClockProfile:
 
     Every non-clock tier is either completely bound or explicitly untimed.  A
     binding targets an ordinary integral kernel boundary; optional integer
-    position attributes refine it to ``(coarse tick, ordered gap)``.  Thus two
+    boundary attributes refine it to ``(coarse tick, ordered gap)``.  Thus two
     repeated point occurrences can occupy distinct structural gaps at the same
     coarse tick without introducing fractional indices.
 
@@ -77,7 +77,7 @@ class ClockProfile:
     The profile remains silent on physical time for bound events with neither a
     rate nor stored timing, and on all events of explicitly untimed tiers.  It
     does not infer refinement: without refinement attributes each integral
-    clock boundary is the unrefined position ``(index, 0)``.  Partial document
+    clock boundary is the unrefined coordinate ``(index, 0)``.  Partial document
     extents remain valid, and trailing silence still needs an explicit item.
     """
 
@@ -93,8 +93,8 @@ class ClockProfile:
     duration_attribute: QualifiedName | None = None
     _rate: Decimal | None = field(init=False, repr=False)
     _unit: str = field(init=False, repr=False)
-    _bindings: dict[PositionRef, int] = field(init=False, repr=False)
-    _clock_positions: tuple[ClockPosition, ...] = field(init=False, repr=False)
+    _bindings: dict[BoundaryRef, int] = field(init=False, repr=False)
+    _clock_coordinates: tuple[ClockCoordinate, ...] = field(init=False, repr=False)
     _timings: dict[ItemRef, PhysicalTiming] = field(init=False, repr=False)
     _untimed_tiers: frozenset[QualifiedName] = field(init=False, repr=False)
     _structural: bool = field(init=False, repr=False, default=False)
@@ -192,23 +192,23 @@ class ClockProfile:
         ):
             raise ValueError("clock binding must relate boundary to boundary")
 
-        clock_positions = self._read_clock_positions(len(clock.items))
-        bindings: dict[PositionRef, int] = {}
+        clock_coordinates = self._read_clock_coordinates(len(clock.items))
+        bindings: dict[BoundaryRef, int] = {}
         for relation in self.graph.relations:
             if relation.declaration != self.binding_relation:
                 continue
-            if not isinstance(relation.left, DurablePositionRef):
+            if not isinstance(relation.left, DurableBoundaryRef):
                 raise ValueError("clock binding left endpoint is not a boundary")
-            if not isinstance(relation.right, DurablePositionRef):
+            if not isinstance(relation.right, DurableBoundaryRef):
                 raise ValueError("clock binding right endpoint is not a boundary")
-            source = self.graph.resolve_position(relation.left)
-            target = self.graph.resolve_position(relation.right)
+            source = self.graph.resolve_boundary(relation.left)
+            target = self.graph.resolve_boundary(relation.right)
             if target.tier != self.clock_tier:
                 raise ValueError("clock binding target is not on the clock tier")
             if source.tier == self.clock_tier:
-                raise ValueError("clock tier positions do not bind to themselves")
+                raise ValueError("clock tier boundaries do not bind to themselves")
             if source in bindings:
-                raise ValueError(f"tier position {source.to_data()!r} has two bindings")
+                raise ValueError(f"tier boundary {source.to_data()!r} has two bindings")
             bindings[source] = target.index
 
         untimed_tiers = self._read_untimed_tiers()
@@ -216,7 +216,7 @@ class ClockProfile:
             if tier_name == self.clock_tier:
                 continue
             coordinates = [
-                bindings.get(PositionRef(tier_name, index))
+                bindings.get(BoundaryRef(tier_name, index))
                 for index in range(len(tier.items) + 1)
             ]
             present = sum(coordinate is not None for coordinate in coordinates)
@@ -228,31 +228,31 @@ class ClockProfile:
                 continue
             if present != len(coordinates):
                 missing = coordinates.index(None)
-                position = PositionRef(tier_name, missing)
+                boundary = BoundaryRef(tier_name, missing)
                 raise ValueError(
-                    f"tier position {position.to_data()!r} has no clock binding"
+                    f"tier boundary {boundary.to_data()!r} has no clock binding"
                 )
             integral = [
                 coordinate for coordinate in coordinates if coordinate is not None
             ]
-            refined = [clock_positions[coordinate] for coordinate in integral]
+            refined = [clock_coordinates[coordinate] for coordinate in integral]
             if refined != sorted(refined):
                 raise ValueError(
                     f"clock bindings for tier {str(tier_name)!r} go backward"
                 )
 
         timings = self._read_timings(
-            untimed_tiers, bindings, clock_positions, rate, unit.lexical
+            untimed_tiers, bindings, clock_coordinates, rate, unit.lexical
         )
         object.__setattr__(self, "_rate", rate)
         object.__setattr__(self, "_unit", unit.lexical)
         object.__setattr__(self, "_bindings", bindings)
-        object.__setattr__(self, "_clock_positions", clock_positions)
+        object.__setattr__(self, "_clock_coordinates", clock_coordinates)
         object.__setattr__(self, "_timings", timings)
         object.__setattr__(self, "_untimed_tiers", frozenset(untimed_tiers))
 
     @classmethod
-    def from_position_values(
+    def from_boundary_values(
         cls,
         graph: Graph,
         clock_tier: QualifiedName,
@@ -262,11 +262,11 @@ class ClockProfile:
         unit_attribute: QualifiedName | None = None,
         collapse_shared_boundaries: bool = False,
     ) -> ClockProfile:
-        """Derive only the clock spine from the clock tier's boundary positions.
+        """Derive only the clock spine from the clock tier's boundary values.
 
-        This construction path reads the ``(tick, gap)`` position attributes on
+        This construction path reads the ``(tick, gap)`` boundary attributes on
         the clock tier's own boundaries -- exactly as the full constructor reads
-        them -- and yields the same :attr:`positions` sequence that the DOT
+        them -- and yields the same :attr:`coordinates` sequence that the DOT
         renderer draws as the spine. It requires neither a binding relation nor
         a unit attribute, so it accepts a graph whose relations and document
         attributes are empty; a unit is read only when ``unit_attribute`` is
@@ -274,7 +274,7 @@ class ClockProfile:
 
         The result supports spine rendering alone. It carries no tier-to-clock
         bindings, so every non-spine timing query -- :meth:`is_timed`,
-        :meth:`clock_position`, :meth:`refined_position`, :meth:`extent`,
+        :meth:`clock_index`, :meth:`refined_coordinate`, :meth:`extent`,
         :meth:`structural_span`, :meth:`timing`, and :meth:`duration` -- raises
         rather than returning an answer it cannot justify. Binding other tiers
         to the clock genuinely needs ``graph.relations`` and remains the full
@@ -282,7 +282,7 @@ class ClockProfile:
 
         With ``collapse_shared_boundaries``, each coarse tick's trailing gap --
         its closing boundary, coincident with the next tick's opening boundary
-        -- is folded away so the spine shows one node per occupied position.
+        -- is folded away so the spine shows one node per occupied coordinate.
         The default is off, leaving the raw boundaries and keeping every other
         caller's spine byte-identical.
         """
@@ -307,11 +307,11 @@ class ClockProfile:
         object.__setattr__(profile, "untimed_attribute", None)
         object.__setattr__(profile, "start_attribute", None)
         object.__setattr__(profile, "duration_attribute", None)
-        positions = profile._read_clock_positions(len(clock.items))
+        coordinates = profile._read_clock_coordinates(len(clock.items))
         if collapse_shared_boundaries:
-            # Collapse raw boundaries to occupied positions by folding away
+            # Collapse raw boundaries to occupied coordinates by folding away
             # each coarse tick's trailing gap.
-            positions = _collapse_shared_boundaries(positions)
+            coordinates = _collapse_shared_boundaries(coordinates)
         unit = ""
         if unit_attribute is not None:
             unit = profile._document_value(
@@ -320,7 +320,7 @@ class ClockProfile:
         object.__setattr__(profile, "_rate", None)
         object.__setattr__(profile, "_unit", unit)
         object.__setattr__(profile, "_bindings", {})
-        object.__setattr__(profile, "_clock_positions", positions)
+        object.__setattr__(profile, "_clock_coordinates", coordinates)
         object.__setattr__(profile, "_timings", {})
         object.__setattr__(profile, "_untimed_tiers", frozenset())
         object.__setattr__(profile, "_structural", True)
@@ -331,8 +331,8 @@ class ClockProfile:
         if self._structural:
             raise ValueError(
                 f"{operation} is unsupported on a ClockProfile built by "
-                "from_position_values: it derives only the clock spine from "
-                "position values and carries no tier-to-clock bindings"
+                "from_boundary_values: it derives only the clock spine from "
+                "boundary values and carries no tier-to-clock bindings"
             )
 
     def _declaration(
@@ -364,35 +364,37 @@ class ClockProfile:
             raise ValueError(f"{role} {str(name)!r} has no value")
         return value
 
-    def _read_clock_positions(self, item_count: int) -> tuple[ClockPosition, ...]:
+    def _read_clock_coordinates(self, item_count: int) -> tuple[ClockCoordinate, ...]:
         if (self.tick_attribute is None) != (self.gap_attribute is None):
             raise ValueError("clock refinement requires both tick and gap attributes")
         if self.tick_attribute is None or self.gap_attribute is None:
-            return tuple(ClockPosition(index) for index in range(item_count + 1))
+            return tuple(ClockCoordinate(index) for index in range(item_count + 1))
         self._declaration(
             self.tick_attribute, AttributeDomain.POSITION, XsdType.INTEGER, "clock tick"
         )
         self._declaration(
             self.gap_attribute, AttributeDomain.POSITION, XsdType.INTEGER, "clock gap"
         )
-        positions = []
+        coordinates = []
         for index in range(item_count + 1):
-            reference = PositionRef(self.clock_tier, index)
+            reference = BoundaryRef(self.clock_tier, index)
             values = {
                 value.name: value
-                for value in self.graph.positions(self.clock_tier)[index].attributes
+                for value in self.graph.boundaries(self.clock_tier)[index].attributes
             }
             try:
                 tick = int(values[self.tick_attribute].lexical)
                 gap = int(values[self.gap_attribute].lexical)
             except KeyError as error:
                 raise ValueError(
-                    f"clock position {reference.to_data()!r} lacks refinement"
+                    f"clock boundary {reference.to_data()!r} lacks refinement"
                 ) from error
-            positions.append(ClockPosition(tick, gap))
-        if positions != sorted(positions) or len(set(positions)) != len(positions):
-            raise ValueError("clock refinement positions are not strictly ordered")
-        return tuple(positions)
+            coordinates.append(ClockCoordinate(tick, gap))
+        if coordinates != sorted(coordinates) or len(set(coordinates)) != len(
+            coordinates
+        ):
+            raise ValueError("clock refinement coordinates are not strictly ordered")
+        return tuple(coordinates)
 
     def _read_untimed_tiers(self) -> set[QualifiedName]:
         if self.untimed_attribute is None:
@@ -415,8 +417,8 @@ class ClockProfile:
     def _read_timings(
         self,
         untimed_tiers: set[QualifiedName],
-        bindings: dict[PositionRef, int],
-        clock_positions: tuple[ClockPosition, ...],
+        bindings: dict[BoundaryRef, int],
+        clock_coordinates: tuple[ClockCoordinate, ...],
         rate: Decimal | None,
         unit: str,
     ) -> dict[ItemRef, PhysicalTiming]:
@@ -462,10 +464,12 @@ class ClockProfile:
                     )
                 timing = PhysicalTiming(start, duration, unit)
                 if rate is not None:
-                    left = bindings[PositionRef(reference.tier, index)]
-                    right = bindings[PositionRef(reference.tier, index + 1)]
-                    start_tick = clock_positions[left].tick
-                    tick_span = clock_positions[right].tick - clock_positions[left].tick
+                    left = bindings[BoundaryRef(reference.tier, index)]
+                    right = bindings[BoundaryRef(reference.tier, index + 1)]
+                    start_tick = clock_coordinates[left].tick
+                    tick_span = (
+                        clock_coordinates[right].tick - clock_coordinates[left].tick
+                    )
                     if not (
                         _decimal_times_rate_equals(start, rate, start_tick)
                         and _decimal_times_rate_equals(duration, rate, tick_span)
@@ -492,32 +496,32 @@ class ClockProfile:
         return self._unit
 
     @property
-    def positions(self) -> tuple[ClockPosition, ...]:
-        """Return the profile's validated refined clock positions in order."""
-        return self._clock_positions
+    def coordinates(self) -> tuple[ClockCoordinate, ...]:
+        """Return the profile's validated refined clock coordinates in order."""
+        return self._clock_coordinates
 
     def is_timed(self, tier: QualifiedName) -> bool:
         """Report whether a tier chose complete clock binding."""
         self._refuse_structural_timing("is_timed")
         return tier not in self._untimed_tiers
 
-    def clock_position(self, position: PositionRef) -> int:
-        """Return the integral clock-tier boundary bound to one tier position."""
-        self._refuse_structural_timing("clock_position")
+    def clock_index(self, boundary: BoundaryRef) -> int:
+        """Return the integral clock-tier boundary bound to one tier boundary."""
+        self._refuse_structural_timing("clock_index")
         try:
-            return self._bindings[position]
+            return self._bindings[boundary]
         except KeyError as error:
             raise ValueError(
-                f"tier position {position.to_data()!r} has no clock binding"
+                f"tier boundary {boundary.to_data()!r} has no clock binding"
             ) from error
 
-    def refined_position(self, position: PositionRef) -> ClockPosition:
-        """Return the coarse tick and ordered gap bound to one tier position."""
-        if position.tier in self._untimed_tiers:
-            raise ValueError(f"tier {str(position.tier)!r} is untimed")
-        return self._clock_positions[self.clock_position(position)]
+    def refined_coordinate(self, boundary: BoundaryRef) -> ClockCoordinate:
+        """Return the coarse tick and ordered gap bound to one tier boundary."""
+        if boundary.tier in self._untimed_tiers:
+            raise ValueError(f"tier {str(boundary.tier)!r} is untimed")
+        return self._clock_coordinates[self.clock_index(boundary)]
 
-    def extent(self, tier: QualifiedName) -> tuple[ClockPosition, ClockPosition]:
+    def extent(self, tier: QualifiedName) -> tuple[ClockCoordinate, ClockCoordinate]:
         """Return a timed tier's possibly partial refined clock extent."""
         self._refuse_structural_timing("extent")
         member = next(
@@ -534,17 +538,17 @@ class ClockProfile:
             raise ValueError(f"tier {str(tier)!r} is the clock tier")
         if tier in self._untimed_tiers:
             raise ValueError(f"tier {str(tier)!r} is untimed")
-        return self.refined_position(PositionRef(tier, 0)), self.refined_position(
-            PositionRef(tier, len(member.items))
+        return self.refined_coordinate(BoundaryRef(tier, 0)), self.refined_coordinate(
+            BoundaryRef(tier, len(member.items))
         )
 
     def structural_span(
         self, tier: QualifiedName, index: int
-    ) -> tuple[ClockPosition, ClockPosition]:
-        """Return an event span between refined integral positions."""
-        return self.refined_position(PositionRef(tier, index)), self.refined_position(
-            PositionRef(tier, index + 1)
-        )
+    ) -> tuple[ClockCoordinate, ClockCoordinate]:
+        """Return an event span between refined integral coordinates."""
+        return self.refined_coordinate(
+            BoundaryRef(tier, index)
+        ), self.refined_coordinate(BoundaryRef(tier, index + 1))
 
     def timing(self, tier: QualifiedName, index: int) -> PhysicalTiming | None:
         """Return stored timing or exactly representable coarse-tick timing.
@@ -621,13 +625,13 @@ def _exact_decimal_ratio(tick: int, rate: Decimal) -> Decimal:
 
 
 def _collapse_shared_boundaries(
-    positions: tuple[ClockPosition, ...],
-) -> tuple[ClockPosition, ...]:
+    coordinates: tuple[ClockCoordinate, ...],
+) -> tuple[ClockCoordinate, ...]:
     """Fold each coarse tick's trailing gap, keeping one node per occupied gap.
 
     A tick's closing boundary and the next tick's opening boundary lie on the
     same instant. Collapsing drops each tick's final raw gap so the
-    spine shows exactly the occupied positions: a tick with ``R`` raw
+    spine shows exactly the occupied coordinates: a tick with ``R`` raw
     boundaries keeps gaps ``0`` through ``R - 2``. The terminal tick's closing
     boundary is dropped the same way. The input is strictly ordered, so equal
     ticks are consecutive and the drop is always the last member of each run.
@@ -637,44 +641,46 @@ def _collapse_shared_boundaries(
     refused rather than silently dropped. Collapse therefore only ever folds
     the trailing boundary of a tick that has at least two.
     """
-    collapsed: list[ClockPosition] = []
+    collapsed: list[ClockCoordinate] = []
     index = 0
-    count = len(positions)
+    count = len(coordinates)
     while index < count:
         tail = index
-        while tail + 1 < count and positions[tail + 1].tick == positions[index].tick:
+        while (
+            tail + 1 < count and coordinates[tail + 1].tick == coordinates[index].tick
+        ):
             tail += 1
         if tail == index:
             raise ValueError(
-                f"clock tick {positions[index].tick} has a single raw boundary; "
+                f"clock tick {coordinates[index].tick} has a single raw boundary; "
                 "collapse_shared_boundaries needs at least two raw boundaries per "
                 "tick so the shared closing boundary can be folded without "
                 "deleting the tick"
             )
-        collapsed.extend(positions[index:tail])
+        collapsed.extend(coordinates[index:tail])
         index = tail + 1
     return tuple(collapsed)
 
 
-def anchored_position(graph: Graph, position: PositionRef) -> DurablePositionRef:
+def anchored_boundary(graph: Graph, boundary: BoundaryRef) -> DurableBoundaryRef:
     """Name an existing boundary by its anchor without changing the graph."""
     tier = next(
         (
             candidate
             for candidate in graph.tiers
-            if candidate.declaration.name == position.tier
+            if candidate.declaration.name == boundary.tier
         ),
         None,
     )
-    if tier is None or position.index < 0 or position.index > len(tier.items):
-        raise ValueError(f"position {position.to_data()!r} is outside its tier")
-    if position.index == 0:
-        return DurablePositionRef(position.tier, BoundarySide.BEFORE)
-    if position.index == len(tier.items):
-        return DurablePositionRef(position.tier, BoundarySide.AFTER)
-    anchor = tier.items[position.index].durable_id
+    if tier is None or boundary.index < 0 or boundary.index > len(tier.items):
+        raise ValueError(f"boundary {boundary.to_data()!r} is outside its tier")
+    if boundary.index == 0:
+        return DurableBoundaryRef(boundary.tier, BoundarySide.BEFORE)
+    if boundary.index == len(tier.items):
+        return DurableBoundaryRef(boundary.tier, BoundarySide.AFTER)
+    anchor = tier.items[boundary.index].durable_id
     if anchor is None:
         raise ValueError(
-            f"position {position.to_data()!r} needs a durable right-hand anchor"
+            f"boundary {boundary.to_data()!r} needs a durable right-hand anchor"
         )
-    return DurablePositionRef(DurableItemRef(anchor), BoundarySide.BEFORE)
+    return DurableBoundaryRef(DurableItemRef(anchor), BoundarySide.BEFORE)

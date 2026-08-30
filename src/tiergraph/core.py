@@ -401,7 +401,7 @@ class Tier:
 
 @dataclass(frozen=True, slots=True)
 class ItemRef:
-    """Address an item by its current structural position."""
+    """Address an item by its current structural coordinate."""
 
     tier: QualifiedName
     index: int
@@ -420,7 +420,7 @@ class ItemRef:
 
 
 @dataclass(frozen=True, slots=True)
-class PositionRef:
+class BoundaryRef:
     """Address a boundary owned by a tier, including both outer boundaries."""
 
     tier: QualifiedName
@@ -428,10 +428,10 @@ class PositionRef:
 
     def __post_init__(self) -> None:
         """Require context-free integral identity before use or serialization."""
-        _require_integral_index(self.index, "position", self.to_data())
+        _require_integral_index(self.index, "boundary", self.to_data())
 
     def to_data(self) -> dict[str, JsonValue]:
-        """Return the position reference as JSON-serializable data."""
+        """Return the boundary reference as JSON-serializable data."""
         return {"tier": self.tier.to_data(), "index": self.index}
 
     def __str__(self) -> str:
@@ -455,7 +455,7 @@ class DurableItemRef:
 
 
 @dataclass(frozen=True, slots=True)
-class DurablePositionRef:
+class DurableBoundaryRef:
     """Address a boundary whose identity is its anchor and chosen side.
 
     Boundary identity is anchor-relative: an interior boundary's identity is,
@@ -503,14 +503,14 @@ class DurablePositionRef:
         return f"{self.side.value} {anchor}"
 
 
-type RelationEndpointRef = ItemRef | DurablePositionRef
+type RelationEndpointRef = ItemRef | DurableBoundaryRef
 
 
 @dataclass(frozen=True, slots=True)
-class Position:
+class Boundary:
     """Hold values for one addressable boundary while empty boundaries stay derived."""
 
-    reference: PositionRef | DurablePositionRef
+    reference: BoundaryRef | DurableBoundaryRef
     attributes: tuple[AttributeValue, ...]
 
     def __post_init__(self) -> None:
@@ -518,7 +518,7 @@ class Position:
         _canonicalize_attributes(self)
 
     def to_data(self) -> dict[str, JsonValue]:
-        """Return the position and its values as JSON-serializable data."""
+        """Return the boundary and its values as JSON-serializable data."""
         return {
             "reference": self.reference.to_data(),
             "attributes": _attributes_data(self.attributes),
@@ -585,7 +585,7 @@ class Graph:
 
     Collections keyed by names or references are canonicalized because supply
     order has no graph meaning: namespaces, relation and attribute declarations,
-    every attribute-value collection, sparse position values, and relation-side
+    every attribute-value collection, sparse boundary values, and relation-side
     allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
     endpoint sequences remain ordered because their sequence carries graph meaning.
     """
@@ -595,7 +595,7 @@ class Graph:
     relation_declarations: tuple[RelationDeclaration, ...]
     relations: tuple[RelationInstance, ...] = ()
     attribute_declarations: tuple[AttributeDeclaration, ...] = ()
-    position_values: tuple[Position, ...] = ()
+    boundary_values: tuple[Boundary, ...] = ()
     attributes: tuple[AttributeValue, ...] = ()
     polyadic_relations: tuple[PolyadicRelationInstance, ...] = ()
     _tiers_by_name: dict[QualifiedName, Tier] = field(
@@ -604,7 +604,7 @@ class Graph:
     _types_by_tier: dict[QualifiedName, QualifiedName] = field(
         init=False, repr=False, compare=False
     )
-    _positions_by_ref: dict[PositionRef, Position] = field(
+    _boundaries_by_ref: dict[BoundaryRef, Boundary] = field(
         init=False, repr=False, compare=False
     )
     _items_by_id: dict[str, ItemRef] = field(init=False, repr=False, compare=False)
@@ -786,31 +786,31 @@ class Graph:
                 tiers_by_name,
                 items_by_id,
             )
-        positioned_values: list[tuple[PositionRef, Position]] = []
-        for position in self.position_values:
-            coordinate = _resolve_position_reference(
-                position.reference,
+        valued_boundaries: list[tuple[BoundaryRef, Boundary]] = []
+        for boundary in self.boundary_values:
+            coordinate = _resolve_boundary_reference(
+                boundary.reference,
                 tiers_by_name,
                 items_by_id,
                 GraphValidationError,
             )
-            positioned_values.append((coordinate, position))
-            if not position.attributes:
+            valued_boundaries.append((coordinate, boundary))
+            if not boundary.attributes:
                 raise GraphValidationError(
-                    f"position {str(position.reference)!r} has no attribute values; "
-                    "empty positions are derived"
+                    f"boundary {str(boundary.reference)!r} has no attribute values; "
+                    "empty boundaries are derived"
                 )
             _validate_attributes(
-                position.attributes, AttributeDomain.POSITION, attributes
+                boundary.attributes, AttributeDomain.POSITION, attributes
             )
-        positions_by_ref = _unique_by_name(positioned_values, "position value")
+        boundaries_by_ref = _unique_by_name(valued_boundaries, "boundary value")
         object.__setattr__(
             self,
-            "position_values",
+            "boundary_values",
             tuple(
-                position
-                for _, position in sorted(
-                    positioned_values,
+                boundary
+                for _, boundary in sorted(
+                    valued_boundaries,
                     key=lambda entry: (entry[0].tier, entry[0].index),
                 )
             ),
@@ -824,28 +824,28 @@ class Graph:
         )
         object.__setattr__(self, "_tiers_by_name", tiers_by_name)
         object.__setattr__(self, "_types_by_tier", types_by_tier)
-        object.__setattr__(self, "_positions_by_ref", positions_by_ref)
+        object.__setattr__(self, "_boundaries_by_ref", boundaries_by_ref)
         object.__setattr__(
             self,
             "_items_by_id",
             items_by_id,
         )
 
-    def positions(self, tier: QualifiedName) -> tuple[Position, ...]:
+    def boundaries(self, tier: QualifiedName) -> tuple[Boundary, ...]:
         """Return every addressable boundary with sparse values joined on demand."""
         member_tier = self._tiers_by_name.get(tier)
         if member_tier is None:
-            raise ValueError(f"position tier {str(tier)!r} is not declared")
-        positions = []
+            raise ValueError(f"boundary tier {str(tier)!r} is not declared")
+        boundaries = []
         for index in range(len(member_tier.items) + 1):
-            reference = PositionRef(tier, index)
-            stored = self._positions_by_ref.get(reference)
-            positions.append(
-                Position(reference, stored.attributes)
+            reference = BoundaryRef(tier, index)
+            stored = self._boundaries_by_ref.get(reference)
+            boundaries.append(
+                Boundary(reference, stored.attributes)
                 if stored is not None
-                else Position(reference, ())
+                else Boundary(reference, ())
             )
-        return tuple(positions)
+        return tuple(boundaries)
 
     def canonical_items(self) -> tuple[ItemRef, ...]:
         """Compute tier-major canonical order without storing it."""
@@ -884,19 +884,19 @@ class Graph:
             raise ValueError(f"unknown durable item id {reference.durable_id!r}")
         return coordinate
 
-    def resolve_position(
-        self, reference: PositionRef | DurablePositionRef
-    ) -> PositionRef:
-        """Resolve either identity level to the position's current coordinate."""
-        if isinstance(reference, PositionRef):
-            _validate_position(reference, self._tiers_by_name, ValueError)
+    def resolve_boundary(
+        self, reference: BoundaryRef | DurableBoundaryRef
+    ) -> BoundaryRef:
+        """Resolve either identity level to the boundary's current coordinate."""
+        if isinstance(reference, BoundaryRef):
+            _validate_boundary(reference, self._tiers_by_name, ValueError)
             return reference
-        if not isinstance(reference, DurablePositionRef):
+        if not isinstance(reference, DurableBoundaryRef):
             raise TypeError(
-                "position resolution expected PositionRef or DurablePositionRef; "
+                "boundary resolution expected BoundaryRef or DurableBoundaryRef; "
                 f"got {type(reference).__name__}"
             )
-        return _resolve_position_reference(
+        return _resolve_boundary_reference(
             reference, self._tiers_by_name, self._items_by_id, ValueError
         )
 
@@ -930,9 +930,9 @@ class Graph:
         )
         return self._replace(tiers=tiers), DurableItemRef(durable_id)
 
-    def promote_position(
-        self, reference: PositionRef, durable_id: str
-    ) -> tuple[Graph, DurablePositionRef]:
+    def promote_boundary(
+        self, reference: BoundaryRef, durable_id: str
+    ) -> tuple[Graph, DurableBoundaryRef]:
         """Return a graph whose boundary anchor has durable identity.
 
         Promoting an interior boundary promotes its anchor item.  That durable
@@ -940,14 +940,14 @@ class Graph:
         construction fingerprint.  An anchor carrying a different id refuses
         the requested boundary identity rather than replacing its own.
         """
-        _validate_position(reference, self._tiers_by_name, ValueError)
+        _validate_boundary(reference, self._tiers_by_name, ValueError)
         tier = self._tiers_by_name[reference.tier]
         if reference.index == 0:
             promoted = self
-            durable = DurablePositionRef(reference.tier, BoundarySide.BEFORE)
+            durable = DurableBoundaryRef(reference.tier, BoundarySide.BEFORE)
         elif reference.index == len(tier.items):
             promoted = self
-            durable = DurablePositionRef(reference.tier, BoundarySide.AFTER)
+            durable = DurableBoundaryRef(reference.tier, BoundarySide.AFTER)
         else:
             anchor_reference = ItemRef(reference.tier, reference.index)
             anchor_item = tier.items[reference.index]
@@ -956,29 +956,29 @@ class Graph:
                 and anchor_item.durable_id != durable_id
             ):
                 raise ValueError(
-                    f"position {str(reference)!r} is before an anchor carrying "
+                    f"boundary {str(reference)!r} is before an anchor carrying "
                     f"durable id {anchor_item.durable_id!r}; refused conflicting "
                     f"boundary durable id {durable_id!r}"
                 )
             promoted, anchor = self.promote_item(anchor_reference, durable_id)
-            durable = DurablePositionRef(anchor, BoundarySide.BEFORE)
-        position = promoted._positions_by_ref.get(reference)
-        if position is None:
+            durable = DurableBoundaryRef(anchor, BoundarySide.BEFORE)
+        boundary = promoted._boundaries_by_ref.get(reference)
+        if boundary is None:
             return promoted, durable
-        if isinstance(position.reference, DurablePositionRef):
-            return promoted, position.reference
-        anchored = Position(durable, position.attributes)
+        if isinstance(boundary.reference, DurableBoundaryRef):
+            return promoted, boundary.reference
+        anchored = Boundary(durable, boundary.attributes)
         values = tuple(
-            anchored if candidate is position else candidate
-            for candidate in promoted.position_values
+            anchored if candidate is boundary else candidate
+            for candidate in promoted.boundary_values
         )
-        return promoted._replace(position_values=values), durable
+        return promoted._replace(boundary_values=values), durable
 
     def _replace(
         self,
         *,
         tiers: tuple[Tier, ...] | None = None,
-        position_values: tuple[Position, ...] | None = None,
+        boundary_values: tuple[Boundary, ...] | None = None,
     ) -> Graph:
         """Rebuild immutable graph content for a promotion operation."""
         return Graph(
@@ -987,7 +987,7 @@ class Graph:
             self.relation_declarations,
             self.relations,
             self.attribute_declarations,
-            self.position_values if position_values is None else position_values,
+            self.boundary_values if boundary_values is None else boundary_values,
             self.attributes,
             self.polyadic_relations,
         )
@@ -1007,8 +1007,9 @@ class Graph:
             "attribute_declarations": [
                 declaration.to_data() for declaration in self.attribute_declarations
             ],
+            # The wire key keeps its format-6 spelling; only the field renamed.
             "position_values": [
-                position.to_data() for position in self.position_values
+                boundary.to_data() for boundary in self.boundary_values
             ],
             "attributes": _attributes_data(self.attributes),
         }
@@ -1071,8 +1072,8 @@ type EditTarget = (
     | QualifiedName
     | ItemRef
     | DurableItemRef
-    | PositionRef
-    | DurablePositionRef
+    | BoundaryRef
+    | DurableBoundaryRef
     | int
     | str
 )
@@ -1097,7 +1098,7 @@ class GraphEditor:
     freeze.  A stored boundary value addressed by coordinate is rewritten when
     the edit leaves its boundary exactly one image, and refuses the edit when
     it does not: a bare coordinate has no anchor to follow, while a boundary
-    promoted through ``Graph.promote_position`` does.
+    promoted through ``Graph.promote_boundary`` does.
 
     An operation that refuses changes nothing, so a refused edit leaves this
     editor exactly as it was.  What one operation cannot see on its own -- a
@@ -1115,7 +1116,7 @@ class GraphEditor:
         self._relation_declarations = list(graph.relation_declarations)
         self._relations = list(graph.relations)
         self._attribute_declarations = list(graph.attribute_declarations)
-        self._position_values = list(graph.position_values)
+        self._boundary_values = list(graph.boundary_values)
         self._attributes = list(graph.attributes)
         self._polyadic_relations = list(graph.polyadic_relations)
 
@@ -1130,7 +1131,7 @@ class GraphEditor:
             tuple(self._relation_declarations),
             tuple(self._relations),
             tuple(self._attribute_declarations),
-            tuple(self._position_values),
+            tuple(self._boundary_values),
             tuple(self._attributes),
             tuple(self._polyadic_relations),
         )
@@ -1188,13 +1189,13 @@ class GraphEditor:
                 item.durable_id, _with_value(item.attributes, value)
             )
         elif domain is AttributeDomain.POSITION:
-            reference = _require_position_target(target, domain)
-            index = self._position_index(self._resolve_position(reference))
+            reference = _require_boundary_target(target, domain)
+            index = self._boundary_index(self._resolve_boundary(reference))
             if index is None:
-                self._position_values.append(Position(reference, (value,)))
+                self._boundary_values.append(Boundary(reference, (value,)))
             else:
-                stored = self._position_values[index]
-                self._position_values[index] = Position(
+                stored = self._boundary_values[index]
+                self._boundary_values[index] = Boundary(
                     stored.reference, _with_value(stored.attributes, value)
                 )
         elif domain is AttributeDomain.RELATION_DECLARATION:
@@ -1234,20 +1235,20 @@ class GraphEditor:
                 _without_value(item.attributes, name, f"item {str(coordinate)!r}"),
             )
         elif domain is AttributeDomain.POSITION:
-            reference = _require_position_target(target, domain)
-            index = self._position_index(self._resolve_position(reference))
+            reference = _require_boundary_target(target, domain)
+            index = self._boundary_index(self._resolve_boundary(reference))
             if index is None:
                 raise GraphValidationError(
                     f"boundary {str(reference)!r} carries no attribute {str(name)!r}"
                 )
-            stored = self._position_values[index]
+            stored = self._boundary_values[index]
             kept = _without_value(
                 stored.attributes, name, f"boundary {str(stored.reference)!r}"
             )
             if kept:
-                self._position_values[index] = Position(stored.reference, kept)
+                self._boundary_values[index] = Boundary(stored.reference, kept)
             else:
-                del self._position_values[index]
+                del self._boundary_values[index]
         elif domain is AttributeDomain.RELATION_DECLARATION:
             qualified = _require_named_target(target, domain)
             index = self._declaration_index(qualified)
@@ -1470,16 +1471,16 @@ class GraphEditor:
             )
         return coordinate
 
-    def _resolve_position(
-        self, reference: PositionRef | DurablePositionRef
-    ) -> PositionRef:
-        return _resolve_position_reference(
+    def _resolve_boundary(
+        self, reference: BoundaryRef | DurableBoundaryRef
+    ) -> BoundaryRef:
+        return _resolve_boundary_reference(
             reference, self._tier_views(), self._items_by_id(), GraphValidationError
         )
 
-    def _position_index(self, coordinate: PositionRef) -> int | None:
-        for index, position in enumerate(self._position_values):
-            if self._resolve_position(position.reference) == coordinate:
+    def _boundary_index(self, coordinate: BoundaryRef) -> int | None:
+        for index, boundary in enumerate(self._boundary_values):
+            if self._resolve_boundary(boundary.reference) == coordinate:
                 return index
         return None
 
@@ -1501,9 +1502,9 @@ class GraphEditor:
         # so a refused operation leaves this editor exactly as it was.
         name = member.declaration.name
         images = _boundary_images(len(member.items), len(items), mapping)
-        positions = [
-            self._remapped_position(position, name, images, subject)
-            for position in self._position_values
+        boundaries = [
+            self._remapped_boundary(boundary, name, images, subject)
+            for boundary in self._boundary_values
         ]
         relations = [
             self._remapped_relation(relation, name, mapping, subject)
@@ -1514,27 +1515,27 @@ class GraphEditor:
             for relation in self._polyadic_relations
         ]
         member.items = items
-        self._position_values = positions
+        self._boundary_values = boundaries
         self._relations = relations
         self._polyadic_relations = polyadic
 
     @staticmethod
-    def _remapped_position(
-        position: Position,
+    def _remapped_boundary(
+        boundary: Boundary,
         name: QualifiedName,
         images: dict[int, int],
         subject: str,
-    ) -> Position:
-        reference = position.reference
-        if not isinstance(reference, PositionRef) or reference.tier != name:
-            return position
+    ) -> Boundary:
+        reference = boundary.reference
+        if not isinstance(reference, BoundaryRef) or reference.tier != name:
+            return boundary
         image = images.get(reference.index)
         if image is None:
             raise GraphValidationError(
                 f"{subject} leaves boundary value {str(reference)!r} without one "
                 "boundary to hold it; promote the boundary so it follows its anchor"
             )
-        return Position(PositionRef(name, image), position.attributes)
+        return Boundary(BoundaryRef(name, image), boundary.attributes)
 
     @staticmethod
     def _remapped_endpoint(
@@ -1690,12 +1691,12 @@ def _require_named_target(target: EditTarget, domain: AttributeDomain) -> Qualif
     return target
 
 
-def _require_position_target(
+def _require_boundary_target(
     target: EditTarget, domain: AttributeDomain
-) -> PositionRef | DurablePositionRef:
-    if not isinstance(target, PositionRef | DurablePositionRef):
+) -> BoundaryRef | DurableBoundaryRef:
+    if not isinstance(target, BoundaryRef | DurableBoundaryRef):
         raise GraphValidationError(
-            f"{domain.value} attribute target must be a position reference"
+            f"{domain.value} attribute target must be a boundary reference"
         )
     return target
 
@@ -1716,7 +1717,7 @@ class _GraphBuilder:
         self.relation_declarations: list[RelationDeclaration] = []
         self.relations: list[RelationInstance] = []
         self.attribute_declarations: list[AttributeDeclaration] = []
-        self.position_values: list[Position] = []
+        self.boundary_values: list[Boundary] = []
         self.attributes: list[AttributeValue] = []
         self.polyadic_relations: list[PolyadicRelationInstance] = []
         self.declared_namespaces: set[str] = set()
@@ -1726,11 +1727,11 @@ class _GraphBuilder:
         self.declarations_by_name: dict[QualifiedName, RelationDeclaration] = {}
         self.declaration_indexes: dict[QualifiedName, int] = {}
         self.attributes_by_name: dict[QualifiedName, AttributeDeclaration] = {}
-        self.positions_by_coordinate: dict[PositionRef, int] = {}
-        self.after_position_by_tier: dict[QualifiedName, int] = {}
+        self.boundaries_by_coordinate: dict[BoundaryRef, int] = {}
+        self.after_boundary_by_tier: dict[QualifiedName, int] = {}
         self.polyadic_targets_by_source: dict[
-            tuple[QualifiedName, ItemRef | PositionRef],
-            set[ItemRef | PositionRef],
+            tuple[QualifiedName, ItemRef | BoundaryRef],
+            set[ItemRef | BoundaryRef],
         ] = {}
 
     def _tier_views(self) -> dict[QualifiedName, Tier]:
@@ -1755,10 +1756,10 @@ class _GraphBuilder:
             raise ValueError(f"unknown durable item id {reference.durable_id!r}")
         return coordinate
 
-    def _resolve_position(
-        self, reference: PositionRef | DurablePositionRef
-    ) -> PositionRef:
-        return _resolve_position_reference(
+    def _resolve_boundary(
+        self, reference: BoundaryRef | DurableBoundaryRef
+    ) -> BoundaryRef:
+        return _resolve_boundary_reference(
             reference, self._tier_views(), self.items_by_id, ValueError
         )
 
@@ -1772,7 +1773,7 @@ class _GraphBuilder:
             tuple(self.relation_declarations),
             tuple(self.relations),
             tuple(self.attribute_declarations),
-            tuple(self.position_values),
+            tuple(self.boundary_values),
             tuple(self.attributes),
             tuple(self.polyadic_relations),
         )
@@ -1952,47 +1953,47 @@ def _validate_reference(
         )
 
 
-def _validate_position(
-    reference: PositionRef,
+def _validate_boundary(
+    reference: BoundaryRef,
     tiers: dict[QualifiedName, Tier],
     error_type: type[ValueError],
 ) -> None:
     tier = tiers.get(reference.tier)
     if tier is None:
         raise error_type(
-            f"position {str(reference)!r} names undeclared tier {str(reference.tier)!r}"
+            f"boundary {str(reference)!r} names undeclared tier {str(reference.tier)!r}"
         )
     if reference.index < 0 or reference.index > len(tier.items):
         raise error_type(
-            f"position {str(reference)!r} is outside tier {str(reference.tier)!r}"
+            f"boundary {str(reference)!r} is outside tier {str(reference.tier)!r}"
         )
 
 
-def _resolve_position_reference(
-    reference: PositionRef | DurablePositionRef,
+def _resolve_boundary_reference(
+    reference: BoundaryRef | DurableBoundaryRef,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
     error_type: type[ValueError],
-) -> PositionRef:
-    if isinstance(reference, PositionRef):
-        _validate_position(reference, tiers, error_type)
+) -> BoundaryRef:
+    if isinstance(reference, BoundaryRef):
+        _validate_boundary(reference, tiers, error_type)
         return reference
     if isinstance(reference.anchor, QualifiedName):
         tier = tiers.get(reference.anchor)
         if tier is None:
             raise error_type(
-                f"durable position tier anchor {str(reference.anchor)!r} is not declared"
+                f"durable boundary tier anchor {str(reference.anchor)!r} is not declared"
             )
-        return PositionRef(
+        return BoundaryRef(
             reference.anchor,
             0 if reference.side is BoundarySide.BEFORE else len(tier.items),
         )
     coordinate = items_by_id.get(reference.anchor.durable_id)
     if coordinate is None:
         raise error_type(
-            f"durable position anchor item {reference.anchor.durable_id!r} was not found"
+            f"durable boundary anchor item {reference.anchor.durable_id!r} was not found"
         )
-    return PositionRef(
+    return BoundaryRef(
         coordinate.tier,
         coordinate.index
         if reference.side is BoundarySide.BEFORE
@@ -2020,7 +2021,7 @@ def _require_boolean(value: object, subject: str) -> None:
 def _validate_endpoint(
     relation_index: int,
     side: str,
-    reference: ItemRef | DurablePositionRef,
+    reference: ItemRef | DurableBoundaryRef,
     expected_type: QualifiedName,
     expected_kind: RelationEndpointKind,
     tiers: dict[QualifiedName, Tier],
@@ -2058,7 +2059,7 @@ def _validate_endpoint(
 
 
 def _boundary_anchor_tier(
-    reference: DurablePositionRef,
+    reference: DurableBoundaryRef,
     subject: str,
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
@@ -2105,7 +2106,7 @@ def _validate_relation_invariants(
             for index, edge in indexed
         ]
         if declaration.single_parent:
-            parents: dict[ItemRef | PositionRef, tuple[int, ItemRef | PositionRef]] = {}
+            parents: dict[ItemRef | BoundaryRef, tuple[int, ItemRef | BoundaryRef]] = {}
             for index, edge, left, right in resolved:
                 previous = parents.get(right)
                 if previous is not None and previous[1] != left:
@@ -2183,20 +2184,20 @@ def _validate_polyadic_invariants(
     }
     for index, relation in enumerate(relations):
         grouped[relation.declaration].append((index, relation))
-    first_source_instance: dict[tuple[QualifiedName, ItemRef | PositionRef], int] = {}
+    first_source_instance: dict[tuple[QualifiedName, ItemRef | BoundaryRef], int] = {}
     targets_by_source: dict[
-        tuple[QualifiedName, ItemRef | PositionRef],
-        set[ItemRef | PositionRef],
+        tuple[QualifiedName, ItemRef | BoundaryRef],
+        set[ItemRef | BoundaryRef],
     ] = {}
     for name, declaration in declarations.items():
         resolved_edges: list[
-            tuple[int, RelationInstance, ItemRef | PositionRef, ItemRef | PositionRef]
+            tuple[int, RelationInstance, ItemRef | BoundaryRef, ItemRef | BoundaryRef]
         ] = []
         resolved_instances: list[
             tuple[
                 int,
-                tuple[ItemRef | PositionRef, ...],
-                tuple[ItemRef | PositionRef, ...],
+                tuple[ItemRef | BoundaryRef, ...],
+                tuple[ItemRef | BoundaryRef, ...],
             ]
         ] = []
         for index, relation in grouped[name]:
@@ -2243,8 +2244,8 @@ def _validate_polyadic_invariants(
                     )
         if declaration.single_parent:
             parents: dict[
-                ItemRef | PositionRef,
-                tuple[int, tuple[ItemRef | PositionRef, ...]],
+                ItemRef | BoundaryRef,
+                tuple[int, tuple[ItemRef | BoundaryRef, ...]],
             ] = {}
             for index, sources, targets in resolved_instances:
                 for target in targets:
@@ -2294,28 +2295,28 @@ def _resolve_relation_endpoint(
     tiers: dict[QualifiedName, Tier],
     items_by_id: dict[str, ItemRef],
     error_type: type[ValueError],
-) -> ItemRef | PositionRef:
+) -> ItemRef | BoundaryRef:
     """Resolve boundary spellings to graph places before invariant comparison."""
     if isinstance(reference, ItemRef):
         return reference
-    return _resolve_position_reference(reference, tiers, items_by_id, error_type)
+    return _resolve_boundary_reference(reference, tiers, items_by_id, error_type)
 
 
 def _require_acyclic(
     name: QualifiedName,
     indexed: list[
-        tuple[int, RelationInstance, ItemRef | PositionRef, ItemRef | PositionRef]
+        tuple[int, RelationInstance, ItemRef | BoundaryRef, ItemRef | BoundaryRef]
     ],
 ) -> None:
-    outgoing: dict[ItemRef | PositionRef, list[tuple[int, ItemRef | PositionRef]]] = {}
+    outgoing: dict[ItemRef | BoundaryRef, list[tuple[int, ItemRef | BoundaryRef]]] = {}
     for index, _edge, left, right in indexed:
         outgoing.setdefault(left, []).append((index, right))
-    visited: set[ItemRef | PositionRef] = set()
+    visited: set[ItemRef | BoundaryRef] = set()
     for root in tuple(outgoing):
         if root in visited:
             continue
-        visiting: set[ItemRef | PositionRef] = {root}
-        stack: list[tuple[ItemRef | PositionRef, int]] = [(root, 0)]
+        visiting: set[ItemRef | BoundaryRef] = {root}
+        stack: list[tuple[ItemRef | BoundaryRef, int]] = [(root, 0)]
         while stack:
             node, child_index = stack[-1]
             children = outgoing.get(node, [])

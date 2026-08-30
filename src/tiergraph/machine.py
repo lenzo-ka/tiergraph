@@ -13,9 +13,11 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -23,8 +25,6 @@ from tiergraph.core import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationDeclaration,
     RelationEndpointKind,
@@ -193,15 +193,15 @@ class PromoteItem:
 
 
 @dataclass(frozen=True, slots=True)
-class PromotePosition:
+class PromoteBoundary:
     """Promote one structural boundary reference to anchored identity."""
 
-    reference: PositionRef
+    reference: BoundaryRef
     durable_id: str
 
     def apply(self, graph: Graph) -> Graph:
         """Apply the kernel's checked boundary promotion operation."""
-        promoted, _ = graph.promote_position(self.reference, self.durable_id)
+        promoted, _ = graph.promote_boundary(self.reference, self.durable_id)
         return promoted
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -238,8 +238,8 @@ type AttributeTarget = (
     | QualifiedName
     | ItemRef
     | DurableItemRef
-    | PositionRef
-    | DurablePositionRef
+    | BoundaryRef
+    | DurableBoundaryRef
     | int
 )
 
@@ -290,18 +290,18 @@ class AttachValue:
                 (*relation.attributes, self.value),
             )
             return _replace(graph, relations=tuple(relations))
-        position_reference = _position_target(self.target, self.domain)
-        position_coordinate = graph.resolve_position(position_reference)
-        positions = list(graph.position_values)
-        for index, position in enumerate(positions):
-            if graph.resolve_position(position.reference) == position_coordinate:
-                positions[index] = Position(
-                    position.reference, (*position.attributes, self.value)
+        boundary_reference = _boundary_target(self.target, self.domain)
+        boundary_coordinate = graph.resolve_boundary(boundary_reference)
+        boundaries = list(graph.boundary_values)
+        for index, boundary in enumerate(boundaries):
+            if graph.resolve_boundary(boundary.reference) == boundary_coordinate:
+                boundaries[index] = Boundary(
+                    boundary.reference, (*boundary.attributes, self.value)
                 )
                 break
         else:
-            positions.append(Position(position_reference, (self.value,)))
-        return _replace(graph, position_values=tuple(positions))
+            boundaries.append(Boundary(boundary_reference, (self.value,)))
+        return _replace(graph, boundary_values=tuple(boundaries))
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the opcode as JSON data."""
@@ -354,7 +354,7 @@ type PrimitiveOpcode = (
     | DeclareAttribute
     | AddItem
     | PromoteItem
-    | PromotePosition
+    | PromoteBoundary
     | Relate
     | AttachValue
 )
@@ -367,7 +367,7 @@ _PRIMITIVE_OPCODE_TYPES = (
     DeclareAttribute,
     AddItem,
     PromoteItem,
-    PromotePosition,
+    PromoteBoundary,
     Relate,
     AttachValue,
 )
@@ -424,8 +424,8 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
         ),
         "promote_position": (
             {"opcode", "reference", "durable_id"},
-            lambda v: PromotePosition(
-                _decode_position_ref(v["reference"], f"{path}.reference"),
+            lambda v: PromoteBoundary(
+                _decode_boundary_ref(v["reference"], f"{path}.reference"),
                 cast(str, v["durable_id"]),
             ),
         ),
@@ -532,9 +532,9 @@ def _decode_item_ref(value: object, path: str) -> ItemRef:
     return ItemRef(_decode_qname(obj["tier"], f"{path}.tier"), cast(int, obj["index"]))
 
 
-def _decode_position_ref(value: object, path: str) -> PositionRef:
+def _decode_boundary_ref(value: object, path: str) -> BoundaryRef:
     obj = _decode_object(value, path, {"tier", "index"})
-    return PositionRef(
+    return BoundaryRef(
         _decode_qname(obj["tier"], f"{path}.tier"), cast(int, obj["index"])
     )
 
@@ -564,7 +564,7 @@ def _decode_endpoint(value: object, path: str) -> object:
                 RefusalStage.DISCRIMINATOR,
                 f"{path}.anchor has an unknown shape",
             )
-        return DurablePositionRef(
+        return DurableBoundaryRef(
             decoded_anchor, BoundarySide(cast(str, value["side"]))
         )
     raise Refusal(RefusalStage.DISCRIMINATOR, f"{path} has an unknown reference shape")
@@ -589,14 +589,14 @@ def _decode_relation_instance(
             _decode_qname(obj["declaration"], f"{path}.declaration"),
             tuple(
                 cast(
-                    ItemRef | DurablePositionRef,
+                    ItemRef | DurableBoundaryRef,
                     _decode_endpoint(endpoint, f"{path}.sources[{index}]"),
                 )
                 for index, endpoint in enumerate(sources)
             ),
             tuple(
                 cast(
-                    ItemRef | DurablePositionRef,
+                    ItemRef | DurableBoundaryRef,
                     _decode_endpoint(endpoint, f"{path}.targets[{index}]"),
                 )
                 for index, endpoint in enumerate(targets)
@@ -610,11 +610,11 @@ def _decode_relation_instance(
     return RelationInstance(
         _decode_qname(obj["declaration"], f"{path}.declaration"),
         cast(
-            ItemRef | DurablePositionRef,
+            ItemRef | DurableBoundaryRef,
             _decode_endpoint(obj["left"], f"{path}.left"),
         ),
         cast(
-            ItemRef | DurablePositionRef,
+            ItemRef | DurableBoundaryRef,
             _decode_endpoint(obj["right"], f"{path}.right"),
         ),
         cast(str | None, obj["durable_id"]),
@@ -730,7 +730,7 @@ def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
         if domain in {AttributeDomain.TIER, AttributeDomain.RELATION_DECLARATION}:
             target = _decode_qname(target, f"{path}.target")
         elif domain is AttributeDomain.POSITION and set(target) == {"tier", "index"}:
-            target = _decode_position_ref(target, f"{path}.target")
+            target = _decode_boundary_ref(target, f"{path}.target")
         else:
             target = _decode_endpoint(target, f"{path}.target")
     return AttachValue(
@@ -887,7 +887,7 @@ def _has_shift_sensitive_relation_endpoint(
             else (relation.left, relation.right)
         )
         if any(
-            isinstance(endpoint, DurablePositionRef)
+            isinstance(endpoint, DurableBoundaryRef)
             and isinstance(endpoint.anchor, QualifiedName)
             for endpoint in endpoints
         ):
@@ -932,10 +932,10 @@ def _build_opcode(builder: _GraphBuilder, opcode: PrimitiveOpcode) -> None:
             opcode.item.attributes, AttributeDomain.ITEM, builder.attributes_by_name
         )
         index = len(current_tier.items)
-        after_index = builder.after_position_by_tier.get(opcode.tier)
+        after_index = builder.after_boundary_by_tier.get(opcode.tier)
         if after_index is not None:
-            del builder.positions_by_coordinate[PositionRef(opcode.tier, index)]
-            builder.positions_by_coordinate[PositionRef(opcode.tier, index + 1)] = (
+            del builder.boundaries_by_coordinate[BoundaryRef(opcode.tier, index)]
+            builder.boundaries_by_coordinate[BoundaryRef(opcode.tier, index + 1)] = (
                 after_index
             )
         current_tier.items.append(opcode.item)
@@ -945,8 +945,8 @@ def _build_opcode(builder: _GraphBuilder, opcode: PrimitiveOpcode) -> None:
     if type(opcode) is PromoteItem:
         _build_promote_item(builder, opcode.reference, opcode.durable_id)
         return
-    if type(opcode) is PromotePosition:
-        _build_promote_position(builder, opcode.reference, opcode.durable_id)
+    if type(opcode) is PromoteBoundary:
+        _build_promote_boundary(builder, opcode.reference, opcode.durable_id)
         return
     if type(opcode) is Relate:
         _build_relate(builder, opcode.relation)
@@ -1023,15 +1023,15 @@ def _build_promote_item(
     return durable
 
 
-def _build_promote_position(
-    builder: _GraphBuilder, reference: PositionRef, durable_id: str
-) -> DurablePositionRef:
-    coordinate = builder._resolve_position(reference)
+def _build_promote_boundary(
+    builder: _GraphBuilder, reference: BoundaryRef, durable_id: str
+) -> DurableBoundaryRef:
+    coordinate = builder._resolve_boundary(reference)
     tier = builder.tiers_by_name[coordinate.tier]
     if coordinate.index == 0:
-        durable = DurablePositionRef(coordinate.tier, BoundarySide.BEFORE)
+        durable = DurableBoundaryRef(coordinate.tier, BoundarySide.BEFORE)
     elif coordinate.index == len(tier.items):
-        durable = DurablePositionRef(coordinate.tier, BoundarySide.AFTER)
+        durable = DurableBoundaryRef(coordinate.tier, BoundarySide.AFTER)
     else:
         anchor_item = tier.items[coordinate.index]
         # Refusing here keeps this engine's own diagnostic in boundary terms rather
@@ -1044,28 +1044,28 @@ def _build_promote_position(
         if anchor_item.durable_id is not None and anchor_item.durable_id != durable_id:
             raise Refusal(
                 RefusalStage.SEMANTICS,
-                f"position {str(reference)!r} is before an anchor carrying "
+                f"boundary {str(reference)!r} is before an anchor carrying "
                 f"durable id {anchor_item.durable_id!r}; refused conflicting "
                 f"boundary durable id {durable_id!r}",
             )
         anchor = _build_promote_item(
             builder, ItemRef(coordinate.tier, coordinate.index), durable_id
         )
-        durable = DurablePositionRef(anchor, BoundarySide.BEFORE)
-    position_index = builder.positions_by_coordinate.get(coordinate)
-    if position_index is not None:
-        position = builder.position_values[position_index]
-        if isinstance(position.reference, PositionRef):
-            builder.position_values[position_index] = Position(
-                durable, position.attributes
+        durable = DurableBoundaryRef(anchor, BoundarySide.BEFORE)
+    boundary_index = builder.boundaries_by_coordinate.get(coordinate)
+    if boundary_index is not None:
+        boundary = builder.boundary_values[boundary_index]
+        if isinstance(boundary.reference, BoundaryRef):
+            builder.boundary_values[boundary_index] = Boundary(
+                durable, boundary.attributes
             )
             if (
                 isinstance(durable.anchor, QualifiedName)
                 and durable.side is BoundarySide.AFTER
             ):
-                builder.after_position_by_tier[durable.anchor] = position_index
+                builder.after_boundary_by_tier[durable.anchor] = boundary_index
         else:
-            durable = position.reference
+            durable = boundary.reference
     return durable
 
 
@@ -1195,26 +1195,26 @@ def _build_attach_value(builder: _GraphBuilder, opcode: AttachValue) -> None:
             (*relation.attributes, opcode.value),
         )
     else:
-        reference = _position_target(opcode.target, opcode.domain)
-        position_coordinate = builder._resolve_position(reference)
-        index = builder.positions_by_coordinate.get(position_coordinate)
+        reference = _boundary_target(opcode.target, opcode.domain)
+        boundary_coordinate = builder._resolve_boundary(reference)
+        index = builder.boundaries_by_coordinate.get(boundary_coordinate)
         if index is None:
-            builder.positions_by_coordinate[position_coordinate] = len(
-                builder.position_values
+            builder.boundaries_by_coordinate[boundary_coordinate] = len(
+                builder.boundary_values
             )
-            builder.position_values.append(Position(reference, (opcode.value,)))
+            builder.boundary_values.append(Boundary(reference, (opcode.value,)))
             if (
-                isinstance(reference, DurablePositionRef)
+                isinstance(reference, DurableBoundaryRef)
                 and isinstance(reference.anchor, QualifiedName)
                 and reference.side is BoundarySide.AFTER
             ):
-                builder.after_position_by_tier[reference.anchor] = (
-                    len(builder.position_values) - 1
+                builder.after_boundary_by_tier[reference.anchor] = (
+                    len(builder.boundary_values) - 1
                 )
         else:
-            position = builder.position_values[index]
-            builder.position_values[index] = Position(
-                position.reference, (*position.attributes, opcode.value)
+            boundary = builder.boundary_values[index]
+            builder.boundary_values[index] = Boundary(
+                boundary.reference, (*boundary.attributes, opcode.value)
             )
 
 
@@ -1363,7 +1363,7 @@ def _validate_graph(graph: Graph) -> Graph:
         graph.relation_declarations,
         graph.relations,
         graph.attribute_declarations,
-        graph.position_values,
+        graph.boundary_values,
         graph.attributes,
         graph.polyadic_relations,
     )
@@ -1377,7 +1377,7 @@ def _replace(
     relation_declarations: tuple[RelationDeclaration, ...] | None = None,
     relations: tuple[RelationInstance, ...] | None = None,
     attribute_declarations: tuple[AttributeDeclaration, ...] | None = None,
-    position_values: tuple[Position, ...] | None = None,
+    boundary_values: tuple[Boundary, ...] | None = None,
     attributes: tuple[AttributeValue, ...] | None = None,
     polyadic_relations: tuple[PolyadicRelationInstance, ...] | None = None,
 ) -> Graph:
@@ -1391,7 +1391,7 @@ def _replace(
         graph.attribute_declarations
         if attribute_declarations is None
         else attribute_declarations,
-        graph.position_values if position_values is None else position_values,
+        graph.boundary_values if boundary_values is None else boundary_values,
         graph.attributes if attributes is None else attributes,
         graph.polyadic_relations if polyadic_relations is None else polyadic_relations,
     )
@@ -1429,13 +1429,13 @@ def _item_target(
     return target
 
 
-def _position_target(
+def _boundary_target(
     target: AttributeTarget, domain: AttributeDomain
-) -> PositionRef | DurablePositionRef:
-    if not isinstance(target, PositionRef | DurablePositionRef):
+) -> BoundaryRef | DurableBoundaryRef:
+    if not isinstance(target, BoundaryRef | DurableBoundaryRef):
         raise Refusal(
             RefusalStage.CONSTRUCTION,
-            f"{domain.value} attribute target {target!r} must be a position reference",
+            f"{domain.value} attribute target {target!r} must be a boundary reference",
         )
     return target
 

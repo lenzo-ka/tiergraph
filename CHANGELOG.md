@@ -130,6 +130,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** the published vocabulary now says *coordinate* for an identity
+  and reserves *position* for nothing else, so the boundary family is renamed
+  rather than kept. `Position`, `PositionRef`, `DurablePositionRef`,
+  `PositionBinding`, `ResolvedPosition`, `PromotePosition`, and
+  `anchored_position` become `Boundary`, `BoundaryRef`, `DurableBoundaryRef`,
+  `BoundaryBinding`, `ResolvedBoundary`, `PromoteBoundary`, and
+  `anchored_boundary`, matching the item family they mirror; `Graph`'s field and
+  methods follow as `boundary_values`, `boundaries()`, `resolve_boundary()`, and
+  `promote_boundary()`. `ClockPosition` becomes `ClockCoordinate` and
+  `ClockProfile` answers `coordinates`, `clock_index()`, `refined_coordinate()`,
+  and `from_boundary_values()`. `WitnessCoordinate` collided on both halves and
+  becomes `OrderedDelivery`, whose ordering key is now `order`;
+  `ReactDeclaration.yield_coordinates` becomes `yield_deliveries`. In the fold,
+  `Coordinate` becomes `IndexCoordinate` and `FoldDeclaration.coordinates()`
+  becomes `index_coordinates()`, and `Provenance` is qualified as
+  `DerivationProvenance`. No deprecated aliases are published: the release
+  already carries breaking cover, and an alias nobody removes leaves two
+  vocabularies standing. The wire is untouched — `FORMAT_VERSION` stays `"6"`
+  and the schema artifact and its stamp are byte-identical — so the document key
+  `position_values`, the `durable_position` schema definition, the `position`
+  attribute domain and node kind, the `promote_position` opcode, the
+  `/positions/…` canonical path segments, and the command line's own `position`
+  vocabulary keep their format-6 spelling and move with the format, not with
+  this rename.
 - **BREAKING:** selection is now one graph-free surface: validation moves from
   construction to evaluation, and `evaluate_selection` takes the graph and a
   path profile. `BoundaryPathSelector`, `DifferenceSelector`,

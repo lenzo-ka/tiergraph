@@ -7,20 +7,20 @@ from enum import StrEnum
 
 from tiergraph.core import (
     BipartiteRelationDeclaration,
+    BoundaryRef,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     ItemRef,
     JsonValue,
     PolyadicRelationDeclaration,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationEndpointRef,
 )
 from tiergraph.selection import Node, NodeKind, NodeSet
 
-type TraversalEndpointRef = ItemRef | DurableItemRef | PositionRef | DurablePositionRef
+type TraversalEndpointRef = ItemRef | DurableItemRef | BoundaryRef | DurableBoundaryRef
 
 
 class WalkDirection(StrEnum):
@@ -152,10 +152,10 @@ class OrderedPolyadicTraversal:
     def _node(self, reference: TraversalEndpointRef, subject: str) -> Node:
         try:
             if isinstance(reference, ItemRef | DurableItemRef):
-                resolved: ItemRef | PositionRef = self.graph.resolve_item(reference)
+                resolved: ItemRef | BoundaryRef = self.graph.resolve_item(reference)
                 kind = NodeKind.ITEM
-            elif isinstance(reference, PositionRef | DurablePositionRef):
-                resolved = self.graph.resolve_position(reference)
+            elif isinstance(reference, BoundaryRef | DurableBoundaryRef):
+                resolved = self.graph.resolve_boundary(reference)
                 kind = NodeKind.POSITION
             else:
                 raise TypeError(f"unsupported endpoint type {type(reference).__name__}")
@@ -246,7 +246,7 @@ class OrderedPolyadicTraversal:
                             f"{str(endpoint)!r} {detail}"
                         )
                     reference = node.reference
-                    assert isinstance(reference, ItemRef | PositionRef)
+                    assert isinstance(reference, ItemRef | BoundaryRef)
                     if side.tiers is not None and reference.tier not in side.tiers:
                         raise ValueError(
                             f"ordered polyadic relation {str(self.relation)!r} instance "
@@ -320,7 +320,7 @@ class OrderedPolyadicTraversal:
                 f"by its {side_name.value[:-1]} side"
             )
         resolved = node.reference
-        assert isinstance(resolved, ItemRef | PositionRef)
+        assert isinstance(resolved, ItemRef | BoundaryRef)
         if side.tiers is not None and resolved.tier not in side.tiers:
             raise ValueError(
                 f"ordered polyadic relation {str(self.relation)!r} origin "
@@ -670,6 +670,6 @@ def _endpoint_node(graph: Graph, reference: RelationEndpointRef) -> Node:
     """Resolve an anchored endpoint to the structural identity used by selections."""
     if isinstance(reference, ItemRef):
         return Node(NodeKind.ITEM, reference)
-    assert isinstance(reference, DurablePositionRef)
-    resolved: PositionRef = graph.resolve_position(reference)
+    assert isinstance(reference, DurableBoundaryRef)
+    resolved: BoundaryRef = graph.resolve_boundary(reference)
     return Node(NodeKind.POSITION, resolved)

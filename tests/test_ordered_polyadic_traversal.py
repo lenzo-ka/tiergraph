@@ -8,9 +8,10 @@ from typing import Any, cast
 import pytest
 
 from tiergraph import (
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -21,7 +22,6 @@ from tiergraph import (
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     PolyadicSide,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationSideDeclaration,
@@ -145,8 +145,8 @@ def test_mixed_item_and_boundary_endpoints_resolve_role_neutrally() -> None:
         (RelationEndpointKind.ITEM, RelationEndpointKind.BOUNDARY), tiers=(NODES,)
     )
     declaration = PolyadicRelationDeclaration(LINKS, side, side, acyclic=True)
-    before_b = DurablePositionRef(DurableItemRef("b"), BoundarySide.BEFORE)
-    after_c = DurablePositionRef(DurableItemRef("c"), BoundarySide.AFTER)
+    before_b = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE)
+    after_c = DurableBoundaryRef(DurableItemRef("c"), BoundarySide.AFTER)
     value = Graph(
         (NamespaceDeclaration("p", NS),),
         (Tier(TierDeclaration(NODES, "Nodes"), (Item("a"), Item("b"), Item("c"))),),
@@ -158,17 +158,17 @@ def test_mixed_item_and_boundary_endpoints_resolve_role_neutrally() -> None:
     engine = traversal(value)
     expected = (
         node(1),
-        Node(NodeKind.POSITION, value.resolve_position(after_c)),
+        Node(NodeKind.POSITION, value.resolve_boundary(after_c)),
     )
     assert engine.direct(ref(0)).nodes == expected
     assert engine.direct(DurableItemRef("a")).nodes == expected
     assert engine.direct(before_b).nodes == expected
-    structural = value.resolve_position(before_b)
-    assert isinstance(structural, PositionRef)
+    structural = value.resolve_boundary(before_b)
+    assert isinstance(structural, BoundaryRef)
     assert engine.direct(structural).nodes == expected
     assert engine.inverse(after_c).nodes == (
         node(0),
-        Node(NodeKind.POSITION, value.resolve_position(before_b)),
+        Node(NodeKind.POSITION, value.resolve_boundary(before_b)),
     )
 
 
@@ -228,7 +228,7 @@ def test_live_side_constraints_name_kind_tier_and_arity() -> None:
 
     value = graph()
     engine = traversal(value)
-    boundary = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
     object.__setattr__(value.polyadic_relations[0], "targets", (boundary,))
     with pytest.raises(ValueError, match=r"instance 0 target 0.*not an item"):
         engine.direct(ref(0))
@@ -262,7 +262,7 @@ def test_wrong_origin_type_is_an_offender_bearing_refusal() -> None:
     value = graph()
     with pytest.raises(ValueError, match=r"links.*origin.*outside"):
         traversal(value).direct("not-an-endpoint")  # type: ignore[arg-type]
-    boundary = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
     with pytest.raises(ValueError, match=r"links.*origin.*boundary.*source side"):
         traversal(value).direct(boundary)
 

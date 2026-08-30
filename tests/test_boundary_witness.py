@@ -11,14 +11,14 @@ from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     NamespaceDeclaration,
-    Position,
-    PositionRef,
     QualifiedName,
     SimpleRelationDeclaration,
     Tier,
@@ -72,16 +72,16 @@ class BoundaryFixture:
             AttributeDeclaration(AUTOMATION, AttributeDomain.POSITION, XsdType.STRING),
             AttributeDeclaration(COORDINATE, AttributeDomain.POSITION, XsdType.INTEGER),
         )
-        positions = (
-            Position(
-                DurablePositionRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE),
+        boundaries = (
+            Boundary(
+                DurableBoundaryRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE),
                 (
                     _value(CUE, XsdType.STRING, "vocal-in"),
                     _value(COORDINATE, XsdType.INTEGER, self.coordinate_lexical),
                 ),
             ),
-            Position(
-                DurablePositionRef(STEM_TIER, BoundarySide.BEFORE),
+            Boundary(
+                DurableBoundaryRef(STEM_TIER, BoundarySide.BEFORE),
                 (_value(AUTOMATION, XsdType.STRING, "gain=0.25"),),
             ),
         )
@@ -96,11 +96,11 @@ class BoundaryFixture:
             ),
             declarations,
             attribute_declarations=attributes,
-            position_values=positions,
+            boundary_values=boundaries,
         )
 
     def insert_placement(self, graph: Graph, index: int, label: str) -> Graph:
-        """Insert one placement; anchored positions need no coordinate repair."""
+        """Insert one placement; anchored boundaries need no coordinate repair."""
         tiers: list[Tier] = []
         for tier in graph.tiers:
             if tier.declaration.name != PLACEMENT_TIER:
@@ -114,11 +114,11 @@ class BoundaryFixture:
             graph.relation_declarations,
             graph.relations,
             graph.attribute_declarations,
-            graph.position_values,
+            graph.boundary_values,
             graph.attributes,
         )
 
-    def neighbors(self, graph: Graph, reference: PositionRef) -> tuple[str, str]:
+    def neighbors(self, graph: Graph, reference: BoundaryRef) -> tuple[str, str]:
         """Name the items on either side so boundary meaning is observable."""
         tier = next(
             candidate
@@ -151,19 +151,19 @@ def test_page_sized_oracle_addresses_every_boundary() -> None:
     """Two placements have three boundaries; one stem has two, all distinct."""
     graph = FIXTURE.graph()
     placement_positions = tuple(
-        position.reference for position in graph.positions(PLACEMENT_TIER)
+        boundary.reference for boundary in graph.boundaries(PLACEMENT_TIER)
     )
     stem_positions = tuple(
-        position.reference for position in graph.positions(STEM_TIER)
+        boundary.reference for boundary in graph.boundaries(STEM_TIER)
     )
     assert placement_positions == (
-        PositionRef(PLACEMENT_TIER, 0),
-        PositionRef(PLACEMENT_TIER, 1),
-        PositionRef(PLACEMENT_TIER, 2),
+        BoundaryRef(PLACEMENT_TIER, 0),
+        BoundaryRef(PLACEMENT_TIER, 1),
+        BoundaryRef(PLACEMENT_TIER, 2),
     )
     assert stem_positions == (
-        PositionRef(STEM_TIER, 0),
-        PositionRef(STEM_TIER, 1),
+        BoundaryRef(STEM_TIER, 0),
+        BoundaryRef(STEM_TIER, 1),
     )
     assert len(set((*placement_positions, *stem_positions))) == 5
     assert FIXTURE.neighbors(graph, placement_positions[0]) == (
@@ -179,13 +179,13 @@ def test_page_sized_oracle_addresses_every_boundary() -> None:
         "<end>",
     )
     assert (
-        graph.resolve_position(
-            DurablePositionRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
+        graph.resolve_boundary(
+            DurableBoundaryRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
         )
         == placement_positions[1]
     )
     assert (
-        graph.resolve_position(DurablePositionRef(STEM_TIER, BoundarySide.BEFORE))
+        graph.resolve_boundary(DurableBoundaryRef(STEM_TIER, BoundarySide.BEFORE))
         == stem_positions[0]
     )
 
@@ -193,50 +193,50 @@ def test_page_sized_oracle_addresses_every_boundary() -> None:
 def test_durable_boundary_survives_insertion_while_structural_reference_moves() -> None:
     """Reject bare offsets for undetectable drift when insertion precedes a seam."""
     original = FIXTURE.graph()
-    bare_offset = PositionRef(PLACEMENT_TIER, 1)
-    durable = DurablePositionRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
-    assert FIXTURE.neighbors(original, original.resolve_position(bare_offset)) == (
+    bare_offset = BoundaryRef(PLACEMENT_TIER, 1)
+    durable = DurableBoundaryRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
+    assert FIXTURE.neighbors(original, original.resolve_boundary(bare_offset)) == (
         "ambient-bed",
         "lead-vocal",
     )
     inserted = FIXTURE.insert_placement(original, 1, "pickup")
-    assert inserted.resolve_position(durable) == PositionRef(PLACEMENT_TIER, 2)
-    assert FIXTURE.neighbors(inserted, inserted.resolve_position(durable)) == (
+    assert inserted.resolve_boundary(durable) == BoundaryRef(PLACEMENT_TIER, 2)
+    assert FIXTURE.neighbors(inserted, inserted.resolve_boundary(durable)) == (
         "pickup",
         "lead-vocal",
     )
-    values = inserted.positions(PLACEMENT_TIER)
+    values = inserted.boundaries(PLACEMENT_TIER)
     assert {value.name for value in values[2].attributes} == {CUE, COORDINATE}
     assert values[1].attributes == ()
-    assert inserted.resolve_position(bare_offset) == PositionRef(PLACEMENT_TIER, 1)
-    assert FIXTURE.neighbors(inserted, inserted.resolve_position(bare_offset)) == (
+    assert inserted.resolve_boundary(bare_offset) == BoundaryRef(PLACEMENT_TIER, 1)
+    assert FIXTURE.neighbors(inserted, inserted.resolve_boundary(bare_offset)) == (
         "ambient-bed",
         "pickup",
     )
-    assert inserted.resolve_position(bare_offset) != inserted.resolve_position(durable)
-    assert inserted.resolve_position(
-        DurablePositionRef(STEM_TIER, BoundarySide.BEFORE)
-    ) == PositionRef(STEM_TIER, 0)
+    assert inserted.resolve_boundary(bare_offset) != inserted.resolve_boundary(durable)
+    assert inserted.resolve_boundary(
+        DurableBoundaryRef(STEM_TIER, BoundarySide.BEFORE)
+    ) == BoundaryRef(STEM_TIER, 0)
 
 
 @pytest.mark.parametrize(("index", "resolved_index"), [(0, 2), (1, 2), (2, 1)])
 def test_anchor_survives_insertion_anywhere(index: int, resolved_index: int) -> None:
     """Insertion before, at, or after a seam leaves its item anchor unchanged."""
     graph = FIXTURE.insert_placement(FIXTURE.graph(), index, f"insert-{index}")
-    durable = DurablePositionRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
-    resolved = graph.resolve_position(durable)
-    assert resolved == PositionRef(PLACEMENT_TIER, resolved_index)
+    durable = DurableBoundaryRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
+    resolved = graph.resolve_boundary(durable)
+    assert resolved == BoundaryRef(PLACEMENT_TIER, resolved_index)
     assert FIXTURE.neighbors(graph, resolved)[1] == "lead-vocal"
 
 
 def test_promotion_for_identity_alone_stays_sparse() -> None:
     """Promoting the trailing boundary stores no invented attribute value."""
     graph = FIXTURE.graph()
-    trailing = PositionRef(PLACEMENT_TIER, 2)
-    promoted, durable = graph.promote_position(trailing, "mix-end")
-    assert durable == DurablePositionRef(PLACEMENT_TIER, BoundarySide.AFTER)
+    trailing = BoundaryRef(PLACEMENT_TIER, 2)
+    promoted, durable = graph.promote_boundary(trailing, "mix-end")
+    assert durable == DurableBoundaryRef(PLACEMENT_TIER, BoundarySide.AFTER)
     assert promoted is graph
-    assert promoted.position_values == graph.position_values
+    assert promoted.boundary_values == graph.boundary_values
 
 
 def test_presentation_only_numeric_spelling_has_canonical_bytes() -> None:

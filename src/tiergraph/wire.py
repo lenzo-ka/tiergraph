@@ -12,9 +12,11 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
@@ -22,8 +24,6 @@ from tiergraph.core import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationDeclaration,
     RelationEndpointKind,
@@ -38,7 +38,7 @@ from tiergraph.core import (
 from tiergraph.schema import (
     DECLARATIONS,
     DOCUMENT,
-    DURABLE_POSITION,
+    DURABLE_BOUNDARY,
     GRAPH,
     ITEM,
     ITEM_REFERENCE,
@@ -385,7 +385,7 @@ def _decode_graph(data: dict[str, object]) -> Graph:
             )
         ),
         tuple(
-            _position(entry, index)
+            _boundary(entry, index)
             for index, entry in enumerate(
                 _objects(
                     data["position_values"],
@@ -547,30 +547,30 @@ def _relation(
 def _endpoint(value: object, path: str) -> RelationEndpointRef:
     data = _object(value, path)
     if "anchor" in data:
-        return _durable_position(data, path)
+        return _durable_boundary(data, path)
     _keys(data, object_fields(ITEM_REFERENCE), path)
     return ItemRef(
         _name(data["tier"], f"{path}.tier"), _integer(data["index"], f"{path}.index")
     )
 
 
-def _position(data: dict[str, object], index: int) -> Position:
+def _boundary(data: dict[str, object], index: int) -> Boundary:
     path = f"position_values[{index}]"
     reference_data = _object(data["reference"], f"{path}.reference")
-    reference: PositionRef | DurablePositionRef
+    reference: BoundaryRef | DurableBoundaryRef
     if "anchor" in reference_data:
-        reference = _durable_position(reference_data, f"{path}.reference")
+        reference = _durable_boundary(reference_data, f"{path}.reference")
     else:
         _keys(reference_data, object_fields(ITEM_REFERENCE), f"{path}.reference")
-        reference = PositionRef(
+        reference = BoundaryRef(
             _name(reference_data["tier"], f"{path}.reference.tier"),
             _integer(reference_data["index"], f"{path}.reference.index"),
         )
-    return Position(reference, _attributes(data["attributes"], f"{path}.attributes"))
+    return Boundary(reference, _attributes(data["attributes"], f"{path}.attributes"))
 
 
-def _durable_position(data: dict[str, object], path: str) -> DurablePositionRef:
-    _keys(data, object_fields(DURABLE_POSITION), path)
+def _durable_boundary(data: dict[str, object], path: str) -> DurableBoundaryRef:
+    _keys(data, object_fields(DURABLE_BOUNDARY), path)
     anchor = _object(data["anchor"], f"{path}.anchor")
     kind = _string(anchor.get("kind"), f"{path}.anchor.kind")
     if kind == "item":
@@ -586,7 +586,7 @@ def _durable_position(data: dict[str, object], path: str) -> DurablePositionRef:
             RefusalStage.DISCRIMINATOR,
             f"{path}.anchor.kind {kind!r} is unsupported",
         )
-    return DurablePositionRef(target, _enum(BoundarySide, data["side"], f"{path}.side"))
+    return DurableBoundaryRef(target, _enum(BoundarySide, data["side"], f"{path}.side"))
 
 
 def _attribute_declaration(data: dict[str, object], index: int) -> AttributeDeclaration:

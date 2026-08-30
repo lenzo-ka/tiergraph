@@ -462,8 +462,8 @@ def test_reference_diagnostics_choose_the_best_matching_variant() -> None:
 
     document = cast(dict[str, object], json.loads(dumps(rich_graph())))
     graph = cast(dict[str, object], document["graph"])
-    position = cast(list[dict[str, object]], graph["position_values"])[0]
-    reference = cast(dict[str, object], position["reference"])
+    boundary = cast(list[dict[str, object]], graph["position_values"])[0]
+    reference = cast(dict[str, object], boundary["reference"])
     anchor = cast(dict[str, object], reference["anchor"])
     anchor["durable_id"] = ""
     assert validation_errors(document, FORMAT_VERSION) == [

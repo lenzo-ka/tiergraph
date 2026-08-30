@@ -9,14 +9,14 @@ from hypothesis import strategies as st
 from tests.conformance.traversal import TraversalLawSuite
 from tiergraph import (
     BipartiteRelationDeclaration,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Node,
     NodeKind,
     NodeSet,
-    PositionRef,
     RelationEndpointKind,
     RelationInstance,
     Walk,
@@ -46,8 +46,8 @@ def test_walk_deduplicates_coincident_anchors_and_refuses_reentry() -> None:
         left_endpoint=RelationEndpointKind.BOUNDARY,
         right_endpoint=RelationEndpointKind.BOUNDARY,
     )
-    after_first = DurablePositionRef(DurableItemRef("node-0"), BoundarySide.AFTER)
-    before_second = DurablePositionRef(DurableItemRef("node-1"), BoundarySide.BEFORE)
+    after_first = DurableBoundaryRef(DurableItemRef("node-0"), BoundarySide.AFTER)
+    before_second = DurableBoundaryRef(DurableItemRef("node-1"), BoundarySide.BEFORE)
     extended = Graph(
         graph.namespaces,
         graph.tiers,
@@ -58,7 +58,7 @@ def test_walk_deduplicates_coincident_anchors_and_refuses_reentry() -> None:
             RelationInstance(relation.name, before_second, after_first),
         ),
     )
-    boundary = PositionRef(LAWS.name("nodes"), 1)
+    boundary = BoundaryRef(LAWS.name("nodes"), 1)
     source = NodeSet(extended, (Node(NodeKind.POSITION, boundary),))
     result = Walk(source, relation.name, WalkDirection.FORWARD, 10).evaluate()
     assert result.nodes.nodes == ()

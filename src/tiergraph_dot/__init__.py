@@ -16,15 +16,15 @@ from dataclasses import dataclass
 
 from tiergraph import (
     AttributeValue,
-    ClockPosition,
+    BoundaryRef,
+    ClockCoordinate,
     ClockProfile,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     Item,
     ItemRef,
     PolyadicRelationInstance,
-    PositionRef,
     QualifiedName,
     RelationInstance,
     Tier,
@@ -80,14 +80,14 @@ def dumps(
     *,
     clock: ClockProfile | None = None,
     presentation: DotPresentation | None = None,
-    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None = None,
+    binding: Callable[..., tuple[ClockCoordinate, ClockCoordinate]] | None = None,
     include_empty_tiers: bool = False,
 ) -> str:
     """Return byte-stable DOT for ``graph``.
 
     With ``clock``, the complete refined clock is the horizontal spine. Timed
     tier boundaries align with that spine, event extents end at their bound
-    refined positions, and physical timing is included when the profile exposes
+    refined coordinates, and physical timing is included when the profile exposes
     it. Explicitly untimed tiers are still drawn on their own structural axes.
     Without ``clock``, every tier uses its own ordered structural boundaries.
 
@@ -97,12 +97,12 @@ def dumps(
     profile must belong to this exact graph instance, not merely an equal graph,
     because its cached derived state was computed from that instance.
 
-    A structural clock (built by :meth:`ClockProfile.from_position_values`)
+    A structural clock (built by :meth:`ClockProfile.from_boundary_values`)
     selects the occupied-spine rendering: the clock tier is drawn only as the
     spine, an occupied clock column is anchored on its item node, and empty
     columns keep a guide point. ``binding`` places the non-clock items: when it
     is supplied it MUST return, for every visible non-clock item, the
-    ``(start, end)`` :class:`tiergraph.ClockPosition` pair naming the collapsed
+    ``(start, end)`` :class:`tiergraph.ClockCoordinate` pair naming the collapsed
     columns the item occupies. There is no untimed lane, so returning ``None``
     is refused with the offending item named. The kernel never parses domain
     identifiers; the caller supplies the placement.
@@ -130,7 +130,7 @@ def dumps(
     if binding is not None and (clock is None or not clock.is_structural):
         raise ValueError(
             "binding is only used with a structural ClockProfile built by "
-            "from_position_values"
+            "from_boundary_values"
         )
 
     if clock is not None and clock.is_structural:
@@ -151,18 +151,18 @@ def dumps(
     ]
 
     clock_ids: tuple[str, ...] = ()
-    clock_positions: tuple[ClockPosition, ...] = ()
+    clock_coordinates: tuple[ClockCoordinate, ...] = ()
     if clock is not None:
-        clock_positions = clock.positions
-        clock_ids = tuple(f"clock_{index}" for index in range(len(clock_positions)))
+        clock_coordinates = clock.coordinates
+        clock_ids = tuple(f"clock_{index}" for index in range(len(clock_coordinates)))
         lines.extend(
             ("", "  // The refined clock spine is the total order.", "  { rank=same;")
         )
         lines.append('    score_start_clock [shape=plaintext, label="clock"];')
-        for index, position in enumerate(clock_positions):
+        for index, coordinate in enumerate(clock_coordinates):
             lines.append(
                 f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
-                f'group="time_{index}", label="{_position_label(position)}"];'
+                f'group="time_{index}", label="{_coordinate_label(coordinate)}"];'
             )
         for left, right in zip(clock_ids, clock_ids[1:], strict=False):
             lines.append(f"    {left} -> {right} [weight=100];")
@@ -171,22 +171,22 @@ def dumps(
     tier_labels: list[str] = []
     tier_slots: list[tuple[str, ...]] = []
     item_nodes: dict[ItemRef, str] = {}
-    boundary_nodes: dict[PositionRef, str] = {}
+    boundary_nodes: dict[BoundaryRef, str] = {}
     for tier_index, tier in visible:
         tier_name = tier.declaration.name
         timed = clock is not None and (
             tier_name == clock.clock_tier or clock.is_timed(tier_name)
         )
-        positions = graph.positions(tier_name)
+        boundaries = graph.boundaries(tier_name)
         if timed:
             assert clock is not None
             slot_count = len(clock_ids)
             boundary_indexes = tuple(
-                _clock_index(clock, position.reference, clock_positions)
-                for position in positions
+                _clock_index(clock, boundary.reference, clock_coordinates)
+                for boundary in boundaries
             )
         else:
-            slot_count = len(positions)
+            slot_count = len(boundaries)
             boundary_indexes = tuple(range(slot_count))
 
         label_id = f"tier_label_{tier_index}"
@@ -241,8 +241,8 @@ def dumps(
                 )
         lines.append("  }")
         tier_slots.append(tuple(slots))
-        for position_index, boundary_index in enumerate(boundary_indexes):
-            boundary_nodes[PositionRef(tier_name, position_index)] = (
+        for local_index, boundary_index in enumerate(boundary_indexes):
+            boundary_nodes[BoundaryRef(tier_name, local_index)] = (
                 clock_ids[boundary_index] if timed else slots[boundary_index]
             )
 
@@ -256,13 +256,13 @@ def dumps(
 
     if clock is not None:
         lines.extend(("", "  // Register timed lanes to refined clock positions."))
-        for position_index, clock_id in enumerate(clock_ids):
+        for boundary_index, clock_id in enumerate(clock_ids):
             column = [clock_id]
             for (_tier_index, tier), row_slots in zip(visible, tier_slots, strict=True):
                 if tier.declaration.name == clock.clock_tier or clock.is_timed(
                     tier.declaration.name
                 ):
-                    column.append(row_slots[position_index])
+                    column.append(row_slots[boundary_index])
             for upper, lower in zip(column, column[1:], strict=False):
                 lines.append(
                     f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
@@ -276,7 +276,7 @@ def dumps(
                 continue
             for item_index in range(len(tier.items)):
                 reference = ItemRef(tier.declaration.name, item_index)
-                start = boundary_nodes[PositionRef(reference.tier, item_index)]
+                start = boundary_nodes[BoundaryRef(reference.tier, item_index)]
                 lines.append(
                     f"  {start} -> {item_nodes[reference]} "
                     '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
@@ -327,10 +327,10 @@ def _structural_tier_ids(visible: tuple[tuple[int, Tier], ...]) -> list[str]:
 
 
 def _resolve_binding_columns(
-    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
+    binding: Callable[..., tuple[ClockCoordinate, ClockCoordinate]] | None,
     item: Item,
     reference: ItemRef,
-    column_of: dict[ClockPosition, int],
+    column_of: dict[ClockCoordinate, int],
 ) -> tuple[int, int]:
     """Resolve one item's binding to its ``(start, end)`` collapsed columns.
 
@@ -352,26 +352,26 @@ def _resolve_binding_columns(
             "returned None, but the occupied spine has no untimed lane"
         )
     try:
-        start_position, end_position = placement
+        start_coordinate, end_coordinate = placement
     except (TypeError, ValueError) as error:
         raise ValueError(
             f"binding for item {reference.to_data()!r} must return a "
-            "(start, end) pair of ClockPositions"
+            "(start, end) pair of ClockCoordinates"
         ) from error
-    if not isinstance(start_position, ClockPosition) or not isinstance(
-        end_position, ClockPosition
+    if not isinstance(start_coordinate, ClockCoordinate) or not isinstance(
+        end_coordinate, ClockCoordinate
     ):
         raise ValueError(
-            f"binding for item {reference.to_data()!r} must return ClockPositions, "
-            f"got ({type(start_position).__name__}, {type(end_position).__name__})"
+            f"binding for item {reference.to_data()!r} must return ClockCoordinates, "
+            f"got ({type(start_coordinate).__name__}, {type(end_coordinate).__name__})"
         )
     try:
-        start_column = column_of[start_position]
-        end_column = column_of[end_position]
+        start_column = column_of[start_coordinate]
+        end_column = column_of[end_coordinate]
     except KeyError as error:
         raise ValueError(
             f"clock placement {error.args[0]!r} for item {reference.to_data()!r} "
-            "is not an occupied spine position"
+            "is not an occupied spine coordinate"
         ) from error
     if start_column > end_column:
         raise ValueError(
@@ -384,7 +384,7 @@ def _resolve_binding_columns(
 def _structural_endpoint_id(
     graph: Graph,
     clock: ClockProfile,
-    endpoint: ItemRef | DurableItemRef | DurablePositionRef,
+    endpoint: ItemRef | DurableItemRef | DurableBoundaryRef,
     item_nodes: dict[ItemRef, str],
     declaration: QualifiedName,
 ) -> str:
@@ -433,7 +433,7 @@ def _arc_labeled(left: str, right: str, label: str) -> str:
 
 
 type _RenderedRelation = RelationInstance | PolyadicRelationInstance
-type _RelationEndpoint = ItemRef | DurablePositionRef
+type _RelationEndpoint = ItemRef | DurableBoundaryRef
 
 
 def _emit_relation_edges(
@@ -484,7 +484,7 @@ def _structural_relation_lines(
     """
 
     def _endpoint(
-        endpoint_ref: ItemRef | DurableItemRef | DurablePositionRef,
+        endpoint_ref: ItemRef | DurableItemRef | DurableBoundaryRef,
         declaration: QualifiedName,
     ) -> str:
         return _structural_endpoint_id(
@@ -541,7 +541,7 @@ def _dumps_occupied_spine(
     graph: Graph,
     clock: ClockProfile,
     presentation: DotPresentation | None,
-    binding: Callable[..., tuple[ClockPosition, ClockPosition]] | None,
+    binding: Callable[..., tuple[ClockCoordinate, ClockCoordinate]] | None,
     include_empty_tiers: bool,
 ) -> str:
     """Render a structural clock: spine plus item-anchored occupied columns.
@@ -562,10 +562,12 @@ def _dumps_occupied_spine(
     are thus all drawn and aligned, with a single deterministic representative
     per column.
     """
-    clock_positions = clock.positions
-    clock_ids, clock_labels = _occupied_spine_identity(clock_positions)
-    column_of = {position: index for index, position in enumerate(clock_positions)}
-    column_count = len(clock_positions)
+    clock_coordinates = clock.coordinates
+    clock_ids, clock_labels = _occupied_spine_identity(clock_coordinates)
+    column_of = {
+        coordinate: index for index, coordinate in enumerate(clock_coordinates)
+    }
+    column_count = len(clock_coordinates)
 
     lines = [
         "digraph tiergraph {",
@@ -702,7 +704,7 @@ def _dumps_occupied_spine(
     triggers: list[tuple[int, int, int, str, str]] = []
     for (tier_index, tier), starts_at in zip(visible, tier_starts, strict=True):
         for column in range(column_count):
-            coarse_tick = clock_positions[column].tick
+            coarse_tick = clock_coordinates[column].tick
             for item_index in starts_at[column]:
                 reference = ItemRef(tier.declaration.name, item_index)
                 triggers.append(
@@ -826,13 +828,13 @@ def dumps_spans(
 
 def _clock_index(
     clock: ClockProfile,
-    reference: PositionRef | DurablePositionRef,
-    positions: tuple[ClockPosition, ...],
+    reference: BoundaryRef | DurableBoundaryRef,
+    coordinates: tuple[ClockCoordinate, ...],
 ) -> int:
-    resolved = clock.graph.resolve_position(reference)
+    resolved = clock.graph.resolve_boundary(reference)
     if resolved.tier == clock.clock_tier:
         return resolved.index
-    return positions.index(clock.refined_position(resolved))
+    return coordinates.index(clock.refined_coordinate(resolved))
 
 
 def _resolve_tier_name(presentation: DotPresentation | None, tier: Tier) -> str:
@@ -869,24 +871,24 @@ def _resolve_item_label(
 
 
 def _occupied_spine_identity(
-    positions: tuple[ClockPosition, ...],
+    coordinates: tuple[ClockCoordinate, ...],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Name each occupied spine node from its tick, sharing single-gap ticks.
 
-    A coarse tick with exactly one occupied position is drawn as ``clock_{t}``
+    A coarse tick with exactly one occupied coordinate is drawn as ``clock_{t}``
     labeled ``{t}``; a tick with several occupied gaps distinguishes each as
     ``clock_{t}_gap_{g}`` labeled ``{t}.{g}``.
     """
-    counts = Counter(position.tick for position in positions)
+    counts = Counter(coordinate.tick for coordinate in coordinates)
     ids: list[str] = []
     labels: list[str] = []
-    for position in positions:
-        if counts[position.tick] == 1:
-            ids.append(f"clock_{position.tick}")
-            labels.append(str(position.tick))
+    for coordinate in coordinates:
+        if counts[coordinate.tick] == 1:
+            ids.append(f"clock_{coordinate.tick}")
+            labels.append(str(coordinate.tick))
         else:
-            ids.append(f"clock_{position.tick}_gap_{position.gap}")
-            labels.append(f"{position.tick}.{position.gap}")
+            ids.append(f"clock_{coordinate.tick}_gap_{coordinate.gap}")
+            labels.append(f"{coordinate.tick}.{coordinate.gap}")
     return tuple(ids), tuple(labels)
 
 
@@ -916,9 +918,11 @@ def _attribute_label(value: AttributeValue) -> str:
     )
 
 
-def _position_label(position: ClockPosition) -> str:
+def _coordinate_label(coordinate: ClockCoordinate) -> str:
     return (
-        str(position.tick) if position.gap == 0 else f"{position.tick}.{position.gap}"
+        str(coordinate.tick)
+        if coordinate.gap == 0
+        else f"{coordinate.tick}.{coordinate.gap}"
     )
 
 
@@ -926,7 +930,7 @@ def _relation_lines(
     lines: list[str],
     graph: Graph,
     items: dict[ItemRef, str],
-    boundaries: dict[PositionRef, str],
+    boundaries: dict[BoundaryRef, str],
 ) -> None:
     def _endpoint(endpoint_ref: _RelationEndpoint, declaration: QualifiedName) -> str:
         del declaration
@@ -945,13 +949,13 @@ def _relation_lines(
 
 def _endpoint_id(
     graph: Graph,
-    endpoint: ItemRef | DurablePositionRef,
+    endpoint: ItemRef | DurableBoundaryRef,
     items: dict[ItemRef, str],
-    boundaries: dict[PositionRef, str],
+    boundaries: dict[BoundaryRef, str],
 ) -> str:
     if isinstance(endpoint, ItemRef):
         return items[graph.resolve_item(endpoint)]
-    resolved = graph.resolve_position(endpoint)
+    resolved = graph.resolve_boundary(endpoint)
     try:
         return boundaries[resolved]
     except KeyError as error:

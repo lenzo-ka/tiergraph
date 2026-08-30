@@ -1,7 +1,7 @@
 # Timing
 
 A `ClockProfile` interprets one tier as a clock and maps the boundaries of other
-tiers onto it. Time is kept structural: a clock position is an integer tick with
+tiers onto it. Time is kept structural: a clock coordinate is an integer tick with
 an optional ordered gap, so inserting a boundary does not renumber the existing
 ticks, and two point events can share a tick while keeping a defined order. When
 a document also declares a rate, the profile derives physical timing from the
@@ -26,12 +26,12 @@ from tiergraph import (
     BoundarySide,
     ClockProfile,
     DurableItemRef,
-    DurablePositionRef,
+    DurableBoundaryRef,
     Graph,
     Item,
     ItemRef,
     NamespaceDeclaration,
-    PositionRef,
+    BoundaryRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -39,7 +39,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
-    anchored_position,
+    anchored_boundary,
 )
 
 ns = "https://example.com/timeline"
@@ -75,18 +75,18 @@ graph = Graph(
     (
         RelationInstance(
             binds,
-            DurablePositionRef(events, BoundarySide.BEFORE),
-            DurablePositionRef(beats, BoundarySide.BEFORE),
+            DurableBoundaryRef(events, BoundarySide.BEFORE),
+            DurableBoundaryRef(beats, BoundarySide.BEFORE),
         ),
         RelationInstance(
             binds,
-            DurablePositionRef(DurableItemRef("verse"), BoundarySide.BEFORE),
-            DurablePositionRef(DurableItemRef("t2"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("verse"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("t2"), BoundarySide.BEFORE),
         ),
         RelationInstance(
             binds,
-            DurablePositionRef(events, BoundarySide.AFTER),
-            DurablePositionRef(beats, BoundarySide.AFTER),
+            DurableBoundaryRef(events, BoundarySide.AFTER),
+            DurableBoundaryRef(beats, BoundarySide.AFTER),
         ),
     ),
     (
@@ -110,7 +110,7 @@ for index, name in enumerate(("intro", "verse")):
     print(f"{name}: start {timing.start} {timing.unit}, duration {timing.duration}")
 print(
     "anchor of events boundary 1:",
-    anchored_position(graph, PositionRef(events, 1)).side.value,
+    anchored_boundary(graph, BoundaryRef(events, 1)).side.value,
 )
 ```
 
@@ -122,14 +122,14 @@ verse: start 1 second, duration 1
 anchor of events boundary 1: before
 ```
 
-`structural_span` returns the refined clock positions bounding an event.
+`structural_span` returns the refined clock coordinates bounding an event.
 `intro` spans ticks 0 to 2 and `verse` spans 2 to 4. At two ticks per second
 that is one second each, and `timing` returns those exact decimal values stamped
 with the declared unit. Because the rate divides evenly here, the physical
 durations are exact; when a tick-to-rate ratio has no finite decimal form,
 `timing` refuses it and `duration` returns the exact tick span and rate instead.
 
-`anchored_position` names an existing boundary by an anchor without changing the
+`anchored_boundary` names an existing boundary by an anchor without changing the
 graph. Boundary 1 of the `events` tier is the edge before `verse`, so it is
 reported as the `before` side of that item's anchor. Anchored references are how
 a boundary keeps its identity across edits that shift structural indexes.

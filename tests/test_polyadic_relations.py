@@ -13,7 +13,7 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BoundarySide,
-    DurablePositionRef,
+    DurableBoundaryRef,
     Graph,
     Item,
     ItemRef,
@@ -101,8 +101,8 @@ def graph(
 
 
 def edge(
-    sources: tuple[ItemRef | DurablePositionRef, ...],
-    targets: tuple[ItemRef | DurablePositionRef, ...],
+    sources: tuple[ItemRef | DurableBoundaryRef, ...],
+    targets: tuple[ItemRef | DurableBoundaryRef, ...],
     relation: QualifiedName = MEMBERS,
 ) -> PolyadicRelationInstance:
     """Build one ordered polyadic instance."""
@@ -131,7 +131,7 @@ def test_allowed_endpoint_kind_set_accepts_neighbour_and_refuses_offender() -> N
             tiers=(LEFT,),
         )
     )
-    boundary = DurablePositionRef(LEFT, BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(LEFT, BoundarySide.BEFORE)
     assert graph((declared,), (edge((boundary,), (ItemRef(RIGHT, 0),)),))
     item_only = replace(declared, sources=side(tiers=(LEFT,)))
     with pytest.raises(

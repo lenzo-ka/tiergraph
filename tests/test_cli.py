@@ -55,6 +55,7 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundaryRef,
     BoundarySide,
     DeclareAttribute,
     DeclareNamespace,
@@ -69,10 +70,9 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    PositionRef,
     Program,
+    PromoteBoundary,
     PromoteItem,
-    PromotePosition,
     QualifiedName,
     Relate,
     RelationEndpointKind,
@@ -232,7 +232,7 @@ def test_select_help_retires_the_query_spelling(
 
 
 def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
-    """Spell the fixture's simple structural item or position path."""
+    """Spell the fixture's simple structural item or boundary path."""
     return f"/{kind}/structural/{namespace}/{local}/{index}"
 
 
@@ -759,10 +759,10 @@ def test_clock_commands_query_full_declarative_profile(
         ],
     }
 
-    position_path = _structural_path(
+    boundary_path = _structural_path(
         "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
     )
-    assert main(["clock", "position", *common, "--position", position_path]) == 0
+    assert main(["clock", "position", *common, "--position", boundary_path]) == 0
     assert json.loads(capsys.readouterr().out) == {
         "position": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
         "clock_index": 2,
@@ -840,10 +840,10 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
     assert main(["clock", "position", *common, "--position", item]) == 1
     assert "did not resolve to a position" in capsys.readouterr().err
 
-    position = _structural_path(
+    boundary = _structural_path(
         "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
     )
-    assert main(["clock", "item", *common, "--item", position]) == 1
+    assert main(["clock", "item", *common, "--item", boundary]) == 1
     assert "did not resolve to an item" in capsys.readouterr().err
 
     assert (
@@ -1182,7 +1182,7 @@ def test_path_resolve_and_spell(
     assert main(["path", "resolve", str(source), "/items/durable/beta"]) == 0
     assert capsys.readouterr().out.encode() == cli._json_bytes(expected_durable)
 
-    expected_position = {
+    expected_boundary = {
         "kind": "position",
         "path": "/positions/durable/item/beta/after",
         "current": {
@@ -1201,7 +1201,7 @@ def test_path_resolve_and_spell(
         )
         == 0
     )
-    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_position)
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_boundary)
 
     spell_cases = (
         (
@@ -2184,10 +2184,10 @@ def test_public_opcode_data_shapes_decode_exactly() -> None:
     relation = QualifiedName(ns, "relation")
     attribute = QualifiedName(ns, "attribute")
     item = tiergraph.ItemRef(tier, 0)
-    position = PositionRef(tier, 0)
+    boundary = BoundaryRef(tier, 0)
     durable_item = tiergraph.DurableItemRef("item-id")
-    durable_position = tiergraph.DurablePositionRef(durable_item, BoundarySide.AFTER)
-    tier_position = tiergraph.DurablePositionRef(tier, BoundarySide.BEFORE)
+    durable_boundary = tiergraph.DurableBoundaryRef(durable_item, BoundarySide.AFTER)
+    tier_boundary = tiergraph.DurableBoundaryRef(tier, BoundarySide.BEFORE)
     value = AttributeValue(attribute, XsdType.STRING, "value")
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), maximum=None)
     declarations = (
@@ -2210,14 +2210,14 @@ def test_public_opcode_data_shapes_decode_exactly() -> None:
     opcodes: list[Any] = [
         *(DeclareRelation(declaration) for declaration in declarations),
         PromoteItem(item, "new-item"),
-        PromotePosition(position, "new-position"),
-        Relate(RelationInstance(relation, item, durable_position, "link", (value,))),
+        PromoteBoundary(boundary, "new-position"),
+        Relate(RelationInstance(relation, item, durable_boundary, "link", (value,))),
         AttachValue(AttributeDomain.TIER, tier, value),
         AttachValue(AttributeDomain.ITEM, item, value),
         AttachValue(AttributeDomain.ITEM, durable_item, value),
-        AttachValue(AttributeDomain.POSITION, position, value),
-        AttachValue(AttributeDomain.POSITION, durable_position, value),
-        AttachValue(AttributeDomain.POSITION, tier_position, value),
+        AttachValue(AttributeDomain.POSITION, boundary, value),
+        AttachValue(AttributeDomain.POSITION, durable_boundary, value),
+        AttachValue(AttributeDomain.POSITION, tier_boundary, value),
         AttachValue(AttributeDomain.RELATION_INSTANCE, 0, value),
         Repeat(1, (AddItem(tier),)),
     ]

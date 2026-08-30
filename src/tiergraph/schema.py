@@ -165,7 +165,7 @@ ITEM_REFERENCE = _object(
     _field("tier", QUALIFIED_NAME), _field("index", NON_NEGATIVE_INTEGER)
 )
 ANCHOR = Shape(ShapeKind.REFERENCE, variants=("item_anchor", "tier_anchor"))
-DURABLE_POSITION = _object(
+DURABLE_BOUNDARY = _object(
     _field("anchor", ANCHOR),
     _field("side", Shape(ShapeKind.STRING, values=("before", "after"))),
 )
@@ -184,7 +184,7 @@ DECLARATIONS: dict[str, Shape] = {
         _field("tier", QUALIFIED_NAME),
     ),
     "item_reference": ITEM_REFERENCE,
-    "durable_position": DURABLE_POSITION,
+    "durable_position": DURABLE_BOUNDARY,
     "simple_relation": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("simple",))),
         _field("name", QUALIFIED_NAME),

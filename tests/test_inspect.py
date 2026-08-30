@@ -16,7 +16,7 @@ from tiergraph import (
 
 
 def _summary_graph() -> Graph:
-    """Build the smallest graph that carries both summarized name positions."""
+    """Build the smallest graph that carries both summarized name kinds."""
     namespace = "urn:inspect"
     tier_name = QualifiedName(namespace, "tokens")
     return Graph(

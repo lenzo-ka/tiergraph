@@ -43,7 +43,7 @@ argument, so nothing has to decide at run time which kind of object it has.
 Setting a value replaces any value of the same name on that carrier. The value's
 own declaration says which domain it belongs to, so a caller spells the place
 and not the domain: `None` is the document, a qualified name is a tier or a
-relation declaration, an item or durable reference is an item, a position or
+relation declaration, an item or durable reference is an item, a structural or
 durable boundary reference is a boundary, and an index or a durable id is a
 relation instance.
 
@@ -52,7 +52,7 @@ denoted. Item coordinates stored inside the graph move with their items, and
 durable identifiers resolve again at freeze. A stored boundary value addressed
 by coordinate moves when the edit leaves its boundary exactly one image and
 refuses the edit when it does not, because a bare coordinate has no anchor to
-follow; `promote_position()` gives it one. A removal is refused while the graph
+follow; `promote_boundary()` gives it one. A removal is refused while the graph
 still references the item, and a refused operation writes nothing.
 
 ```python
@@ -135,7 +135,7 @@ graph is the whole job.
 A `Program` holds a tuple of opcodes. Each primitive opcode is one checked state
 transition: `DeclareNamespace`, `DeclareTier`, `DeclareAttribute`,
 `DeclareRelation`, `AddItem`, `AttachValue`, `Relate`, `PromoteItem`, and
-`PromotePosition`. `Repeat` runs a block a fixed number of times; it carries a
+`PromoteBoundary`. `Repeat` runs a block a fixed number of times; it carries a
 declared upper bound, so a serialized program cannot request unbounded
 expansion.
 
@@ -214,7 +214,7 @@ six-opcode source and the eight-opcode trace describe the same graph.
 ## Refusal names its location
 
 `execute` applies opcodes in order and validates the whole graph after each one.
-A refused opcode raises `ExecutionError` naming the failing opcode's position,
+A refused opcode raises `ExecutionError` naming the failing opcode's index,
 so a bad edit points at itself rather than surfacing later.
 
 ```python
@@ -229,7 +229,7 @@ except ExecutionError as error:
 refused at opcode 0
 ```
 
-The tier `missing` was never declared, so the `AddItem` at position 0 cannot
+The tier `missing` was never declared, so the `AddItem` at index 0 cannot
 make its transition. Because each step is validated in full, a program either
 produces a valid graph or stops at the exact opcode that broke.
 
@@ -288,7 +288,7 @@ asserts almost nothing cannot be read as a strong one.
 
 A discharged `DECORATE` licenses one thing. Every reading taken over the source
 is still a correct reading of the result without re-reading it: an item's
-attributes, a position's values, a relation's endpoints, whatever a reference
+attributes, a boundary's values, a relation's endpoints, whatever a reference
 resolved to. It does not license any reading that counts, quantifies over
 everything, or turns on absence, such as a tier's extent, the canonical bytes,
 or the construction fingerprint. Decoration adds, so those must be taken again.
@@ -308,7 +308,7 @@ Invalid declarations or graph content at a graph-construction boundary raise
 `GraphValidationError`, a subclass of `ValueError`. This includes validation
 performed while decoding a serialized document into a graph. Once a `Graph` is
 valid, invalid arguments to lookup and mutation-style methods such as
-`resolve_item()`, `positions()`, and `promote_item()` deliberately remain plain
+`resolve_item()`, `boundaries()`, and `promote_item()` deliberately remain plain
 `ValueError`; wrong Python argument kinds may raise `TypeError`. The editing
 operations on `Graph` and `GraphEditor` refuse with `GraphValidationError`,
 because each one is a construction boundary: the frozen carrier builds a graph

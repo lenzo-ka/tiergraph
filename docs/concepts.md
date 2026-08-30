@@ -23,8 +23,8 @@ of the same graph.
 - **Namespaces** bind a document-local prefix to a URI. Every qualified name a
   graph uses must resolve to a declared namespace.
 - **Tiers** hold items in order. Item order carries meaning and is preserved;
-  a tier's boundaries are the `n + 1` positions before, between, and after its
-  `n` items.
+  a tier with `n` items has `n + 1` boundaries: before, between, and after
+  those items.
 - **Items** are tier members. An item may hold typed attributes and may be
   promoted to a durable identifier when a reference must survive edits.
 - **Attributes** are optional and have at most one value per qualified name.
@@ -84,7 +84,7 @@ graph = Graph(
 
 print("item indices:", [ref.index for ref in graph.canonical_items()])
 print("type of item 0:", graph.item_type(ItemRef(words, 0)))
-print("boundaries on the tier:", len(graph.positions(words)))
+print("boundaries on the tier:", len(graph.boundaries(words)))
 ```
 
 ```text

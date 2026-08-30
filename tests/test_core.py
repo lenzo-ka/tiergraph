@@ -15,9 +15,11 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
+    BoundaryRef,
     BoundarySide,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     GraphValidationError,
     Item,
@@ -25,8 +27,6 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    Position,
-    PositionRef,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -52,7 +52,7 @@ def build_graph(
     declarations: tuple[SimpleRelationDeclaration | BipartiteRelationDeclaration, ...],
     relations: tuple[RelationInstance, ...] = (),
     attributes: tuple[AttributeDeclaration, ...] = (),
-    positions: tuple[Position, ...] = (),
+    boundaries: tuple[Boundary, ...] = (),
     document_values: tuple[AttributeValue, ...] = (),
 ) -> Graph:
     """Construct the reference graph behind the conformance boundary."""
@@ -62,7 +62,7 @@ def build_graph(
         declarations,
         relations,
         attributes,
-        positions,
+        boundaries,
         document_values,
     )
 
@@ -103,7 +103,7 @@ def test_every_attribute_carrier_canonicalizes_by_qualified_name() -> None:
         Tier(TierDeclaration(tier_name, "Tier"), attributes=supplied).attributes
         == expected
     )
-    assert Position(PositionRef(tier_name, 0), supplied).attributes == expected
+    assert Boundary(BoundaryRef(tier_name, 0), supplied).attributes == expected
     assert (
         SimpleRelationDeclaration(
             name("simple"), tier_name, name("type"), supplied
@@ -375,14 +375,14 @@ def test_attribute_declaration_and_domain_are_enforced() -> None:
         Graph(NAMESPACES, (item,), (), attribute_declarations=(wrong_type,))
 
 
-def test_position_values_are_sparse_and_checked() -> None:
-    """Only valued positions are stored while all boundaries remain addressable."""
+def test_boundary_values_are_sparse_and_checked() -> None:
+    """Only valued boundaries are stored while all boundaries remain addressable."""
     tier_name = name("x")
     declaration = AttributeDeclaration(
         name("mark"), AttributeDomain.POSITION, XsdType.BOOLEAN
     )
-    stored = Position(
-        PositionRef(tier_name, 1),
+    stored = Boundary(
+        BoundaryRef(tier_name, 1),
         (AttributeValue(declaration.name, XsdType.BOOLEAN, "1"),),
     )
     graph = Graph(
@@ -390,34 +390,34 @@ def test_position_values_are_sparse_and_checked() -> None:
         (Tier(TierDeclaration(tier_name, "X"), (Item(), Item())),),
         (),
         attribute_declarations=(declaration,),
-        position_values=(stored,),
+        boundary_values=(stored,),
     )
-    assert graph.position_values == (stored,)
-    assert graph.positions(tier_name) == (
-        Position(PositionRef(tier_name, 0), ()),
+    assert graph.boundary_values == (stored,)
+    assert graph.boundaries(tier_name) == (
+        Boundary(BoundaryRef(tier_name, 0), ()),
         stored,
-        Position(PositionRef(tier_name, 2), ()),
+        Boundary(BoundaryRef(tier_name, 2), ()),
     )
-    promoted, durable = graph.promote_position(
-        PositionRef(tier_name, 1), "stored-position"
+    promoted, durable = graph.promote_boundary(
+        BoundaryRef(tier_name, 1), "stored-position"
     )
-    assert promoted.position_values[0].attributes == stored.attributes
-    assert promoted.resolve_position(durable) == stored.reference
+    assert promoted.boundary_values[0].attributes == stored.attributes
+    assert promoted.resolve_boundary(durable) == stored.reference
     with pytest.raises(ValueError, match="outside tier"):
         Graph(
             NAMESPACES,
             graph.tiers,
             (),
             attribute_declarations=(declaration,),
-            position_values=(Position(PositionRef(tier_name, 3), stored.attributes),),
+            boundary_values=(Boundary(BoundaryRef(tier_name, 3), stored.attributes),),
         )
-    with pytest.raises(ValueError, match="empty positions are derived"):
+    with pytest.raises(ValueError, match="empty boundaries are derived"):
         Graph(
             NAMESPACES,
             graph.tiers,
             (),
             attribute_declarations=(declaration,),
-            position_values=(Position(PositionRef(tier_name, 0), ()),),
+            boundary_values=(Boundary(BoundaryRef(tier_name, 0), ()),),
         )
 
 
@@ -486,14 +486,14 @@ def test_declaration_and_reference_refusals() -> None:
         )
     graph = Graph(NAMESPACES, (tier,), (simple,))
     assert graph.item_type(ItemRef(tier_name, 0)) == name("node")
-    with pytest.raises(ValueError, match="position tier.*missing"):
-        graph.positions(name("missing"))
+    with pytest.raises(ValueError, match="boundary tier.*missing"):
+        graph.boundaries(name("missing"))
     with pytest.raises(ValueError, match="names undeclared tier.*missing"):
         graph.item_type(ItemRef(name("missing"), 0))
 
 
 def test_relation_and_position_value_refusals() -> None:
-    """Relation instances and sparse position entries require valid unique targets."""
+    """Relation instances and sparse boundary entries require valid unique targets."""
     tier_name = name("x")
     tier = Tier(TierDeclaration(tier_name, "X"), (Item(),))
     simple = SimpleRelationDeclaration(name("members"), tier_name, name("node"))
@@ -508,17 +508,17 @@ def test_relation_and_position_value_refusals() -> None:
     with pytest.raises(ValueError, match="belongs to untyped tier"):
         Graph(NAMESPACES, (tier, untyped_tier), (simple, link), (untyped_edge,))
     mark = AttributeDeclaration(name("mark"), AttributeDomain.POSITION, XsdType.STRING)
-    valued = Position(
-        PositionRef(tier_name, 0),
+    valued = Boundary(
+        BoundaryRef(tier_name, 0),
         (AttributeValue(mark.name, XsdType.STRING, "x"),),
     )
-    with pytest.raises(ValueError, match="duplicate position value"):
+    with pytest.raises(ValueError, match="duplicate boundary value"):
         Graph(
             NAMESPACES,
             (tier,),
             (simple,),
             attribute_declarations=(mark,),
-            position_values=(valued, valued),
+            boundary_values=(valued, valued),
         )
     with pytest.raises(ValueError, match="names undeclared tier.*missing"):
         Graph(
@@ -526,8 +526,8 @@ def test_relation_and_position_value_refusals() -> None:
             (tier,),
             (simple,),
             attribute_declarations=(mark,),
-            position_values=(
-                Position(PositionRef(name("missing"), 0), valued.attributes),
+            boundary_values=(
+                Boundary(BoundaryRef(name("missing"), 0), valued.attributes),
             ),
         )
 
@@ -573,10 +573,10 @@ def test_acyclic_boundary_relation_resolves_mixed_anchor_spellings() -> None:
         right_endpoint=RelationEndpointKind.BOUNDARY,
         acyclic=True,
     )
-    before_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
-    before_b = DurablePositionRef(DurableItemRef("b"), BoundarySide.BEFORE)
-    after_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.AFTER)
-    before_tier = DurablePositionRef(tier_name, BoundarySide.BEFORE)
+    before_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    before_b = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE)
+    after_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.AFTER)
+    before_tier = DurableBoundaryRef(tier_name, BoundarySide.BEFORE)
     relations = (
         RelationInstance(links.name, before_a, before_b),
         RelationInstance(links.name, after_a, before_tier),
@@ -602,10 +602,10 @@ def test_single_parent_boundary_relation_resolves_mixed_anchor_spellings() -> No
         right_endpoint=RelationEndpointKind.BOUNDARY,
         single_parent=True,
     )
-    before_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.BEFORE)
-    after_b = DurablePositionRef(DurableItemRef("b"), BoundarySide.AFTER)
-    before_b = DurablePositionRef(DurableItemRef("b"), BoundarySide.BEFORE)
-    after_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.AFTER)
+    before_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    after_b = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.AFTER)
+    before_b = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE)
+    after_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.AFTER)
     relations = (
         RelationInstance(links.name, before_a, before_b),
         RelationInstance(links.name, after_b, after_a),
@@ -662,9 +662,9 @@ def test_durable_ids_and_reference_refusals() -> None:
     "operation",
     [
         lambda graph: graph.resolve_item(ItemRef(name("x"), 9)),
-        lambda graph: graph.resolve_position(PositionRef(name("x"), 9)),
+        lambda graph: graph.resolve_boundary(BoundaryRef(name("x"), 9)),
         lambda graph: graph.promote_item(ItemRef(name("x"), 9), "promoted"),
-        lambda graph: graph.promote_position(PositionRef(name("x"), 9), "promoted"),
+        lambda graph: graph.promote_boundary(BoundaryRef(name("x"), 9), "promoted"),
         lambda graph: graph.item_type(ItemRef(name("x"), 9)),
     ],
     ids=(
@@ -699,7 +699,7 @@ def test_graph_construction_contract_raises_graph_validation_error() -> None:
         Graph(NAMESPACES, (tier, tier), ())
 
 
-def test_durable_position_reference_survives_insertion_but_coordinate_does_not() -> (
+def test_durable_boundary_reference_survives_insertion_but_coordinate_does_not() -> (
     None
 ):
     """A promoted boundary follows its identity while a coordinate remains structural."""
@@ -709,12 +709,12 @@ def test_durable_position_reference_survives_insertion_but_coordinate_does_not()
         (Tier(TierDeclaration(tier_name, "Placements"), (Item(), Item())),),
         (),
     )
-    coordinate = PositionRef(tier_name, 1)
-    promoted, durable = original.promote_position(coordinate, "middle-boundary")
-    assert durable == DurablePositionRef(
+    coordinate = BoundaryRef(tier_name, 1)
+    promoted, durable = original.promote_boundary(coordinate, "middle-boundary")
+    assert durable == DurableBoundaryRef(
         DurableItemRef("middle-boundary"), BoundarySide.BEFORE
     )
-    assert promoted.resolve_position(durable) == coordinate
+    assert promoted.resolve_boundary(durable) == coordinate
     inserted = Graph(
         NAMESPACES,
         (
@@ -725,9 +725,9 @@ def test_durable_position_reference_survives_insertion_but_coordinate_does_not()
         ),
         (),
     )
-    assert inserted.resolve_position(durable) == PositionRef(tier_name, 2)
-    assert inserted.resolve_position(coordinate) == PositionRef(tier_name, 1)
-    assert inserted.resolve_position(coordinate) != inserted.resolve_position(durable)
+    assert inserted.resolve_boundary(durable) == BoundaryRef(tier_name, 2)
+    assert inserted.resolve_boundary(coordinate) == BoundaryRef(tier_name, 1)
+    assert inserted.resolve_boundary(coordinate) != inserted.resolve_boundary(durable)
 
 
 def test_coincident_position_anchors_intentionally_diverge_after_insertion() -> None:
@@ -745,14 +745,14 @@ def test_coincident_position_anchors_intentionally_diverge_after_insertion() -> 
         ),
         (),
     )
-    after_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.AFTER)
-    before_b = DurablePositionRef(DurableItemRef("b"), BoundarySide.BEFORE)
-    before_empty = DurablePositionRef(empty_name, BoundarySide.BEFORE)
-    after_empty = DurablePositionRef(empty_name, BoundarySide.AFTER)
+    after_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.AFTER)
+    before_b = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE)
+    before_empty = DurableBoundaryRef(empty_name, BoundarySide.BEFORE)
+    after_empty = DurableBoundaryRef(empty_name, BoundarySide.AFTER)
     assert after_a != before_b
     assert before_empty != after_empty
-    assert graph.resolve_position(after_a) == graph.resolve_position(before_b)
-    assert graph.resolve_position(before_empty) == graph.resolve_position(after_empty)
+    assert graph.resolve_boundary(after_a) == graph.resolve_boundary(before_b)
+    assert graph.resolve_boundary(before_empty) == graph.resolve_boundary(after_empty)
 
     inserted = Graph(
         NAMESPACES,
@@ -765,10 +765,10 @@ def test_coincident_position_anchors_intentionally_diverge_after_insertion() -> 
         ),
         (),
     )
-    assert inserted.resolve_position(after_a) == PositionRef(tier_name, 1)
-    assert inserted.resolve_position(before_b) == PositionRef(tier_name, 2)
-    assert inserted.resolve_position(before_empty) == PositionRef(empty_name, 0)
-    assert inserted.resolve_position(after_empty) == PositionRef(empty_name, 1)
+    assert inserted.resolve_boundary(after_a) == BoundaryRef(tier_name, 1)
+    assert inserted.resolve_boundary(before_b) == BoundaryRef(tier_name, 2)
+    assert inserted.resolve_boundary(before_empty) == BoundaryRef(empty_name, 0)
+    assert inserted.resolve_boundary(after_empty) == BoundaryRef(empty_name, 1)
 
 
 def test_removed_boundary_anchor_refuses_on_both_sides_by_name() -> None:
@@ -780,14 +780,14 @@ def test_removed_boundary_anchor_refuses_on_both_sides_by_name() -> None:
         (Tier(TierDeclaration(tier_name, "Placements"), (Item(anchor_id),)),),
         (),
     )
-    before = DurablePositionRef(DurableItemRef(anchor_id), BoundarySide.BEFORE)
-    after = DurablePositionRef(DurableItemRef(anchor_id), BoundarySide.AFTER)
-    assert graph.resolve_position(before) == PositionRef(tier_name, 0)
-    assert graph.resolve_position(after) == PositionRef(tier_name, 1)
+    before = DurableBoundaryRef(DurableItemRef(anchor_id), BoundarySide.BEFORE)
+    after = DurableBoundaryRef(DurableItemRef(anchor_id), BoundarySide.AFTER)
+    assert graph.resolve_boundary(before) == BoundaryRef(tier_name, 0)
+    assert graph.resolve_boundary(after) == BoundaryRef(tier_name, 1)
     removed = Graph(NAMESPACES, (Tier(TierDeclaration(tier_name, "Placements")),), ())
     for reference in (before, after):
         with pytest.raises(ValueError, match="lead-vocal.*not found"):
-            removed.resolve_position(reference)
+            removed.resolve_boundary(reference)
 
 
 def test_outer_and_empty_tier_boundaries_are_promotable() -> None:
@@ -802,18 +802,18 @@ def test_outer_and_empty_tier_boundaries_are_promotable() -> None:
         ),
         (),
     )
-    graph, leading = graph.promote_position(PositionRef(full_name, 0), "unused")
-    graph, trailing = graph.promote_position(PositionRef(full_name, 1), "unused")
-    graph, empty = graph.promote_position(PositionRef(empty_name, 0), "unused")
-    assert leading == DurablePositionRef(full_name, BoundarySide.BEFORE)
-    assert trailing == DurablePositionRef(full_name, BoundarySide.AFTER)
-    assert empty == DurablePositionRef(empty_name, BoundarySide.BEFORE)
-    assert graph.resolve_position(leading) == PositionRef(full_name, 0)
-    assert graph.resolve_position(trailing) == PositionRef(full_name, 1)
-    assert graph.resolve_position(empty) == PositionRef(empty_name, 0)
+    graph, leading = graph.promote_boundary(BoundaryRef(full_name, 0), "unused")
+    graph, trailing = graph.promote_boundary(BoundaryRef(full_name, 1), "unused")
+    graph, empty = graph.promote_boundary(BoundaryRef(empty_name, 0), "unused")
+    assert leading == DurableBoundaryRef(full_name, BoundarySide.BEFORE)
+    assert trailing == DurableBoundaryRef(full_name, BoundarySide.AFTER)
+    assert empty == DurableBoundaryRef(empty_name, BoundarySide.BEFORE)
+    assert graph.resolve_boundary(leading) == BoundaryRef(full_name, 0)
+    assert graph.resolve_boundary(trailing) == BoundaryRef(full_name, 1)
+    assert graph.resolve_boundary(empty) == BoundaryRef(empty_name, 0)
     with pytest.raises(ValueError, match="missing-tier.*not declared"):
-        graph.resolve_position(
-            DurablePositionRef(name("missing-tier"), BoundarySide.BEFORE)
+        graph.resolve_boundary(
+            DurableBoundaryRef(name("missing-tier"), BoundarySide.BEFORE)
         )
 
 
@@ -825,7 +825,7 @@ def test_boundary_relation_endpoint_uses_anchor_type_and_names_wrong_type() -> N
     cue_type = name("cue")
     placement_type = name("placement")
     other_type = name("other-type")
-    boundary = DurablePositionRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
+    boundary = DurableBoundaryRef(DurableItemRef("lead-vocal"), BoundarySide.BEFORE)
     tiers = (
         Tier(TierDeclaration(cue_tier, "Cues"), (Item(),)),
         Tier(TierDeclaration(placement_tier, "Placements"), (Item("lead-vocal"),)),
@@ -848,7 +848,7 @@ def test_boundary_relation_endpoint_uses_anchor_type_and_names_wrong_type() -> N
     outer_relation = RelationInstance(
         declaration.name,
         ItemRef(cue_tier, 0),
-        DurablePositionRef(placement_tier, BoundarySide.AFTER),
+        DurableBoundaryRef(placement_tier, BoundarySide.AFTER),
     )
     relations = (relation, outer_relation)
     assert (
@@ -858,7 +858,7 @@ def test_boundary_relation_endpoint_uses_anchor_type_and_names_wrong_type() -> N
     wrong = RelationInstance(
         declaration.name,
         ItemRef(cue_tier, 0),
-        DurablePositionRef(DurableItemRef("wrong-anchor"), BoundarySide.AFTER),
+        DurableBoundaryRef(DurableItemRef("wrong-anchor"), BoundarySide.AFTER),
     )
     with pytest.raises(
         ValueError, match="right endpoint.*wrong-anchor.*other-type.*placement"
@@ -886,14 +886,14 @@ def test_boundary_endpoint_refusals_name_kind_and_missing_anchors() -> None:
     missing_item = RelationInstance(
         boundary_link.name,
         ItemRef(tier_name, 0),
-        DurablePositionRef(DurableItemRef("absent"), BoundarySide.BEFORE),
+        DurableBoundaryRef(DurableItemRef("absent"), BoundarySide.BEFORE),
     )
     with pytest.raises(ValueError, match="right endpoint.*absent.*missing anchor"):
         Graph(NAMESPACES, (tier,), (members, boundary_link), (missing_item,))
     missing_tier = RelationInstance(
         boundary_link.name,
         ItemRef(tier_name, 0),
-        DurablePositionRef(name("absent-tier"), BoundarySide.AFTER),
+        DurableBoundaryRef(name("absent-tier"), BoundarySide.AFTER),
     )
     with pytest.raises(
         ValueError, match="right endpoint.*undeclared tier.*absent-tier"
@@ -929,14 +929,14 @@ def test_durable_item_reference_resolves_after_insertion() -> None:
     [
         (DurableItemRef("missing-item"), Graph.resolve_item, "missing-item"),
         (
-            DurablePositionRef(DurableItemRef("missing-position"), BoundarySide.BEFORE),
-            Graph.resolve_position,
+            DurableBoundaryRef(DurableItemRef("missing-position"), BoundarySide.BEFORE),
+            Graph.resolve_boundary,
             "missing-position",
         ),
     ],
 )
 def test_unknown_durable_reference_is_refused_by_name(
-    reference: DurableItemRef | DurablePositionRef,
+    reference: DurableItemRef | DurableBoundaryRef,
     resolver: object,
     message: str,
 ) -> None:
@@ -952,15 +952,15 @@ def test_unknown_durable_reference_is_refused_by_name(
     [
         (
             Graph.resolve_item,
-            DurablePositionRef(DurableItemRef("position-id"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("position-id"), BoundarySide.BEFORE),
             "DurableItemRef",
         ),
-        (Graph.resolve_position, DurableItemRef("item-id"), "DurablePositionRef"),
+        (Graph.resolve_boundary, DurableItemRef("item-id"), "DurableBoundaryRef"),
     ],
 )
 def test_resolvers_refuse_the_wrong_reference_class(
     resolver: object,
-    reference: DurableItemRef | DurablePositionRef,
+    reference: DurableItemRef | DurableBoundaryRef,
     expected: str,
 ) -> None:
     """Runtime resolution enforces the identity level expressed by its annotation."""
@@ -973,7 +973,7 @@ def test_resolvers_refuse_the_wrong_reference_class(
 
 
 def test_promotion_ids_are_independent_of_promotion_order() -> None:
-    """Caller-owned semantic ids do not depend on prior item or position promotion."""
+    """Caller-owned semantic ids do not depend on prior item or boundary promotion."""
     tier_name = name("x")
     graph = Graph(
         NAMESPACES,
@@ -988,17 +988,17 @@ def test_promotion_ids_are_independent_of_promotion_order() -> None:
     assert first == second
 
     item_first, item_ref = graph.promote_item(ItemRef(tier_name, 0), "zero")
-    item_first, position_ref = item_first.promote_position(
-        PositionRef(tier_name, 1), "middle"
+    item_first, boundary_ref = item_first.promote_boundary(
+        BoundaryRef(tier_name, 1), "middle"
     )
-    position_first, reverse_position_ref = graph.promote_position(
-        PositionRef(tier_name, 1), "middle"
+    boundary_first, reverse_boundary_ref = graph.promote_boundary(
+        BoundaryRef(tier_name, 1), "middle"
     )
-    position_first, reverse_item_ref = position_first.promote_item(
+    boundary_first, reverse_item_ref = boundary_first.promote_item(
         ItemRef(tier_name, 0), "zero"
     )
-    assert (item_ref, position_ref) == (reverse_item_ref, reverse_position_ref)
-    assert item_first == position_first
+    assert (item_ref, boundary_ref) == (reverse_item_ref, reverse_boundary_ref)
+    assert item_first == boundary_first
 
 
 def test_position_promotion_uses_an_existing_anchor_id() -> None:
@@ -1009,17 +1009,17 @@ def test_position_promotion_uses_an_existing_anchor_id() -> None:
         (Tier(TierDeclaration(tier_name, "X"), (Item(), Item("taken"))),),
         (),
     )
-    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "taken")
+    promoted, durable = graph.promote_boundary(BoundaryRef(tier_name, 1), "taken")
     assert promoted is graph
-    assert durable == DurablePositionRef(DurableItemRef("taken"), BoundarySide.BEFORE)
+    assert durable == DurableBoundaryRef(DurableItemRef("taken"), BoundarySide.BEFORE)
 
 
 def test_position_promotion_returns_the_anchor_that_already_stores_values() -> None:
     """A promoted handle continues to identify its stored values after insertion."""
     tier_name = name("x")
     mark = AttributeDeclaration(name("mark"), AttributeDomain.POSITION, XsdType.STRING)
-    after_a = DurablePositionRef(DurableItemRef("a"), BoundarySide.AFTER)
-    stored = Position(
+    after_a = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.AFTER)
+    stored = Boundary(
         after_a,
         (AttributeValue(mark.name, XsdType.STRING, "kept"),),
     )
@@ -1028,12 +1028,12 @@ def test_position_promotion_returns_the_anchor_that_already_stores_values() -> N
         (Tier(TierDeclaration(tier_name, "X"), (Item("a"), Item("b"))),),
         (),
         attribute_declarations=(mark,),
-        position_values=(stored,),
+        boundary_values=(stored,),
     )
-    promoted, durable = graph.promote_position(PositionRef(tier_name, 1), "b")
+    promoted, durable = graph.promote_boundary(BoundaryRef(tier_name, 1), "b")
     assert promoted is graph
     assert durable == after_a
-    assert promoted.position_values[0].reference == durable
+    assert promoted.boundary_values[0].reference == durable
 
     inserted = Graph(
         NAMESPACES,
@@ -1045,16 +1045,16 @@ def test_position_promotion_returns_the_anchor_that_already_stores_values() -> N
         ),
         (),
         attribute_declarations=(mark,),
-        position_values=promoted.position_values,
+        boundary_values=promoted.boundary_values,
     )
-    assert inserted.resolve_position(durable) == PositionRef(tier_name, 1)
-    assert inserted.resolve_position(inserted.position_values[0].reference) == (
-        inserted.resolve_position(durable)
+    assert inserted.resolve_boundary(durable) == BoundaryRef(tier_name, 1)
+    assert inserted.resolve_boundary(inserted.boundary_values[0].reference) == (
+        inserted.resolve_boundary(durable)
     )
 
 
 def test_promotion_is_idempotent_and_unvalued_positions_remain_derived() -> None:
-    """Repeated promotion preserves the anchor and stores no empty position."""
+    """Repeated promotion preserves the anchor and stores no empty boundary."""
     tier_name = name("x")
     graph = Graph(
         NAMESPACES,
@@ -1075,15 +1075,15 @@ def test_promotion_is_idempotent_and_unvalued_positions_remain_derived() -> None
     )
     assert same_item_graph is item_graph
     assert same_item_ref == item_ref
-    position_graph, position_ref = item_graph.promote_position(
-        PositionRef(tier_name, 1), "end-boundary"
+    boundary_graph, boundary_ref = item_graph.promote_boundary(
+        BoundaryRef(tier_name, 1), "end-boundary"
     )
-    same_position_graph, same_position_ref = position_graph.promote_position(
-        PositionRef(tier_name, 1), "ignored-replacement"
+    same_boundary_graph, same_boundary_ref = boundary_graph.promote_boundary(
+        BoundaryRef(tier_name, 1), "ignored-replacement"
     )
-    assert same_position_graph is position_graph
-    assert same_position_ref == position_ref
-    assert position_graph.position_values == ()
+    assert same_boundary_graph is boundary_graph
+    assert same_boundary_ref == boundary_ref
+    assert boundary_graph.boundary_values == ()
 
 
 def test_item_promotion_refuses_a_conflicting_durable_id() -> None:
@@ -1111,12 +1111,12 @@ def test_position_promotion_refuses_a_conflicting_anchor_id() -> None:
     )
     with pytest.raises(
         ValueError,
-        match=r"position .* is before an anchor.*'anchor'.*boundary.*'refused'",
+        match=r"boundary .* is before an anchor.*'anchor'.*boundary.*'refused'",
     ):
-        graph.promote_position(PositionRef(tier_name, 1), "refused")
+        graph.promote_boundary(BoundaryRef(tier_name, 1), "refused")
 
 
-def test_anchored_position_reference_has_tagged_json_shape() -> None:
+def test_anchored_boundary_reference_has_tagged_json_shape() -> None:
     """The item-or-tier anchor and side remain explicit in public data."""
     tier_name = name("x")
     graph = Graph(
@@ -1125,13 +1125,13 @@ def test_anchored_position_reference_has_tagged_json_shape() -> None:
         (),
     )
     graph, item_ref = graph.promote_item(ItemRef(tier_name, 0), "the-item")
-    graph, position_ref = graph.promote_position(
-        PositionRef(tier_name, 1), "end-boundary"
+    graph, boundary_ref = graph.promote_boundary(
+        BoundaryRef(tier_name, 1), "end-boundary"
     )
     data = json.loads(json.dumps(graph.to_data(), allow_nan=False))
     assert data["tiers"][0]["items"][0]["durable_id"] == item_ref.durable_id
     assert item_ref.to_data() == {"durable_id": item_ref.durable_id}
-    assert position_ref.to_data() == {
+    assert boundary_ref.to_data() == {
         "anchor": {"kind": "tier", "tier": tier_name.to_data()},
         "side": "after",
     }
@@ -1172,10 +1172,10 @@ def test_relation_and_item_durable_ids_share_one_unique_namespace() -> None:
         Graph(NAMESPACES, (tier,), (simple, link), (colliding,))
 
 
-@pytest.mark.parametrize("reference_type", [ItemRef, PositionRef])
+@pytest.mark.parametrize("reference_type", [ItemRef, BoundaryRef])
 @pytest.mark.parametrize(("index", "spelling"), [(1.5, "1.5"), (True, "True")])
 def test_reference_indices_must_be_integral_at_construction(
-    reference_type: type[ItemRef] | type[PositionRef], index: object, spelling: str
+    reference_type: type[ItemRef] | type[BoundaryRef], index: object, spelling: str
 ) -> None:
     """References refuse fractional indices and bool's integer disguise immediately."""
     tier_name = name("x")
@@ -1183,11 +1183,11 @@ def test_reference_indices_must_be_integral_at_construction(
         reference_type(tier_name, index)  # type: ignore[arg-type]
 
 
-def test_valued_position_index_must_be_integral() -> None:
+def test_valued_boundary_index_must_be_integral() -> None:
     """A fractional sparse boundary is refused before it can be embedded."""
     tier_name = name("x")
-    with pytest.raises(ValueError, match=r"position.*non-integral index 1\.5"):
-        PositionRef(tier_name, 1.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"boundary.*non-integral index 1\.5"):
+        BoundaryRef(tier_name, 1.5)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -1217,7 +1217,7 @@ def test_relation_structural_promises_must_be_boolean(
         lambda: TierDeclaration(name("x"), ""),
         lambda: Item(""),
         lambda: DurableItemRef(""),
-        lambda: DurablePositionRef(DurableItemRef(""), BoundarySide.BEFORE),
+        lambda: DurableBoundaryRef(DurableItemRef(""), BoundarySide.BEFORE),
         lambda: RelationInstance(
             name("links"), ItemRef(name("x"), 0), ItemRef(name("x"), 0), ""
         ),

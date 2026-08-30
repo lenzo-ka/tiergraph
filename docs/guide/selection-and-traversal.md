@@ -153,7 +153,7 @@ them -- has no origin to key on, so `instances()` enumerates it: each
 not for the traversal direction, and their arities need not match. That is what
 makes the shape usable for a correspondence that reorders one side: the order is
 graph content, and reading either side as a bag of endpoints, or pairing the two
-sides off position by position, would lose it.
+sides off index by index, would lose it.
 
 `OrderedContainment` below is the item-only, source-unique, acyclic profile over
 this shared engine. Its existing result types and ordering remain unchanged.

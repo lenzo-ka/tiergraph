@@ -23,13 +23,14 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    BoundaryRef,
     BoundarySide,
     DeclareAttribute,
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     ExecutionError,
     Graph,
     Item,
@@ -37,10 +38,9 @@ from tiergraph import (
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
-    PositionRef,
     Program,
+    PromoteBoundary,
     PromoteItem,
-    PromotePosition,
     QualifiedName,
     Relate,
     RelationEndpointKind,
@@ -416,17 +416,17 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
             ),
             AttachValue(
                 AttributeDomain.POSITION,
-                PositionRef(tier, 0),
+                BoundaryRef(tier, 0),
                 value(AttributeDomain.POSITION),
             ),
             AttachValue(
                 AttributeDomain.POSITION,
-                PositionRef(tier, 1),
+                BoundaryRef(tier, 1),
                 value(AttributeDomain.POSITION, "other"),
             ),
             AttachValue(
                 AttributeDomain.POSITION,
-                PositionRef(tier, 1),
+                BoundaryRef(tier, 1),
                 AttributeValue(name("position-second"), XsdType.STRING, "second"),
             ),
         )
@@ -434,7 +434,7 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
     outcome = program.unroll()
     assert execute(outcome.trace) == outcome.graph
     assert outcome.graph.attributes == (value(AttributeDomain.DOCUMENT),)
-    assert len(outcome.graph.position_values[1].attributes) == 2
+    assert len(outcome.graph.boundary_values[1].attributes) == 2
     for opcode in program.opcodes:
         json.dumps(opcode.to_data(), allow_nan=False)
 
@@ -457,7 +457,7 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
             "is not declared",
         ),
         (AttributeDomain.RELATION_INSTANCE, 0, "not an existing relation index"),
-        (AttributeDomain.POSITION, 0, "must be a position reference"),
+        (AttributeDomain.POSITION, 0, "must be a boundary reference"),
     ],
 )
 def test_attribute_target_refusals_name_the_target(
@@ -525,19 +525,19 @@ def test_promoted_references_drive_later_checked_operations() -> None:
     """Durable item and boundary identity remain usable by later opcodes."""
     tier = LAWS.name("events")
     item_value = AttributeValue(LAWS.name("label"), XsdType.STRING, "named")
-    position_name = LAWS.name("position-label")
-    position_value = AttributeValue(position_name, XsdType.STRING, "edge")
+    boundary_name = LAWS.name("position-label")
+    position_value = AttributeValue(boundary_name, XsdType.STRING, "edge")
     program = build_program(
         (
             *LAWS.declarations(),
             DeclareAttribute(
                 AttributeDeclaration(
-                    position_name, AttributeDomain.POSITION, XsdType.STRING
+                    boundary_name, AttributeDomain.POSITION, XsdType.STRING
                 )
             ),
             AddItem(tier),
             PromoteItem(ItemRef(tier, 0), "item-id"),
-            PromotePosition(PositionRef(tier, 0), "unused-at-outer-edge"),
+            PromoteBoundary(BoundaryRef(tier, 0), "unused-at-outer-edge"),
             AttachValue(
                 AttributeDomain.ITEM,
                 DurableItemRef("item-id"),
@@ -545,14 +545,14 @@ def test_promoted_references_drive_later_checked_operations() -> None:
             ),
             AttachValue(
                 AttributeDomain.POSITION,
-                DurablePositionRef(tier, BoundarySide.BEFORE),
+                DurableBoundaryRef(tier, BoundarySide.BEFORE),
                 position_value,
             ),
         )
     )
     outcome = program.unroll()
     assert outcome.graph.tiers[0].items[0].attributes == (item_value,)
-    assert outcome.graph.position_values[0].attributes == (position_value,)
+    assert outcome.graph.boundary_values[0].attributes == (position_value,)
     json.dumps(program.opcodes[7].to_data(), allow_nan=False)
 
 
@@ -560,23 +560,23 @@ def test_linear_unroll_matches_reference_execution_for_rich_graph() -> None:
     """The fast builder preserves every graph field and canonical wire byte."""
     tier = LAWS.name("events")
     relation_name = LAWS.name("ordered")
-    position_name = LAWS.name("position-label")
+    boundary_name = LAWS.name("position-label")
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), 1, 2)
     trace: tuple[Opcode, ...] = (
         *LAWS.declarations(),
         DeclareAttribute(
             AttributeDeclaration(
-                position_name, AttributeDomain.POSITION, XsdType.STRING
+                boundary_name, AttributeDomain.POSITION, XsdType.STRING
             )
         ),
         AddItem(tier),
         PromoteItem(ItemRef(tier, 0), "durable"),
-        PromotePosition(PositionRef(tier, 1), "outer-unused"),
+        PromoteBoundary(BoundaryRef(tier, 1), "outer-unused"),
         AddItem(tier),
         AttachValue(
             AttributeDomain.POSITION,
-            DurablePositionRef(tier, BoundarySide.AFTER),
-            AttributeValue(position_name, XsdType.STRING, "tick"),
+            DurableBoundaryRef(tier, BoundarySide.AFTER),
+            AttributeValue(boundary_name, XsdType.STRING, "tick"),
         ),
         AddItem(tier),
         DeclareRelation(PolyadicRelationDeclaration(relation_name, side, side)),
@@ -600,7 +600,7 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
     """Less common mutable transitions retain the reference machine's result."""
     name = LAWS.name
     tier = name("events")
-    position_attribute = name("position-extra")
+    boundary_attribute = name("position-extra")
     relation_attribute = name("relation-extra")
     membership = name("membership-poly")
     selection = name("selection-poly")
@@ -609,7 +609,7 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
         *LAWS.declarations(),
         DeclareAttribute(
             AttributeDeclaration(
-                position_attribute, AttributeDomain.POSITION, XsdType.STRING
+                boundary_attribute, AttributeDomain.POSITION, XsdType.STRING
             )
         ),
         DeclareAttribute(
@@ -624,17 +624,17 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
         AddItem(tier),
         AttachValue(
             AttributeDomain.POSITION,
-            PositionRef(tier, 1),
-            AttributeValue(position_attribute, XsdType.STRING, "middle"),
+            BoundaryRef(tier, 1),
+            AttributeValue(boundary_attribute, XsdType.STRING, "middle"),
         ),
-        PromotePosition(PositionRef(tier, 1), "middle-anchor"),
-        PromotePosition(PositionRef(tier, 1), "middle-anchor"),
+        PromoteBoundary(BoundaryRef(tier, 1), "middle-anchor"),
+        PromoteBoundary(BoundaryRef(tier, 1), "middle-anchor"),
         AttachValue(
             AttributeDomain.POSITION,
-            PositionRef(tier, 2),
-            AttributeValue(position_attribute, XsdType.STRING, "after"),
+            BoundaryRef(tier, 2),
+            AttributeValue(boundary_attribute, XsdType.STRING, "after"),
         ),
-        PromotePosition(PositionRef(tier, 2), "outer-unused"),
+        PromoteBoundary(BoundaryRef(tier, 2), "outer-unused"),
         DeclareRelation(PolyadicRelationDeclaration(membership, side, side)),
         DeclareRelation(
             PolyadicRelationDeclaration(
@@ -686,8 +686,8 @@ def test_linear_builder_covers_promotions_subsets_and_attachment_shapes() -> Non
             *LAWS.declarations(),
             AddItem(tier),
             AddItem(tier),
-            PromotePosition(PositionRef(tier, 1), "middle-anchor"),
-            PromotePosition(PositionRef(tier, 1), "ignored-again"),
+            PromoteBoundary(BoundaryRef(tier, 1), "middle-anchor"),
+            PromoteBoundary(BoundaryRef(tier, 1), "ignored-again"),
         ),
     )
     for conflicting_trace in conflicting_promotions:
@@ -874,8 +874,8 @@ def test_tier_anchored_boundary_cycle_cannot_be_healed_by_later_item() -> None:
             Relate(
                 RelationInstance(
                     relation,
-                    DurablePositionRef(tier, BoundarySide.BEFORE),
-                    DurablePositionRef(tier, BoundarySide.AFTER),
+                    DurableBoundaryRef(tier, BoundarySide.BEFORE),
+                    DurableBoundaryRef(tier, BoundarySide.AFTER),
                 )
             ),
             AddItem(tier),
@@ -898,8 +898,8 @@ def test_tier_anchored_boundary_second_parent_cannot_be_healed() -> None:
     tier = name("tier")
     item_type = name("type")
     relation = name("relation")
-    anchor_after = DurablePositionRef(DurableItemRef("anchor"), BoundarySide.AFTER)
-    tier_after = DurablePositionRef(tier, BoundarySide.AFTER)
+    anchor_after = DurableBoundaryRef(DurableItemRef("anchor"), BoundarySide.AFTER)
+    tier_after = DurableBoundaryRef(tier, BoundarySide.AFTER)
     program = Program(
         (
             DeclareNamespace(NamespaceDeclaration("s", namespace)),
@@ -921,7 +921,7 @@ def test_tier_anchored_boundary_second_parent_cannot_be_healed() -> None:
             Relate(
                 RelationInstance(
                     relation,
-                    DurablePositionRef(tier, BoundarySide.BEFORE),
+                    DurableBoundaryRef(tier, BoundarySide.BEFORE),
                     anchor_after,
                 )
             ),
@@ -956,10 +956,10 @@ def test_tier_anchored_polyadic_duplicate_targets_cannot_be_healed() -> None:
             Relate(
                 PolyadicRelationInstance(
                     relation,
-                    (DurablePositionRef(tier, BoundarySide.BEFORE),),
+                    (DurableBoundaryRef(tier, BoundarySide.BEFORE),),
                     (
-                        DurablePositionRef(tier, BoundarySide.BEFORE),
-                        DurablePositionRef(tier, BoundarySide.AFTER),
+                        DurableBoundaryRef(tier, BoundarySide.BEFORE),
+                        DurableBoundaryRef(tier, BoundarySide.AFTER),
                     ),
                 )
             ),
@@ -1003,8 +1003,8 @@ def test_valid_tier_anchored_relation_uses_identical_reference_graph() -> None:
             Relate(
                 RelationInstance(
                     relation,
-                    DurablePositionRef(tier, BoundarySide.BEFORE),
-                    DurablePositionRef(tier, BoundarySide.AFTER),
+                    DurableBoundaryRef(tier, BoundarySide.BEFORE),
+                    DurableBoundaryRef(tier, BoundarySide.AFTER),
                 )
             ),
         )

@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 
 from tiergraph.core import (
     BipartiteRelationDeclaration,
-    DurablePositionRef,
+    DurableBoundaryRef,
     Graph,
     Item,
     ItemRef,
@@ -256,8 +256,8 @@ def span_view(
             if relation.left.tier == profile.base_tier:
                 members.setdefault(relation.right, set()).add(relation.left.index)
         else:
-            assert isinstance(relation.left, DurablePositionRef)
-            boundary = graph.resolve_position(relation.left)
+            assert isinstance(relation.left, DurableBoundaryRef)
+            boundary = graph.resolve_boundary(relation.left)
             if boundary.tier == profile.base_tier:
                 previous = anchors.setdefault(relation.right, boundary.index)
                 if previous != boundary.index:

@@ -740,27 +740,27 @@ def _candidate_matches(
 
     def _visit(
         index: int,
-        position: int,
+        cursor: int,
         children: tuple[tuple[QualifiedName, int, int], ...],
         terminals_match: bool,
     ) -> None:
         if index == len(pattern):
-            if position == end:
+            if cursor == end:
                 found.append((children, terminals_match))
             return
         element = pattern[index]
         if isinstance(element, GrammarTerminal):
-            if position < end:
+            if cursor < end:
                 _visit(
                     index + 1,
-                    position + 1,
+                    cursor + 1,
                     children,
-                    terminals_match and tokens[position] == element.text.lexical,
+                    terminals_match and tokens[cursor] == element.text.lexical,
                 )
             return
-        first = position if allow_empty_holes else position + 1
+        first = cursor if allow_empty_holes else cursor + 1
         for boundary in range(first, end + 1):
-            key = (element.nonterminal, position, boundary)
+            key = (element.nonterminal, cursor, boundary)
             _visit(index + 1, boundary, (*children, key), terminals_match)
 
     _visit(0, start, (), True)

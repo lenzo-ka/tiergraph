@@ -9,20 +9,20 @@ from typing import cast
 
 from tiergraph.core import (
     AttributeDomain,
+    BoundaryRef,
+    DurableBoundaryRef,
     DurableItemRef,
-    DurablePositionRef,
     Graph,
     ItemRef,
     JsonValue,
-    PositionRef,
     QualifiedName,
     SimpleRelationDeclaration,
 )
 from tiergraph.machine import _decode_qname
 from tiergraph.path import (
     PathProfile,
+    ResolvedBoundary,
     ResolvedItem,
-    ResolvedPosition,
     StructuralPathProfile,
     resolve_path,
 )
@@ -56,7 +56,7 @@ class Node:
     """
 
     kind: NodeKind
-    reference: QualifiedName | ItemRef | PositionRef | int | None
+    reference: QualifiedName | ItemRef | BoundaryRef | int | None
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return a tagged strict-JSON representation of this identity."""
@@ -72,7 +72,7 @@ class NodeSet:
     """Hold unique nodes in the graph's canonical mixed-node order.
 
     Nodes sort first by kind rank. Within tier-addressed kinds they sort by tier
-    declaration index, then item or position index, so reproducible selection
+    declaration index, then item or boundary index, so reproducible selection
     output depends on the graph's tier declaration order.
 
     A polyadic instance sorts by its declaration, then its two side arities,
@@ -107,7 +107,7 @@ class NodeSet:
         }
         reference = node.reference
         detail: tuple[int, ...]
-        if isinstance(reference, ItemRef | PositionRef):
+        if isinstance(reference, ItemRef | BoundaryRef):
             detail = (tier_order[reference.tier], reference.index)
         elif isinstance(reference, QualifiedName):
             detail = (tier_order.get(reference, declaration_order.get(reference, 0)),)
@@ -137,11 +137,11 @@ class NodeSet:
             detail = ()
         return (kind_order[node.kind], *detail)
 
-    def _endpoint_key(self, reference: ItemRef | DurablePositionRef) -> tuple[int, int]:
+    def _endpoint_key(self, reference: ItemRef | DurableBoundaryRef) -> tuple[int, int]:
         if isinstance(reference, ItemRef):
-            resolved: ItemRef | PositionRef = reference
+            resolved: ItemRef | BoundaryRef = reference
         else:
-            resolved = self.graph.resolve_position(reference)
+            resolved = self.graph.resolve_boundary(reference)
         tier_order = {
             tier.declaration.name: index for index, tier in enumerate(self.graph.tiers)
         }
@@ -260,8 +260,8 @@ class BoundariesSelector:
         return NodeSet(
             graph,
             tuple(
-                Node(NodeKind.POSITION, graph.resolve_position(position.reference))
-                for position in graph.positions(self.tier)
+                Node(NodeKind.POSITION, graph.resolve_boundary(boundary.reference))
+                for boundary in graph.boundaries(self.tier)
             ),
         )
 
@@ -283,12 +283,12 @@ class ItemSelector:
 class BoundarySelector:
     """Select one structural or anchored durable boundary reference."""
 
-    reference: PositionRef | DurablePositionRef
+    reference: BoundaryRef | DurableBoundaryRef
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the boundary identity."""
         return NodeSet(
-            graph, (Node(NodeKind.POSITION, graph.resolve_position(self.reference)),)
+            graph, (Node(NodeKind.POSITION, graph.resolve_boundary(self.reference)),)
         )
 
 
@@ -318,7 +318,7 @@ class BoundaryPathSelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve the path and require a boundary result."""
         resolved = resolve_path(graph, path_profile, self.path)
-        if not isinstance(resolved, ResolvedPosition):
+        if not isinstance(resolved, ResolvedBoundary):
             raise Refusal(
                 RefusalStage.REFERENCE,
                 f"boundary selection path {self.path!r} did not resolve to a boundary",
@@ -383,9 +383,9 @@ class AttributeSelector:
             )
         elif self.domain is AttributeDomain.POSITION:
             nodes.extend(
-                Node(NodeKind.POSITION, graph.resolve_position(position.reference))
-                for position in graph.position_values
-                if self._has(position.attributes)
+                Node(NodeKind.POSITION, graph.resolve_boundary(boundary.reference))
+                for boundary in graph.boundary_values
+                if self._has(boundary.attributes)
             )
         elif self.domain is AttributeDomain.RELATION_DECLARATION:
             nodes.extend(

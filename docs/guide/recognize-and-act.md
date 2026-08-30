@@ -44,6 +44,7 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    OrderedDelivery,
     QualifiedName,
     ReactDeclaration,
     ReactMode,
@@ -53,7 +54,6 @@ from tiergraph import (
     TiePolicy,
     Tier,
     TierDeclaration,
-    WitnessCoordinate,
     XsdType,
 )
 from tiergraph.semiring import DECIMAL_TROPICAL
@@ -72,12 +72,12 @@ def build_graph() -> Graph:
     cost = name("cost")
     coordinate = name("coordinate")
 
-    def item(identifier: str, weight: str, position: str) -> Item:
+    def item(identifier: str, weight: str, order: str) -> Item:
         return Item(
             identifier,
             (
                 AttributeValue(cost, XsdType.DECIMAL, weight),
-                AttributeValue(coordinate, XsdType.INTEGER, position),
+                AttributeValue(coordinate, XsdType.INTEGER, order),
             ),
         )
 
@@ -134,7 +134,7 @@ def _fold(graph: Graph) -> FoldDeclaration[Decimal]:
     )
 
 
-def _coordinates(graph: Graph, provenance: object) -> tuple[WitnessCoordinate, ...]:
+def _deliveries(graph: Graph, provenance: object) -> tuple[OrderedDelivery, ...]:
     paths = cast(tuple[tuple[str, ...], ...], provenance)
     coordinate = name("coordinate")
     values = {
@@ -145,7 +145,7 @@ def _coordinates(graph: Graph, provenance: object) -> tuple[WitnessCoordinate, .
         for item in tier.items
     }
     return tuple(
-        WitnessCoordinate((values[label],), values[label])
+        OrderedDelivery((values[label],), values[label])
         for path in paths
         for label in path
     )
@@ -177,7 +177,7 @@ def run_example() -> dict[str, object]:
     react = ReactDeclaration(
         "mix-recognized-path",
         fold,
-        lambda provenance: _coordinates(graph, provenance),
+        lambda provenance: _deliveries(graph, provenance),
         coordinate_action,
         mode=ReactMode.ONE_FOR_ONE,
         distribution=DistributionWitness("batch-equals-one-for-one"),
