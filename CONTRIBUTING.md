@@ -35,8 +35,16 @@ gates, and must remain at 100% branch coverage.
 
 The tracked-file hygiene check reads **every tracked file**, not a listed set of
 directories. That is not a convenience: the source distribution ships the whole
-tracked tree, so anything committed here is published, and a check that read
-less than everything would leave shipped files unread. The one exemption is the
+**unignored** tree, so anything committed here is published, and a check that
+read less than everything would leave shipped files unread.
+
+The distinction between *tracked* and *unignored* is the gap, not pedantry. The
+check selects its files from the git index; the build selects from the working
+tree minus what version control ignores. A file that is neither tracked nor
+ignored therefore ships **and is never read** — so a new file must be staged
+before the check can see it, and a scratch file that nobody ignores rides out in
+the distribution unexamined. Keep `.gitignore` ahead of whatever the tooling and
+the platform deposit. The one exemption is the
 check's own source, which has to write down the patterns it forbids. The
 distribution is built during the test suite and compared against what the check
 reads, so the two cannot drift apart silently.
