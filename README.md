@@ -152,3 +152,12 @@ the version it found and the one it expected.
 Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
 later release is not supported.
+
+Within a release line the format only grows. Fields are added; none is removed,
+narrowed, or redefined, so a document written earlier in the line stays valid
+and no field a reader already understands changes meaning underneath it. A
+change that would break that is permitted, and it costs a step in the version
+position that carries breaking changes — before 1.0 the minor position, after
+1.0 the major one. A gate in this repository compares the committed schema
+against the last released one and refuses a break that takes no such step, so
+the version alone tells a reader whether the format grew or moved.

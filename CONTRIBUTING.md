@@ -28,10 +28,10 @@ make check
 
 The gate runs Ruff linting and formatting checks, strict mypy checks, pytest,
 the test suite in separate processes with hash seeds 0, 12345, and 999, JSON
-Schema currency checks, documentation currency checks, the tracked-file hygiene
-check, the public-docstring check, and the reservation check. Coverage is
-measured for the `tiergraph` and `tiergraph_dot` packages and for the `scripts`
-gates, and must remain at 100% branch coverage.
+Schema currency checks, the format-growth check, documentation currency checks,
+the tracked-file hygiene check, the public-docstring check, and the reservation
+check. Coverage is measured for the `tiergraph` and `tiergraph_dot` packages and
+for the `scripts` gates, and must remain at 100% branch coverage.
 
 The tracked-file hygiene check reads **every tracked file**, not a listed set of
 directories. That is not a convenience: the source distribution ships the whole
@@ -51,6 +51,36 @@ reads, so the two cannot drift apart silently.
 
 Because no tracked file is inert to it, CI runs this check on every pull
 request, outside the path filter that governs the more expensive jobs.
+
+## Grow the wire format, or say that you did not
+
+`make format-growth` (implemented as `scripts/check_format_growth.py`) compares
+the committed JSON Schema against the schema recovered from the newest release
+tag in the current release line, and refuses a change that shrinks the set of
+documents the format accepts: a removed property, one that became required, a
+narrowed enum, a tightened bound, a withdrawn union arm. The wire is closed, so
+a reader refuses a field it does not know rather than ignoring it; growth is
+what keeps an older document valid and an older reader honest about a newer one.
+
+It does not forbid breaking the format. A break is legal and costs a step in the
+version position that carries breaking changes — the minor position before 1.0,
+the major position after — and the refusal names the step that would make the
+change legal rather than only saying no. Between that version step and the tag
+that releases it, the check prints each break instead of refusing it, so a break
+is never silent even where it is permitted, and the first tag in the new line
+becomes the baseline the rest of that line is held to.
+
+Two things it does not decide, and says so rather than passing over: a changed
+`pattern`, because regular-language containment is not computed here, and a
+keyword it has no rule for. Both are reported as unestablished and refuse for
+the same reason a shrinkage does. Teach the check the keyword rather than
+working around it.
+
+The baseline comes from a tag, not from a second committed copy of the released
+schema, because a committed copy can be edited in the same commit as the change
+it exists to catch. The cost is that a checkout without tags cannot run this
+check at all — and it then refuses, rather than reporting a comparison it never
+made. Fetch tags before running `make check` in a shallow clone.
 
 ## Reserve something only with a condition that discharges it
 

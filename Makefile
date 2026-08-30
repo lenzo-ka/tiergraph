@@ -3,7 +3,7 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check docs docs-check tracked-clean documented reservations check
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth docs docs-check tracked-clean documented reservations check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -53,10 +53,15 @@ schema:
 schema-check:
 	@$(VENV_PYTHON) scripts/generate_schema.py --check
 
+# Reads the baseline out of the release tags, so a checkout without them refuses
+# rather than passing on a comparison it never made.
+format-growth:
+	@$(VENV_PYTHON) scripts/check_format_growth.py
+
 docs:
 	@$(VENV_PYTHON) scripts/generate_docs.py
 
 docs-check:
 	@$(VENV_PYTHON) scripts/generate_docs.py --check
 
-check: venv lint format-check types test determinism schema-check docs-check tracked-clean documented reservations
+check: venv lint format-check types test determinism schema-check format-growth docs-check tracked-clean documented reservations

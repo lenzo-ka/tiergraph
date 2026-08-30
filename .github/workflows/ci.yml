@@ -18,7 +18,16 @@ jobs:
     name: test (Python 3.13)
     runs-on: ubuntu-latest
     steps:
+      # Full history is fetched because the format-growth gate recovers its
+      # baseline from the newest release tag in the current line. Without a tag
+      # it refuses rather than passing, which is the intended failure but not a
+      # useful one to meet in CI on every run. `fetch-tags` is not enough: the
+      # default checkout fetches one commit by SHA, and a tag pointing outside
+      # that single commit does not come with it. Measured, not assumed -- the
+      # gate refused on this workflow's first run with `fetch-tags: true` set.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       # Only run the 3.13 compatibility suite when code changes; a docs- or
       # metadata-only change cannot affect it, and the job still reports success
       # so a required check does not hang.
@@ -53,7 +62,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # See the note on the job above: the format-growth gate needs the release
+      # tags to have a baseline to compare against.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"

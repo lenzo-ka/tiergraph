@@ -127,6 +127,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holding a graph. The clock profile is adapted separately, and the path
   profiles are outside this mechanism: a path vocabulary asserts nothing about a
   graph. The wire format is untouched.
+- Added `scripts/check_format_growth.py` and the `make format-growth` gate,
+  which compares the committed JSON Schema against the schema recovered from the
+  newest release tag in the current release line and refuses a change that
+  shrinks the set of documents the format accepts. The wire is closed and a
+  document is refused when it fails to validate, which leaves one exposure: a
+  later release could change what an existing field means without changing its
+  shape, and an older reader would validate the document and misread it. A
+  format that only grows retires that exposure. Additive is decided from the
+  schema's own vocabulary — a member added, a requirement dropped, an enum or
+  union widened, a bound lowered, an object opened — and its negations refuse by
+  name and location. A changed `pattern` and a keyword the gate has no rule for
+  are reported as unestablished rather than passed over, and the two
+  version-bearing sites are excluded only while each is still exactly a version
+  stamp, so the exclusion cannot carry another change through. The gate does not
+  forbid a break: a break costs a step in the version position that carries
+  breaking changes, the minor before 1.0 and the major after, the refusal names
+  that step, and between the step and the tag that releases it the gate prints
+  each break rather than refusing it. The baseline is read from a release tag
+  rather than a second committed copy, so a checkout without tags refuses
+  instead of reporting a comparison it never made. The wire format is untouched.
 
 ### Changed
 
