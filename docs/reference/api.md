@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 149 top-level `tiergraph` exports exactly once.
+It covers 152 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -779,6 +779,28 @@ Declare whether one relation's incident children are alternatives or requirement
 - `OR` = `or`
 - `AND` = `and`
 
+### `ExactnessRefusal`
+
+Refuse an exactness claim a fold does not make good on.
+
+### `FoldCertificate`
+
+```text
+FoldCertificate(exactness: 'FoldExactness', result: 'FoldResult[Value]', probes: 'int', derivations: 'int', compared: 'bool') -> None
+```
+
+Report what discharged one fold's exactness claim, and what it never reached.
+
+``compared`` is the honest part. It is true only when the fold's derivations
+were enumerated in full within the declared budget and the combination over
+them was compared against the published value. When it is false the claim
+stood on the law search alone, and a law search that finds no refutation has
+found no refutation — it has not proved anything.
+
+``derivations`` counts the structural derivations that were enumerated, which
+includes any the valuation annihilates, so it is a measure of the search and
+not a restatement of a counting fold's value.
+
 ### `FoldCost`
 
 ```text
@@ -830,7 +852,7 @@ Return a strict-JSON cost account.
 ### `FoldDeclaration`
 
 ```text
-FoldDeclaration(name: 'str', graph: 'Graph', valuation: 'AttributeValuation', semiring: 'Semiring[Value]', lift: 'Lift[Value]', transitions: 'tuple[FoldTransition, ...]', index_axes: 'tuple[tuple[str, ...], ...]' = (), roots: 'tuple[ItemRef, ...]' = (), witness_order: 'WitnessOrder[Value] | None' = None, tie_policy: 'TiePolicy | None' = None, output_cap: 'int' = 1, carrier_operation_cost: 'int' = 1, ranked_output: 'bool' = False) -> None
+FoldDeclaration(name: 'str', graph: 'Graph', valuation: 'AttributeValuation', semiring: 'Semiring[Value]', lift: 'Lift[Value]', transitions: 'tuple[FoldTransition, ...]', index_axes: 'tuple[tuple[str, ...], ...]' = (), roots: 'tuple[ItemRef, ...]' = (), witness_order: 'WitnessOrder[Value] | None' = None, tie_policy: 'TiePolicy | None' = None, output_cap: 'int' = 1, carrier_operation_cost: 'int' = 1, ranked_output: 'bool' = False, exactness: 'FoldExactness' = <FoldExactness.UNDECLARED: 'undeclared'>) -> None
 ```
 
 Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
@@ -840,6 +862,12 @@ by the semiring's own order, which its multiplication must preserve
 (``multiply_preserves_witness_order``); a custom ``witness_order`` is refused. Among
 witnesses of equal carrier value the ranked selection is deterministic but not
 guaranteed to be a globally canonical one.
+
+``exactness`` states how the published value stands to the combination over every
+derivation. It defaults to ``UNDECLARED`` and ``run()`` never consults it, because
+the claim is owed where it is relied on rather than where a fixture is built;
+``check_exactness()`` is the gate that demands and discharges it. Only the two
+refusals a declaration alone can settle are made here.
 
 #### `FoldDeclaration.coordinates`
 
@@ -870,6 +898,79 @@ FoldDeclaration.run(self) -> 'FoldResult[Value]'
 ```
 
 Evaluate every state using only the semiring's addition and multiplication.
+
+#### `FoldDeclaration.check_exactness`
+
+Method.
+
+```text
+FoldDeclaration.check_exactness(self, *, derivation_budget: 'int' = 1024) -> 'FoldCertificate[Value]'
+```
+
+Demand this fold's exactness claim and discharge it, or refuse.
+
+Every branch bites, and the asymmetry is deliberate. An ``UNDECLARED``
+exactness is refused with **the declaration to be made**, and no fold is
+run for it; a false claim is refused with **a semantic counterexample**.
+Declining to say is not the same as saying the weaker thing.
+
+The claim is checked two ways, and neither is a carrier swap: re-running
+the fold under another algebra reads the same ``transitions``, so it
+confirms whatever the declaration says rather than testing it.
+
+The first way is a law search over **probes the fold produces itself**,
+rather than a probe set a caller supplies. Distributivity is what
+regroups a sum over derivations into a fold over shared structure, so a
+carrier that fails it at the values this fold actually reaches cannot be
+folded exactly, whatever its declared ``LawCheck`` says. A carrier that
+cannot evaluate its own laws at its own values raises; that is a defect
+in the carrier boundary, not something to be swallowed here.
+
+The second way enumerates the derivations and combines them with no
+sharing at all, then compares. It runs only when the whole enumeration
+fits in ``derivation_budget``, and the returned certificate reports
+whether it did. A search that finds no counterexample has found no
+counterexample; it has not proved the claim, and the certificate says
+which of the two happened rather than implying the stronger one.
+
+### `FoldExactness`
+
+```text
+FoldExactness(*values)
+```
+
+State how a fold's published value stands to the combination over every derivation.
+
+``DISTRIBUTIVE``
+    The value **is** the combination over every derivation. Gate: no
+    counterexample may exist, and none may be found at the values this fold
+    itself produces.
+``APPROXIMATE``
+    The value is a sound approximation of that combination, and that is a
+    fact about the published result rather than a footnote about the
+    algebra. Gate: the approximation must be exhibitable — an ``APPROXIMATE``
+    claim over a fold measured exact by an algebra that checks every law
+    exactly is a declaration that is hiding, and it is refused.
+``STRUCTURAL``
+    No such combination exists: the derivation set is infinite because the
+    dependency graph has a cycle, so the starred fixpoint equations are the
+    specification. Gate: the algebra must name the star warrant that makes
+    the closure converge, and the graph must actually carry a cycle.
+``UNDECLARED``
+    The default. It is refused, and it does not mean ``APPROXIMATE``:
+    declining to say is not the same as saying the weaker thing, and the
+    refusal says so by handing back the declaration to be made.
+
+Every branch bites, and the asymmetry is deliberate. Omitting the claim is
+answered with the declaration; asserting it falsely is answered with a
+semantic counterexample.
+
+#### `FoldExactness` members
+
+- `DISTRIBUTIVE` = `distributive`
+- `APPROXIMATE` = `approximate`
+- `STRUCTURAL` = `structural`
+- `UNDECLARED` = `undeclared`
 
 ### `FoldHomomorphism`
 
@@ -4226,6 +4327,20 @@ ZeroClosedStar.close(self, operand: 'T', /) -> 'T'
 ```
 
 Return the closure after checking the warrant.
+
+### `inexact_laws`
+
+```text
+inexact_laws(algebra: 'Semiring[Any]', /) -> 'tuple[str, ...]'
+```
+
+Name the required semiring laws this algebra does not check exactly.
+
+The order is the fixed precondition order, so the first name is stable across
+runs and can be quoted in a refusal. An empty result is a statement about the
+algebra's *declaration* only: it says the five laws are declared exact, not
+that they hold, which is why a caller that needs the stronger fact has to
+check the laws at values rather than read this tuple.
 ### `tiergraph.schema`
 
 This module is importable and usable, but carries no API-stability promise at version 0.1.0.

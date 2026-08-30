@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
 from enum import Enum
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 
 class StarRefusal(ValueError):
@@ -43,9 +43,10 @@ class LawCheck(Enum):
     APPROXIMATE = "approximate"
 
 
-# A shared precondition list for the composite constructions below, not a
-# published surface: it repeats the protocol's own LawCheck-valued properties,
-# and a caller reads those from the algebra rather than from this tuple.
+# A shared precondition list for the composite constructions below and for
+# ``inexact_laws``, not a published surface: it repeats the protocol's own
+# LawCheck-valued properties, and a caller reads those from the algebra, or the
+# unchecked ones from ``inexact_laws``, rather than from this tuple.
 _REQUIRED_LAW_CHECKS = (
     "add_associativity",
     "multiply_associativity",
@@ -53,6 +54,22 @@ _REQUIRED_LAW_CHECKS = (
     "left_distributivity",
     "right_distributivity",
 )
+
+
+def inexact_laws(algebra: Semiring[Any], /) -> tuple[str, ...]:
+    """Name the required semiring laws this algebra does not check exactly.
+
+    The order is the fixed precondition order, so the first name is stable across
+    runs and can be quoted in a refusal. An empty result is a statement about the
+    algebra's *declaration* only: it says the five laws are declared exact, not
+    that they hold, which is why a caller that needs the stronger fact has to
+    check the laws at values rather than read this tuple.
+    """
+    return tuple(
+        name
+        for name in _REQUIRED_LAW_CHECKS
+        if getattr(algebra, name) is not LawCheck.EXACT
+    )
 
 
 class Semiring[T](Protocol):
@@ -500,9 +517,9 @@ class LexicographicSemiring[T, U](ProductSemiring[T, U]):
 
     def __init__(self, first: Semiring[T], second: Semiring[U]) -> None:
         for component in (first, second):
-            for name in _REQUIRED_LAW_CHECKS:
-                if getattr(component, name) is not LawCheck.EXACT:
-                    raise ValueError(f"lexicographic component lacks exact {name}")
+            unchecked = inexact_laws(component)
+            if unchecked:
+                raise ValueError(f"lexicographic component lacks exact {unchecked[0]}")
         for name in ("add_selective", "multiply_strictly_order_preserving"):
             if not getattr(first, name):
                 raise ValueError(f"lexicographic first component lacks {name}")
@@ -634,9 +651,9 @@ class ExpectationSemiring[T](ProductSemiring[T, T]):
         return None
 
     def __init__(self, base: Semiring[T]) -> None:
-        for name in _REQUIRED_LAW_CHECKS:
-            if getattr(base, name) is not LawCheck.EXACT:
-                raise ValueError(f"expectation base lacks exact {name}")
+        unchecked = inexact_laws(base)
+        if unchecked:
+            raise ValueError(f"expectation base lacks exact {unchecked[0]}")
         if not base.multiply_commutative:
             raise ValueError("expectation base lacks multiply_commutative")
         super().__init__(base, base)
@@ -743,4 +760,5 @@ __all__ = [
     "StarSelector",
     "TropicalSemiring",
     "ZeroClosedStar",
+    "inexact_laws",
 ]

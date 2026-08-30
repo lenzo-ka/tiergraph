@@ -38,9 +38,11 @@ from tiergraph.fold import (
     TiePolicy,
 )
 from tiergraph.semiring import (
+    COUNTING,
     DECIMAL_ARCTIC,
     DECIMAL_TROPICAL,
     PATH,
+    PATH_WITNESSES,
     PathValue,
     Semiring,
     ZeroClosedStar,
@@ -842,6 +844,62 @@ def test_selection_compares_alternatives_not_the_running_total() -> None:
     assert len(everything.provenance) > 1
     assert len(first_only.provenance) == 1
     assert everything.value == first_only.value
+
+
+def test_a_carrier_swap_cannot_detect_a_mis_declared_structure() -> None:
+    """CHARACTERIZATION: both carriers read the same declaration, so both agree.
+
+    Folding a diamond's joint requirements as alternatives is a plausible wrong
+    answer that no refusal catches, and re-running it under an independent
+    derivation enumerator returns the same wrong answer, because the enumerator
+    reads the same ``FoldTransition`` tuple. An oracle for a structural
+    mis-declaration cannot be another fold of the same declaration.
+    """
+    graph = FIXTURE.graph()
+    depends = FIXTURE.name("depends")
+    roots = (FIXTURE.states(graph)[0][0],)
+
+    def counting(combination: ChildCombination) -> int:
+        return (
+            FoldDeclaration(
+                "count",
+                graph,
+                valuation("cost"),
+                cast(Semiring[int], COUNTING),
+                cast(Lift[int], lambda value, label: 1),
+                (FoldTransition(depends, combination),),
+                roots=roots,
+            )
+            .run()
+            .value
+        )
+
+    def witnesses(combination: ChildCombination) -> int:
+        return len(
+            FoldDeclaration(
+                "witnesses",
+                graph,
+                valuation("cost"),
+                cast(Semiring[tuple[tuple[str, ...], ...]], PATH_WITNESSES),
+                cast(
+                    Lift[tuple[tuple[str, ...], ...]], lambda value, label: ((label,),)
+                ),
+                (FoldTransition(depends, combination),),
+                roots=roots,
+            )
+            .run()
+            .value
+        )
+
+    assert counting(ChildCombination.OR) == witnesses(ChildCombination.OR) == 2
+    assert counting(ChildCombination.AND) == witnesses(ChildCombination.AND) == 1
+    assert DECIMAL_TROPICAL.left_distributivity is COUNTING.left_distributivity
+
+
+def test_the_double_valuation_guard_is_not_absorbed_by_any_later_claim() -> None:
+    """CHARACTERIZATION: the xsd:double guard fires for a fold that claims nothing."""
+    with pytest.raises(ValueError, match="claims exact associativity"):
+        mismatch()
 
 
 def test_ranked_candidate_deduplication_is_costed() -> None:

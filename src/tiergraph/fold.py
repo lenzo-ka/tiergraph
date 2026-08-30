@@ -19,7 +19,7 @@ from tiergraph.core import (
     QualifiedName,
     XsdType,
 )
-from tiergraph.semiring import LawCheck, Semiring, StarRefusal
+from tiergraph.semiring import LawCheck, Semiring, StarRefusal, inexact_laws
 
 Value = TypeVar("Value")
 OtherValue = TypeVar("OtherValue")
@@ -30,6 +30,20 @@ State = tuple[ItemRef, Coordinate]
 Path = tuple[str, ...]
 Provenance = tuple[Path, ...]
 type RankedWitness[Value] = tuple[Value, Path]
+type _Outgoing = dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]]
+type _DependencyGraph = tuple[
+    _Outgoing,
+    tuple[ItemRef, ...],
+    tuple[ItemRef, ...],
+    dict[ItemRef, int],
+    dict[ItemRef, tuple[ItemRef, ...]],
+]
+
+# The law search reads the fold's own state values, so its cost is set by how
+# many distinct ones a fold produces rather than by a caller's probe set. The
+# cap keeps the cubic triple search bounded on a large document; the values are
+# taken in canonical encoded order, so which ones survive the cap is stable.
+_PROBE_CAP = 8
 
 
 class Lift(Protocol[LiftValue]):
@@ -66,6 +80,48 @@ class TiePolicy(Enum):
 
     ALL = "all"
     CHOOSE_FIRST = "choose-first"
+
+
+class FoldExactness(Enum):
+    """State how a fold's published value stands to the combination over every derivation.
+
+    ``DISTRIBUTIVE``
+        The value **is** the combination over every derivation. Gate: no
+        counterexample may exist, and none may be found at the values this fold
+        itself produces.
+    ``APPROXIMATE``
+        The value is a sound approximation of that combination, and that is a
+        fact about the published result rather than a footnote about the
+        algebra. Gate: the approximation must be exhibitable — an ``APPROXIMATE``
+        claim over a fold measured exact by an algebra that checks every law
+        exactly is a declaration that is hiding, and it is refused.
+    ``STRUCTURAL``
+        No such combination exists: the derivation set is infinite because the
+        dependency graph has a cycle, so the starred fixpoint equations are the
+        specification. Gate: the algebra must name the star warrant that makes
+        the closure converge, and the graph must actually carry a cycle.
+    ``UNDECLARED``
+        The default. It is refused, and it does not mean ``APPROXIMATE``:
+        declining to say is not the same as saying the weaker thing, and the
+        refusal says so by handing back the declaration to be made.
+
+    Every branch bites, and the asymmetry is deliberate. Omitting the claim is
+    answered with the declaration; asserting it falsely is answered with a
+    semantic counterexample.
+    """
+
+    DISTRIBUTIVE = "distributive"
+    APPROXIMATE = "approximate"
+    STRUCTURAL = "structural"
+    UNDECLARED = "undeclared"
+
+
+class ExactnessRefusal(ValueError):
+    """Refuse an exactness claim a fold does not make good on."""
+
+
+class _BudgetExceeded(Exception):
+    """Stop an enumeration that outgrew the caller's declared derivation budget."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +305,28 @@ class FoldResult[Value]:
 
 
 @dataclass(frozen=True, slots=True)
+class FoldCertificate[Value]:
+    """Report what discharged one fold's exactness claim, and what it never reached.
+
+    ``compared`` is the honest part. It is true only when the fold's derivations
+    were enumerated in full within the declared budget and the combination over
+    them was compared against the published value. When it is false the claim
+    stood on the law search alone, and a law search that finds no refutation has
+    found no refutation — it has not proved anything.
+
+    ``derivations`` counts the structural derivations that were enumerated, which
+    includes any the valuation annihilates, so it is a measure of the search and
+    not a restatement of a counting fold's value.
+    """
+
+    exactness: FoldExactness
+    result: FoldResult[Value]
+    probes: int
+    derivations: int
+    compared: bool
+
+
+@dataclass(frozen=True, slots=True)
 class FoldDeclaration[Value]:
     """Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
 
@@ -257,6 +335,12 @@ class FoldDeclaration[Value]:
     (``multiply_preserves_witness_order``); a custom ``witness_order`` is refused. Among
     witnesses of equal carrier value the ranked selection is deterministic but not
     guaranteed to be a globally canonical one.
+
+    ``exactness`` states how the published value stands to the combination over every
+    derivation. It defaults to ``UNDECLARED`` and ``run()`` never consults it, because
+    the claim is owed where it is relied on rather than where a fixture is built;
+    ``check_exactness()`` is the gate that demands and discharges it. Only the two
+    refusals a declaration alone can settle are made here.
     """
 
     name: str
@@ -272,6 +356,7 @@ class FoldDeclaration[Value]:
     output_cap: int = 1
     carrier_operation_cost: int = 1
     ranked_output: bool = False
+    exactness: FoldExactness = FoldExactness.UNDECLARED
 
     def __post_init__(self) -> None:
         """Validate every declaration-level refusal before a fold can run."""
@@ -322,6 +407,26 @@ class FoldDeclaration[Value]:
         if any(not isinstance(item, FoldTransition) for item in self.transitions):
             raise ValueError(
                 f"fold {self.name!r} transitions must declare AND/OR meaning"
+            )
+        # Only a fold that makes a claim interrogates the algebra for it: an
+        # undeclared fold reads no property it did not already need, so an opaque
+        # carrier stays foldable.
+        if self.exactness is FoldExactness.DISTRIBUTIVE:
+            unchecked = inexact_laws(self.semiring)
+            if unchecked:
+                law = unchecked[0]
+                raise ExactnessRefusal(
+                    f"fold {self.name!r} declares DISTRIBUTIVE exactness, but algebra "
+                    f"{type(self.semiring).__name__!r} checks {law} only "
+                    f"{getattr(self.semiring, law).value!r}; a fold cannot be the "
+                    "combination over every derivation when the law that regroups "
+                    "the derivations is not checked exactly. Declare APPROXIMATE."
+                )
+        if self.exactness is FoldExactness.STRUCTURAL and self.semiring.star is None:
+            raise ExactnessRefusal(
+                f"fold {self.name!r} declares STRUCTURAL exactness, but algebra "
+                f"{type(self.semiring).__name__!r} declares no star; a structural "
+                "claim owes the warrant that makes its fixpoint converge."
             )
         declared_tiers = {tier.declaration.name for tier in self.graph.tiers}
         for tier in self.valuation.tiers:
@@ -445,8 +550,8 @@ class FoldDeclaration[Value]:
             raise ValueError(f"fold {self.name!r} dependency DAG has no root")
         return outgoing, roots
 
-    def run(self) -> FoldResult[Value]:
-        """Evaluate every state using only the semiring's addition and multiplication."""
+    def _dependency_graph(self) -> _DependencyGraph:
+        """Return the canonical topology, roots, order, and merged child adjacency."""
         outgoing, item_roots = self._topology()
         references = self._references()
         canonical_index = {
@@ -462,62 +567,18 @@ class FoldDeclaration[Value]:
             )
             for reference in references
         }
-        tarjan_index = 0
-        indices: dict[ItemRef, int] = {}
-        lowlinks: dict[ItemRef, int] = {}
-        stack: list[ItemRef] = []
-        on_stack: set[ItemRef] = set()
-        components: list[tuple[ItemRef, ...]] = []
+        return outgoing, item_roots, references, canonical_index, adjacency
 
-        def connect(reference: ItemRef) -> None:
-            """Add one canonical vertex with iterative Tarjan traversal."""
-            nonlocal tarjan_index
-            indices[reference] = tarjan_index
-            lowlinks[reference] = tarjan_index
-            tarjan_index += 1
-            stack.append(reference)
-            on_stack.add(reference)
-            frames: list[tuple[ItemRef, int]] = [(reference, 0)]
-            while frames:
-                current, child_index = frames[-1]
-                children = adjacency[current]
-                if child_index < len(children):
-                    child = children[child_index]
-                    frames[-1] = (current, child_index + 1)
-                    if child not in indices:
-                        indices[child] = tarjan_index
-                        lowlinks[child] = tarjan_index
-                        tarjan_index += 1
-                        stack.append(child)
-                        on_stack.add(child)
-                        frames.append((child, 0))
-                    elif child in on_stack:
-                        lowlinks[current] = min(lowlinks[current], indices[child])
-                    continue
-                frames.pop()
-                if frames:
-                    parent = frames[-1][0]
-                    lowlinks[parent] = min(lowlinks[parent], lowlinks[current])
-                if lowlinks[current] == indices[current]:
-                    members: list[ItemRef] = []
-                    while True:
-                        member = stack.pop()
-                        on_stack.remove(member)
-                        members.append(member)
-                        if member == current:
-                            break
-                    components.append(
-                        tuple(sorted(members, key=canonical_index.__getitem__))
-                    )
-
-        for reference in references:
-            if reference not in indices:
-                connect(reference)
-        cyclic_components = tuple(
-            component
-            for component in components
-            if len(component) > 1 or component[0] in adjacency[component[0]]
-        )
+    def run(self) -> FoldResult[Value]:
+        """Evaluate every state using only the semiring's addition and multiplication."""
+        (
+            outgoing,
+            item_roots,
+            references,
+            canonical_index,
+            adjacency,
+        ) = self._dependency_graph()
+        cyclic_components = _cyclic_components(references, canonical_index, adjacency)
         component_by_item = {
             reference: component
             for component in cyclic_components
@@ -1040,6 +1101,264 @@ class FoldDeclaration[Value]:
             ranked_witnesses=ranked_witnesses,
         )
 
+    def check_exactness(
+        self, *, derivation_budget: int = 1024
+    ) -> FoldCertificate[Value]:
+        """Demand this fold's exactness claim and discharge it, or refuse.
+
+        Every branch bites, and the asymmetry is deliberate. An ``UNDECLARED``
+        exactness is refused with **the declaration to be made**, and no fold is
+        run for it; a false claim is refused with **a semantic counterexample**.
+        Declining to say is not the same as saying the weaker thing.
+
+        The claim is checked two ways, and neither is a carrier swap: re-running
+        the fold under another algebra reads the same ``transitions``, so it
+        confirms whatever the declaration says rather than testing it.
+
+        The first way is a law search over **probes the fold produces itself**,
+        rather than a probe set a caller supplies. Distributivity is what
+        regroups a sum over derivations into a fold over shared structure, so a
+        carrier that fails it at the values this fold actually reaches cannot be
+        folded exactly, whatever its declared ``LawCheck`` says. A carrier that
+        cannot evaluate its own laws at its own values raises; that is a defect
+        in the carrier boundary, not something to be swallowed here.
+
+        The second way enumerates the derivations and combines them with no
+        sharing at all, then compares. It runs only when the whole enumeration
+        fits in ``derivation_budget``, and the returned certificate reports
+        whether it did. A search that finds no counterexample has found no
+        counterexample; it has not proved the claim, and the certificate says
+        which of the two happened rather than implying the stronger one.
+        """
+        if self.exactness is FoldExactness.UNDECLARED:
+            raise ExactnessRefusal(
+                f"fold {self.name!r} exactness is UNDECLARED: say whether this "
+                "fold's value is the combination over every derivation "
+                "(DISTRIBUTIVE), a sound approximation of it (APPROXIMATE), or a "
+                "starred fixpoint over a cycle with no finite derivation set to "
+                "be measured against (STRUCTURAL, which owes its algebra's star "
+                "warrant). Not declaring is not the same as declaring APPROXIMATE."
+            )
+        (
+            outgoing,
+            item_roots,
+            references,
+            canonical_index,
+            adjacency,
+        ) = self._dependency_graph()
+        cyclic = _cyclic_components(references, canonical_index, adjacency)
+        if self.exactness is FoldExactness.STRUCTURAL:
+            if cyclic:
+                return FoldCertificate(self.exactness, self.run(), 0, 0, False)
+            raise ExactnessRefusal(
+                f"fold {self.name!r} declares STRUCTURAL exactness, but its "
+                "dependency graph is acyclic, so its derivation set is finite and "
+                "there is a combination over every derivation to measure against. "
+                "Declare DISTRIBUTIVE or APPROXIMATE."
+            )
+        if cyclic:
+            members = [member.to_data() for member in cyclic[0]]
+            raise ExactnessRefusal(
+                f"fold {self.name!r} declares {self.exactness.name} exactness over "
+                f"a dependency cycle through SCC {members!r}; a cyclic fold has "
+                "infinitely many derivations, so the claim names a combination "
+                "that does not exist. Declare STRUCTURAL."
+            )
+        result = self.run()
+        probes = self._probes(result)
+        witness = self._distributivity_witness(probes)
+        compared, unfolded, derivations = self._unfold(
+            outgoing, item_roots, derivation_budget
+        )
+        if self.exactness is FoldExactness.DISTRIBUTIVE:
+            if witness is not None:
+                raise ExactnessRefusal(self._law_refusal(witness))
+            if compared and unfolded != result.value:
+                raise ExactnessRefusal(
+                    self._derivation_refusal(result.value, unfolded, derivations)
+                )
+        elif (
+            witness is None
+            and compared
+            and unfolded == result.value
+            and not inexact_laws(self.semiring)
+        ):
+            raise ExactnessRefusal(
+                f"fold {self.name!r} declares APPROXIMATE exactness, but its value "
+                f"equals the combination over all {derivations} of its derivations "
+                f"and algebra {type(self.semiring).__name__!r} checks every "
+                "required law exactly, so nothing here approximates anything. An "
+                "approximation you cannot exhibit is a declaration that is hiding. "
+                "Declare DISTRIBUTIVE."
+            )
+        return FoldCertificate(
+            self.exactness, result, len(probes), derivations, compared
+        )
+
+    def _probes(self, result: FoldResult[Value]) -> tuple[Value, ...]:
+        """Take the fold's own distinct carrier values in canonical encoded order."""
+        candidates = [
+            self.semiring.zero,
+            self.semiring.one,
+            result.value,
+            *(value for _state, value in result.values),
+        ]
+        seen: dict[str, Value] = {}
+        for candidate in candidates:
+            canonical = self.semiring.decode(self.semiring.encode(candidate))
+            seen.setdefault(repr(self.semiring.encode(canonical)), canonical)
+        return tuple(seen[key] for key in sorted(seen))[:_PROBE_CAP]
+
+    def _distributivity_witness(
+        self, probes: tuple[Value, ...]
+    ) -> tuple[str, Value, Value, Value, Value, Value] | None:
+        """Return the first probe triple that denies distributivity, or ``None``.
+
+        A Boolean would have been useless: the witness is the finding. The
+        enumeration order is the canonical encoded order of the probes, so the
+        triple returned is the first in a fixed order rather than a minimized
+        one, and it is reported as such.
+        """
+        for left in probes:
+            for first in probes:
+                for second in probes:
+                    added = self.semiring.add(first, second)
+                    got = self.semiring.multiply(left, added)
+                    want = self.semiring.add(
+                        self.semiring.multiply(left, first),
+                        self.semiring.multiply(left, second),
+                    )
+                    if got != want:
+                        return ("left_distributivity", left, first, second, got, want)
+                    got = self.semiring.multiply(added, left)
+                    want = self.semiring.add(
+                        self.semiring.multiply(first, left),
+                        self.semiring.multiply(second, left),
+                    )
+                    if got != want:
+                        return ("right_distributivity", left, first, second, got, want)
+        return None
+
+    def _law_refusal(
+        self, witness: tuple[str, Value, Value, Value, Value, Value]
+    ) -> str:
+        """Render a denied law with its inputs and both sides evaluated."""
+        law, left, first, second, got, want = witness
+        encode = self.semiring.encode
+        sides = (
+            f"a ⊗ (b ⊕ c) = {encode(got)!r}; (a ⊗ b) ⊕ (a ⊗ c) = {encode(want)!r}"
+            if law == "left_distributivity"
+            else f"(b ⊕ c) ⊗ a = {encode(got)!r}; (b ⊗ a) ⊕ (c ⊗ a) = {encode(want)!r}"
+        )
+        return (
+            f"fold {self.name!r} declares {self.exactness.name} exactness, but "
+            f"algebra {type(self.semiring).__name__!r} denies {law} at values this "
+            f"fold produces. a = {encode(left)!r}; b = {encode(first)!r}; "
+            f"c = {encode(second)!r}; {sides}. Distributivity is what regroups the "
+            "combination over every derivation into a fold over shared structure, "
+            "so the published value is not that combination."
+        )
+
+    def _derivation_refusal(
+        self, value: Value, unfolded: Value, derivations: int
+    ) -> str:
+        """Render a fold value that disagrees with its own enumerated derivations."""
+        encode = self.semiring.encode
+        return (
+            f"fold {self.name!r} declares DISTRIBUTIVE exactness, but its value is "
+            f"not the combination over every derivation. Enumerated {derivations} "
+            f"derivations: fold value {encode(value)!r}; combination over "
+            f"derivations {encode(unfolded)!r}. No probe triple denies "
+            "distributivity, so the disagreement is in how this declaration folds "
+            "the structure rather than in the carrier's arithmetic."
+        )
+
+    def _unfold(
+        self,
+        outgoing: _Outgoing,
+        item_roots: tuple[ItemRef, ...],
+        budget: int,
+    ) -> tuple[bool, Value, int]:
+        """Combine every derivation evaluated on its own, with no shared reuse.
+
+        The multiplication order mirrors ``run()`` exactly, so a disagreement is
+        about sharing rather than about the order operands were combined in.
+        Only the *lists* are memoized; every derivation still carries its own
+        product, which is what makes this an oracle rather than the fold again.
+        """
+        memo: dict[ItemRef, tuple[Value, ...]] = {}
+        produced = 0
+
+        def charge(size: int) -> None:
+            """Refuse to enumerate past the declared budget."""
+            nonlocal produced
+            produced += size
+            if produced > budget:
+                raise _BudgetExceeded
+
+        def expand(reference: ItemRef) -> None:
+            """Evaluate one item's derivation list from its children's lists."""
+            item = _item(self.graph, reference)
+            label = item.durable_id or _structural_label(reference)
+            values: tuple[Value, ...] = (
+                self.lift(self.valuation.read(self.graph, reference), label),
+            )
+            has_children = False
+            for transition in self.transitions:
+                children = outgoing[reference][transition.relation]
+                if not children:
+                    continue
+                has_children = True
+                options: tuple[Value, ...]
+                if transition.combination is ChildCombination.AND:
+                    options = (self.semiring.one,)
+                    for child in children:
+                        options = tuple(
+                            self.semiring.multiply(option, value)
+                            for option in options
+                            for value in memo[child]
+                        )
+                        charge(len(options))
+                else:
+                    options = tuple(
+                        value for child in children for value in memo[child]
+                    )
+                values = tuple(
+                    self.semiring.multiply(value, option)
+                    for value in values
+                    for option in options
+                )
+                charge(len(values))
+            if not has_children:
+                values = tuple(
+                    self.semiring.multiply(value, self.semiring.one) for value in values
+                )
+            memo[reference] = values
+
+        try:
+            for root in item_roots:
+                work: list[tuple[ItemRef, bool]] = [(root, False)]
+                while work:
+                    current, finish = work.pop()
+                    if current in memo:
+                        continue
+                    if finish:
+                        expand(current)
+                        continue
+                    work.append((current, True))
+                    for transition in reversed(self.transitions):
+                        for child in reversed(outgoing[current][transition.relation]):
+                            work.append((child, False))
+            combined = self.semiring.zero
+            derivations = 0
+            for root in item_roots:
+                for value in memo[root]:
+                    combined = self.semiring.add(combined, value)
+                    derivations += 1
+        except _BudgetExceeded:
+            return False, self.semiring.zero, 0
+        return True, combined, derivations
+
     def _rank_candidates(
         self,
         candidates: tuple[RankedWitness[Value], ...],
@@ -1135,6 +1454,70 @@ class FoldHomomorphism[Value, OtherValue]:
             raise ValueError(f"homomorphism {self.name!r} does not commute with fold")
 
 
+def _cyclic_components(
+    references: tuple[ItemRef, ...],
+    canonical_index: dict[ItemRef, int],
+    adjacency: dict[ItemRef, tuple[ItemRef, ...]],
+) -> tuple[tuple[ItemRef, ...], ...]:
+    """Return the strongly connected components that carry a cycle, in canonical order."""
+    tarjan_index = 0
+    indices: dict[ItemRef, int] = {}
+    lowlinks: dict[ItemRef, int] = {}
+    stack: list[ItemRef] = []
+    on_stack: set[ItemRef] = set()
+    components: list[tuple[ItemRef, ...]] = []
+
+    def connect(reference: ItemRef) -> None:
+        """Add one canonical vertex with iterative Tarjan traversal."""
+        nonlocal tarjan_index
+        indices[reference] = tarjan_index
+        lowlinks[reference] = tarjan_index
+        tarjan_index += 1
+        stack.append(reference)
+        on_stack.add(reference)
+        frames: list[tuple[ItemRef, int]] = [(reference, 0)]
+        while frames:
+            current, child_index = frames[-1]
+            children = adjacency[current]
+            if child_index < len(children):
+                child = children[child_index]
+                frames[-1] = (current, child_index + 1)
+                if child not in indices:
+                    indices[child] = tarjan_index
+                    lowlinks[child] = tarjan_index
+                    tarjan_index += 1
+                    stack.append(child)
+                    on_stack.add(child)
+                    frames.append((child, 0))
+                elif child in on_stack:
+                    lowlinks[current] = min(lowlinks[current], indices[child])
+                continue
+            frames.pop()
+            if frames:
+                parent = frames[-1][0]
+                lowlinks[parent] = min(lowlinks[parent], lowlinks[current])
+            if lowlinks[current] == indices[current]:
+                members: list[ItemRef] = []
+                while True:
+                    member = stack.pop()
+                    on_stack.remove(member)
+                    members.append(member)
+                    if member == current:
+                        break
+                components.append(
+                    tuple(sorted(members, key=canonical_index.__getitem__))
+                )
+
+    for reference in references:
+        if reference not in indices:
+            connect(reference)
+    return tuple(
+        component
+        for component in components
+        if len(component) > 1 or component[0] in adjacency[component[0]]
+    )
+
+
 def _item(graph: Graph, reference: ItemRef) -> Item:
     return next(
         tier.items[reference.index]
@@ -1155,8 +1538,11 @@ __all__ = [
     "AttributeValuation",
     "ChildCombination",
     "Coordinate",
+    "ExactnessRefusal",
+    "FoldCertificate",
     "FoldCost",
     "FoldDeclaration",
+    "FoldExactness",
     "FoldHomomorphism",
     "FoldResult",
     "FoldTransition",

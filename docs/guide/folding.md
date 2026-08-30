@@ -148,6 +148,108 @@ paths: 2
 
 Nothing about the graph changed; only the algebra did.
 
+## Exactness is a declared claim
+
+A fold evaluates shared structure once and reuses it. Whether the value that
+comes out is the same as combining every derivation separately is a real
+question with a real answer, and `exactness` is where a declaration answers it.
+`FoldExactness` has four values. `DISTRIBUTIVE` says the value *is* that
+combination. `APPROXIMATE` says it is a sound approximation of it, which is a
+fact about the published result rather than a footnote about the algebra.
+`STRUCTURAL` says no such combination exists, because a cycle makes the
+derivation set infinite and the starred fixpoint equations are the
+specification. `UNDECLARED` is the default.
+
+`check_exactness()` demands the claim and returns a `FoldCertificate`. The two
+ways of getting it wrong are answered differently on purpose: **omitting** the
+claim is answered with the declaration to be made, and **asserting it falsely**
+is answered with a semantic counterexample.
+
+```python
+from tiergraph import FoldExactness
+
+undeclared = FoldDeclaration(
+    "undeclared",
+    graph,
+    valuation,
+    COUNTING,
+    lambda value, _label: 1,
+    transitions,
+    roots=(refs[0],),
+)
+try:
+    undeclared.check_exactness()
+except ValueError as error:
+    head, _, rest = str(error).partition(": ")
+    print(head)
+    print(rest.rsplit(". ", 1)[-1])
+
+certificate = FoldDeclaration(
+    "declared",
+    graph,
+    valuation,
+    COUNTING,
+    lambda value, _label: 1,
+    transitions,
+    roots=(refs[0],),
+    exactness=FoldExactness.DISTRIBUTIVE,
+).check_exactness()
+print("value:", certificate.result.value)
+print("derivations:", certificate.derivations)
+print("compared:", certificate.compared)
+```
+
+```text
+fold 'undeclared' exactness is UNDECLARED
+Not declaring is not the same as declaring APPROXIMATE.
+value: 2
+derivations: 2
+compared: True
+```
+
+Not declaring is not the same as declaring `APPROXIMATE`, and the refusal says
+so rather than assuming the weaker claim on the caller's behalf.
+
+The declared laws of a semiring are necessary and not sufficient here.
+`COUNTING` checks distributivity exactly, and that is a statement about the
+algebra; whether *this* fold equals the combination over its own derivations is
+a statement about the fold. So the check is made two ways. It searches for a
+counterexample to distributivity among the values this fold itself produces,
+and, when the whole enumeration fits in `derivation_budget`, it enumerates the
+derivations with no sharing at all and compares. Re-running the fold under a
+second algebra would not do: both algebras read the same `FoldTransition`
+tuple, so a swap confirms whatever the declaration says instead of testing it.
+
+`FoldCertificate.compared` reports which of the two happened. When it is false
+the enumeration did not fit and the claim stood on the law search alone — and a
+law search that finds no counterexample has found no counterexample, not a
+proof.
+
+```python
+print("budgeted:", undeclared.run().value)
+capped = FoldDeclaration(
+    "capped",
+    graph,
+    valuation,
+    COUNTING,
+    lambda value, _label: 1,
+    transitions,
+    roots=(refs[0],),
+    exactness=FoldExactness.DISTRIBUTIVE,
+).check_exactness(derivation_budget=1)
+print("compared:", capped.compared)
+```
+
+```text
+budgeted: 2
+compared: False
+```
+
+Two refusals are settled by the declaration alone and never run the fold: a
+`DISTRIBUTIVE` claim over an algebra that does not check every required law
+exactly, which `tiergraph.semiring.inexact_laws` names, and a `STRUCTURAL`
+claim over an algebra that declares no star warrant.
+
 ## Refusals
 
 A fold validates its declaration before it can run. The type of the valued
