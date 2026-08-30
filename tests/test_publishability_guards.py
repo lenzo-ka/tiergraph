@@ -488,25 +488,42 @@ def _distribution_members(destination: Path) -> list[str]:
         ]
 
 
-def test_every_file_in_the_built_distribution_is_gated(tmp_path: Path) -> None:
-    """REGRESSION: the checked set is derived from what ships, not listed by hand.
+def _scanned_files() -> set[str]:
+    """Return the paths the publishability gate reads, selected as the gate selects."""
+    return {
+        str(path)
+        for path in check_tracked_clean.tracked_files()
+        if path.is_file() and check_tracked_clean.is_shipped_surface(path)
+    }
+
+
+def test_every_file_in_the_built_distribution_is_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION: what ships is a subset of what the gate reads, file by file.
 
     A hand-kept list of shipped directories drifts the moment packaging changes,
     and drift is invisible until something unpublishable rides out in a file
     nobody remembered to name. Building the distribution and reading its members
     back is the only statement of the shipped set that cannot go stale.
+
+    The comparison is against the set of paths the gate selects, not against the
+    predicate it selects them with. Membership is the claim; the predicate
+    answers only about a name, and it accepts every name that is not exempt,
+    including the name of a file the gate never opens. The gate reads the git
+    index and the build reads the working tree, so a file that is neither
+    tracked nor ignored ships without ever being scanned, and a check written
+    against the predicate alone passes on it. Comparing against the selected
+    set is what makes such a file visible here.
     """
+    monkeypatch.chdir(check_tracked_clean.ROOT)
     members = _distribution_members(tmp_path)
     # PKG-INFO is generated at build time from metadata that is itself gated:
     # the readme, the description, and the project URLs all live in files the
     # gate reads. The gate script is the single named exemption, and naming it
     # here is deliberate: a second entry in this set is a second file shipping
     # unread, and has to be argued for in review rather than appearing quietly.
-    ungated = {
-        name
-        for name in members
-        if name != "PKG-INFO" and not check_tracked_clean.is_shipped_surface(Path(name))
-    }
+    ungated = set(members) - _scanned_files() - {"PKG-INFO"}
     assert ungated == {"scripts/check_tracked_clean.py"}
     # The build has to have produced something, or the assertion above is vacuous.
     assert "pyproject.toml" in members
