@@ -62,8 +62,8 @@ def graph_and_clock() -> tuple[Graph, ClockProfile]:
     unit, start, duration = name("unit"), name("start"), name("duration")
     binding, link, choices = name("binding"), name("link"), name("choices")
     attributes = (
-        AttributeDeclaration(tick, AttributeDomain.POSITION, XsdType.INTEGER),
-        AttributeDeclaration(gap, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(tick, AttributeDomain.BOUNDARY, XsdType.INTEGER),
+        AttributeDeclaration(gap, AttributeDomain.BOUNDARY, XsdType.INTEGER),
         AttributeDeclaration(untimed, AttributeDomain.TIER, XsdType.BOOLEAN),
         AttributeDeclaration(unit, AttributeDomain.DOCUMENT, XsdType.STRING),
         AttributeDeclaration(start, AttributeDomain.ITEM, XsdType.DECIMAL),
@@ -623,8 +623,8 @@ def clock_only_graph(raw: tuple[tuple[int, int], ...]) -> Graph:
         ),
     )
     attributes = (
-        AttributeDeclaration(tick, AttributeDomain.POSITION, XsdType.INTEGER),
-        AttributeDeclaration(gap, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(tick, AttributeDomain.BOUNDARY, XsdType.INTEGER),
+        AttributeDeclaration(gap, AttributeDomain.BOUNDARY, XsdType.INTEGER),
     )
     boundaries = tuple(
         Boundary(
@@ -764,8 +764,8 @@ def build_fixture_graph(
         ),
     )
     declarations = (
-        AttributeDeclaration(_IK_TICK, AttributeDomain.POSITION, XsdType.INTEGER),
-        AttributeDeclaration(_IK_GAP, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(_IK_TICK, AttributeDomain.BOUNDARY, XsdType.INTEGER),
+        AttributeDeclaration(_IK_GAP, AttributeDomain.BOUNDARY, XsdType.INTEGER),
         AttributeDeclaration(_IK_TEXT, AttributeDomain.ITEM, XsdType.STRING),
         AttributeDeclaration(_IK_DURATION, AttributeDomain.ITEM, XsdType.INTEGER),
         AttributeDeclaration(_IK_SPAN_START, AttributeDomain.ITEM, XsdType.STRING),

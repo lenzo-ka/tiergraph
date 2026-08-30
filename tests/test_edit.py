@@ -68,10 +68,10 @@ DECLARATIONS = (
     AttributeDeclaration(SCORE, AttributeDomain.ITEM, XsdType.INTEGER),
     AttributeDeclaration(LABEL, AttributeDomain.TIER, XsdType.STRING),
     AttributeDeclaration(TITLE, AttributeDomain.DOCUMENT, XsdType.STRING),
-    AttributeDeclaration(WEIGHT, AttributeDomain.POSITION, XsdType.DECIMAL),
+    AttributeDeclaration(WEIGHT, AttributeDomain.BOUNDARY, XsdType.DECIMAL),
     AttributeDeclaration(KIND, AttributeDomain.RELATION_DECLARATION, XsdType.STRING),
     AttributeDeclaration(CONFIDENCE, AttributeDomain.RELATION_INSTANCE, XsdType.DOUBLE),
-    AttributeDeclaration(MARK, AttributeDomain.POSITION, XsdType.STRING),
+    AttributeDeclaration(MARK, AttributeDomain.BOUNDARY, XsdType.STRING),
 )
 
 

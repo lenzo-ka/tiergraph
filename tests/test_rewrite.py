@@ -65,7 +65,7 @@ DECLARATIONS = (
 )
 ATTRIBUTES = (
     AttributeDeclaration(LABEL, AttributeDomain.ITEM, XsdType.STRING),
-    AttributeDeclaration(EDGE, AttributeDomain.POSITION, XsdType.STRING),
+    AttributeDeclaration(EDGE, AttributeDomain.BOUNDARY, XsdType.STRING),
     AttributeDeclaration(TIER_NOTE, AttributeDomain.TIER, XsdType.STRING),
 )
 
@@ -199,7 +199,7 @@ def test_every_build_machine_opcode_decorates() -> None:
             AttributeDomain.TIER, WORD, AttributeValue(TIER_NOTE, XsdType.STRING, "n")
         ),
         AttachValue(
-            AttributeDomain.POSITION,
+            AttributeDomain.BOUNDARY,
             BoundaryRef(WORD, 1),
             AttributeValue(EDGE, XsdType.STRING, "e"),
         ),

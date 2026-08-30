@@ -729,7 +729,7 @@ def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
     if isinstance(target, dict):
         if domain in {AttributeDomain.TIER, AttributeDomain.RELATION_DECLARATION}:
             target = _decode_qname(target, f"{path}.target")
-        elif domain is AttributeDomain.POSITION and set(target) == {"tier", "index"}:
+        elif domain is AttributeDomain.BOUNDARY and set(target) == {"tier", "index"}:
             target = _decode_boundary_ref(target, f"{path}.target")
         else:
             target = _decode_endpoint(target, f"{path}.target")

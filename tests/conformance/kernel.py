@@ -148,7 +148,7 @@ class KernelLawSuite:
             attributes=(value(AttributeDomain.RELATION_INSTANCE),),
         )
         boundary = Boundary(
-            BoundaryRef(tier_name, 1), (value(AttributeDomain.POSITION),)
+            BoundaryRef(tier_name, 1), (value(AttributeDomain.BOUNDARY),)
         )
         graph = self.build(
             (NamespaceDeclaration("t", "urn:test"),),

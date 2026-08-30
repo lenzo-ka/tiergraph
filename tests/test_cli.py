@@ -2215,9 +2215,9 @@ def test_public_opcode_data_shapes_decode_exactly() -> None:
         AttachValue(AttributeDomain.TIER, tier, value),
         AttachValue(AttributeDomain.ITEM, item, value),
         AttachValue(AttributeDomain.ITEM, durable_item, value),
-        AttachValue(AttributeDomain.POSITION, boundary, value),
-        AttachValue(AttributeDomain.POSITION, durable_boundary, value),
-        AttachValue(AttributeDomain.POSITION, tier_boundary, value),
+        AttachValue(AttributeDomain.BOUNDARY, boundary, value),
+        AttachValue(AttributeDomain.BOUNDARY, durable_boundary, value),
+        AttachValue(AttributeDomain.BOUNDARY, tier_boundary, value),
         AttachValue(AttributeDomain.RELATION_INSTANCE, 0, value),
         Repeat(1, (AddItem(tier),)),
     ]

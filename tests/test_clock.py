@@ -416,8 +416,8 @@ def reference_shape(*, rate: str | None = None) -> Graph:
     )
     attribute_declarations: tuple[AttributeDeclaration, ...] = (
         AttributeDeclaration(UNIT, AttributeDomain.DOCUMENT, XsdType.STRING),
-        AttributeDeclaration(TICK, AttributeDomain.POSITION, XsdType.INTEGER),
-        AttributeDeclaration(GAP, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(TICK, AttributeDomain.BOUNDARY, XsdType.INTEGER),
+        AttributeDeclaration(GAP, AttributeDomain.BOUNDARY, XsdType.INTEGER),
         AttributeDeclaration(UNTIMED, AttributeDomain.TIER, XsdType.BOOLEAN),
         AttributeDeclaration(START, AttributeDomain.ITEM, XsdType.DECIMAL),
         AttributeDeclaration(DURATION, AttributeDomain.ITEM, XsdType.DECIMAL),
@@ -846,8 +846,8 @@ def spine_fixture(
         ),
     )
     declarations: tuple[AttributeDeclaration, ...] = (
-        AttributeDeclaration(SPINE_TICK, AttributeDomain.POSITION, XsdType.INTEGER),
-        AttributeDeclaration(SPINE_GAP, AttributeDomain.POSITION, XsdType.INTEGER),
+        AttributeDeclaration(SPINE_TICK, AttributeDomain.BOUNDARY, XsdType.INTEGER),
+        AttributeDeclaration(SPINE_GAP, AttributeDomain.BOUNDARY, XsdType.INTEGER),
     )
     if with_unit:
         declarations = (

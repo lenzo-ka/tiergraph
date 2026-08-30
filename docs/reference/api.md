@@ -1593,7 +1593,7 @@ The closed set of places where a declared attribute may occur.
 - `TIER` = `tier`
 - `RELATION_DECLARATION` = `relation_declaration`
 - `RELATION_INSTANCE` = `relation_instance`
-- `POSITION` = `boundary`
+- `BOUNDARY` = `boundary`
 - `DOCUMENT` = `document`
 
 ### `AttributeValue`

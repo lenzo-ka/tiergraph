@@ -158,10 +158,10 @@ def rich_graph(*, reverse_unordered: bool = False) -> Graph:
         name("revision"), AttributeDomain.DOCUMENT, XsdType.INTEGER
     )
     marker = AttributeDeclaration(
-        name("marker"), AttributeDomain.POSITION, XsdType.BOOLEAN
+        name("marker"), AttributeDomain.BOUNDARY, XsdType.BOOLEAN
     )
     offset = AttributeDeclaration(
-        name("offset"), AttributeDomain.POSITION, XsdType.INTEGER
+        name("offset"), AttributeDomain.BOUNDARY, XsdType.INTEGER
     )
     placements = name("placements")
     members = SimpleRelationDeclaration(name("members"), placements, name("event"))

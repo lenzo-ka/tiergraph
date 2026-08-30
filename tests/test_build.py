@@ -609,8 +609,8 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     doc.attribute(
         "instance-value", XsdType.STRING, domain=AttributeDomain.RELATION_INSTANCE
     )
-    doc.attribute("position-value", XsdType.STRING, domain=AttributeDomain.POSITION)
-    doc.attribute("position-value-2", XsdType.STRING, domain=AttributeDomain.POSITION)
+    doc.attribute("position-value", XsdType.STRING, domain=AttributeDomain.BOUNDARY)
+    doc.attribute("position-value-2", XsdType.STRING, domain=AttributeDomain.BOUNDARY)
     doc.link("self", tier, "items", ((0, 0),))
     doc.attach(AttributeDomain.DOCUMENT, None, {"doc-value": "d"})
     doc.attach(AttributeDomain.TIER, q("items"), {"tier-value": "t"})
@@ -623,8 +623,8 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     )
     doc.attach(AttributeDomain.RELATION_INSTANCE, 0, {"instance-value": "x"})
     boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
-    doc.attach(AttributeDomain.POSITION, boundary, {"position-value": "p"})
-    doc.attach(AttributeDomain.POSITION, boundary, {"position-value-2": "q"})
+    doc.attach(AttributeDomain.BOUNDARY, boundary, {"position-value": "p"})
+    doc.attach(AttributeDomain.BOUNDARY, boundary, {"position-value-2": "q"})
     graph = doc.build()
     assert graph.attributes[0].lexical == "d"
     assert graph.boundary_values[0].attributes[0].lexical == "p"
@@ -632,7 +632,7 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     direct_relation = RelationInstance(q("self"), tier.ref(0), tier.ref(0))
     extra = document(ns, prefix="e")
     extra.tier("items", ("a",), item_type="thing", membership="members")
-    extra.attribute("position-value", XsdType.STRING, domain=AttributeDomain.POSITION)
+    extra.attribute("position-value", XsdType.STRING, domain=AttributeDomain.BOUNDARY)
     extra.declare(BipartiteRelationDeclaration(q("self"), q("thing"), q("thing")))
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (q("items"),))
     extra.declare(PolyadicRelationDeclaration(q("poly"), side, side))
@@ -652,13 +652,13 @@ def test_escape_hatches_and_attribute_attachments() -> None:
 
     boundary_branches = document(ns, prefix="e")
     boundary_branches.attribute(
-        "position-value", XsdType.STRING, domain=AttributeDomain.POSITION
+        "position-value", XsdType.STRING, domain=AttributeDomain.BOUNDARY
     )
     boundary_branches.attach(
-        AttributeDomain.POSITION, boundary, {"position-value": "p"}
+        AttributeDomain.BOUNDARY, boundary, {"position-value": "p"}
     )
     boundary_branches.attach(
-        AttributeDomain.POSITION,
+        AttributeDomain.BOUNDARY,
         DurableBoundaryRef(DurableItemRef("other"), BoundarySide.BEFORE),
         {"position-value": "q"},
     )
@@ -699,7 +699,7 @@ def test_escape_hatches_and_attribute_attachments() -> None:
             "not uniquely declared",
         ),
         (AttributeDomain.RELATION_INSTANCE, 2, "out of range"),
-        (AttributeDomain.POSITION, None, "boundary reference"),
+        (AttributeDomain.BOUNDARY, None, "boundary reference"),
     ],
 )
 def test_attachment_target_refusals(
