@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import pytest
 
 from tiergraph import Graph
+from tiergraph.schema import Refusal, RefusalStage
 
 Encoder = Callable[[Graph], bytes]
 Decoder = Callable[[str | bytes], Graph]
@@ -79,15 +80,16 @@ class WireLawSuite:
     def check_writer_refuses_unreadable_text(self) -> None:
         """Every unencodable string is refused at its exact decoder path.
 
-        The refusal must be a plain ``ValueError``.  ``UnicodeEncodeError`` is a
-        ``ValueError`` subclass, so accepting any subclass would let an encoder
-        that merely leaks its own exception satisfy this law without ever
-        deciding to refuse.
+        The refusal must be this reader's own ``Refusal``, staged as an encoding
+        condition.  ``UnicodeEncodeError`` is a ``ValueError`` subclass, so
+        accepting any subclass would let an encoder that merely leaks its own
+        exception satisfy this law without ever deciding to refuse.
         """
         for graph, expected_path in self.refused_corpus():
             with pytest.raises(ValueError) as refusal:
                 self.encode(graph)
-            assert type(refusal.value) is ValueError
+            assert type(refusal.value) is Refusal
+            assert refusal.value.stage is RefusalStage.ENCODING
             assert expected_path in str(refusal.value)
 
     def check_refusal(self, offender: str, document: object) -> None:

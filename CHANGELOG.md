@@ -129,6 +129,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name sorts first. `loads` also defers materializing omitted members until
   after that decision, so a foreign-version document is no longer rewritten
   toward this format's shape before the reader declines it.
+- **BREAKING:** the document, program, and selector readers now share one
+  numbered total order over the classes a refusal can belong to, published as
+  `tiergraph.schema.RefusalStage` and carried on every refusal they raise, which
+  is now a `tiergraph.schema.Refusal` — still a `ValueError`, so any caller that
+  already catches one still does. The order runs envelope, encoding, syntax,
+  construction, discriminator, shape, value, reference, semantics, and its
+  principle is stated once: a refusal at one stage explains what a later stage
+  would report, and the converse never holds. Stages rank the conditions of one
+  node, and nodes are read outside in, so the pair of a node and a stage orders
+  every condition a read can meet. Deciding the version before the field set
+  generalizes from `format_version` to every discriminator: a JSONL header now
+  reports its `machine_version` before the header's field set, so a program from
+  a later release is told its version rather than the extra header member that
+  being newer introduced, and a header carrying no stamp at all is reported for
+  the stamp. Two conditions of one node are carried as data rather than prose:
+  a field set that is both missing and unknown keeps its single combined message
+  and also names the unknown-field condition on `Refusal.also`. `validation_errors`
+  returns every applicable structural condition in that order instead of only the
+  first, so a document with four problems is repaired in one pass rather than in
+  four; a foreign version is still reported alone, because the field sets of a
+  declaration the document never selected cannot honestly be judged. The document
+  format is unchanged: `FORMAT_VERSION` stays `"6"`, the schema artifact and its
+  stamp are byte-identical, and all 2,967 conformance probes keep their outcome
+  with no drift.
 
 ### Removed
 

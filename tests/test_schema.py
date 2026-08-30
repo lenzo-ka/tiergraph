@@ -478,7 +478,8 @@ def test_nested_declaration_change_moves_validator_parser_and_schema() -> None:
     try:
         document = to_data(rich_graph())
         assert validation_errors(document, FORMAT_VERSION) == [
-            "document.graph.tiers[0] is missing fields ['extension']"
+            "document.graph.tiers[0] is missing fields ['extension']",
+            "document.graph.tiers[1] is missing fields ['extension']",
         ]
         tier_schema = cast(
             dict[str, JsonValue],

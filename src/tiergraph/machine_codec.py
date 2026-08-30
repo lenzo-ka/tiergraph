@@ -6,7 +6,13 @@ import json
 from io import BytesIO
 from typing import BinaryIO
 
-from tiergraph.machine import MACHINE_VERSION, Program, _decode_object, _decode_opcode
+from tiergraph.machine import (
+    MACHINE_VERSION,
+    Program,
+    _decode_object,
+    _decode_opcode,
+)
+from tiergraph.schema import Refusal, RefusalStage
 from tiergraph.wire import MAX_DOCUMENT_BYTES, MAX_JSON_DEPTH
 
 # Owner-tunable policy: keep an individual JSONL record bounded independently
@@ -27,26 +33,49 @@ def load_program(stream: BinaryIO) -> Program:
     for number, line in enumerate(stream, 1):
         total += len(line)
         if total > MAX_DOCUMENT_BYTES:
-            raise ValueError(f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes")
+            raise Refusal(
+                RefusalStage.ENVELOPE,
+                f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes",
+            )
         if len(line) > _JSONL_LINE_BYTES:
-            raise ValueError(f"JSONL line {number} exceeds {_JSONL_LINE_BYTES} bytes")
+            raise Refusal(
+                RefusalStage.ENVELOPE,
+                f"JSONL line {number} exceeds {_JSONL_LINE_BYTES} bytes",
+            )
         if not line.strip():
-            raise ValueError(f"JSONL line {number} is whitespace-only")
+            raise Refusal(
+                RefusalStage.SYNTAX, f"JSONL line {number} is whitespace-only"
+            )
         try:
             _check_jsonl_depth(line, number)
             records.append(json.loads(line))
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError(f"JSONL line {number}: {error}") from error
+            raise Refusal(
+                RefusalStage.SYNTAX, f"JSONL line {number}: {error}"
+            ) from error
         except RecursionError as error:
-            raise ValueError(
+            raise Refusal(
+                RefusalStage.SYNTAX,
                 f"JSONL line {number}: JSON nesting depth exceeds limit "
-                f"{MAX_JSON_DEPTH}"
+                f"{MAX_JSON_DEPTH}",
             ) from error
     if not records:
-        raise ValueError("JSONL program is missing its header line")
-    header = _decode_object(records[0], "header", {"machine_version"})
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR, "JSONL program is missing its header line"
+        )
+    header = records[0]
+    if not isinstance(header, dict):
+        raise Refusal(RefusalStage.CONSTRUCTION, "header must be an object")
+    if "machine_version" not in header:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR, "header is missing field 'machine_version'"
+        )
     if header["machine_version"] != MACHINE_VERSION:
-        raise ValueError(f"header machine_version must be {MACHINE_VERSION!r}")
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"header machine_version must be {MACHINE_VERSION!r}",
+        )
+    _decode_object(header, "header", {"machine_version"})
     try:
         return Program(
             tuple(
@@ -55,7 +84,7 @@ def load_program(stream: BinaryIO) -> Program:
             )
         )
     except TypeError as error:
-        raise ValueError(str(error)) from error
+        raise Refusal(RefusalStage.CONSTRUCTION, str(error)) from error
 
 
 def program_dumps(program: Program) -> str:
@@ -95,9 +124,10 @@ def _check_jsonl_depth(line: bytes, number: int) -> None:
         elif byte in (ord("["), ord("{")):
             depth += 1
             if depth > MAX_JSON_DEPTH:
-                raise ValueError(
+                raise Refusal(
+                    RefusalStage.SYNTAX,
                     f"JSONL line {number}: JSON nesting depth exceeds limit "
-                    f"{MAX_JSON_DEPTH}"
+                    f"{MAX_JSON_DEPTH}",
                 )
         elif byte in (ord("]"), ord("}")):
             depth -= 1

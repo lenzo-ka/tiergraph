@@ -45,6 +45,7 @@ from tiergraph import (
     to_data,
     wire,
 )
+from tiergraph.schema import Refusal, RefusalStage
 
 NS = "urn:wire-test"
 META_NS = "urn:wire-meta"
@@ -506,7 +507,8 @@ def test_no_writer_returns_text_this_reader_would_refuse() -> None:
     ASCII document, and every writer used to hand back either a string holding
     a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  All four
     writers must now make the same decision, name the same field path, and
-    raise a plain ``ValueError`` rather than leaking an encoder exception.
+    raise this reader's own encoding-staged ``Refusal`` rather than leaking an
+    encoder exception.
     """
     document = (
         '{"format_version":"6","graph":'
@@ -517,7 +519,8 @@ def test_no_writer_returns_text_this_reader_would_refuse() -> None:
     for writer in (to_data, dumps, dump_compact, dump_bytes):
         with pytest.raises(ValueError) as refusal:
             writer(graph)
-        assert type(refusal.value) is ValueError
+        assert type(refusal.value) is Refusal
+        assert refusal.value.stage is RefusalStage.ENCODING
         assert "namespaces[0].namespace" in str(refusal.value)
 
 
