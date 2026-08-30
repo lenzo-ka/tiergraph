@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one concept one way.
 - The publishability gate now refuses sibling-repository names by comparing
   salted digests, so no forbidden name is written down in the repository.
+- The documentation gate now holds every module in the manifest's secondary
+  surface to that module's own `__all__`, rather than only `tiergraph.build` and
+  `tiergraph.semiring`, and refuses to publish a surface for a module that
+  declares none. `tiergraph.schema` now declares the two names it publishes, so
+  the module rather than the manifest states the surface.
 
 ### Removed
 
