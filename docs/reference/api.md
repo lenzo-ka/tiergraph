@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 172 top-level `tiergraph` exports exactly once.
+It covers 173 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -745,6 +745,38 @@ Yield each primitive opcode with its validated resulting graph.
 
 ## Editing
 
+### `Displacement`
+
+```text
+Displacement(items: 'Mapping[ItemRef, ItemRef]', boundaries: 'Mapping[BoundaryRef, BoundaryRef]', relations: 'Mapping[int, int]', polyadic_relations: 'Mapping[int, int]', departed_items: 'frozenset[ItemRef]', departed_boundaries: 'frozenset[BoundaryRef]', departed_relations: 'frozenset[int]', departed_polyadic_relations: 'frozenset[int]') -> None
+```
+
+Report where every position of one graph stands in another.
+
+The four maps are total over their source index spaces: an old position is
+either mapped or departed.  In particular, stationary positions map to
+themselves rather than being omitted.
+
+#### `Displacement.then`
+
+Method.
+
+```text
+Displacement.then(self, later: 'Displacement') -> 'Displacement'
+```
+
+Compose two displacements into the one the pair of edits performed.
+
+#### `Displacement.stationary`
+
+Class method.
+
+```text
+Displacement.stationary(cls, graph: 'Graph') -> 'Displacement'
+```
+
+Return the displacement of a graph onto itself.
+
 ### `GraphEditor`
 
 ```text
@@ -781,6 +813,16 @@ GraphEditor.freeze(self) -> 'Graph'
 ```
 
 Return a fully validated graph without consuming this editor.
+
+#### `GraphEditor.displacement`
+
+Method.
+
+```text
+GraphEditor.displacement(self) -> 'Displacement'
+```
+
+Return where every position of this editor's input now stands.
 
 #### `GraphEditor.declare`
 
