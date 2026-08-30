@@ -30,6 +30,7 @@ from tiergraph.core import (
     QualifiedName,
     RelationDeclaration,
     RelationEndpointKind,
+    RelationEndpointRef,
     RelationInstance,
     SimpleRelationDeclaration,
     Tier,
@@ -605,7 +606,7 @@ class Document:
         tier: TierHandle,
         value: object,
         kind: RelationEndpointKind,
-    ) -> ItemRef | DurableBoundaryRef:
+    ) -> RelationEndpointRef:
         operation = f"relation {relation} {side}"
         if kind is RelationEndpointKind.ITEM:
             return self._endpoint(relation, side, tier, value, kind)
@@ -646,7 +647,7 @@ class Document:
         tier: TierHandle,
         value: object,
         kind: RelationEndpointKind,
-    ) -> ItemRef | DurableBoundaryRef:
+    ) -> RelationEndpointRef:
         operation = f"link {link} {side}"
         if kind is RelationEndpointKind.BOUNDARY:
             if isinstance(value, int):
@@ -680,7 +681,7 @@ class Document:
                     f"{operation}: durable item {value.durable_id!r} is not unique "
                     f"in tier {tier.name.local_name}"
                 )
-            return ItemRef(tier.name, matches[0])
+            return value
         raise BuilderError(
             f"{operation}: item endpoint needs int, ItemRef, or DurableItemRef"
         )

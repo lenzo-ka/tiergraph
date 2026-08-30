@@ -169,6 +169,10 @@ DURABLE_BOUNDARY = _object(
     _field("anchor", ANCHOR),
     _field("side", Shape(ShapeKind.STRING, values=("before", "after"))),
 )
+DURABLE_ITEM_ENDPOINT = _object(
+    _field("kind", Shape(ShapeKind.STRING, values=("durable-item",))),
+    _field("durable_id", NON_EMPTY_STRING),
+)
 
 DECLARATIONS: dict[str, Shape] = {
     **{
@@ -184,6 +188,7 @@ DECLARATIONS: dict[str, Shape] = {
         _field("tier", QUALIFIED_NAME),
     ),
     "item_reference": ITEM_REFERENCE,
+    "durable_item_endpoint": DURABLE_ITEM_ENDPOINT,
     "durable_position": DURABLE_BOUNDARY,
     "tier_seal_carrier": _object(
         _field("kind", Shape(ShapeKind.STRING, values=("tier",))),
@@ -245,7 +250,7 @@ DECLARATIONS: dict[str, Shape] = {
 RELATION_DECLARATION = _reference(
     "simple_relation", "bipartite_relation", "polyadic_relation"
 )
-ENDPOINT = _reference("item_reference", "durable_position")
+ENDPOINT = _reference("item_reference", "durable_item_endpoint", "durable_position")
 DECLARATIONS.update(
     {
         "binary_relation_instance": _object(
@@ -305,7 +310,7 @@ GRAPH = _object(
                             "tier",
                             "relation_declaration",
                             "relation_instance",
-                            "position",
+                            "boundary",
                             "document",
                         ),
                     ),

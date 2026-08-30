@@ -86,6 +86,32 @@ def test_generated_schema_is_json_data() -> None:
     json.dumps(schema, allow_nan=False)
 
 
+def test_relation_endpoint_schema_arms_are_pairwise_disjoint() -> None:
+    """REGRESSION: fails on parent because the tagged durable-item arm is absent."""
+    schema = json_schema(FORMAT_VERSION)
+    validator = Draft202012Validator(schema)
+    shapes: tuple[dict[str, JsonValue], ...] = (
+        {"tier": "t:words", "index": 1},
+        {"kind": "durable-item", "durable_id": "w1"},
+        {
+            "anchor": {"kind": "item", "durable_id": "w1"},
+            "side": "before",
+        },
+    )
+    branches = (
+        "item_reference",
+        "durable_item_endpoint",
+        "durable_position",
+    )
+
+    for shape in shapes:
+        matches = sum(
+            validator.evolve(schema={"$ref": f"#/$defs/{branch}"}).is_valid(shape)
+            for branch in branches
+        )
+        assert matches == 1, shape
+
+
 def test_required_field_metadata_requires_an_object() -> None:
     """Required-field introspection refuses scalar shapes explicitly."""
     with pytest.raises(TypeError, match="required field metadata requires an object"):
@@ -100,18 +126,19 @@ def test_committed_artifact_and_hash_match_generation() -> None:
     assert stamp["schema_sha256"] == hashlib.sha256(schema_bytes).hexdigest()
 
 
-def test_shape_or_artifact_change_requires_format_version_change() -> None:
-    """The prior stamp refuses either bound digest under the same version."""
+def test_shape_or_artifact_change_requires_the_format_release_step() -> None:
+    """The prior stamp refuses either digest before the package takes its release."""
     prior = cast(dict[str, object], json.loads(STAMP_PATH.read_text()))
     for digest in ("shape_sha256", "schema_sha256"):
         altered = {**prior, digest: "edited"}
         with pytest.raises(
             ValueError,
-            match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
+            match="without moving the package to the release named by FORMAT_VERSION",
         ):
-            refuse_unversioned_shape_change(prior, altered)
+            refuse_unversioned_shape_change(prior, altered, "0.1.0")
+        refuse_unversioned_shape_change(prior, altered, "0.2.0")
         altered["format_version"] = "foreign"
-        refuse_unversioned_shape_change(prior, altered)
+        refuse_unversioned_shape_change(prior, altered, "0.1.0")
 
 
 def test_committed_stamp_fails_closed_with_distinct_diagnostics(
@@ -155,9 +182,11 @@ def test_generator_weakening_is_caught_by_artifact_digest(
     assert schema_module.shape_hash() == baseline["shape_sha256"]
     with pytest.raises(
         ValueError,
-        match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
+        match="without moving the package to the release named by FORMAT_VERSION",
     ):
-        refuse_unversioned_shape_change(baseline, json.loads(stamp_bytes(weakened)))
+        refuse_unversioned_shape_change(
+            baseline, json.loads(stamp_bytes(weakened)), "0.1.0"
+        )
 
 
 def test_check_refuses_honestly_regenerated_unversioned_shape(
@@ -177,9 +206,9 @@ def test_check_refuses_honestly_regenerated_unversioned_shape(
         stamp_path.write_bytes(stamp_bytes(schema_bytes))
         with pytest.raises(
             SystemExit,
-            match="schema declaration or generated artifact changed without moving FORMAT_VERSION",
+            match="without moving the package to the release named by FORMAT_VERSION",
         ):
-            generate_main(["--check"], baseline)
+            generate_main(["--check"], baseline, "0.1.0")
     finally:
         object.__setattr__(TIER, "fields", original)
 

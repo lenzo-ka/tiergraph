@@ -109,9 +109,7 @@ def test_caption_builder_is_byte_identical_to_direct_construction() -> None:
             ),
         ),
         (
-            RelationInstance(
-                q("spells"), ItemRef(q("words"), 0), ItemRef(q("captions"), 0)
-            ),
+            RelationInstance(q("spells"), ItemRef(q("words"), 0), DurableItemRef("c1")),
             RelationInstance(
                 q("spells"), ItemRef(q("words"), 1), ItemRef(q("captions"), 0)
             ),

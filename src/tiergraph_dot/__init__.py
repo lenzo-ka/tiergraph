@@ -433,7 +433,7 @@ def _arc_labeled(left: str, right: str, label: str) -> str:
 
 
 type _RenderedRelation = RelationInstance | PolyadicRelationInstance
-type _RelationEndpoint = ItemRef | DurableBoundaryRef
+type _RelationEndpoint = ItemRef | DurableItemRef | DurableBoundaryRef
 
 
 def _emit_relation_edges(
@@ -949,11 +949,11 @@ def _relation_lines(
 
 def _endpoint_id(
     graph: Graph,
-    endpoint: ItemRef | DurableBoundaryRef,
+    endpoint: _RelationEndpoint,
     items: dict[ItemRef, str],
     boundaries: dict[BoundaryRef, str],
 ) -> str:
-    if isinstance(endpoint, ItemRef):
+    if isinstance(endpoint, ItemRef | DurableItemRef):
         return items[graph.resolve_item(endpoint)]
     resolved = graph.resolve_boundary(endpoint)
     try:

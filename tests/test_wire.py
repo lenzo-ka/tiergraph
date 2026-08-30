@@ -761,6 +761,41 @@ def test_reference_kinds_and_anchor_union_round_trip_distinguishably() -> None:
     assert item_anchor != outer_anchor
 
 
+def test_format_0_2_0_round_trip_uses_boundary_domain_and_durable_item_tag() -> None:
+    """REGRESSION: fails on parent with position and no durable endpoint wire arm."""
+    graph = rich_graph()
+    durable = DurableItemRef("lead")
+    relation = RelationInstance(
+        graph.relations[0].declaration,
+        durable,
+        graph.relations[0].right,
+    )
+    extended = Graph(
+        graph.namespaces,
+        graph.tiers,
+        graph.relation_declarations,
+        (relation, *graph.relations[1:]),
+        graph.attribute_declarations,
+        graph.boundary_values,
+        graph.attributes,
+    )
+
+    document = json.loads(dumps(extended))
+    assert document["format_version"] == "0.2.0"
+    declarations = document["graph"]["attribute_declarations"]
+    boundary_domains = [
+        declaration["domain"]
+        for declaration in declarations
+        if declaration["name"].endswith((":marker", ":offset"))
+    ]
+    assert boundary_domains == ["boundary", "boundary"]
+    assert document["graph"]["relations"][0]["left"] == {
+        "kind": "durable-item",
+        "durable_id": "lead",
+    }
+    assert loads(json.dumps(document)) == extended
+
+
 def test_missing_declaration_refuses_at_attribute_validation() -> None:
     """A value whose declaration was removed names the undeclared attribute."""
     document = mutable_document()

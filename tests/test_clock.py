@@ -185,7 +185,7 @@ def test_runtime_boundary_invariant_refuses_malformed_endpoints() -> None:
     graph = fixture()
     invalid_left = replace(
         graph.relations[0],
-        left=DurableItemRef("segment-0"),  # type: ignore[arg-type]
+        left=DurableItemRef("segment-0"),
     )
     object.__setattr__(graph, "relations", (invalid_left, *graph.relations[1:]))
     with pytest.raises(ValueError, match="left endpoint is not a boundary"):
@@ -194,7 +194,7 @@ def test_runtime_boundary_invariant_refuses_malformed_endpoints() -> None:
     graph = fixture()
     invalid_right = replace(
         graph.relations[0],
-        right=DurableItemRef("clock-0"),  # type: ignore[arg-type]
+        right=DurableItemRef("clock-0"),
     )
     object.__setattr__(graph, "relations", (invalid_right, *graph.relations[1:]))
     with pytest.raises(ValueError, match="right endpoint is not a boundary"):
@@ -678,7 +678,7 @@ def test_new_clock_role_declarations_and_values_are_checked() -> None:
         for declaration in graph.attribute_declarations
     )
     object.__setattr__(graph, "attribute_declarations", bad_tick)
-    with pytest.raises(ValueError, match="clock tick must be a position integer"):
+    with pytest.raises(ValueError, match="clock tick must be a boundary integer"):
         advanced_profile(graph)
 
 

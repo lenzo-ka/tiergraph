@@ -668,8 +668,8 @@ class Walk:
 
 def _endpoint_node(graph: Graph, reference: RelationEndpointRef) -> Node:
     """Resolve an anchored endpoint to the structural identity used by selections."""
-    if isinstance(reference, ItemRef):
-        return Node(NodeKind.ITEM, reference)
+    if isinstance(reference, ItemRef | DurableItemRef):
+        return Node(NodeKind.ITEM, graph.resolve_item(reference))
     assert isinstance(reference, DurableBoundaryRef)
     resolved: BoundaryRef = graph.resolve_boundary(reference)
     return Node(NodeKind.POSITION, resolved)

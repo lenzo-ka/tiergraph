@@ -36,6 +36,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _resolve_relation_endpoint
 
 NS = "urn:test"
 NAMESPACES = (NamespaceDeclaration("t", NS),)
@@ -922,6 +923,104 @@ def test_durable_item_reference_resolves_after_insertion() -> None:
     )
     assert inserted.resolve_item(durable) == ItemRef(tier_name, 1)
     assert inserted.resolve_item(ItemRef(tier_name, 0)) == ItemRef(tier_name, 0)
+
+
+def test_relation_durable_item_endpoint_survives_insertion() -> None:
+    """REGRESSION: fails on parent because a durable item is classified as a boundary."""
+    tier_name = name("items")
+    item_type = name("item")
+    membership = SimpleRelationDeclaration(name("members"), tier_name, item_type)
+    link = BipartiteRelationDeclaration(name("link"), item_type, item_type)
+    durable = DurableItemRef("target")
+    graph = Graph(
+        NAMESPACES,
+        (Tier(TierDeclaration(tier_name, "Items"), (Item("source"), Item("target"))),),
+        (membership, link),
+        (RelationInstance(link.name, ItemRef(tier_name, 0), durable),),
+    )
+
+    inserted = graph.insert_item(tier_name, 0, Item("new"))
+
+    assert inserted.relations[0].right == durable
+    assert inserted.resolve_item(durable) == ItemRef(tier_name, 2)
+
+
+def test_missing_relation_durable_item_endpoint_has_corrected_refusal() -> None:
+    """REGRESSION: fails on parent with the false claim that the value is a boundary."""
+    tier_name = name("items")
+    item_type = name("item")
+    membership = SimpleRelationDeclaration(name("members"), tier_name, item_type)
+    link = BipartiteRelationDeclaration(name("link"), item_type, item_type)
+    relation = RelationInstance(link.name, ItemRef(tier_name, 0), DurableItemRef("w-b"))
+    expected = (
+        "relation instance 0 right endpoint 'w-b' names no item; a durable coordinate "
+        "resolves against this graph's items and nothing carries that identifier"
+    )
+
+    with pytest.raises(GraphValidationError) as caught:
+        Graph(
+            NAMESPACES,
+            (Tier(TierDeclaration(tier_name, "Items"), (Item("source"),)),),
+            (membership, link),
+            (relation,),
+        )
+
+    assert str(caught.value) == expected
+    assert "boundary" not in str(caught.value)
+
+
+def test_missing_polyadic_durable_item_endpoint_has_corrected_refusal() -> None:
+    """REGRESSION: fails on parent by classifying the durable item as a boundary."""
+    tier_name = name("items")
+    membership = SimpleRelationDeclaration(name("members"), tier_name, name("item"))
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), tiers=(tier_name,), maximum=None
+    )
+    declaration = PolyadicRelationDeclaration(name("links"), side, side)
+    relation = PolyadicRelationInstance(
+        declaration.name,
+        (ItemRef(tier_name, 0),),
+        (DurableItemRef("missing"),),
+    )
+    valid = PolyadicRelationInstance(
+        declaration.name,
+        relation.sources,
+        (DurableItemRef("target"),),
+    )
+    assert Graph(
+        NAMESPACES,
+        (
+            Tier(
+                TierDeclaration(tier_name, "Items"),
+                (Item("source"), Item("target")),
+            ),
+        ),
+        (membership, declaration),
+        polyadic_relations=(valid,),
+    ).polyadic_relations == (valid,)
+
+    with pytest.raises(
+        GraphValidationError,
+        match=(
+            "relation instance 0 target endpoint 0 'missing' names no item; "
+            "a durable coordinate resolves against this graph's items and nothing "
+            "carries that identifier"
+        ),
+    ):
+        Graph(
+            NAMESPACES,
+            (Tier(TierDeclaration(tier_name, "Items"), (Item("source"),)),),
+            (membership, declaration),
+            polyadic_relations=(relation,),
+        )
+
+
+def test_relation_endpoint_resolution_refuses_missing_durable_item() -> None:
+    """REGRESSION: fails on parent because endpoint resolution lacks this item arm."""
+    with pytest.raises(GraphValidationError, match="unknown durable item id 'missing'"):
+        _resolve_relation_endpoint(
+            DurableItemRef("missing"), {}, {}, GraphValidationError
+        )
 
 
 @pytest.mark.parametrize(

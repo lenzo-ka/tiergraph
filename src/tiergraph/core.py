@@ -32,7 +32,7 @@ class AttributeDomain(StrEnum):
     TIER = "tier"
     RELATION_DECLARATION = "relation_declaration"
     RELATION_INSTANCE = "relation_instance"
-    POSITION = "position"
+    POSITION = "boundary"
     DOCUMENT = "document"
 
 
@@ -632,7 +632,14 @@ class DurableBoundaryRef:
         return f"{self.side.value} {anchor}"
 
 
-type RelationEndpointRef = ItemRef | DurableBoundaryRef
+type RelationEndpointRef = ItemRef | DurableItemRef | DurableBoundaryRef
+
+
+def _endpoint_data(reference: RelationEndpointRef) -> dict[str, JsonValue]:
+    """Return an endpoint with the tag that disjoins durable item references."""
+    if isinstance(reference, DurableItemRef):
+        return {"kind": "durable-item", "durable_id": reference.durable_id}
+    return reference.to_data()
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,8 +681,8 @@ class RelationInstance:
         """Return the instance as JSON-serializable data."""
         return {
             "declaration": self.declaration.to_data(),
-            "left": self.left.to_data(),
-            "right": self.right.to_data(),
+            "left": _endpoint_data(self.left),
+            "right": _endpoint_data(self.right),
             "durable_id": self.durable_id,
             "attributes": _attributes_data(self.attributes),
         }
@@ -701,8 +708,8 @@ class PolyadicRelationInstance:
         """Return the ordered sides as JSON-serializable arrays."""
         return {
             "declaration": self.declaration.to_data(),
-            "sources": [endpoint.to_data() for endpoint in self.sources],
-            "targets": [endpoint.to_data() for endpoint in self.targets],
+            "sources": [_endpoint_data(endpoint) for endpoint in self.sources],
+            "targets": [_endpoint_data(endpoint) for endpoint in self.targets],
             "durable_id": self.durable_id,
             "attributes": _attributes_data(self.attributes),
         }
@@ -2481,7 +2488,7 @@ def _require_boolean(value: object, subject: str) -> None:
 def _validate_endpoint(
     relation_index: int,
     side: str,
-    reference: ItemRef | DurableBoundaryRef,
+    reference: RelationEndpointRef,
     expected_type: QualifiedName,
     expected_kind: RelationEndpointKind,
     tiers: dict[QualifiedName, Tier],
@@ -2491,7 +2498,7 @@ def _validate_endpoint(
     subject = f"relation instance {relation_index} {side} endpoint"
     actual_kind = (
         RelationEndpointKind.ITEM
-        if isinstance(reference, ItemRef)
+        if isinstance(reference, ItemRef | DurableItemRef)
         else RelationEndpointKind.BOUNDARY
     )
     if actual_kind is not expected_kind:
@@ -2504,6 +2511,14 @@ def _validate_endpoint(
     if isinstance(reference, ItemRef):
         _validate_reference(reference, subject, tiers, GraphValidationError)
         tier_name = reference.tier
+    elif isinstance(reference, DurableItemRef):
+        coordinate = items_by_id.get(reference.durable_id)
+        if coordinate is None:
+            raise GraphValidationError(
+                f"{subject} {reference.durable_id!r} names no item; a durable coordinate "
+                "resolves against this graph's items and nothing carries that identifier"
+            )
+        tier_name = coordinate.tier
     else:
         tier_name = _boundary_anchor_tier(reference, subject, tiers, items_by_id)
     actual_type = types.get(tier_name)
@@ -2607,7 +2622,7 @@ def _validate_polyadic_instance(
             subject = f"relation instance {index} {label} endpoint {endpoint_index}"
             kind = (
                 RelationEndpointKind.ITEM
-                if isinstance(endpoint, ItemRef)
+                if isinstance(endpoint, ItemRef | DurableItemRef)
                 else RelationEndpointKind.BOUNDARY
             )
             if kind not in side.endpoint_kinds:
@@ -2618,6 +2633,15 @@ def _validate_polyadic_instance(
             if isinstance(endpoint, ItemRef):
                 _validate_reference(endpoint, subject, tiers, GraphValidationError)
                 tier = endpoint.tier
+            elif isinstance(endpoint, DurableItemRef):
+                coordinate = items_by_id.get(endpoint.durable_id)
+                if coordinate is None:
+                    raise GraphValidationError(
+                        f"{subject} {endpoint.durable_id!r} names no item; a durable "
+                        "coordinate resolves against this graph's items and nothing "
+                        "carries that identifier"
+                    )
+                tier = coordinate.tier
             else:
                 tier = _boundary_anchor_tier(endpoint, subject, tiers, items_by_id)
             if side.tiers is not None and tier not in side.tiers:
@@ -2759,6 +2783,11 @@ def _resolve_relation_endpoint(
     """Resolve boundary spellings to graph places before invariant comparison."""
     if isinstance(reference, ItemRef):
         return reference
+    if isinstance(reference, DurableItemRef):
+        coordinate = items_by_id.get(reference.durable_id)
+        if coordinate is None:
+            raise error_type(f"unknown durable item id {reference.durable_id!r}")
+        return coordinate
     return _resolve_boundary_reference(reference, tiers, items_by_id, error_type)
 
 
