@@ -3,7 +3,7 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check docs docs-check tracked-clean documented check
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check docs docs-check tracked-clean documented reservations check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -44,6 +44,9 @@ tracked-clean:
 documented:
 	@$(VENV_PYTHON) scripts/check_documented.py
 
+reservations:
+	@$(VENV_PYTHON) scripts/check_reservations.py
+
 schema:
 	@$(VENV_PYTHON) scripts/generate_schema.py
 
@@ -56,4 +59,4 @@ docs:
 docs-check:
 	@$(VENV_PYTHON) scripts/generate_docs.py --check
 
-check: venv lint format-check types test determinism schema-check docs-check tracked-clean documented
+check: venv lint format-check types test determinism schema-check docs-check tracked-clean documented reservations

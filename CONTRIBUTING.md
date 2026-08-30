@@ -29,9 +29,9 @@ make check
 The gate runs Ruff linting and formatting checks, strict mypy checks, pytest,
 the test suite in separate processes with hash seeds 0, 12345, and 999, JSON
 Schema currency checks, documentation currency checks, the tracked-file hygiene
-check, and the public-docstring check. Coverage is measured for the `tiergraph`
-and `tiergraph_dot` packages and for the `scripts` gates, and must remain at
-100% branch coverage.
+check, the public-docstring check, and the reservation check. Coverage is
+measured for the `tiergraph` and `tiergraph_dot` packages and for the `scripts`
+gates, and must remain at 100% branch coverage.
 
 The tracked-file hygiene check reads **every tracked file**, not a listed set of
 directories. That is not a convenience: the source distribution ships the whole
@@ -44,6 +44,36 @@ reads, so the two cannot drift apart silently.
 Because no tracked file is inert to it, CI runs this check on every pull
 request, outside the path filter that governs the more expensive jobs.
 
+## Reserve something only with a condition that discharges it
+
+Sometimes a change declares a name, or documents a decision, that nothing
+produces yet: a refusal code kept for a meaning no resolver emits, a helper
+withheld until a ruling lands, a rule left unratified. Such a reservation has
+to be registered in `scripts/check_reservations.py`, with the exact prose that
+carries it and the condition that would end it.
+
+The register exists because the two failure modes are not symmetric. A
+reservation that is still undischarged is visible: a reader meets the docstring
+and sees the promise standing. A reservation that quietly stopped being true is
+not visible at all -- the thing it waited on now exists, the prose still says it
+does not, and no other check disagrees. `make reservations` fails on the second
+case by name, and it fails on a docstring that announces a reservation without
+registering one.
+
+Entries come in two kinds. Most carry a predicate that reads the tree and
+reports evidence when the reservation has been overtaken; each predicate states
+in its own docstring which spelling of an arrival it watches. A few conditions
+no observable in this repository can decide -- machinery that has no reserved
+name to watch for -- and those are registered as unenforceable, with the reason
+written down. For them the check pins the prose and claims nothing further,
+which is the honest position: an unenforceable entry that says so is worth more
+than a predicate that can never fire.
+
+The check reads docstrings under `src/tiergraph`, `src/tiergraph_dot`, and
+`examples/`. It does not read hand-written Markdown, because its vocabulary is
+ordinary English there; the check's own module docstring records that boundary
+and the reason.
+
 The repository also provides a pre-commit configuration. After installing
 `pre-commit` separately, enable it in your checkout with:
 
@@ -52,8 +82,9 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-Those hooks apply basic file checks and Ruff, then run the tracked-file hygiene
-and public-docstring checks. They complement rather than replace `make check`.
+Those hooks apply basic file checks and Ruff, then run the tracked-file hygiene,
+public-docstring, and reservation checks. They complement rather than replace
+`make check`.
 
 ## Documentation
 

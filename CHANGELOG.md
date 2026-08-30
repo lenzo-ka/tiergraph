@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document declares the format version it was written in, a reader accepts only
   the version it implements and refuses any other by name, and documents are
   versioned interchange rather than an archival format.
+- Added `scripts/check_reservations.py` and the `make reservations` gate, which
+  registers every reserved or deferred item on a shipped docstring surface with
+  the exact prose that carries it and the condition that would discharge it. An
+  undischarged reservation is visible to a reader; one that has quietly stopped
+  being true is not, so most entries carry a predicate that reports evidence
+  when the tree has overtaken the promise and the gate fails naming it. A
+  reservation no observable here can decide is registered as unenforceable with
+  the reason. The gate also refuses a docstring that announces a reservation
+  without registering one, and its own docstring states which surfaces it reads.
 
 ### Changed
 
