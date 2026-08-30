@@ -25,7 +25,7 @@ from tiergraph.core import JsonValue
 
 
 def segment_value() -> JsonValue:
-    """Return a representative recursively frozen ipakit feature value."""
+    """Return a representative recursively frozen nested-domain feature value."""
     return {
         "features": {
             "consonantal": True,
@@ -42,7 +42,7 @@ def rebound(graph: Graph, profile: JsonValueProfile) -> JsonValueProfile:
     return replace(profile, graph=graph)
 
 
-def test_ipakit_feature_value_round_trips_with_identical_bytes() -> None:
+def test_nested_domain_feature_value_round_trips_with_identical_bytes() -> None:
     """A nested feature value survives construction and the canonical wire."""
     expected = segment_value()
     graph, profile, root = json_value_graph(expected)

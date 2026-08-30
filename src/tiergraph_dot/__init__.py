@@ -291,8 +291,8 @@ def _sanitize_structural_id(name: str) -> str:
     """Map a tier name to a safe bare DOT identifier, verbatim when already safe.
 
     A name that is already a run of ASCII letters, digits, and underscores is
-    returned unchanged, so tiers whose long names satisfy that (every ipakit
-    tier) keep the ids they render today. Any other byte is escaped as
+    returned unchanged, so tiers with such long names keep the ids they render
+    today. Any other byte is escaped as
     ``_<hex>_`` so hyphens, spaces, and non-ASCII never produce an invalid or
     ambiguous identifier.
     """
@@ -308,8 +308,8 @@ def _sanitize_structural_id(name: str) -> str:
 def _structural_tier_ids(visible: tuple[tuple[int, Tier], ...]) -> list[str]:
     """Return one collision-free sanitized id per visible tier, in order.
 
-    Distinct sanitized names keep their sanitized form (so ipakit's distinct
-    long names are byte-identical to today); a collision is broken with a
+    Distinct sanitized names keep their sanitized form, preserving their bytes;
+    a collision is broken with a
     deterministic numeric suffix.
     """
     used: set[str] = set()
@@ -695,8 +695,8 @@ def _dumps_occupied_spine(
             )
 
     lines.extend(("", "  // Trigger every event from the clock position it occupies."))
-    # ipakit orders trigger edges by (coarse tick, tier declaration index, event
-    # index) -- the coarse tick, not the collapsed column, so an item placed in a
+    # Order trigger edges by (coarse tick, tier declaration index, event index):
+    # the coarse tick, not the collapsed column, so an item placed in a
     # refined gap still sorts with its tick. The edge source stays the item's own
     # collapsed column.
     triggers: list[tuple[int, int, int, str, str]] = []
