@@ -237,11 +237,11 @@ def test_validation_rejects_each_declared_json_construction() -> None:
     cases: list[tuple[dict[str, JsonValue], str]] = []
     missing = cast(dict[str, JsonValue], json.loads(json.dumps(valid)))
     del missing["graph"]
-    cases.append((missing, "document is missing field 'graph'"))
+    cases.append((missing, "document is missing fields ['graph']"))
 
     extra = cast(dict[str, JsonValue], json.loads(json.dumps(valid)))
     extra["extension"] = None
-    cases.append((extra, "document has unknown field 'extension'"))
+    cases.append((extra, "document has unknown fields ['extension']"))
 
     not_array = cast(dict[str, JsonValue], json.loads(json.dumps(valid)))
     cast(dict[str, JsonValue], not_array["graph"])["tiers"] = {}
@@ -478,7 +478,7 @@ def test_nested_declaration_change_moves_validator_parser_and_schema() -> None:
     try:
         document = to_data(rich_graph())
         assert validation_errors(document, FORMAT_VERSION) == [
-            "document.graph.tiers[0] is missing field 'extension'"
+            "document.graph.tiers[0] is missing fields ['extension']"
         ]
         tier_schema = cast(
             dict[str, JsonValue],
@@ -488,8 +488,60 @@ def test_nested_declaration_change_moves_validator_parser_and_schema() -> None:
         )
         assert "extension" in json.dumps(tier_schema)
         with pytest.raises(
-            ValueError, match="tiers\\[0\\] is missing field 'extension'"
+            ValueError, match="tiers\\[0\\] is missing fields \\['extension'\\]"
         ):
             loads(json.dumps(document))
     finally:
         object.__setattr__(TIER, "fields", original)
+
+
+def test_validation_errors_report_the_version_before_the_shape() -> None:
+    """REGRESSION: the validator names the version, not a field, on a foreign format.
+
+    The validator and the codec must agree on cause and not merely on
+    accept-or-refuse, so a document announcing a version this release does not
+    implement is reported for its version whatever else it carries.
+    """
+    document = to_data(rich_graph())
+    document["format_version"] = "7"
+    document["zz"] = 1
+    assert validation_errors(document, FORMAT_VERSION) == [
+        f"format_version '7' is unsupported; expected {FORMAT_VERSION!r}"
+    ]
+
+
+def test_validation_errors_ignore_a_non_string_version() -> None:
+    """CHARACTERIZATION: a non-string stamp is a type problem, not a version one.
+
+    An announced version is compared only when it is spelled as a string, so a
+    document carrying an integer stamp is told what is wrong with the stamp
+    rather than that some version is unsupported.
+    """
+    document = to_data(rich_graph())
+    document["format_version"] = 6
+    assert validation_errors(document, FORMAT_VERSION) == [
+        "document.format_version must be a string"
+    ]
+
+
+def test_validation_errors_on_a_non_object_document() -> None:
+    """CHARACTERIZATION: a non-object document is reported, not dereferenced."""
+    assert validation_errors("nope", FORMAT_VERSION) == ["document must be an object"]
+
+
+def test_schema_generation_refuses_a_foreign_format() -> None:
+    """REGRESSION: this release publishes the schema it implements and no other.
+
+    Generating a schema for a version this release does not implement would
+    label the current shape as another format, which the published statement
+    that a release implements exactly one format forbids.
+    """
+    with pytest.raises(ValueError) as refusal:
+        json_schema("5")
+    assert str(refusal.value) == (
+        f"format_version '5' is unsupported; expected {FORMAT_VERSION!r}; "
+        f"this release publishes only the schema for the format it implements"
+    )
+    identifier = json_schema(FORMAT_VERSION)["$id"]
+    assert isinstance(identifier, str)
+    assert identifier.endswith(f"format-{FORMAT_VERSION}.json")

@@ -391,3 +391,25 @@ def test_console_script_contract() -> None:
     assert version.returncode == 0
     assert version.stderr == ""
     assert set(json.loads(version.stdout)) == {"version"}
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/format.md"])
+def test_format_version_statement_is_present(document: str) -> None:
+    """PROSE GUARD: the published statement of the format version policy stands.
+
+    The refusal behavior and the statement are one deliverable: deleting the
+    statement is the one way to undo the policy without changing any code.
+    """
+    root = Path(__file__).resolve().parent.parent
+    prose = " ".join((root / document).read_text(encoding="utf-8").split())
+    assert "## Format versions" in (root / document).read_text(encoding="utf-8")
+    assert (
+        "A tiergraph document declares the format version it was written in. A "
+        "reader accepts documents of the version it implements and refuses any "
+        "other, naming the version it found and the one it expected."
+    ) in prose
+    assert (
+        "Documents are versioned interchange: they move data between tools that "
+        "agree on a version. They are not an archival format, and reading a "
+        "document written by a later release is not supported."
+    ) in prose

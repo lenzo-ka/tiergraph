@@ -46,3 +46,13 @@ Durable ids are canonical as-built content, not metadata. Promoting an item or
 an interior boundary therefore changes the canonical bytes and their SHA-256
 fingerprint. Ignoring durable identity would make fingerprints erase the very
 identifier consumers use to address an item across graphs.
+
+## Format versions
+
+A tiergraph document declares the format version it was written in. A reader
+accepts documents of the version it implements and refuses any other, naming
+the version it found and the one it expected.
+
+Documents are versioned interchange: they move data between tools that agree on
+a version. They are not an archival format, and reading a document written by a
+later release is not supported.

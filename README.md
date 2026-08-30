@@ -142,3 +142,13 @@ release, and remove it only in a later release. Security, correctness, or
 otherwise impractical compatibility constraints may require a faster change,
 which will be documented in the release. This is an intended post-1.0 policy,
 not a compatibility promise for the current alpha series.
+
+## Format versions
+
+A tiergraph document declares the format version it was written in. A reader
+accepts documents of the version it implements and refuses any other, naming
+the version it found and the one it expected.
+
+Documents are versioned interchange: they move data between tools that agree on
+a version. They are not an archival format, and reading a document written by a
+later release is not supported.

@@ -4236,7 +4236,7 @@ This module is importable and usable, but carries no API-stability promise at ve
 json_schema(format_version: 'str') -> 'dict[str, JsonValue]'
 ```
 
-Generate the JSON Schema document for one codec format version.
+Generate the JSON Schema document for the format this release implements.
 
 ### `shape_hash`
 

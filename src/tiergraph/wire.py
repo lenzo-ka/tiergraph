@@ -44,6 +44,7 @@ from tiergraph.schema import (
     ITEM_REFERENCE,
     TIER,
     TIER_DECLARATION,
+    _refuse_field_set,
     array_item,
     field_shape,
     object_fields,
@@ -179,13 +180,15 @@ def loads(document: str | bytes) -> Graph:
     except RecursionError as error:
         raise ValueError("parse JSON failed: document nesting is too deep") from error
     root = _object(value, "document")
-    _materialize_defaults(root, DOCUMENT)
-    _keys(root, object_fields(DOCUMENT), "document")
+    if "format_version" not in root:
+        raise ValueError("document is missing field 'format_version'")
     version = _string(root["format_version"], "format_version")
     if version != FORMAT_VERSION:
         raise ValueError(
             f"format_version {version!r} is unsupported; expected {FORMAT_VERSION!r}"
         )
+    _materialize_defaults(root, DOCUMENT)
+    _keys(root, object_fields(DOCUMENT), "document")
     return _graph(_object(root["graph"], "graph"))
 
 
@@ -450,12 +453,7 @@ def _relation_declaration(data: dict[str, object], index: int) -> RelationDeclar
 def _relation_side(value: object, path: str) -> RelationSideDeclaration:
     data = _object(value, path)
     expected = object_fields(DECLARATIONS["relation_side"])
-    missing = (expected - {"tiers"}) - data.keys()
-    extra = data.keys() - expected
-    if missing:
-        raise ValueError(f"{path} is missing field {min(missing)!r}")
-    if extra:
-        raise ValueError(f"{path} has unknown field {min(extra)!r}")
+    _refuse_field_set(data.keys(), expected, expected - {"tiers"}, path)
     kinds = _array(data["endpoint_kinds"], f"{path}.endpoint_kinds")
     tiers = None if "tiers" not in data else _array(data["tiers"], f"{path}.tiers")
     maximum = _integer(data["maximum"], f"{path}.maximum")
@@ -625,12 +623,7 @@ def _objects(value: object, path: str, keys: set[str]) -> list[dict[str, object]
 
 
 def _keys(data: dict[str, object], expected: set[str], path: str) -> None:
-    missing = expected - data.keys()
-    extra = data.keys() - expected
-    if missing:
-        raise ValueError(f"{path} is missing field {min(missing)!r}")
-    if extra:
-        raise ValueError(f"{path} has unknown field {min(extra)!r}")
+    _refuse_field_set(data.keys(), expected, expected, path)
 
 
 def _string(value: object, path: str) -> str:
