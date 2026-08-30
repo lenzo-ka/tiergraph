@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   product remain caller code in the Python API, so `--ranked` is the shell's
   route to witnesses. The action and react surface gets no command, because
   every part of it that matters is a caller-supplied callable.
+- `README.md` and `docs/format.md` now state the format version policy: a
+  document declares the format version it was written in, a reader accepts only
+  the version it implements and refuses any other by name, and documents are
+  versioned interchange rather than an archival format.
 
 ### Changed
 
@@ -86,6 +90,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contents against what the check reads, so the two cannot drift apart, and CI
   runs the check on every pull request instead of behind a path filter that
   could classify a shipped file as inert.
+- **BREAKING:** wire and schema refusals now name every missing field and every
+  unknown field in one message, rather than one lexically first name per
+  attempt. A document carrying two unknown fields reports both, so anyone
+  matching on the exact refusal text sees a different string.
+- **BREAKING:** `json_schema` and `tiergraph schema --format-version` now refuse
+  a format version this release does not implement, rather than printing the
+  current shape under another label. The flag's meaning changes from "print any
+  format's schema" to "assert which format you expect".
+- `loads` and `validation_errors` now decide `format_version` before they
+  consult the declared field set, so a document announcing a format this release
+  does not implement is refused for its version rather than for whichever field
+  name sorts first. `loads` also defers materializing omitted members until
+  after that decision, so a foreign-version document is no longer rewritten
+  toward this format's shape before the reader declines it.
 
 ### Removed
 

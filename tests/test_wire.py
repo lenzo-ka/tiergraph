@@ -842,7 +842,7 @@ def test_wire_shape_guards_name_their_paths() -> None:
 
     extra = mutable_document()
     extra["machine_version"] = "1"
-    cases.append((extra, "document has unknown field 'machine_version'"))
+    cases.append((extra, "document has unknown fields \\['machine_version'\\]"))
 
     not_object = mutable_document()
     not_object["graph"] = []
@@ -912,7 +912,7 @@ def test_relation_instance_refuses_unknown_field(document: object, index: int) -
     value = document()
     relations = cast(list[dict[str, object]], graph_data(value)["relations"])
     relations[-1]["bogus"] = 1
-    LAWS.check_refusal(rf"relations\[{index}\] has unknown field 'bogus'", value)
+    LAWS.check_refusal(rf"relations\[{index}\] has unknown fields \['bogus'\]", value)
 
 
 @pytest.mark.parametrize(
@@ -926,4 +926,111 @@ def test_relation_instance_refuses_missing_field(
     value = document()
     relations = cast(list[dict[str, object]], graph_data(value)["relations"])
     del relations[-1][required]
-    LAWS.check_refusal(rf"relations\[{index}\] is missing field '{required}'", value)
+    LAWS.check_refusal(
+        rf"relations\[{index}\] is missing fields \['{required}'\]", value
+    )
+
+
+def test_unsupported_version_is_reported_before_the_field_set() -> None:
+    """REGRESSION: a foreign version is named as the cause, not a field.
+
+    A document announcing a format this release does not implement is refused
+    for its version whatever else it carries, so a consumer holding a newer
+    document is told the version rather than whichever unknown field it
+    happens to carry.
+    """
+    for announced in ("7", "5"):
+        document = mutable_document()
+        document["format_version"] = announced
+        document["zz"] = 1
+        with pytest.raises(ValueError) as refusal:
+            loads(json.dumps(document))
+        assert str(refusal.value) == (
+            f"format_version {announced!r} is unsupported; expected {FORMAT_VERSION!r}"
+        )
+
+
+def test_every_unknown_document_field_is_named_in_one_refusal() -> None:
+    """REGRESSION: one attempt names every unknown field, not the first."""
+    document = mutable_document()
+    document["aa"] = 1
+    document["zz"] = 2
+    with pytest.raises(ValueError) as refusal:
+        loads(json.dumps(document))
+    assert str(refusal.value) == "document has unknown fields ['aa', 'zz']"
+
+
+def test_missing_and_unknown_fields_are_named_in_one_refusal() -> None:
+    """REGRESSION: both directions of the difference reach one message."""
+    document = mutable_document()
+    del document["graph"]
+    document["aa"] = 1
+    document["zz"] = 2
+    with pytest.raises(ValueError) as refusal:
+        loads(json.dumps(document))
+    assert str(refusal.value) == (
+        "document is missing fields ['graph'] and has unknown fields ['aa', 'zz']"
+    )
+
+
+def test_optional_relation_side_field_is_not_reported_as_missing() -> None:
+    """CHARACTERIZATION: an optional field is a difference in neither direction.
+
+    The relation side's `tiers` is declared and not required, so its absence is
+    neither missing nor unknown. This pins the `required` argument: passing the
+    declared set instead would report `tiers` as missing.
+    """
+    document = polyadic_document()
+    declarations = cast(
+        list[dict[str, object]], graph_data(document)["relation_declarations"]
+    )
+    side = cast(dict[str, object], declarations[1]["sources"])
+    side.pop("tiers", None)
+    side["zz"] = 1
+    with pytest.raises(ValueError) as refusal:
+        loads(json.dumps(document))
+    assert "tiers" not in str(refusal.value)
+
+
+def test_missing_format_version_is_not_reported_as_a_field_set_difference() -> None:
+    """CHARACTERIZATION: an unannounced version is not a field-set report.
+
+    Until the stamp is read the reader does not know which declared field set
+    applies, so it cannot honestly report a difference against this format's
+    set. The refusal names the stamp alone even though `graph` is also absent.
+    """
+    with pytest.raises(ValueError) as refusal:
+        loads("{}")
+    assert str(refusal.value) == "document is missing field 'format_version'"
+
+
+def test_unknown_field_values_never_reach_the_refusal() -> None:
+    """CHARACTERIZATION: a refusal names what was unknown, never what it held.
+
+    An unknown member carries arbitrary caller structure, so interpolating its
+    value into a diagnostic would make the refusal path a log-injection
+    surface.
+    """
+    document = mutable_document()
+    document["zz"] = {"deep": [1, 2, {"payload": "SECRET"}]}
+    with pytest.raises(ValueError) as refusal:
+        loads(json.dumps(document))
+    message = str(refusal.value)
+    for absent in ("deep", "payload", "SECRET"):
+        assert absent not in message
+
+
+def test_unknown_field_probe_family_denominator_is_pinned() -> None:
+    """CHARACTERIZATION: pin the family this workstream's claim runs over.
+
+    `undeclared_drifts` reports nothing when a mutation family stops being
+    generated, so the family's disappearance is invisible to the conformance
+    file. The denominator is the only thing that can notice it.
+    """
+    from tests.conformance.schema_codec import conformance_probes
+    from tests.test_schema_codec_conformance import _seeds
+    from tiergraph.schema import DOCUMENT
+
+    probes = conformance_probes(_seeds(), DOCUMENT)
+    unknown = [probe for probe in probes if probe.mutation == "unknown-field"]
+    assert len(unknown) == 85

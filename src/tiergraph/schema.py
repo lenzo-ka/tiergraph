@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
@@ -292,6 +293,45 @@ def _mark_omittable_fields(shape: Shape, seen: set[int] | None = None) -> None:
 _mark_omittable_fields(DOCUMENT)
 
 
+def _field_set_refusal(
+    actual: AbstractSet[str],
+    declared: AbstractSet[str],
+    required: AbstractSet[str],
+    path: str,
+) -> str | None:
+    """Return one refusal naming every missing and every unknown field, or None.
+
+    Both directions are named in a single message so a consumer holding a
+    document this reader cannot read learns the whole difference from one
+    attempt rather than one lexically first name per attempt.  A declared field
+    that is not required is absent from both lists, so an optional field is
+    never reported as missing.
+    """
+    missing = sorted(required - actual)
+    unknown = sorted(actual - declared)
+    if missing and unknown:
+        return (
+            f"{path} is missing fields {missing!r} and has unknown fields {unknown!r}"
+        )
+    if missing:
+        return f"{path} is missing fields {missing!r}"
+    if unknown:
+        return f"{path} has unknown fields {unknown!r}"
+    return None
+
+
+def _refuse_field_set(
+    actual: AbstractSet[str],
+    declared: AbstractSet[str],
+    required: AbstractSet[str],
+    path: str,
+) -> None:
+    """Refuse an object whose field set is not the declared one."""
+    message = _field_set_refusal(actual, declared, required, path)
+    if message is not None:
+        raise ValueError(message)
+
+
 def object_fields(shape: Shape) -> set[str]:
     """Return parser metadata for an object declaration."""
     if shape.kind is not ShapeKind.OBJECT:
@@ -339,7 +379,15 @@ def shape_hash() -> str:
 
 
 def json_schema(format_version: str) -> dict[str, JsonValue]:
-    """Generate the JSON Schema document for one codec format version."""
+    """Generate the JSON Schema document for the format this release implements."""
+    from tiergraph.wire import FORMAT_VERSION
+
+    if format_version != FORMAT_VERSION:
+        raise ValueError(
+            f"format_version {format_version!r} is unsupported; expected "
+            f"{FORMAT_VERSION!r}; this release publishes only the schema for "
+            f"the format it implements"
+        )
     return json_schema_for(DOCUMENT, DECLARATIONS, format_version)
 
 
@@ -380,16 +428,22 @@ def json_schema_for(
 
 def validation_errors(value: object, format_version: str) -> list[str]:
     """Return deterministic structural errors derived from the wire declaration."""
-    errors = _validation_errors(value, DOCUMENT, "document")
-    if (
-        not errors
-        and cast(dict[str, object], value)["format_version"] != format_version
-    ):
-        errors.append(
-            f"format_version {cast(dict[str, object], value)['format_version']!r} "
-            f"is unsupported; expected {format_version!r}"
-        )
-    return errors
+    declared = _declared_format_version(value)
+    if declared is not None and declared != format_version:
+        return [
+            f"format_version {declared!r} is unsupported; expected {format_version!r}"
+        ]
+    return _validation_errors(value, DOCUMENT, "document")
+
+
+def _declared_format_version(value: object) -> str | None:
+    """Return the announced version, or None when none is declared as a string."""
+    if not isinstance(value, dict):
+        return None
+    announced = value.get("format_version")
+    if not isinstance(announced, str):
+        return None
+    return announced
 
 
 def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
@@ -412,13 +466,11 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
             isinstance(key, str) for key in value
         ):
             return [f"{path} must be an object"]
-        expected = object_fields(shape)
-        missing = required_object_fields(shape) - value.keys()
-        extra = value.keys() - expected
-        if missing:
-            return [f"{path} is missing field {min(missing)!r}"]
-        if extra:
-            return [f"{path} has unknown field {min(extra)!r}"]
+        message = _field_set_refusal(
+            value.keys(), object_fields(shape), required_object_fields(shape), path
+        )
+        if message is not None:
+            return [message]
         for field in shape.fields:
             if field.name not in value:
                 continue
