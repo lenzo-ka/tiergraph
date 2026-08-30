@@ -92,13 +92,38 @@ def verdict(
 # --- the released tree itself -------------------------------------------------
 
 
-def test_the_committed_schema_still_grows() -> None:
-    """REGRESSION. Predict pass: main is byte-identical to the released schema.
+PRICED_BREAKS = (
+    "/properties/graph/properties/attribute_declarations/items/properties/domain: "
+    'the value "position" was dropped',
+)
 
-    This is the gate running against the real repository and its real tag, so a
-    green run here is the claim that the shipped wire format has not shrunk.
+
+def test_the_committed_schema_reports_only_the_break_this_release_priced(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """REGRESSION. Predict the reported breaks are exactly the ones paid for.
+
+    This is the gate running against the real repository and its real tag. It
+    deliberately does not assert on the exit status alone. Once ``__version__``
+    advanced past the released line, an unreleased line has no baseline it can
+    be held to, so the gate prints its findings and returns zero whether or not
+    the format shrank -- and an assertion on the status would hold just as well
+    over a schema that had lost half its vocabulary. The claim that survives the
+    permissive window is the *set* of breaks, which is exactly the one this
+    release spent a version position on.
+
+    The window closes by itself: tagging v0.2.0 gives the line a baseline and
+    the gate refuses again, at which point a status assertion means something
+    once more.
     """
-    assert growth.main() == 0
+    status = growth.main()
+    printed = capsys.readouterr()
+    reported = tuple(
+        line.strip()
+        for line in (printed.out + printed.err).splitlines()
+        if line.startswith("  ")
+    )
+    assert (status, reported) == (0, PRICED_BREAKS)
 
 
 def test_the_walk_reaches_every_definition() -> None:
@@ -311,9 +336,18 @@ def _plan_a_durable_item_arm(document: dict[str, Any]) -> None:
         polyadic[side]["items"]["oneOf"].append(dict(arm))
 
 
-def _plan_separately_held_layers(document: dict[str, Any]) -> None:
-    """Add an optional layer collection the graph holds apart from its tiers."""
-    document["$defs"]["layer"] = {
+def _add_a_held_apart_collection(document: dict[str, Any]) -> None:
+    """Add an optional collection the graph holds apart from its tiers.
+
+    This once added ``layers``, which has since landed, and applying it to the
+    shipped schema would now overwrite the real definition with a poorer one --
+    a shrink, refused, for a reason having nothing to do with what is being
+    checked. It uses a name the schema does not carry instead, because the
+    subject is the *shape*: whether the gate reads a new optional collection as
+    growth. Deleting the body rather than renaming it would leave a case that
+    mutates nothing and therefore cannot fail.
+    """
+    document["$defs"]["annotation_set"] = {
         "additionalProperties": False,
         "properties": {
             "name": {
@@ -325,23 +359,28 @@ def _plan_separately_held_layers(document: dict[str, Any]) -> None:
         "required": ["name"],
         "type": "object",
     }
-    document["properties"]["graph"]["properties"]["layers"] = {
-        "items": {"$ref": "#/$defs/layer"},
+    document["properties"]["graph"]["properties"]["annotation_sets"] = {
+        "items": {"$ref": "#/$defs/annotation_set"},
         "type": "array",
     }
 
 
-def _plan_a_source_axis(document: dict[str, Any]) -> None:
-    """Add a source axis to layers and let an attribute be declared over one."""
-    _plan_separately_held_layers(document)
-    document["$defs"]["layer"]["properties"]["source"] = {
+def _add_a_source_axis_and_widen_a_domain(document: dict[str, Any]) -> None:
+    """Give that collection a source axis and admit one more domain value.
+
+    Two growths at once, and the second is the one worth keeping: adding a
+    member to an enum admits documents the old vocabulary could not spell, so a
+    gate that read enum changes as narrowing in both directions would refuse it.
+    """
+    _add_a_held_apart_collection(document)
+    document["$defs"]["annotation_set"]["properties"]["source"] = {
         "minLength": 1,
         "type": "string",
     }
     domain = document["properties"]["graph"]["properties"]["attribute_declarations"][
         "items"
     ]["properties"]["domain"]
-    domain["enum"] = [*domain["enum"], "layer"]
+    domain["enum"] = [*domain["enum"], "annotation"]
 
 
 def _loosen_constraints(document: dict[str, Any]) -> None:
@@ -366,8 +405,8 @@ def _widen_a_union(document: dict[str, Any]) -> None:
     [
         _plan_a_seal,
         _plan_a_durable_item_arm,
-        _plan_separately_held_layers,
-        _plan_a_source_axis,
+        _add_a_held_apart_collection,
+        _add_a_source_axis_and_widen_a_domain,
         _loosen_constraints,
         _open_a_closed_object,
     ],
@@ -387,19 +426,22 @@ def test_an_additive_change_passes(
     assert (status, output, errors) == (0, "", "")
 
 
-def test_the_four_planned_changes_pass_together(
+def test_the_additive_shapes_pass_together(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """REGRESSION. Predict pass: the release's four changes are jointly additive.
+    """REGRESSION. Predict pass: the additive shapes are jointly additive.
 
-    Applied one at a time they could each pass while interacting badly. This
-    applies all four to one schema.
+    Applied one at a time they could each pass while interacting badly, so they
+    are applied to one schema together. The count is not named in the title on
+    purpose: it was once four, the release's own planned changes, and a title
+    carrying a number goes stale the moment the list moves while still reading
+    as though it were checked.
     """
 
     def change(document: dict[str, Any]) -> None:
         _plan_a_seal(document)
         _plan_a_durable_item_arm(document)
-        _plan_a_source_axis(document)
+        _add_a_source_axis_and_widen_a_domain(document)
 
     status, output, errors = verdict(tmp_path, change, capsys)
     assert (status, output, errors) == (0, "", "")

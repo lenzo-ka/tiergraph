@@ -21,22 +21,36 @@ from tiergraph import (
     Boundary,
     BoundaryRef,
     BoundarySide,
+    Consensus,
+    Delivery,
+    DocumentRef,
     DurableBoundaryRef,
     DurableItemRef,
+    DurablePolyadicRef,
+    DurableRelationRef,
     Graph,
     GraphValidationError,
     Item,
     ItemRef,
+    Layer,
+    LayerFact,
+    LayerName,
+    LayerRead,
     NamespaceDeclaration,
+    OrphanedSubject,
+    PolyadicInstanceRef,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
+    RelationDeclarationRef,
     RelationEndpointKind,
     RelationInstance,
+    RelationInstanceRef,
     RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    TierRef,
     XsdType,
     dump_bytes,
     dump_compact,
@@ -1072,3 +1086,510 @@ def test_unknown_field_probe_family_denominator_is_pinned() -> None:
     probes = conformance_probes(_seeds(), DOCUMENT)
     unknown = [probe for probe in probes if probe.mutation == "unknown-field"]
     assert len(unknown) == 85
+
+
+LAYER_NS = "urn:layer-test"
+VOCAB = "urn:layer-gloss"
+
+
+def q(local: str) -> QualifiedName:
+    return QualifiedName(
+        LAYER_NS if local in {"words", "member", "links", "poly", "token"} else VOCAB,
+        local,
+    )
+
+
+WORDS = q("words")
+MEMBER = q("member")
+LINKS = q("links")
+TOKEN = q("token")
+NAMES = {domain: q(domain.value) for domain in AttributeDomain}
+SOURCE_A = LayerName(VOCAB, "reader-a")
+SOURCE_B = LayerName(VOCAB, "reader-b")
+
+
+def value(domain: AttributeDomain, lexical: str) -> AttributeValue:
+    return AttributeValue(NAMES[domain], XsdType.STRING, lexical)
+
+
+def graph_with_layers(*layers: Layer, seal: int | None = None) -> Graph:
+    declarations = tuple(
+        AttributeDeclaration(NAMES[domain], domain, XsdType.STRING)
+        for domain in AttributeDomain
+    )
+    relation_declarations = (
+        SimpleRelationDeclaration(MEMBER, WORDS, TOKEN),
+        BipartiteRelationDeclaration(
+            LINKS, TOKEN, TOKEN, RelationEndpointKind.ITEM, RelationEndpointKind.ITEM
+        ),
+    )
+    return (
+        Graph(
+            (NamespaceDeclaration("o", LAYER_NS), NamespaceDeclaration("g", VOCAB)),
+            (Tier(TierDeclaration(WORDS, "Words"), (Item("w0"), Item("w1"))),),
+            relation_declarations,
+            (RelationInstance(LINKS, ItemRef(WORDS, 0), ItemRef(WORDS, 1), "r0"),),
+            declarations,
+            seals=() if seal is None else (),
+            layers=layers,
+        ).seal(WORDS, seal)
+        if seal is not None
+        else Graph(
+            (NamespaceDeclaration("o", LAYER_NS), NamespaceDeclaration("g", VOCAB)),
+            (Tier(TierDeclaration(WORDS, "Words"), (Item("w0"), Item("w1"))),),
+            relation_declarations,
+            (RelationInstance(LINKS, ItemRef(WORDS, 0), ItemRef(WORDS, 1), "r0"),),
+            declarations,
+            layers=layers,
+        )
+    )
+
+
+def six_domain_layer(name: LayerName = SOURCE_A) -> Layer:
+    return Layer(
+        name,
+        (
+            LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "item")),
+            LayerFact(TierRef(WORDS), value(AttributeDomain.TIER, "tier")),
+            LayerFact(
+                RelationDeclarationRef(LINKS),
+                value(AttributeDomain.RELATION_DECLARATION, "declaration"),
+            ),
+            LayerFact(
+                RelationInstanceRef(0),
+                value(AttributeDomain.RELATION_INSTANCE, "instance"),
+            ),
+            LayerFact(
+                BoundaryRef(WORDS, 1), value(AttributeDomain.BOUNDARY, "boundary")
+            ),
+            LayerFact(DocumentRef(), value(AttributeDomain.DOCUMENT, "document")),
+        ),
+    )
+
+
+# REGRESSION: predicted FAIL against the parent because the layer API is absent.
+def test_two_sources_and_first_last_all_are_distinct() -> None:
+    first = Layer(
+        SOURCE_A, (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "a")),)
+    )
+    last = Layer(
+        SOURCE_B, (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "b")),)
+    )
+    graph = graph_with_layers(first, last)
+    subject = ItemRef(WORDS, 0)
+    deliveries = {read: Delivery((SOURCE_A, SOURCE_B), read) for read in LayerRead}
+    answers = {
+        read: tuple(
+            item.lexical
+            for item in graph.layer_values(
+                subject, NAMES[AttributeDomain.ITEM], delivery
+            )
+        )
+        for read, delivery in deliveries.items()
+    }
+    assert answers == {
+        LayerRead.FIRST: ("a",),
+        LayerRead.LAST: ("b",),
+        LayerRead.ALL: ("a", "b"),
+    }
+    assert len(graph.layers) == 2
+    with pytest.raises(GraphValidationError, match="duplicate attribute value"):
+        Graph(
+            graph.namespaces,
+            (
+                Tier(
+                    TierDeclaration(WORDS, "Words"),
+                    (
+                        Item(
+                            "w0",
+                            (
+                                value(AttributeDomain.ITEM, "a"),
+                                value(AttributeDomain.ITEM, "b"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            graph.relation_declarations,
+            attribute_declarations=graph.attribute_declarations,
+        )
+
+
+# REGRESSION: predicted FAIL against the parent because the layer API is absent.
+def test_all_six_domains_read_back() -> None:
+    layer = six_domain_layer()
+    graph = graph_with_layers(layer)
+    delivery = Delivery((SOURCE_A,), LayerRead.ALL)
+    for fact in layer.facts:
+        assert graph.layer_values(fact.subject, fact.value.name, delivery) == (
+            fact.value,
+        )
+
+
+# REGRESSION: predicted FAIL against the parent because consensus is absent.
+def test_consensus_and_disagreements() -> None:
+    subject = ItemRef(WORDS, 0)
+    left = Layer(SOURCE_A, (LayerFact(subject, value(AttributeDomain.ITEM, "same")),))
+    same = Layer(SOURCE_B, (LayerFact(subject, value(AttributeDomain.ITEM, "same")),))
+    delivery = Delivery((SOURCE_A, SOURCE_B), LayerRead.ALL)
+    agreed = graph_with_layers(left, same)
+    assert agreed.consensus(subject, NAMES[AttributeDomain.ITEM], delivery).agreed
+    assert agreed.disagreements(delivery) == ()
+    different = graph_with_layers(
+        left,
+        Layer(SOURCE_B, (LayerFact(subject, value(AttributeDomain.ITEM, "other")),)),
+    )
+    reports = different.disagreements(delivery)
+    assert reports == (
+        Consensus(
+            subject,
+            NAMES[AttributeDomain.ITEM],
+            (
+                (SOURCE_A, value(AttributeDomain.ITEM, "same")),
+                (SOURCE_B, value(AttributeDomain.ITEM, "other")),
+            ),
+            False,
+        ),
+    )
+
+
+# REGRESSION: predicted FAIL against the parent because layers cannot be orphaned.
+def test_removal_orphans_fact_and_flatten_refuses() -> None:
+    layer = Layer(
+        SOURCE_A, (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "gone")),)
+    )
+    graph = graph_with_layers(layer)
+    # Remove the relation first: structural references still veto their target.
+    with pytest.raises(GraphValidationError, match="still references"):
+        graph.remove_item(ItemRef(WORDS, 0))
+    edited = graph.remove_relation(0).remove_item(ItemRef(WORDS, 0))
+    orphan = edited.layers[0].facts[0].subject
+    assert isinstance(orphan, OrphanedSubject)
+    assert orphan.carrier == WORDS
+    assert orphan.was == ItemRef(WORDS, 0)
+    assert (
+        edited.layer_values(
+            ItemRef(WORDS, 0),
+            NAMES[AttributeDomain.ITEM],
+            Delivery((SOURCE_A,), LayerRead.ALL),
+        )
+        == ()
+    )
+    with pytest.raises(
+        GraphValidationError, match="delivery cannot be flattened.*orphaned from"
+    ):
+        edited.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+
+
+# REGRESSION: predicted FAIL against the parent because layers and seals cannot coexist there.
+def test_seal_vetoes_even_where_layer_would_allow_edit() -> None:
+    layer = Layer(
+        SOURCE_A, (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "x")),)
+    )
+    graph = graph_with_layers(layer, seal=1)
+    with pytest.raises(GraphValidationError, match="seal on that tier"):
+        graph.insert_item(WORDS, 0, Item("new"))
+
+
+# CHARACTERIZATION plus REGRESSION: omission preserves old bytes; populated layers round-trip.
+def test_layerless_omission_and_layer_round_trip() -> None:
+    layerless = graph_with_layers()
+    assert "layers" not in cast(dict[str, object], to_data(layerless)["graph"])
+    layered = graph_with_layers(six_domain_layer())
+    assert loads(dumps(layered)) == layered
+    assert json.loads(dumps(layered))["graph"]["layers"]
+
+
+# REGRESSION: validation failures remain attributed to layer values and subjects.
+def test_layer_validation_refusals() -> None:
+    graph = graph_with_layers()
+    item = ItemRef(WORDS, 0)
+    good = value(AttributeDomain.ITEM, "x")
+    cases = (
+        (
+            Layer(
+                LayerName(VOCAB, "source"),
+                (LayerFact(item, good), LayerFact(item, good)),
+            ),
+            "states.*twice",
+        ),
+        (
+            Layer(LayerName(LAYER_NS, "source"), (LayerFact(item, good),)),
+            "named vocabulary",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        item,
+                        AttributeValue(
+                            QualifiedName(VOCAB, "missing"), XsdType.STRING, "x"
+                        ),
+                    ),
+                ),
+            ),
+            "undeclared",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        item,
+                        AttributeValue(
+                            NAMES[AttributeDomain.ITEM], XsdType.BOOLEAN, "true"
+                        ),
+                    ),
+                ),
+            ),
+            "requires string",
+        ),
+        (
+            Layer(SOURCE_A, (LayerFact(TierRef(WORDS), good),)),
+            "declared for the item domain",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        TierRef(QualifiedName(LAYER_NS, "missing")),
+                        value(AttributeDomain.TIER, "x"),
+                    ),
+                ),
+            ),
+            "undeclared tier",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        RelationDeclarationRef(QualifiedName(LAYER_NS, "missing")),
+                        value(AttributeDomain.RELATION_DECLARATION, "x"),
+                    ),
+                ),
+            ),
+            "undeclared relation",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        RelationInstanceRef(9),
+                        value(AttributeDomain.RELATION_INSTANCE, "x"),
+                    ),
+                ),
+            ),
+            "relation index 9",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        PolyadicInstanceRef(0),
+                        value(AttributeDomain.RELATION_INSTANCE, "x"),
+                    ),
+                ),
+            ),
+            "polyadic relation index 0",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        DurableRelationRef("missing"),
+                        value(AttributeDomain.RELATION_INSTANCE, "x"),
+                    ),
+                ),
+            ),
+            "unknown durable relation",
+        ),
+        (
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        DurablePolyadicRef("missing"),
+                        value(AttributeDomain.RELATION_INSTANCE, "x"),
+                    ),
+                ),
+            ),
+            "unknown durable polyadic",
+        ),
+    )
+    for layer, message in cases:
+        with pytest.raises(GraphValidationError, match=message):
+            replace(graph, layers=(layer,))
+
+
+# REGRESSION: delivery errors and flatten ambiguity are explicit refusals.
+def test_delivery_and_flatten_refusals_and_promotion() -> None:
+    fact = LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "a"))
+    graph = graph_with_layers(Layer(SOURCE_A, (fact,)))
+    with pytest.raises(GraphValidationError, match="names no layers"):
+        graph.layer_values(fact.subject, fact.value.name, Delivery((), LayerRead.ALL))
+    with pytest.raises(GraphValidationError, match="twice"):
+        graph.layer_values(
+            fact.subject, fact.value.name, Delivery((SOURCE_A, SOURCE_A), LayerRead.ALL)
+        )
+    with pytest.raises(GraphValidationError, match="does not hold"):
+        graph.layer_values(
+            fact.subject, fact.value.name, Delivery((SOURCE_B,), LayerRead.ALL)
+        )
+    other = Layer(
+        SOURCE_B, (LayerFact(fact.subject, value(AttributeDomain.ITEM, "b")),)
+    )
+    with pytest.raises(GraphValidationError, match="both state"):
+        graph_with_layers(graph.layers[0], other).flatten(
+            Delivery((SOURCE_A, SOURCE_B), LayerRead.ALL)
+        )
+    flattened = graph.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+    assert flattened.layers == ()
+    assert flattened.tiers[0].items[0].attributes == (fact.value,)
+    assert graph.promotion(WORDS)
+    assert not replace(
+        graph,
+        tiers=(Tier(TierDeclaration(WORDS, "Words"), (Item(), Item("w1"))),),
+    ).promotion(WORDS)
+    with pytest.raises(ValueError, match="undeclared tier"):
+        graph.promotion(QualifiedName(LAYER_NS, "missing"))
+
+
+# REGRESSION: durable subjects and relation orphans retain every wire arm.
+def test_durable_subjects_and_relation_orphan_round_trip() -> None:
+    subjects = (
+        DurableItemRef("w0"),
+        DurableBoundaryRef(DurableItemRef("w1"), BoundarySide.BEFORE),
+        DurableRelationRef("r0"),
+    )
+    facts = (
+        LayerFact(subjects[0], value(AttributeDomain.ITEM, "item")),
+        LayerFact(subjects[1], value(AttributeDomain.BOUNDARY, "boundary")),
+        LayerFact(subjects[2], value(AttributeDomain.RELATION_INSTANCE, "relation")),
+    )
+    graph = graph_with_layers(Layer(SOURCE_A, facts))
+    assert loads(dumps(graph)) == graph
+    indexed = replace(
+        graph,
+        layers=(Layer(SOURCE_A, (LayerFact(RelationInstanceRef(0), facts[2].value),)),),
+    )
+    orphaned = indexed.remove_relation(0)
+    orphan = orphaned.layers[0].facts[0].subject
+    assert isinstance(orphan, OrphanedSubject)
+    assert loads(dumps(orphaned)) == orphaned
+    assert (
+        orphaned.layer_values(
+            orphan, facts[2].value.name, Delivery((SOURCE_A,), LayerRead.ALL)
+        )
+        == ()
+    )
+
+
+# REGRESSION: flatten reaches every non-item edit target and polyadic subjects.
+def test_flatten_six_domains_and_polyadic_subjects() -> None:
+    graph = graph_with_layers(six_domain_layer())
+    flattened = graph.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+    assert flattened.attributes[0].lexical == "document"
+    assert flattened.tiers[0].attributes[0].lexical == "tier"
+    assert flattened.relations[0].attributes[0].lexical == "instance"
+
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORDS,))
+    poly_name = q("poly")
+    declaration = PolyadicRelationDeclaration(poly_name, side, side)
+    instance = PolyadicRelationInstance(
+        poly_name, (ItemRef(WORDS, 0),), (ItemRef(WORDS, 1),), "p0"
+    )
+    base = graph_with_layers()
+    poly = replace(
+        base,
+        relation_declarations=(*base.relation_declarations, declaration),
+        polyadic_relations=(instance,),
+        layers=(
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        PolyadicInstanceRef(0),
+                        value(AttributeDomain.RELATION_INSTANCE, "p"),
+                    ),
+                    LayerFact(
+                        DurablePolyadicRef("p0"),
+                        AttributeValue(
+                            QualifiedName(VOCAB, "other-instance"), XsdType.STRING, "d"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        attribute_declarations=(
+            *base.attribute_declarations,
+            AttributeDeclaration(
+                QualifiedName(VOCAB, "other-instance"),
+                AttributeDomain.RELATION_INSTANCE,
+                XsdType.STRING,
+            ),
+        ),
+    )
+    assert loads(dumps(poly)) == poly
+    assert (
+        poly.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+        .polyadic_relations[0]
+        .attributes
+    )
+    departed = poly.remove_relation("p0")
+    assert all(
+        isinstance(fact.subject, OrphanedSubject) for fact in departed.layers[0].facts
+    )
+    no_id_instance = replace(instance, durable_id=None)
+    no_id = replace(
+        poly,
+        polyadic_relations=(no_id_instance,),
+        layers=(
+            Layer(
+                SOURCE_A,
+                (
+                    LayerFact(
+                        PolyadicInstanceRef(0),
+                        value(AttributeDomain.RELATION_INSTANCE, "p"),
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="without durable relation identity"):
+        no_id.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+
+
+# REGRESSION: orphan boundary wire and discriminator paths are explicit.
+def test_boundary_orphan_wire_and_unknown_layer_subject() -> None:
+    orphan = OrphanedSubject(WORDS, BoundaryRef(WORDS, 1))
+    graph = graph_with_layers(
+        Layer(SOURCE_A, (LayerFact(orphan, value(AttributeDomain.BOUNDARY, "old")),))
+    )
+    assert loads(dumps(graph)) == graph
+    document = json.loads(dumps(graph_with_layers(six_domain_layer())))
+    document["graph"]["layers"][0]["facts"][0]["subject"] = {"kind": "unknown"}
+    with pytest.raises(Refusal, match="unsupported"):
+        loads(json.dumps(document))
+    live = graph_with_layers(
+        Layer(
+            SOURCE_A,
+            (
+                LayerFact(BoundaryRef(WORDS, 0), value(AttributeDomain.BOUNDARY, "a")),
+                LayerFact(
+                    BoundaryRef(WORDS, 1),
+                    value(AttributeDomain.BOUNDARY, "b"),
+                ),
+            ),
+        )
+    )
+    restructured = live.remove_relation(0).remove_item(ItemRef(WORDS, 0))
+    assert any(
+        isinstance(fact.subject, OrphanedSubject)
+        for fact in restructured.layers[0].facts
+    )
