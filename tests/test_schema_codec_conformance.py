@@ -22,7 +22,7 @@ from tests.test_wire import (
 )
 from tiergraph import wire as wire_module
 from tiergraph.core import JsonValue
-from tiergraph.schema import DOCUMENT, STRING, TIER, Field
+from tiergraph.schema import DOCUMENT, QUALIFIED_NAME, STRING, TIER, Field
 from tiergraph.wire import to_data
 
 
@@ -218,8 +218,6 @@ def test_harness_rediscovers_missing_nonempty_facets() -> None:
     original = DOCUMENT.fields
     # QUALIFIED_NAME is shared below DOCUMENT; mutate its fields through a realized
     # reference obtained from the declaration rather than special-casing a path.
-    from tiergraph.schema import QUALIFIED_NAME
-
     qualified_original = (QUALIFIED_NAME.pattern, QUALIFIED_NAME.min_length)
     object.__setattr__(QUALIFIED_NAME, "pattern", None)
     object.__setattr__(QUALIFIED_NAME, "min_length", None)

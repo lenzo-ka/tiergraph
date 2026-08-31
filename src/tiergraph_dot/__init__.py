@@ -10,6 +10,7 @@ independently installable renderer.
 
 from __future__ import annotations
 
+import itertools
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -172,7 +173,7 @@ def dumps(
                 f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
                 f'group="time_{index}", label="{_coordinate_label(coordinate)}"];'
             )
-        for left, right in zip(clock_ids, clock_ids[1:], strict=False):
+        for left, right in itertools.pairwise(clock_ids):
             lines.append(f"    {left} -> {right} [weight={_SPINE_WEIGHT}];")
         lines.append("  }")
 
@@ -229,7 +230,7 @@ def dumps(
                     f'label="{label}"];'
                 )
             slots.append(slot)
-        for left, right in zip(slots, slots[1:], strict=False):
+        for left, right in itertools.pairwise(slots):
             lines.append(
                 f"    {left} -> {right} [style=invis, weight={_SPINE_WEIGHT}];"
             )
@@ -259,7 +260,7 @@ def dumps(
     if clock is not None or tier_labels:
         lines.extend(("", "  // The score brace joins rows in tier order."))
         row_anchors = (["score_start_clock"] if clock is not None else []) + tier_labels
-        for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
+        for upper, lower in itertools.pairwise(row_anchors):
             lines.append(
                 f'  {upper} -> {lower} [dir=none, color="{_BRACE_COLOR}", penwidth=2.4, weight={_SPINE_WEIGHT}];'
             )
@@ -273,7 +274,7 @@ def dumps(
                     tier.declaration.name
                 ):
                     column.append(row_slots[boundary_index])
-            for upper, lower in zip(column, column[1:], strict=False):
+            for upper, lower in itertools.pairwise(column):
                 lines.append(
                     f"  {upper} -> {lower} [style=invis, weight={_COLUMN_WEIGHT}, arrowhead=none];"
                 )
@@ -583,12 +584,14 @@ def _dumps_occupied_spine(
 
     lines.extend(("", "  // The clock spine is the total order.", "  { rank=same;"))
     lines.append('    score_start_clock [shape=plaintext, label="clock"];')
-    for index in range(column_count):
-        lines.append(
+    lines.extend(
+        (
             f"    {clock_ids[index]} [shape=circle, width=0.46, fixedsize=true, "
             f'group="time_{index}", label="{clock_labels[index]}"];'
         )
-    for left, right in zip(clock_ids, clock_ids[1:], strict=False):
+        for index in range(column_count)
+    )
+    for left, right in itertools.pairwise(clock_ids):
         lines.append(f"    {left} -> {right} [weight={_SPINE_WEIGHT}];")
     lines.append("  }")
 
@@ -665,7 +668,7 @@ def _dumps_occupied_spine(
                     f"    guide_{safe_id}_{column} [shape=point, width=0.01, "
                     f'label="", group="time_{column}", style=invis];'
                 )
-        for left, right in zip(anchors, anchors[1:], strict=False):
+        for left, right in itertools.pairwise(anchors):
             lines.append(
                 f"    {left} -> {right} [style=invis, weight={_SPINE_WEIGHT}];"
             )
@@ -690,7 +693,7 @@ def _dumps_occupied_spine(
 
     lines.extend(("", "  // The score brace joins lane starts in declaration order."))
     row_anchors = ["score_start_clock", *tier_labels]
-    for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
+    for upper, lower in itertools.pairwise(row_anchors):
         lines.append(
             f'  {upper} -> {lower} [dir=none, color="{_BRACE_COLOR}", penwidth=2.4, weight={_SPINE_WEIGHT}];'
         )
@@ -698,7 +701,7 @@ def _dumps_occupied_spine(
     lines.extend(("", "  // Register every lane to the clock's time columns."))
     for column in range(column_count):
         chain = [clock_ids[column], *(anchors[column] for anchors in tier_anchor_lists)]
-        for upper, lower in zip(chain, chain[1:], strict=False):
+        for upper, lower in itertools.pairwise(chain):
             lines.append(
                 f"  {upper} -> {lower} [style=invis, weight={_COLUMN_WEIGHT}, arrowhead=none];"
             )
@@ -979,12 +982,17 @@ def _quote(value: str, field: str) -> str:
     Unicode surrogates are refused. They have no faithful, portable Graphviz
     label representation. Nothing is silently stripped or replaced.
     """
+    c0_control_limit = 0x20
+    delete_codepoint = 0x7F
+    c1_control_limit = 0x9F
+    surrogate_minimum = 0xD800
+    surrogate_maximum = 0xDFFF
     for character in value:
         codepoint = ord(character)
         if (
-            (codepoint < 0x20 and character != "\n")
-            or 0x7F <= codepoint <= 0x9F
-            or 0xD800 <= codepoint <= 0xDFFF
+            (codepoint < c0_control_limit and character != "\n")
+            or delete_codepoint <= codepoint <= c1_control_limit
+            or surrogate_minimum <= codepoint <= surrogate_maximum
         ):
             raise ValueError(
                 f"DOT cannot render {field} value {value!r}: unsupported character "

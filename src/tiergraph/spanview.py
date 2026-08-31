@@ -407,14 +407,16 @@ def to_jsonl(
                 }
             )
         else:
-            for span in view.spans:
-                records.append(
+            records.extend(
+                (
                     {
                         "input": index,
                         "version": SPANVIEW_FORMAT_VERSION,
                         **_span_data(span, alternatives),
                     }
                 )
+                for span in view.spans
+            )
     return "".join(
         json.dumps(
             value,
@@ -536,14 +538,14 @@ def to_html(view: SpanView, *, alternatives: bool = False) -> str:
 
 
 __all__ = [
-    "SpanViewProfile",
-    "SpanView",
+    "SPANVIEW_FORMAT_VERSION",
     "Span",
     "SpanAlternative",
+    "SpanView",
+    "SpanViewProfile",
     "span_view",
+    "to_html",
     "to_json",
     "to_jsonl",
     "to_text",
-    "to_html",
-    "SPANVIEW_FORMAT_VERSION",
 ]

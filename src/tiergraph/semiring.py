@@ -502,7 +502,8 @@ class ProductSemiring[T, U]:
 
     def decode(self, value: object, /) -> tuple[T, U]:
         """Decode a two-component JSON array."""
-        if not isinstance(value, list) or len(value) != 2:
+        product_component_count = 2
+        if not isinstance(value, list) or len(value) != product_component_count:
             raise ValueError("encoded product must be a two-element array")
         return (self.left.decode(value[0]), self.right.decode(value[1]))
 
@@ -742,14 +743,14 @@ __all__ = [
     "PATH",
     "PATH_WITNESSES",
     "TROPICAL",
-    "BooleanSemiring",
     "ArcticSemiring",
+    "BooleanSemiring",
     "CountingSemiring",
     "DecimalExtremumSemiring",
     "DoubleExtremumSemiring",
     "ExpectationSemiring",
-    "LexicographicSemiring",
     "LawCheck",
+    "LexicographicSemiring",
     "Path",
     "PathSemiring",
     "PathValue",

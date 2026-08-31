@@ -382,11 +382,13 @@ class ReactDeclaration[Value, Carrier, Result]:
                 f"react {self.name!r} reordering requires commutative action "
                 f"{self.action.name!r}"
             )
-        if self.mode is ReactMode.ONE_FOR_ONE:
-            if self.normalization.requires_complete_yield:
-                raise ValueError(
-                    f"react {self.name!r} one-for-one mode cannot normalize a complete yield"
-                )
+        if (
+            self.mode is ReactMode.ONE_FOR_ONE
+            and self.normalization.requires_complete_yield
+        ):
+            raise ValueError(
+                f"react {self.name!r} one-for-one mode cannot normalize a complete yield"
+            )
 
     def run(self, carrier: Carrier) -> dict[str, object]:
         """Recognize and apply, optionally certifying equivalence for this run.
@@ -486,9 +488,9 @@ __all__ = [
     "ActionFunction",
     "DeliveryYield",
     "DistributionWitness",
+    "OrderedDelivery",
     "ReactDeclaration",
     "ReactMode",
     "Semimodule",
-    "OrderedDelivery",
     "YieldNormalization",
 ]

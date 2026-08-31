@@ -296,7 +296,11 @@ _namespace_by_prefix: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
 
 def _materialize_defaults(value: object, shape: object) -> None:
     """Restore omitted arrays and nullable strings for the existing decoder."""
-    from tiergraph.schema import DECLARATIONS, Shape, ShapeKind
+    from tiergraph.schema import (  # noqa: PLC0415 -- cycle breaker
+        DECLARATIONS,
+        Shape,
+        ShapeKind,
+    )
 
     declared = cast(Shape, shape)
     if declared.kind is ShapeKind.REFERENCE:

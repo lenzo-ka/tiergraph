@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from importlib import resources
 
 import pytest
@@ -30,6 +31,4 @@ def test_typing_marker_ships() -> None:
 
 def test_module_shim_imports() -> None:
     """The `python -m` shim imports without running."""
-    import importlib
-
     assert importlib.import_module("tiergraph.__main__") is not None

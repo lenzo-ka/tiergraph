@@ -558,8 +558,6 @@ class MachineLawSuite:
         """A declared typed value attaches through a checked item transition."""
         tier = self.name("events")
         value = AttributeValue(self.name("label"), XsdType.STRING, "hit")
-        from tiergraph import AttachValue
-
         outcome = self.build(
             (
                 *self.declarations(),

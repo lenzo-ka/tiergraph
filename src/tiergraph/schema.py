@@ -556,7 +556,7 @@ def shape_hash() -> str:
 
 def json_schema(format_version: str) -> dict[str, JsonValue]:
     """Generate the JSON Schema document for the format this release implements."""
-    from tiergraph.wire import FORMAT_VERSION
+    from tiergraph.wire import FORMAT_VERSION  # noqa: PLC0415 -- cycle breaker
 
     if format_version != FORMAT_VERSION:
         raise Refusal(

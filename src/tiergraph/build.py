@@ -191,10 +191,11 @@ class Document:
             ) from error
         lowered: list[AttributeDeclaration] = []
         existing = {declaration.name for declaration in self._attribute_declarations}
+        typed_domain_pair_length = 2
         for name, specification in declarations.items():
             operation = f"attributes {self._local(name)}"
             if isinstance(specification, tuple):
-                if len(specification) != 2:
+                if len(specification) != typed_domain_pair_length:
                     raise BuilderError(
                         f"{operation}: expected XsdType or (XsdType, domain)"
                     )
@@ -719,16 +720,13 @@ class Document:
             lexical = value
         elif value_type is XsdType.BOOLEAN and isinstance(value, bool | str):
             lexical = str(value).lower() if isinstance(value, bool) else value
-        elif value_type is XsdType.INTEGER and (
-            type(value) is int or isinstance(value, str)
-        ):
-            lexical = str(value)
-        elif value_type is XsdType.DECIMAL and (
-            isinstance(value, Decimal | str) or type(value) is int
-        ):
-            lexical = str(value)
-        elif value_type is XsdType.DOUBLE and (
-            isinstance(value, float | str) or type(value) is int
+        elif (
+            value_type is XsdType.INTEGER
+            and (type(value) is int or isinstance(value, str))
+            or value_type is XsdType.DECIMAL
+            and (isinstance(value, Decimal | str) or type(value) is int)
+            or value_type is XsdType.DOUBLE
+            and (isinstance(value, float | str) or type(value) is int)
         ):
             lexical = str(value)
         else:

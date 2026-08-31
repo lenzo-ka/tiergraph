@@ -1079,9 +1079,10 @@ def test_unknown_field_probe_family_denominator_is_pinned() -> None:
     generated, so the family's disappearance is invisible to the conformance
     file. The denominator is the only thing that can notice it.
     """
-    from tests.conformance.schema_codec import conformance_probes
-    from tests.test_schema_codec_conformance import _seeds
-    from tiergraph.schema import DOCUMENT
+    # Keep these local: the conformance module imports fixtures from this module.
+    from tests.conformance.schema_codec import conformance_probes  # noqa: PLC0415
+    from tests.test_schema_codec_conformance import _seeds  # noqa: PLC0415
+    from tiergraph.schema import DOCUMENT  # noqa: PLC0415
 
     probes = conformance_probes(_seeds(), DOCUMENT)
     unknown = [probe for probe in probes if probe.mutation == "unknown-field"]

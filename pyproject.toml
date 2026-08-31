@@ -73,8 +73,32 @@ target-version = "py312"
 src = ["src", "tests", "examples", "scripts"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "E", "F", "I", "UP", "B",
+    "PLR2004", "PERF401", "SIM102", "SIM105", "SIM114", "SIM115",
+    "RUF007", "RUF022", "RUF100",
+    "ARG001", "ARG002", "ARG005",
+    "C420", "PLW2901", "PLC0415", "PLW1510",
+]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    # A literal in an assertion is the assertion; naming it hides what the test checks.
+    "PLR2004",
+    # Unused stub parameters document the callback's shape rather than being dead.
+    "ARG001",
+    # Unused lambda parameters document the callback's shape rather than being dead.
+    "ARG005",
+]
+"examples/**/*.py" = [
+    # A literal in an assertion is the assertion; naming it hides what the example checks.
+    "PLR2004",
+    # Unused stub parameters document the callback's shape rather than being dead.
+    "ARG001",
+    # Unused lambda parameters document the callback's shape rather than being dead.
+    "ARG005",
+]
 
 [tool.mypy]
 python_version = "3.12"

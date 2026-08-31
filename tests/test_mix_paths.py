@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import replace
 from pathlib import Path
 
@@ -269,7 +270,7 @@ def test_rendered_midi_is_valid_paired_format_zero_and_alternates() -> None:
         for channel in channels
     }
     gaps = {
-        channel: [right - left for left, right in zip(ticks, ticks[1:], strict=False)]
+        channel: [right - left for left, right in itertools.pairwise(ticks)]
         for channel, ticks in grids.items()
     }
     assert min(gaps[0]) * 3 == min(gaps[1]) * 4 == 1920
@@ -278,7 +279,7 @@ def test_rendered_midi_is_valid_paired_format_zero_and_alternates() -> None:
 
     for voice in (channel_zero, channel_one):
         ordered = sorted(voice)
-        for interval, following in zip(ordered[:-1], ordered[1:], strict=True):
+        for interval, following in itertools.pairwise(ordered):
             inter_onset = following[0] - interval[0]
             assert interval[1] - interval[0] >= inter_onset
     velocities = {interval[4] for interval in intervals}
@@ -297,7 +298,7 @@ def test_rendered_midi_is_valid_paired_format_zero_and_alternates() -> None:
         assert pans[-1] == (7680, 64)
         assert all(
             abs(64 - left[1]) >= abs(64 - right[1])
-            for left, right in zip(pans, pans[1:], strict=False)
+            for left, right in itertools.pairwise(pans)
         )
         volumes = [
             value
@@ -316,11 +317,11 @@ def test_rendered_midi_is_valid_paired_format_zero_and_alternates() -> None:
     assert lead_pans[:2] == [0, 127]
     assert all(
         (left < 64 and right > 64) or (left > 64 and right < 64)
-        for left, right in zip(lead_pans[:-2], lead_pans[1:-1], strict=True)
+        for left, right in itertools.pairwise(lead_pans[:-1])
     )
     assert all(
         abs(value - 64) >= abs(following - 64)
-        for value, following in zip(lead_pans, lead_pans[1:], strict=False)
+        for value, following in itertools.pairwise(lead_pans)
     )
     assert lead_pans[-1] == 64
 

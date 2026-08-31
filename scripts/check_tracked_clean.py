@@ -259,7 +259,8 @@ def denied_digests(path: Path) -> Denylist:
     if len(salt_lines) != 1 or lines[0] != salt_lines[0]:
         raise ValueError(f"denylist {path} has an invalid salt line")
     salt_hex = salt_lines[0].removeprefix("salt ")
-    if len(salt_hex) < 16:
+    minimum_salt_hex_length = 16
+    if len(salt_hex) < minimum_salt_hex_length:
         raise ValueError(f"denylist {path} salt is shorter than 16 hex characters")
     if len(salt_hex) % 2 or re.fullmatch(r"[0-9A-Fa-f]+", salt_hex) is None:
         raise ValueError(f"denylist {path} salt is malformed")
@@ -333,9 +334,11 @@ def reference_leaks(path: Path) -> list[str]:
             for allowed in ALLOWED_URL_PREFIXES
         ):
             messages.append(f"{path}: an unallowlisted URL reference ({prefix!r})")
-    for value in EMAIL.findall(text):
-        if value.lower() not in ALLOWED_EMAILS:
-            messages.append(f"{path}: an unallowlisted email address ({value!r})")
+    messages.extend(
+        f"{path}: an unallowlisted email address ({value!r})"
+        for value in EMAIL.findall(text)
+        if value.lower() not in ALLOWED_EMAILS
+    )
     for value in DOMAIN.findall(text):
         domain = value.lower()
         if domain not in ALLOWED_DOMAINS:
@@ -346,9 +349,11 @@ def reference_leaks(path: Path) -> list[str]:
             (source, f"{path} Python fence #{index}")
             for index, source in enumerate(PYTHON_FENCE.findall(text), start=1)
         )
-    for source, label in sources:
-        for imported in sorted(_imports(source, label) - ALLOWED_IMPORTS):
-            messages.append(f"{path}: an unallowlisted top-level import ({imported!r})")
+    messages.extend(
+        f"{path}: an unallowlisted top-level import ({imported!r})"
+        for source, label in sources
+        for imported in sorted(_imports(source, label) - ALLOWED_IMPORTS)
+    )
     if path.name == "pyproject.toml":
         project = tomllib.loads(text)["project"]
         requirements = list(project.get("dependencies", ()))

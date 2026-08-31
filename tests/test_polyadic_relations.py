@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import Any, cast
 
@@ -382,8 +383,6 @@ def test_wire_refuses_plural_subset_names_and_non_array_side() -> None:
         value for value in data["relation_declarations"] if value["kind"] == "polyadic"
     )
     declared["targets_subset_of"] = ["p:members", "p:selects"]
-    import json
-
     document = json.dumps(wire_document)
     with pytest.raises(ValueError, match=r"targets_subset_of must contain at most one"):
         loads(document)

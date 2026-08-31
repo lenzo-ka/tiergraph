@@ -4394,6 +4394,24 @@ The exact semiring of finite path sets under union and concatenation.
 
 The inexact IEEE-double min-plus semiring.
 
+### `ArcticSemiring`
+
+```text
+ArcticSemiring() -> 'None'
+```
+
+The inexact IEEE-double max-plus semiring.
+
+#### `ArcticSemiring.star`
+
+Property.
+
+```text
+ArcticSemiring.star(self) -> 'StarSelector[float]'
+```
+
+Return this carrier's explicitly declared 0-closed closure.
+
 ### `BooleanSemiring`
 
 ```text
@@ -4451,24 +4469,6 @@ BooleanSemiring.decode(self, value: 'object', /) -> 'bool'
 ```
 
 Decode a JSON Boolean.
-
-### `ArcticSemiring`
-
-```text
-ArcticSemiring() -> 'None'
-```
-
-The inexact IEEE-double max-plus semiring.
-
-#### `ArcticSemiring.star`
-
-Property.
-
-```text
-ArcticSemiring.star(self) -> 'StarSelector[float]'
-```
-
-Return this carrier's explicitly declared 0-closed closure.
 
 ### `CountingSemiring`
 
@@ -4732,6 +4732,19 @@ ExpectationSemiring.no_zero_divisors(self) -> 'bool'
 
 The mixed component can vanish independently.
 
+### `LawCheck`
+
+```text
+LawCheck(*values)
+```
+
+The mandatory comparison used to check a semiring law.
+
+#### `LawCheck` members
+
+- `EXACT` = `exact`
+- `APPROXIMATE` = `approximate`
+
 ### `LexicographicSemiring`
 
 ```text
@@ -4829,19 +4842,6 @@ LexicographicSemiring.no_zero_divisors(self) -> 'bool'
 ```
 
 The restricted carrier makes componentwise zero operands whole zeros.
-
-### `LawCheck`
-
-```text
-LawCheck(*values)
-```
-
-The mandatory comparison used to check a semiring law.
-
-#### `LawCheck` members
-
-- `EXACT` = `exact`
-- `APPROXIMATE` = `approximate`
 
 ### `Path`
 
@@ -5520,6 +5520,48 @@ Run the command line. Returns the process exit status.
 
 This module is importable and usable, but carries no API-stability promise at version 0.2.0.
 
+### `SPANVIEW_FORMAT_VERSION`
+
+str(object='') -> str
+str(bytes_or_buffer[, encoding[, errors]]) -> str
+
+Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.__str__() (if defined)
+or repr(object).
+encoding defaults to sys.getdefaultencoding().
+errors defaults to 'strict'.
+
+### `Span`
+
+```text
+Span(label: 'str', start: 'int', end: 'int', char_start: 'int | None', char_end: 'int | None', value: 'str | None', score: 'str | None', path: 'str', alternatives: 'tuple[SpanAlternative, ...]' = ()) -> None
+```
+
+Describe one selected span whose extent is derived from live coverage.
+
+The kernel graph stores membership, not an origin-plus-extent snapshot;
+this projection carries the resulting bounds for renderers.  Coverage must
+remain contiguous, so a new base item inside its range requires the caller
+to update membership rather than being absorbed or splitting it.
+
+### `SpanAlternative`
+
+```text
+SpanAlternative(value: 'str | None', score: 'str | None', path: 'str') -> None
+```
+
+Describe one ranked candidate associated with a selected span.
+
+### `SpanView`
+
+```text
+SpanView(text: 'str', spans: 'tuple[Span, ...]', base_surfaces: 'tuple[str, ...]') -> None
+```
+
+Hold reconstructed input text and its ordered, non-overlapping spans.
+
 ### `SpanViewProfile`
 
 ```text
@@ -5546,35 +5588,6 @@ SpanViewProfile.from_data(cls, data: 'object') -> 'SpanViewProfile'
 
 Decode a strict declarative span-view profile document.
 
-### `SpanView`
-
-```text
-SpanView(text: 'str', spans: 'tuple[Span, ...]', base_surfaces: 'tuple[str, ...]') -> None
-```
-
-Hold reconstructed input text and its ordered, non-overlapping spans.
-
-### `Span`
-
-```text
-Span(label: 'str', start: 'int', end: 'int', char_start: 'int | None', char_end: 'int | None', value: 'str | None', score: 'str | None', path: 'str', alternatives: 'tuple[SpanAlternative, ...]' = ()) -> None
-```
-
-Describe one selected span whose extent is derived from live coverage.
-
-The kernel graph stores membership, not an origin-plus-extent snapshot;
-this projection carries the resulting bounds for renderers.  Coverage must
-remain contiguous, so a new base item inside its range requires the caller
-to update membership rather than being absorbed or splitting it.
-
-### `SpanAlternative`
-
-```text
-SpanAlternative(value: 'str | None', score: 'str | None', path: 'str') -> None
-```
-
-Describe one ranked candidate associated with a selected span.
-
 ### `span_view`
 
 ```text
@@ -5582,6 +5595,14 @@ span_view(graph: 'Graph', profile: 'SpanViewProfile', *, alternatives: 'bool' = 
 ```
 
 Read a segmentation and its coverage entirely through the public graph API.
+
+### `to_html`
+
+```text
+to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
+```
+
+Return a self-contained, injection-safe HTML segmentation report.
 
 ### `to_json`
 
@@ -5606,27 +5627,6 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 ```
 
 Return a deterministic ruler and aligned plain-text span table.
-
-### `to_html`
-
-```text
-to_html(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
-```
-
-Return a self-contained, injection-safe HTML segmentation report.
-
-### `SPANVIEW_FORMAT_VERSION`
-
-str(object='') -> str
-str(bytes_or_buffer[, encoding[, errors]]) -> str
-
-Create a new string object from the given object. If encoding or
-errors is specified, then the object must expose a data buffer
-that will be decoded using the given encoding and error handler.
-Otherwise, returns the result of object.__str__() (if defined)
-or repr(object).
-encoding defaults to sys.getdefaultencoding().
-errors defaults to 'strict'.
 
 ## Companion package
 

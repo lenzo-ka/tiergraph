@@ -190,6 +190,7 @@ class TierSelector:
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return the selected tier."""
+        del path_profile
         if all(candidate.declaration.name != self.tier for candidate in graph.tiers):
             raise Refusal(
                 RefusalStage.REFERENCE,
@@ -206,6 +207,7 @@ class TypeSelector:
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return all items of the declared type."""
+        del path_profile
         if not any(
             isinstance(declaration, SimpleRelationDeclaration)
             and declaration.item_type == self.item_type
@@ -276,6 +278,7 @@ class ItemSelector:
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the item identity."""
+        del path_profile
         return NodeSet(
             graph, (Node(NodeKind.ITEM, graph.resolve_item(self.reference)),)
         )
@@ -289,6 +292,7 @@ class BoundarySelector:
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the boundary identity."""
+        del path_profile
         return NodeSet(
             graph, (Node(NodeKind.BOUNDARY, graph.resolve_boundary(self.reference)),)
         )
@@ -345,6 +349,7 @@ class AttributeSelector:
 
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return owners carrying the named value."""
+        del path_profile
         declaration = next(
             (
                 candidate
