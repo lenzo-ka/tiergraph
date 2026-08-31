@@ -757,6 +757,14 @@ The four maps are total over their source index spaces: an old position is
 either mapped or departed.  In particular, stationary positions map to
 themselves rather than being omitted.
 
+Construction refuses a coordinate that is both mapped and departed, which is
+the half of that claim a value can decide.  The other half cannot be checked
+here: a displacement does not carry the graph it is about, so the source
+space is whatever the maps and departed sets name between them, and a
+coordinate omitted from both is not detectable.  An accumulated displacement
+is total against a real graph because the operation that built it saw one;
+a hand-built one is total by definition rather than by check.
+
 #### `Displacement.then`
 
 Method.
