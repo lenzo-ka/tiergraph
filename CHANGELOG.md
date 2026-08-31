@@ -167,6 +167,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** the clock CLI now names the values it returns: `tiergraph clock
+  positions` becomes `tiergraph clock coordinates`, and `tiergraph clock
+  position --position PATH` becomes `tiergraph clock boundary --boundary PATH`.
+  Their emitted top-level JSON keys likewise change from `"positions"` to
+  `"coordinates"` and from `"position"` to `"boundary"`; all other output is
+  unchanged.
 - **BREAKING:** `NodeKind.POSITION`, `PathKind.POSITION`, and
   `PathRefusalCode.POSITION_NOT_IN_PARENT` become `NodeKind.BOUNDARY`,
   `PathKind.BOUNDARY`, and `PathRefusalCode.BOUNDARY_NOT_IN_PARENT`; their

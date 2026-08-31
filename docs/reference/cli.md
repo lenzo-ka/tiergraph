@@ -312,12 +312,12 @@ options:
 ### `tiergraph clock`
 
 ```text
-usage: tiergraph clock [-h] {positions,position,extent,item} ...
+usage: tiergraph clock [-h] {coordinates,boundary,extent,item} ...
 
 positional arguments:
-  {positions,position,extent,item}
-    positions           list refined clock positions
-    position            query one tier position
+  {coordinates,boundary,extent,item}
+    coordinates         list refined clock coordinates
+    boundary            query one tier boundary
     extent              query a timed tier extent
     item                query one timed item
 
@@ -325,10 +325,10 @@ options:
   -h, --help            show this help message and exit
 ```
 
-### `tiergraph clock positions`
+### `tiergraph clock coordinates`
 
 ```text
-usage: tiergraph clock positions [-h] --profile FILE [-o FILE] GRAPH
+usage: tiergraph clock coordinates [-h] --profile FILE [-o FILE] GRAPH
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
@@ -340,10 +340,10 @@ options:
                         output file (default: -)
 ```
 
-### `tiergraph clock position`
+### `tiergraph clock boundary`
 
 ```text
-usage: tiergraph clock position [-h] --profile FILE --position PATH [-o FILE]
+usage: tiergraph clock boundary [-h] --profile FILE --boundary PATH [-o FILE]
                                 GRAPH
 
 positional arguments:
@@ -352,7 +352,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --profile FILE
-  --position PATH
+  --boundary PATH
   -o FILE, --output FILE
                         output file (default: -)
 ```
