@@ -180,4 +180,14 @@ change that would break that is permitted, and it costs a step in the version
 position that carries breaking changes — before 1.0 the minor position, after
 1.0 the major one. A gate in this repository compares the committed schema
 against the last released one and refuses a break that takes no such step, so
-the version alone tells a reader whether the format grew or moved.
+for the structural shape that schema describes, the version alone tells a reader
+whether the format grew or moved.
+
+The gate reads the schema, and the schema is not the whole format. The decoder is
+the authority for semantic constraints such as declaration compatibility,
+acyclicity, and reference validity, and a release that tightened one of those
+would refuse a document the previous release accepted without changing a schema
+byte, drawing a finding, or costing a version position. Within a release line the
+structural half of *only grows* is enforced; the semantic half is intended and
+rests on review. A reader deciding whether an existing document still loads should
+read the changelog, not the version alone.
