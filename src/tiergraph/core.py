@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
+from functools import total_ordering
 from types import MappingProxyType
 from typing import Protocol, cast
 
@@ -168,12 +169,22 @@ class GraphCarrier(StrEnum):
 type SealedCarrier = QualifiedName | GraphCarrier
 
 
-@dataclass(frozen=True, slots=True, order=True)
+@total_ordering
+@dataclass(frozen=True, slots=True)
 class Seal:
     """State how much of one ordered carrier may not be disturbed."""
 
     carrier: SealedCarrier
     sealed: int
+
+    def __lt__(self, other: object) -> bool:
+        """Order tier carriers before graph-wide carriers, then by prefix length."""
+        if not isinstance(other, Seal):
+            return NotImplemented
+        return (*_sealed_carrier_key(self.carrier), self.sealed) < (
+            *_sealed_carrier_key(other.carrier),
+            other.sealed,
+        )
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the tagged carrier and sealed prefix for wire encoding."""
@@ -572,6 +583,14 @@ class Displacement:
     The four maps are total over their source index spaces: an old position is
     either mapped or departed.  In particular, stationary positions map to
     themselves rather than being omitted.
+
+    Construction refuses a coordinate that is both mapped and departed, which is
+    the half of that claim a value can decide.  The other half cannot be checked
+    here: a displacement does not carry the graph it is about, so the source
+    space is whatever the maps and departed sets name between them, and a
+    coordinate omitted from both is not detectable.  An accumulated displacement
+    is total against a real graph because the operation that built it saw one;
+    a hand-built one is total by definition rather than by check.
     """
 
     items: Mapping[ItemRef, ItemRef]
@@ -584,9 +603,24 @@ class Displacement:
     departed_polyadic_relations: frozenset[int]
 
     def __post_init__(self) -> None:
-        """Detach the maps from mutable caller-owned dictionaries."""
+        """Detach the maps and require exclusive source-space partitions."""
         for name in ("items", "boundaries", "relations", "polyadic_relations"):
             object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+        for mapped_name, departed_name in (
+            ("items", "departed_items"),
+            ("boundaries", "departed_boundaries"),
+            ("relations", "departed_relations"),
+            ("polyadic_relations", "departed_polyadic_relations"),
+        ):
+            overlap = set(getattr(self, mapped_name)).intersection(
+                getattr(self, departed_name)
+            )
+            if overlap:
+                position = min(overlap)
+                raise GraphValidationError(
+                    f"displacement {mapped_name} position {str(position)!r} is both "
+                    "mapped and departed; every source position is exactly one"
+                )
 
     def then(self, later: Displacement) -> Displacement:
         """Compose two displacements into the one the pair of edits performed."""
@@ -922,7 +956,7 @@ class Graph:
             "attribute_declarations",
             tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
         )
-        object.__setattr__(self, "seals", tuple(sorted(self.seals, key=_seal_key)))
+        object.__setattr__(self, "seals", tuple(sorted(self.seals)))
         object.__setattr__(
             self,
             "layers",
@@ -2202,6 +2236,13 @@ class GraphEditor:
             departed_boundaries=departed_boundaries,
         )
         layers = [_remap_layer(layer, step) for layer in self._layers]
+        for coordinate in departed_items:
+            durable_id = member.items[coordinate.index].durable_id
+            if durable_id is not None:
+                layers = [
+                    _orphan_durable_item(layer, durable_id, coordinate)
+                    for layer in layers
+                ]
         member.items = items
         self._boundary_values = boundaries
         self._relations = relations
@@ -3192,11 +3233,11 @@ def _require_acyclic(
                 stack.append((child, 0))
 
 
-def _seal_key(seal: Seal) -> tuple[int, str, str]:
-    """Return one total canonical order across tier and graph carriers."""
-    if isinstance(seal.carrier, QualifiedName):
-        return (0, seal.carrier.namespace, seal.carrier.local_name)
-    return (1, seal.carrier.value, "")
+def _sealed_carrier_key(carrier: SealedCarrier) -> tuple[int, str, str]:
+    """Return one total order across tier and graph-wide carriers."""
+    if isinstance(carrier, QualifiedName):
+        return (0, carrier.namespace, carrier.local_name)
+    return (1, carrier.value, "")
 
 
 def _layer_subject_domain(subject: LayerSubject) -> AttributeDomain:
@@ -3232,10 +3273,25 @@ def _domain_article(domain: AttributeDomain) -> str:
 
 
 def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
-    if isinstance(subject, (ItemRef, DurableItemRef)):
-        return graph.resolve_item(subject)
+    if isinstance(subject, ItemRef):
+        _validate_reference(
+            subject, "item reference", graph._tiers_by_name, GraphValidationError
+        )
+        return subject
+    if isinstance(subject, DurableItemRef):
+        coordinate = graph._items_by_id.get(subject.durable_id)
+        if coordinate is None:
+            raise GraphValidationError(
+                f"unknown durable item id {subject.durable_id!r}"
+            )
+        return coordinate
     if isinstance(subject, (BoundaryRef, DurableBoundaryRef)):
-        return graph.resolve_boundary(subject)
+        return _resolve_boundary_reference(
+            subject,
+            graph._tiers_by_name,
+            graph._items_by_id,
+            GraphValidationError,
+        )
     if isinstance(subject, TierRef):
         if subject.tier not in graph._tiers_by_name:
             raise GraphValidationError(
@@ -3395,6 +3451,23 @@ def _orphan_durable_relation(
             LayerFact(
                 OrphanedSubject(carrier, index)
                 if isinstance(fact.subject, DurableRelationRef | DurablePolyadicRef)
+                and fact.subject.durable_id == durable_id
+                else fact.subject,
+                fact.value,
+            )
+            for fact in layer.facts
+        ),
+    )
+
+
+def _orphan_durable_item(layer: Layer, durable_id: str, coordinate: ItemRef) -> Layer:
+    """Retain a durable item fact when removal takes away its identity."""
+    return Layer(
+        layer.name,
+        tuple(
+            LayerFact(
+                OrphanedSubject(coordinate.tier, coordinate)
+                if isinstance(fact.subject, DurableItemRef)
                 and fact.subject.durable_id == durable_id
                 else fact.subject,
                 fact.value,

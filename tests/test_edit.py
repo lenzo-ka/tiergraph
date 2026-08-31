@@ -929,6 +929,21 @@ def test_seal_bounds_and_graph_carrier_edits_are_checked() -> None:
     assert graph.seal(GraphCarrier.POLYADIC_RELATIONS, 0).seals
 
 
+def test_seal_order_is_total_across_carrier_kinds() -> None:
+    """REGRESSION (F8): the public Seal order covers its carrier union."""
+    tier_seal = Seal(WORD, 1)
+    graph_seal = Seal(GraphCarrier.RELATIONS, 0)
+    assert tier_seal < graph_seal
+    assert tier_seal <= graph_seal
+    assert graph_seal > tier_seal
+    assert graph_seal >= tier_seal
+    assert Seal.__lt__(tier_seal, object()) is NotImplemented
+    assert sorted((graph_seal, tier_seal)) == [
+        Seal(WORD, 1),
+        Seal(GraphCarrier.RELATIONS, 0),
+    ]
+
+
 def test_seal_declarations_report_vacuity_breaches_and_omission() -> None:
     """REGRESSION (parent: dependency failure): certificates remain honest."""
     graph = base(relations=())
