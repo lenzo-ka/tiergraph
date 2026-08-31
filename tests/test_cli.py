@@ -745,31 +745,31 @@ def test_clock_commands_query_full_declarative_profile(
     profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
     common = [str(graph_path), "--profile", str(profile_path)]
 
-    assert main(["clock", "positions", *common]) == 0
-    expected_positions = {
+    assert main(["clock", "coordinates", *common]) == 0
+    expected_coordinates = {
         "clock_tier": {
             "namespace": CLOCK_SEGMENT.namespace,
             "local_name": "clock",
         },
-        "positions": [
+        "coordinates": [
             {"index": 0, "tick": 0, "gap": 0},
             {"index": 1, "tick": 1, "gap": 0},
             {"index": 2, "tick": 1, "gap": 1},
             {"index": 3, "tick": 2, "gap": 0},
         ],
     }
-    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_positions)
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_coordinates)
 
     boundary_path = _structural_path(
         "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
     )
-    assert main(["clock", "position", *common, "--position", boundary_path]) == 0
-    expected_position = {
-        "position": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
+    assert main(["clock", "boundary", *common, "--boundary", boundary_path]) == 0
+    expected_boundary = {
+        "boundary": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
         "clock_index": 2,
         "refined": {"tick": 1, "gap": 1},
     }
-    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_position)
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_boundary)
 
     assert (
         main(
@@ -855,7 +855,7 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
     graph_path.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile_path.write_text("{}", encoding="utf-8")
     common = [str(graph_path), "--profile", str(profile_path)]
-    assert main(["clock", "positions", *common]) == 1
+    assert main(["clock", "coordinates", *common]) == 1
     assert "clock profile fields" in capsys.readouterr().err
 
     malformed = clock_profile_data()
@@ -864,7 +864,7 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
         "local_name": CLOCK_TIER.local_name,
     }
     profile_path.write_text(json.dumps(malformed), encoding="utf-8")
-    assert main(["clock", "positions", *common]) == 1
+    assert main(["clock", "coordinates", *common]) == 1
     assert (
         "clock profile.clock_tier.namespace must be a string" in capsys.readouterr().err
     )
@@ -879,7 +879,7 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
     item = _structural_path(
         "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
     )
-    assert main(["clock", "position", *common, "--position", item]) == 1
+    assert main(["clock", "boundary", *common, "--boundary", item]) == 1
     assert "did not resolve to a boundary" in capsys.readouterr().err
 
     boundary = _structural_path(
@@ -2098,7 +2098,13 @@ def test_surrogate_reports_are_refused_with_field_paths(
             )
         ],
         (
-            ["clock", "positions", str(clock_graph), "--profile", str(clock_profile)],
+            [
+                "clock",
+                "coordinates",
+                str(clock_graph),
+                "--profile",
+                str(clock_profile),
+            ],
             "clock_tier.namespace",
         ),
         (
@@ -2152,7 +2158,7 @@ def test_invalid_utf8_profile_remains_an_exit_three_decode_failure(
     graph.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile = tmp_path / "profile.json"
     profile.write_bytes(b'{"clock_tier":"\xff\xfe"}')
-    assert main(["clock", "positions", str(graph), "--profile", str(profile)]) == 3
+    assert main(["clock", "coordinates", str(graph), "--profile", str(profile)]) == 3
     assert "UnicodeDecodeError" in capsys.readouterr().err
 
 

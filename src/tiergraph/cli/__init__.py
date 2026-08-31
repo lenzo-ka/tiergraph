@@ -141,8 +141,8 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     clock = subparsers.add_parser("clock", help="query declarative clock timing")
     clock_subparsers = clock.add_subparsers(dest="clock_command", required=True)
     for clock_command, help_text in (
-        ("positions", "list refined clock positions"),
-        ("position", "query one tier position"),
+        ("coordinates", "list refined clock coordinates"),
+        ("boundary", "query one tier boundary"),
         ("extent", "query a timed tier extent"),
         ("item", "query one timed item"),
     ):
@@ -152,8 +152,8 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
             "file", metavar="GRAPH", help="graph file, or - for stdin"
         )
         clock_parser.add_argument("--profile", required=True, metavar="FILE")
-        if clock_command == "position":
-            clock_parser.add_argument("--position", required=True, metavar="PATH")
+        if clock_command == "boundary":
+            clock_parser.add_argument("--boundary", required=True, metavar="PATH")
         elif clock_command == "extent":
             clock_parser.add_argument("--tier-namespace", required=True, metavar="NS")
             clock_parser.add_argument("--tier-local", required=True, metavar="LOCAL")
@@ -600,21 +600,21 @@ def _clock_query(
     args: argparse.Namespace,
 ) -> object:
     """Evaluate one parsed clock query and return JSON-compatible data."""
-    if args.clock_command == "positions":
+    if args.clock_command == "coordinates":
         return {
             "clock_tier": profile.clock_tier.to_data(),
-            "positions": [
+            "coordinates": [
                 {"index": index, **coordinate.to_data()}
                 for index, coordinate in enumerate(profile.coordinates)
             ],
         }
-    if args.clock_command == "position":
+    if args.clock_command == "boundary":
         boundary_reference = cast(
             tiergraph.BoundaryRef,
-            _resolved_reference(graph, args.position, "boundary", "clock"),
+            _resolved_reference(graph, args.boundary, "boundary", "clock"),
         )
         return {
-            "position": boundary_reference.to_data(),
+            "boundary": boundary_reference.to_data(),
             "clock_index": profile.clock_index(boundary_reference),
             "refined": profile.refined_coordinate(boundary_reference).to_data(),
         }
