@@ -2166,7 +2166,14 @@ Name one sealed member that the result did not leave where it stood.
 SealCertificate(carriers: 'int', sealed_members: 'int') -> None
 ```
 
-Report what a seal check compared, and over how much.
+Report what a seal check could discriminate, and over how much.
+
+``sealed_members`` counts only members whose durable identity made a
+value-only comparison capable of detecting movement. Anonymous members do
+not contribute: two graph values cannot reveal whether one anonymous member
+moved or an indistinguishable one took its coordinate. A zero count is
+therefore an explicit vacuous pass, not evidence that anonymous geometry was
+preserved.
 
 ### `SealDeclaration`
 
