@@ -29,7 +29,7 @@ of the same graph.
   promoted to a durable identifier when a reference must survive edits.
 - **Attributes** are optional and have at most one value per qualified name.
   They are typed by a growable XSD subset (string, boolean, integer, decimal,
-  double) and are declared for one domain: document, tier, item, position,
+  double) and are declared for one domain: document, tier, item, boundary,
   relation declaration, or relation instance. A value's lexical form is
   canonicalized when it is stored, so equal values have one spelling. Absence
   means absent: there are deliberately no defaults that appear in a reading
@@ -124,6 +124,73 @@ first-class payload-attachment API that could attach a JSON value to an item in
 another graph. That API does not yet exist. If it is added, stringified-JSON
 attributes will be candidates for migration.
 
+## Coordinates, and what an edit does to them
+
+A position is the thing; a coordinate is its identity. A `(tier, index)` pair is
+a coordinate, and the families that spell one are `ItemRef` and `BoundaryRef`,
+with `DurableItemRef` and `DurableBoundaryRef` naming the same places by an
+identity the graph carries rather than by where they sit.
+
+This document said so before the code did. The sentence above about a structural
+reference being a coordinate was already published while the type was called
+`PositionRef`, and the prose was the half that was right: the reading has not
+changed, only the spelling caught up to it.
+
+Coordinates are cheap to key on and they move. An edit that inserts an item
+shifts every later index in that tier, and removing a relation shifts every later
+relation index in the graph. A `Displacement` reports where every position of one
+graph stands in another, over all four of the ordered index spaces this graph
+has: items, boundaries, relation instances, and polyadic relation instances.
+
+Its maps are total. Every coordinate the source individuates is a key of its map
+or a member of the matching departed set, never both and never neither, and a
+position that did not move appears at its own coordinate rather than being left
+out. Silence would otherwise have to mean two things — *did not move* and *is not
+described* — and a caller would have to guess which.
+
+A displacement is accumulated by the operation performing the edit and is never
+recovered by comparing two graph values. Two values cannot carry it: an anonymous
+item that moved is indistinguishable from one that did not.
+
+## Seals
+
+A seal states how much of one ordered carrier may not be disturbed. It is data
+the graph carries, not an inference about how the graph was built.
+
+That distinction is the whole reason it exists. A graph value carries no history,
+so *"this will only ever be appended to"* is a promise about future edits that
+nothing in the value can refute — identical content built by appending, by
+inserting in the middle, and from scratch produces equal graphs with identical
+canonical bytes. A seal makes no claim about the past. It constrains successors,
+and a successor is always in hand to be checked, so it is refutable at every step
+where a claim about the past never is. Append-only is the degenerate case, where
+the seal equals the carrier's length.
+
+**A seal is geometric, not a content freeze.** Sealed members cannot move; their
+attribute values may still be rewritten. This is deliberate and load-bearing in
+both directions. It is what makes coordinate-keyed layers safe, since such a fact
+breaks when a coordinate moves and not when a value changes. And it is what the
+motivating work requires: taking an automatic reading, freezing it as *what I was
+given*, and iterating the values to a fixpoint is exactly twiddling content over
+fixed structure. A total seal would have forbidden the work the seal exists to
+protect.
+
+Sealing advances freely. It retreats only through `unseal`, which is named,
+public, and deliberately loud — an escape spelled as a flag on the sealing
+operation would make unsealing indistinguishable from sealing at the call site.
+
+`SealCertificate` reports how many members a check actually compared. A seal
+check over a graph that sealed nothing has compared nothing, and the count says
+so rather than letting a vacuous pass read as a strong one.
+
+One limit is worth stating plainly rather than papering over: the constructor can
+validate that a seal is internally consistent, but it cannot know whether a
+hand-built prefix matches anyone else's, so a constructed graph may claim any
+seal. That is the same limit durable identifiers already live with. What a seal
+does guarantee is that it is refutable across every rewrite, checkable between
+any two values, and a bare declaration on a value with no predecessor — and
+append-only cannot say even the last of those.
+
 ## Attribute layers
 
 `Graph.layers` keeps separately sourced attribute facts without weakening the
@@ -141,8 +208,9 @@ need review. `flatten` writes a chosen delivery into a new layerless base.
 Structural edits remap coordinate-keyed facts. When a subject is removed, its
 fact becomes an `OrphanedSubject` carrying the old coordinate and its former
 carrier. Orphans are invisible to reads and accumulate until a caller replaces
-the layer; flattening a delivery containing one is refused. A layer does not
-veto a base edit, but an existing positional seal still does.
+the layer; flattening a delivery containing one is refused. A layer never vetoes
+a base edit. Inside a seal the seal does, which is the one place the base's own
+constraint outranks anything a layer has to say about it.
 
 ## Immutability and refusal
 

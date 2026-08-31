@@ -1,6 +1,6 @@
 # JSON format
 
-The version 6 wire representation is strict JSON: object keys are strings,
+The wire representation is strict JSON: object keys are strings,
 arrays retain order, and scalar attribute values retain their declared XSD type
 and canonical lexical form. The top-level document carries
 `"format_version": "0.2.0"`.
@@ -52,6 +52,28 @@ identifier consumers use to address an item across graphs.
 A tiergraph document declares the format version it was written in. A reader
 accepts documents of the version it implements and refuses any other, naming
 the version it found and the one it expected.
+
+The version names **the release at which the format last changed**, not the
+release that wrote the document. This release stamps `"0.2.0"`, and `0.2.1` and
+`0.3.0` will keep stamping `"0.2.0"` until the format itself moves again.
+
+It is worth being clear about why it is not simply the writing package's version,
+which is the obvious reading. Versions are compared by string equality, so a
+reader built at `0.2.0` would refuse a document written by `0.2.1` even though
+the two formats are identical -- every patch release would break document
+reading. Repairing that needs compatibility ranges, which is more machinery than
+the plain counter it replaced rather than less. The rare thing must not inherit
+the frequent thing's cadence.
+
+The form also says something a bare counter could not. A reader that refuses now
+names the release to go and look at, instead of sending someone to a table to
+find out what format `7` was.
+
+Within a release line the format may only grow: a change that shrinks what an
+existing document may say is legal, but it costs the version position that
+carries breaking changes -- the minor while the major is zero, the major after
+that. This release spent one, moving to `0.2.0` to drop `position` from the
+attribute-domain vocabulary in favor of `boundary`.
 
 Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
