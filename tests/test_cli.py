@@ -1936,7 +1936,7 @@ def test_cli_output_emitters_are_audited() -> None:
     Calls().visit(tree)
     approved = {
         ("main", "json.dumps"),
-        ("main", "encode"),
+        ("_handle_schema", "encode"),
         ("_graph_bytes", "encode"),
         ("_graph_report_bytes", "encode"),
         ("_json_bytes", "json.dumps"),

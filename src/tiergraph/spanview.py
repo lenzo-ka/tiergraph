@@ -195,7 +195,7 @@ def _validate_profile(graph: Graph, profile: SpanViewProfile) -> None:
             )
 
 
-def span_view(
+def span_view(  # noqa: PLR0915 -- one ordered span projection
     graph: Graph, profile: SpanViewProfile, *, alternatives: bool = False
 ) -> SpanView:
     """Read a segmentation and its coverage entirely through the public graph API."""

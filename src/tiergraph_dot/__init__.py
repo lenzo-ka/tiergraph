@@ -89,7 +89,7 @@ class DotPresentation:
     relation_style: Callable[..., str | None] | None = None
 
 
-def dumps(
+def dumps(  # noqa: PLR0915 -- exhaustive graph rendering dispatch
     graph: Graph,
     *,
     clock: ClockProfile | None = None,
@@ -548,7 +548,7 @@ def _structural_relation_lines(
         )
 
 
-def _dumps_occupied_spine(
+def _dumps_occupied_spine(  # noqa: PLR0915 -- one ordered DOT spine
     graph: Graph,
     clock: ClockProfile,
     presentation: DotPresentation | None,
