@@ -343,6 +343,16 @@ ClockCoordinate(tick: 'int', gap: 'int' = 0) -> None
 
 Name one integral gap inside an integral coarse tick.
 
+#### `ClockCoordinate.to_data`
+
+Method.
+
+```text
+ClockCoordinate.to_data(self) -> 'dict[str, int]'
+```
+
+Encode this refined structural clock coordinate.
+
 ### `PhysicalTiming`
 
 ```text
@@ -354,6 +364,16 @@ Carry exact decimal values stamped with the profile's declared unit.
 The unit is carried, not dimensionally enforced: this profile validates its
 declaration and stamps stored values with it, but a stored decimal has no
 independent unit metadata against which the declaration could be checked.
+
+#### `PhysicalTiming.to_data`
+
+Method.
+
+```text
+PhysicalTiming.to_data(self) -> 'dict[str, str]'
+```
+
+Encode this exact physical timing with canonical decimal lexemes.
 
 ### `anchored_boundary`
 

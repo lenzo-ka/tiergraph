@@ -59,9 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     schema = subparsers.add_parser("schema", help="print the graph document schema")
-    schema.add_argument(
-        "--format-version", default=tiergraph.FORMAT_VERSION, metavar="N"
-    )
+    schema.add_argument("--format-version", metavar="VERSION")
     schema.add_argument("--hash", action="store_true", help="print the shape hash")
     _output_argument(schema)
 
@@ -266,16 +264,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             graph = tiergraph.loads(_read_bytes(args.file))
             _write_output(args.file, args.output, _graph_bytes(graph, args.to))
         elif args.command == "schema":
+            if args.hash and args.format_version is not None:
+                raise ValueError("--format-version cannot be used with --hash")
             encoded = (
                 (shape_hash() + "\n").encode("utf-8")
                 if args.hash
-                else _json_bytes(json_schema(args.format_version))
+                else _json_bytes(
+                    json_schema(args.format_version or tiergraph.FORMAT_VERSION)
+                )
             )
             _write_output("-", args.output, encoded)
         elif args.command == "walk":
             graph = tiergraph.loads(_read_bytes(args.file))
-            if args.cap is not None and args.cap < 1:
-                raise ValueError(f"walk cap {args.cap!r} must be positive")
             profile = tiergraph.StructuralPathProfile()
             sources = [
                 _walk_source(graph, profile, source_text) for source_text in args.source
@@ -312,7 +312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "structural path profile returned an alternative"
                     )
             else:
-                binding = _path_binding(args)
+                binding = _path_binding(args, profile, graph)
                 value = {"path": str(profile.spell(binding, graph))}
             _write_output(args.file, args.output, _json_bytes(value))
         elif args.command == "grammar":
@@ -417,11 +417,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         _diagnostic(args.command, type(error).__name__, error)
         return 3
     return 0
-
-
-def _clock_coordinate_data(boundary: tiergraph.ClockCoordinate) -> dict[str, int]:
-    """Encode one refined clock boundary without inventing a public codec."""
-    return {"tick": boundary.tick, "gap": boundary.gap}
 
 
 def _clock_decimal(value: Decimal) -> str:
@@ -577,8 +572,8 @@ def _clock_query(
         return {
             "clock_tier": profile.clock_tier.to_data(),
             "positions": [
-                {"index": index, **_clock_coordinate_data(boundary)}
-                for index, boundary in enumerate(profile.coordinates)
+                {"index": index, **coordinate.to_data()}
+                for index, coordinate in enumerate(profile.coordinates)
             ],
         }
     if args.clock_command == "position":
@@ -589,17 +584,15 @@ def _clock_query(
         return {
             "position": boundary_reference.to_data(),
             "clock_index": profile.clock_index(boundary_reference),
-            "refined": _clock_coordinate_data(
-                profile.refined_coordinate(boundary_reference)
-            ),
+            "refined": profile.refined_coordinate(boundary_reference).to_data(),
         }
     if args.clock_command == "extent":
         tier = tiergraph.QualifiedName(args.tier_namespace, args.tier_local)
         start, end = profile.extent(tier)
         return {
             "tier": tier.to_data(),
-            "start": _clock_coordinate_data(start),
-            "end": _clock_coordinate_data(end),
+            "start": start.to_data(),
+            "end": end.to_data(),
         }
     item_reference = cast(
         tiergraph.ItemRef, _resolved_reference(graph, args.item, "item", "clock")
@@ -614,18 +607,10 @@ def _clock_query(
     return {
         "item": item_reference.to_data(),
         "structural": {
-            "start": _clock_coordinate_data(start),
-            "end": _clock_coordinate_data(end),
+            "start": start.to_data(),
+            "end": end.to_data(),
         },
-        "physical": (
-            None
-            if physical is None
-            else {
-                "start": _clock_decimal(physical.start),
-                "duration": _clock_decimal(physical.duration),
-                "unit": physical.unit,
-            }
-        ),
+        "physical": (None if physical is None else physical.to_data()),
         "exact_duration": exact_duration,
     }
 
@@ -660,74 +645,62 @@ def _tokens_json(source: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
-    """Build one unambiguous public path binding from spell flags."""
+def _path_binding(
+    args: argparse.Namespace,
+    profile: tiergraph.StructuralPathProfile,
+    graph: tiergraph.Graph,
+) -> tiergraph.PathBinding:
+    """Translate spell flags to a path and let the profile bind its form."""
     structural = (args.tier_namespace, args.tier_local, args.index)
     anchor_tier = (args.anchor_tier_namespace, args.anchor_tier_local)
+    conflicts: list[str] = []
     if args.kind == "item":
-        if args.durable_id is not None and all(value is None for value in structural):
-            if any(
-                value is not None
-                for value in (*anchor_tier, args.anchor_item_id, args.side)
-            ):
-                raise ValueError("item flags cannot include boundary anchor flags")
-            return tiergraph.ItemBinding(tiergraph.DurableItemRef(args.durable_id))
-        if all(value is not None for value in structural) and args.durable_id is None:
-            if any(
-                value is not None
-                for value in (*anchor_tier, args.anchor_item_id, args.side)
-            ):
-                raise ValueError("item flags cannot include boundary anchor flags")
-            return tiergraph.ItemBinding(
-                tiergraph.ItemRef(
-                    tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
-                    args.index,
-                )
-            )
-        raise ValueError(
-            "item requires either --durable-id or "
-            "--tier-namespace, --tier-local, and --index"
+        if args.durable_id is not None:
+            segments = ["items", "durable", args.durable_id]
+            conflicts = _present_path_values(structural)
+        elif any(value is not None for value in structural):
+            segments = ["items", "structural", *_path_values(structural)]
+            conflicts = _present_path_values((args.durable_id,))
+        else:
+            segments = ["items"]
+        conflicts.extend(
+            _present_path_values((*anchor_tier, args.anchor_item_id, args.side))
         )
+    elif any(value is not None for value in structural):
+        segments = ["positions", "structural", *_path_values(structural)]
+        conflicts = _present_path_values((*anchor_tier, args.anchor_item_id, args.side))
+    elif args.anchor_item_id is not None:
+        segments = [
+            "positions",
+            "durable",
+            "item",
+            args.anchor_item_id,
+            *_path_values((args.side,)),
+        ]
+        conflicts = _present_path_values(anchor_tier)
+    elif any(value is not None for value in anchor_tier):
+        segments = [
+            "positions",
+            "durable",
+            "tier",
+            *_path_values((*anchor_tier, args.side)),
+        ]
+    else:
+        segments = ["positions"]
+        conflicts = _present_path_values((args.durable_id, args.side))
+    if args.kind == "boundary" and args.durable_id is not None:
+        conflicts.append(args.durable_id)
+    return profile.bind(tiergraph.CanonicalPath(tuple([*segments, *conflicts])), graph)
 
-    if args.durable_id is not None:
-        raise ValueError("boundary flags cannot include --durable-id")
-    if all(value is not None for value in structural):
-        if any(value is not None for value in (*anchor_tier, args.anchor_item_id)):
-            raise ValueError("structural boundary flags cannot include durable anchors")
-        if args.side is not None:
-            raise ValueError("structural boundary flags cannot include --side")
-        return tiergraph.BoundaryBinding(
-            tiergraph.BoundaryRef(
-                tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
-                args.index,
-            )
-        )
-    if any(value is not None for value in structural):
-        raise ValueError(
-            "structural boundary requires --tier-namespace, --tier-local, and --index"
-        )
-    if args.side is None:
-        raise ValueError("durable boundary requires --side")
-    side = tiergraph.BoundarySide(args.side)
-    if args.anchor_item_id is not None and all(value is None for value in anchor_tier):
-        return tiergraph.BoundaryBinding(
-            tiergraph.DurableBoundaryRef(
-                tiergraph.DurableItemRef(args.anchor_item_id), side
-            )
-        )
-    if args.anchor_item_id is None and all(value is not None for value in anchor_tier):
-        return tiergraph.BoundaryBinding(
-            tiergraph.DurableBoundaryRef(
-                tiergraph.QualifiedName(
-                    args.anchor_tier_namespace, args.anchor_tier_local
-                ),
-                side,
-            )
-        )
-    raise ValueError(
-        "durable boundary requires exactly one of --anchor-item-id or "
-        "--anchor-tier-namespace with --anchor-tier-local"
-    )
+
+def _path_values(values: tuple[object | None, ...]) -> list[str]:
+    """Preserve missing and present flag values as path segments."""
+    return ["" if value is None else str(value) for value in values]
+
+
+def _present_path_values(values: tuple[object | None, ...]) -> list[str]:
+    """Return only supplied flag values as conflict-marking segments."""
+    return [str(value) for value in values if value is not None]
 
 
 def _diagnostic(command: str, category: str, error: BaseException) -> None:

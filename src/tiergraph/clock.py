@@ -19,6 +19,7 @@ from tiergraph.core import (
     QualifiedName,
     RelationEndpointKind,
     XsdType,
+    _canonical_lexical,
 )
 from tiergraph.machine import _QNameFields
 
@@ -39,6 +40,10 @@ class ClockCoordinate:
         if self.tick < 0 or self.gap < 0:
             raise ValueError(f"clock coordinate {(self.tick, self.gap)!r} is negative")
 
+    def to_data(self) -> dict[str, int]:
+        """Encode this refined structural clock coordinate."""
+        return {"tick": self.tick, "gap": self.gap}
+
 
 @dataclass(frozen=True, slots=True)
 class PhysicalTiming:
@@ -52,6 +57,14 @@ class PhysicalTiming:
     start: Decimal
     duration: Decimal
     unit: str
+
+    def to_data(self) -> dict[str, str]:
+        """Encode this exact physical timing with canonical decimal lexemes."""
+        return {
+            "start": _canonical_lexical(XsdType.DECIMAL, format(self.start, "f")),
+            "duration": _canonical_lexical(XsdType.DECIMAL, format(self.duration, "f")),
+            "unit": self.unit,
+        }
 
 
 @dataclass(frozen=True, slots=True)

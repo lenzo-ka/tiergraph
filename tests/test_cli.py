@@ -746,7 +746,7 @@ def test_clock_commands_query_full_declarative_profile(
     common = [str(graph_path), "--profile", str(profile_path)]
 
     assert main(["clock", "positions", *common]) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    expected_positions = {
         "clock_tier": {
             "namespace": CLOCK_SEGMENT.namespace,
             "local_name": "clock",
@@ -758,16 +758,18 @@ def test_clock_commands_query_full_declarative_profile(
             {"index": 3, "tick": 2, "gap": 0},
         ],
     }
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_positions)
 
     boundary_path = _structural_path(
         "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
     )
     assert main(["clock", "position", *common, "--position", boundary_path]) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    expected_position = {
         "position": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
         "clock_index": 2,
         "refined": {"tick": 1, "gap": 1},
     }
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_position)
 
     assert (
         main(
@@ -783,17 +785,18 @@ def test_clock_commands_query_full_declarative_profile(
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out) == {
+    expected_extent = {
         "tier": CLOCK_SEGMENT.to_data(),
         "start": {"tick": 1, "gap": 0},
         "end": {"tick": 2, "gap": 0},
     }
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_extent)
 
     item_path = _structural_path(
         "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
     )
     assert main(["clock", "item", *common, "--item", item_path]) == 0
-    assert json.loads(capsys.readouterr().out) == {
+    expected_item = {
         "item": {"tier": CLOCK_SEGMENT.to_data(), "index": 1},
         "structural": {
             "start": {"tick": 1, "gap": 1},
@@ -802,6 +805,7 @@ def test_clock_commands_query_full_declarative_profile(
         "physical": {"start": "0.1", "duration": "0.04", "unit": "s"},
         "exact_duration": None,
     }
+    assert capsys.readouterr().out.encode() == cli._json_bytes(expected_item)
 
 
 def test_clock_item_without_uniform_rate_does_not_inspect_refusal_message(
@@ -1128,7 +1132,7 @@ def test_walk_forward_inverse_capped_and_multiple_sources(
 def test_walk_failures_use_the_normal_diagnostic(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Path, relation, cyclic, and nonpositive-cap refusals exit one cleanly."""
+    """Path and relation refusals exit one cleanly, while cap zero is valid."""
     source = tmp_path / "diamond.json"
     _walk_graph(source)
     assert (
@@ -1153,13 +1157,19 @@ def test_walk_failures_use_the_normal_diagnostic(
             "--relation-local",
             "missing",
         ],
-        _walk_args(source, "--source", _item_path(0), "--cap", "0"),
     )
     for arguments in cases:
         assert main(arguments) == 1
         captured = capsys.readouterr()
         assert captured.out == ""
         assert captured.err.startswith("tiergraph: walk:")
+
+    assert main(_walk_args(source, "--source", _item_path(0), "--cap", "0")) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "nodes": [],
+        "truncated": True,
+        "cap": 0,
+    }
 
     _walk_graph(source, acyclic=False)
     assert main(_walk_args(source, "--source", _item_path(0))) == 1
@@ -1302,11 +1312,11 @@ def test_path_resolve_and_spell(
 
 
 @pytest.mark.parametrize(
-    ("flags", "message"),
+    ("flags", "code"),
     [
         (
             ["--kind", "item", "--durable-id", "alpha", "--side", "after"],
-            "item flags cannot include boundary anchor flags",
+            "unknown_form",
         ),
         (
             [
@@ -1321,15 +1331,15 @@ def test_path_resolve_and_spell(
                 "--anchor-item-id",
                 "alpha",
             ],
-            "item flags cannot include boundary anchor flags",
+            "unknown_form",
         ),
         (
             ["--kind", "item"],
-            "item requires either --durable-id or --tier-namespace, --tier-local, and --index",
+            "unknown_form",
         ),
         (
             ["--kind", "boundary", "--durable-id", "alpha"],
-            "boundary flags cannot include --durable-id",
+            "unknown_form",
         ),
         (
             [
@@ -1344,7 +1354,7 @@ def test_path_resolve_and_spell(
                 "--anchor-item-id",
                 "alpha",
             ],
-            "structural boundary flags cannot include durable anchors",
+            "unknown_form",
         ),
         (
             [
@@ -1359,19 +1369,19 @@ def test_path_resolve_and_spell(
                 "--side",
                 "after",
             ],
-            "structural boundary flags cannot include --side",
+            "unknown_form",
         ),
         (
             ["--kind", "boundary", "--tier-namespace", "urn:path"],
-            "structural boundary requires --tier-namespace, --tier-local, and --index",
+            "invalid_segment",
         ),
         (
             ["--kind", "boundary", "--anchor-item-id", "alpha"],
-            "durable boundary requires --side",
+            "invalid_segment",
         ),
         (
             ["--kind", "boundary", "--side", "after"],
-            "durable boundary requires exactly one of --anchor-item-id or --anchor-tier-namespace with --anchor-tier-local",
+            "unknown_form",
         ),
     ],
 )
@@ -1379,15 +1389,40 @@ def test_path_spell_rejects_incoherent_flags(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     flags: list[str],
-    message: str,
+    code: str,
 ) -> None:
     source = tmp_path / "graph.json"
     _path_graph(source)
     assert main(["path", "spell", str(source), *flags]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "tiergraph: path: ValueError:" in captured.err
-    assert message in captured.err
+    assert captured.err.startswith(f"tiergraph: path: PathRefusal: {code}:")
+
+
+def test_path_spell_and_resolve_share_typed_malformed_reference_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "graph.json"
+    _path_graph(source)
+    flags = [
+        "--kind",
+        "item",
+        "--tier-namespace",
+        "urn:path",
+        "--tier-local",
+        "tokens",
+        "--index",
+        "-1",
+    ]
+    assert main(["path", "spell", str(source), *flags]) == 1
+    spell_error = capsys.readouterr().err
+    assert (
+        main(["path", "resolve", str(source), "/items/structural/urn:path/tokens/-1"])
+        == 1
+    )
+    resolve_error = capsys.readouterr().err
+    for error in (spell_error, resolve_error):
+        assert error.startswith("tiergraph: path: PathRefusal: invalid_segment:")
 
 
 def test_path_failure_is_a_clean_diagnostic(
@@ -1462,6 +1497,26 @@ def test_schema_outputs_current_selected_version_and_hash(
 
     assert main(["schema", "--hash"]) == 0
     assert capsys.readouterr().out == f"{shape_hash()}\n"
+
+
+def test_schema_hash_rejects_discarded_format_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["schema", "--hash", "--format-version", "not-a-version"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--format-version cannot be used with --hash" in captured.err
+
+
+def test_schema_help_labels_format_version_as_a_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        main(["schema", "--help"])
+    assert stopped.value.code == 0
+    output = capsys.readouterr().out
+    assert "--format-version VERSION" in output
+    assert "--format-version N" not in output
 
 
 def test_inspect_uses_canonical_relation_order(tmp_path: Path) -> None:
