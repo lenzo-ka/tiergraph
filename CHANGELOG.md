@@ -183,13 +183,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   becomes `index_coordinates()`, and `Provenance` is qualified as
   `DerivationProvenance`. No deprecated aliases are published: the release
   already carries breaking cover, and an alias nobody removes leaves two
-  vocabularies standing. The wire is untouched — `FORMAT_VERSION` stays `"6"`
-  and the schema artifact and its stamp are byte-identical — so the document key
+  vocabularies standing. This rename initially left the wire spellings alone,
+  but the later format break in this release moved `FORMAT_VERSION` from `"6"`
+  to `"0.2.0"` and changed both the schema artifact and its stamp. The document key
   `position_values`, the `durable_position` schema definition, the `position`
   attribute domain and node kind, the `promote_position` opcode, the
   `/positions/…` canonical path segments, and the command line's own `position`
-  vocabulary keep their format-6 spelling and move with the format, not with
-  this rename.
+  vocabulary therefore moved with that format break rather than with this
+  rename. Most retain their earlier spelling in format 0.2.0; the attribute
+  domain is the exception and now spells its wire value `boundary`.
 - **BREAKING:** selection is now one graph-free surface: validation moves from
   construction to evaluation, and `evaluate_selection` takes the graph and a
   path profile. `BoundaryPathSelector`, `DifferenceSelector`,
@@ -270,10 +272,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns every applicable structural condition in that order instead of only the
   first, so a document with four problems is repaired in one pass rather than in
   four; a foreign version is still reported alone, because the field sets of a
-  declaration the document never selected cannot honestly be judged. The document
-  format is unchanged: `FORMAT_VERSION` stays `"6"`, the schema artifact and its
-  stamp are byte-identical, and all 2,967 conformance probes keep their outcome
-  with no drift.
+  declaration the document never selected cannot honestly be judged. This
+  refusal-order change itself did not alter the document shape, and the
+  conformance probes kept their outcomes with no drift. The later format break
+  in this release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"` and changed
+  both the schema artifact and its stamp.
 - **BREAKING:** a fold with `ranked_output` now refuses a `tie_policy` instead of
   requiring one. The requirement demanded the one declaration that configuration
   could never read: ranked selection asks the semiring's addition which value it
@@ -285,9 +288,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be inferred. `witness_order` and `tie_policy` remain one mechanism, declared
   together or not at all. `grammar.best()` and `tiergraph fold --ranked` declare no
   tie policy and return exactly what they returned before, tied derivations
-  included. The document format is unchanged: `FORMAT_VERSION` stays `"6"`, the
-  schema artifact and its stamp are byte-identical, and the conformance probes
-  keep their outcome.
+  included. This fold change itself did not alter the document shape, and the
+  conformance probes kept their outcomes. The later format break in this
+  release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"` and changed both the
+  schema artifact and its stamp.
 
 ### Removed
 
