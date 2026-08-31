@@ -12,9 +12,12 @@ from tiergraph import (
     FORMAT_VERSION,
     ExecutionError,
     Graph,
+    GraphValidationError,
+    core,
     execute,
     loads,
     program_loads,
+    schema,
     selection_loads,
     to_data,
     wire,
@@ -304,3 +307,59 @@ def test_an_accepted_document_reports_no_condition() -> None:
     """
     assert validation_errors(to_data(rich_graph()), FORMAT_VERSION) == []
     assert loads(json.dumps(to_data(Graph((), (), ())))) == Graph((), (), ())
+
+
+def test_the_stage_vocabulary_is_reachable_where_callers_import_it() -> None:
+    """REGRESSION: moving the enum down does not move where callers find it.
+
+    The stage is declared in the base module so the graph channel can name it
+    without importing upward, but every existing reader imports it from
+    `tiergraph.schema`.  The re-export has to be the same object rather than a
+    second enumeration, or two stages of one name would compare unequal.
+    """
+    assert schema.RefusalStage is core.RefusalStage
+    assert schema.RefusalStage is RefusalStage
+    assert schema.RefusalStage.SEMANTICS is RefusalStage.SEMANTICS
+    assert "RefusalStage" in schema.__all__
+
+
+def test_a_graph_refusal_carries_the_semantic_stage_by_default() -> None:
+    """REGRESSION: the other refusal channel is staged too, without restating.
+
+    A declaration or graph-contract violation is semantic by nature: the bytes
+    decoded, the shapes held, and what the document says is still not sayable.
+    Every existing raise site says only that much, so the default has to be the
+    stage those sites mean, and the failure has to stay a `ValueError` for the
+    callers that already catch one.
+    """
+    refusal = GraphValidationError("the graph says something unsayable")
+
+    assert refusal.stage is RefusalStage.SEMANTICS
+    assert isinstance(refusal, ValueError)
+    assert str(refusal) == "the graph says something unsayable"
+
+
+def test_a_graph_refusal_reports_the_stage_its_site_names() -> None:
+    """CHARACTERIZATION: the default is what a site means, not all it can say.
+
+    A site whose condition is sharper than semantics states it, which is the
+    point of carrying the stage as data; a default that could not be overridden
+    would rank every graph refusal alike forever.
+    """
+    refusal = GraphValidationError("no such tier", RefusalStage.REFERENCE)
+
+    assert refusal.stage is RefusalStage.REFERENCE
+    assert refusal.stage < RefusalStage.SEMANTICS
+
+
+def test_both_refusal_channels_rank_in_one_order() -> None:
+    """CHARACTERIZATION: one comparison spans both ways this package refuses.
+
+    A caller meets a `Refusal` from the reader and a `GraphValidationError`
+    from the graph, and the reason for one vocabulary is that the two can be
+    compared at all.  Separate enumerations would rank each channel alone.
+    """
+    read = Refusal(RefusalStage.REFERENCE, "a name that does not resolve")
+    built = GraphValidationError("a contract the graph breaks")
+
+    assert read.stage < built.stage

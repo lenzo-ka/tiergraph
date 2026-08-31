@@ -2013,7 +2013,21 @@ Name the graph's ordered carriers that are not a tier's items.
 
 ### `GraphValidationError`
 
+```text
+GraphValidationError(message: 'str', stage: 'RefusalStage' = <RefusalStage.SEMANTICS: 9>) -> 'None'
+```
+
 Report a declaration or graph-contract validation failure.
+
+A caller meets refusals from two channels and should have to learn one
+vocabulary, so this failure carries the same ``stage`` a ``Refusal`` does,
+as data rather than prose.  The stage defaults to ``SEMANTICS`` because a
+violated declaration or graph contract is semantic by nature: the document
+parsed, its shapes held, and what it says is still not sayable.  A site with
+a sharper condition names it, and the default keeps every other site
+correct without restating what it already means.  The message stays first so
+an existing raise reads unchanged.  This is still a ``ValueError``, so every
+caller that already catches one still does.
 
 ### `Item`
 
@@ -5489,6 +5503,11 @@ declaration the document never selected, so a foreign version is reported
 alone rather than with the fields that being foreign introduces.
 
 The stage is the stable part of a refusal; the wording is diagnostic.
+
+The vocabulary lives here, beside the other declared enumerations, because
+both refusal channels have to name it: this module is the base every other
+imports, so a refusal raised from here can carry a stage without the cycle
+that reaching upward for it would create.
 
 #### `RefusalStage` members
 
