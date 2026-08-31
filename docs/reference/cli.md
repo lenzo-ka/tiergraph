@@ -411,7 +411,7 @@ options:
 usage: tiergraph span render [-h] --profile FILE --format
                              {text,json,jsonl,html,dot} [--alternatives]
                              [--jsonl-record {input,span}]
-                             [--include-empty-tiers] [-o OUT]
+                             [--include-empty-tiers] [-o FILE]
                              GRAPH
 
 positional arguments:
@@ -424,13 +424,14 @@ options:
   --alternatives
   --jsonl-record {input,span}
   --include-empty-tiers
-  -o OUT, --output OUT  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph select`
 
 ```text
-usage: tiergraph select [-h] --selector FILE [-o OUT] GRAPH
+usage: tiergraph select [-h] --selector FILE [-o FILE] GRAPH
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
@@ -438,7 +439,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --selector FILE
-  -o OUT, --output OUT  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph fold`
@@ -448,7 +450,7 @@ usage: tiergraph fold [-h] [--name NAME] --attribute-namespace NS
                       --attribute-local LOCAL --tier NS LOCAL --semiring
                       {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
                       --lift {one,value} --transition NS LOCAL COMBINATION
-                      [--root TGPATH] [--ranked] [--output-cap N] [-o OUT]
+                      [--root TGPATH] [--ranked] [--output-cap N] [-o FILE]
                       GRAPH
 
 positional arguments:
@@ -471,7 +473,8 @@ options:
   --ranked              also report witnesses ranked by the semiring's own
                         order
   --output-cap N        witness cap; requires --ranked
-  -o OUT, --output OUT  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph semirings`

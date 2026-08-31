@@ -32,6 +32,19 @@ from tiergraph import (
 from tiergraph.path import ItemBinding, StructuralPathProfile
 from tiergraph.spanview import SpanViewProfile, span_view
 
+_SPINE_WEIGHT = 100
+_COLUMN_WEIGHT = 1000
+_ADJACENCY_COLOR = "#888888"
+_EXTENT_COLOR = "#777777"
+_BRACE_COLOR = "#333333"
+_TRIGGER_COLOR = "#2f6f9f"
+_RELATION_COLOR = "#5555aa"
+_PREAMBLE = (
+    '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
+    '  node [fontname="Helvetica"];',
+    '  edge [fontname="Helvetica", fontsize=9];',
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DotPresentation:
@@ -143,12 +156,7 @@ def dumps(
         for tier_index, tier in enumerate(graph.tiers)
         if tier.items or include_empty_tiers
     )
-    lines = [
-        "digraph tiergraph {",
-        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
-        '  node [fontname="Helvetica"];',
-        '  edge [fontname="Helvetica", fontsize=9];',
-    ]
+    lines = ["digraph tiergraph {", *_PREAMBLE]
 
     clock_ids: tuple[str, ...] = ()
     clock_coordinates: tuple[ClockCoordinate, ...] = ()
@@ -165,7 +173,7 @@ def dumps(
                 f'group="time_{index}", label="{_coordinate_label(coordinate)}"];'
             )
         for left, right in zip(clock_ids, clock_ids[1:], strict=False):
-            lines.append(f"    {left} -> {right} [weight=100];")
+            lines.append(f"    {left} -> {right} [weight={_SPINE_WEIGHT}];")
         lines.append("  }")
 
     tier_labels: list[str] = []
@@ -222,13 +230,15 @@ def dumps(
                 )
             slots.append(slot)
         for left, right in zip(slots, slots[1:], strict=False):
-            lines.append(f"    {left} -> {right} [style=invis, weight=100];")
+            lines.append(
+                f"    {left} -> {right} [style=invis, weight={_SPINE_WEIGHT}];"
+            )
         for item_index in range(len(tier.items) - 1):
             left = item_nodes[ItemRef(tier_name, item_index)]
             right = item_nodes[ItemRef(tier_name, item_index + 1)]
             lines.append(
                 f"    {left} -> {right} "
-                '[color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];'
+                f'[color="{_ADJACENCY_COLOR}", penwidth=0.8, arrowsize=0.55, constraint=false];'
             )
         for item_index in range(len(tier.items)):
             start_index = boundary_indexes[item_index]
@@ -236,7 +246,7 @@ def dumps(
             if start_index != end_index:
                 lines.append(
                     f"    {item_nodes[ItemRef(tier_name, item_index)]} -> {slots[end_index]} "
-                    '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                    f'[xlabel="extent", color="{_EXTENT_COLOR}", style=dashed, arrowhead=tee, '
                     "arrowsize=0.6, fontsize=8, constraint=false];"
                 )
         lines.append("  }")
@@ -251,7 +261,7 @@ def dumps(
         row_anchors = (["score_start_clock"] if clock is not None else []) + tier_labels
         for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
             lines.append(
-                f'  {upper} -> {lower} [dir=none, color="#333333", penwidth=2.4, weight=100];'
+                f'  {upper} -> {lower} [dir=none, color="{_BRACE_COLOR}", penwidth=2.4, weight={_SPINE_WEIGHT}];'
             )
 
     if clock is not None:
@@ -265,7 +275,7 @@ def dumps(
                     column.append(row_slots[boundary_index])
             for upper, lower in zip(column, column[1:], strict=False):
                 lines.append(
-                    f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
+                    f"  {upper} -> {lower} [style=invis, weight={_COLUMN_WEIGHT}, arrowhead=none];"
                 )
 
         lines.extend(("", "  // Trigger timed events from their refined positions."))
@@ -279,7 +289,7 @@ def dumps(
                 start = boundary_nodes[BoundaryRef(reference.tier, item_index)]
                 lines.append(
                     f"  {start} -> {item_nodes[reference]} "
-                    '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+                    f'[color="{_TRIGGER_COLOR}", penwidth=1.35, arrowsize=0.65, weight={_SPINE_WEIGHT}];'
                 )
 
     _relation_lines(lines, graph, item_nodes, boundary_nodes)
@@ -428,7 +438,7 @@ def _arc_labeled(left: str, right: str, label: str) -> str:
     return (
         f"  {left} -> {right} "
         f'[label="{_quote(label, "relation name")}", '
-        'color="#5555aa", constraint=false];'
+        f'color="{_RELATION_COLOR}", constraint=false];'
     )
 
 
@@ -569,12 +579,7 @@ def _dumps_occupied_spine(
     }
     column_count = len(clock_coordinates)
 
-    lines = [
-        "digraph tiergraph {",
-        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
-        '  node [fontname="Helvetica"];',
-        '  edge [fontname="Helvetica", fontsize=9];',
-    ]
+    lines = ["digraph tiergraph {", *_PREAMBLE]
 
     lines.extend(("", "  // The clock spine is the total order.", "  { rank=same;"))
     lines.append('    score_start_clock [shape=plaintext, label="clock"];')
@@ -584,7 +589,7 @@ def _dumps_occupied_spine(
             f'group="time_{index}", label="{clock_labels[index]}"];'
         )
     for left, right in zip(clock_ids, clock_ids[1:], strict=False):
-        lines.append(f"    {left} -> {right} [weight=100];")
+        lines.append(f"    {left} -> {right} [weight={_SPINE_WEIGHT}];")
     lines.append("  }")
 
     visible = tuple(
@@ -661,20 +666,22 @@ def _dumps_occupied_spine(
                     f'label="", group="time_{column}", style=invis];'
                 )
         for left, right in zip(anchors, anchors[1:], strict=False):
-            lines.append(f"    {left} -> {right} [style=invis, weight=100];")
+            lines.append(
+                f"    {left} -> {right} [style=invis, weight={_SPINE_WEIGHT}];"
+            )
         for item_index in range(len(tier.items) - 1):
             left = item_nodes[ItemRef(tier_name, item_index)]
             right = item_nodes[ItemRef(tier_name, item_index + 1)]
             lines.append(
                 f"    {left} -> {right} "
-                '[color="#888888", penwidth=0.8, arrowsize=0.55, constraint=false];'
+                f'[color="{_ADJACENCY_COLOR}", penwidth=0.8, arrowsize=0.55, constraint=false];'
             )
         for item_index in range(len(tier.items)):
             if item_columns[item_index] != item_end_columns[item_index]:
                 anchor = anchors[item_end_columns[item_index]]
                 lines.append(
                     f"    {item_nodes[ItemRef(tier_name, item_index)]} -> {anchor} "
-                    '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                    f'[xlabel="extent", color="{_EXTENT_COLOR}", style=dashed, arrowhead=tee, '
                     "arrowsize=0.6, fontsize=8, constraint=false];"
                 )
         lines.append("  }")
@@ -685,7 +692,7 @@ def _dumps_occupied_spine(
     row_anchors = ["score_start_clock", *tier_labels]
     for upper, lower in zip(row_anchors, row_anchors[1:], strict=False):
         lines.append(
-            f'  {upper} -> {lower} [dir=none, color="#333333", penwidth=2.4, weight=100];'
+            f'  {upper} -> {lower} [dir=none, color="{_BRACE_COLOR}", penwidth=2.4, weight={_SPINE_WEIGHT}];'
         )
 
     lines.extend(("", "  // Register every lane to the clock's time columns."))
@@ -693,7 +700,7 @@ def _dumps_occupied_spine(
         chain = [clock_ids[column], *(anchors[column] for anchors in tier_anchor_lists)]
         for upper, lower in zip(chain, chain[1:], strict=False):
             lines.append(
-                f"  {upper} -> {lower} [style=invis, weight=1000, arrowhead=none];"
+                f"  {upper} -> {lower} [style=invis, weight={_COLUMN_WEIGHT}, arrowhead=none];"
             )
 
     lines.extend(("", "  // Trigger every event from the clock position it occupies."))
@@ -720,7 +727,7 @@ def _dumps_occupied_spine(
     for _tick, _tier_index, _item_index, source, node in triggers:
         lines.append(
             f"  {source} -> {node} "
-            '[color="#2f6f9f", penwidth=1.35, arrowsize=0.65, weight=100];'
+            f'[color="{_TRIGGER_COLOR}", penwidth=1.35, arrowsize=0.65, weight={_SPINE_WEIGHT}];'
         )
 
     _structural_relation_lines(lines, graph, clock, item_nodes, presentation)
@@ -744,12 +751,7 @@ def dumps_spans(
         if tier.declaration.name in selected_tiers
         and (tier.items or include_empty_tiers)
     )
-    lines = [
-        "digraph tiergraph_spans {",
-        '  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];',
-        '  node [fontname="Helvetica"];',
-        '  edge [fontname="Helvetica", fontsize=9];',
-    ]
+    lines = ["digraph tiergraph_spans {", *_PREAMBLE]
     node_ids: dict[ItemRef, str] = {}
     for tier_index, tier in tiers:
         lines.extend(("", f"  subgraph tier_{tier_index} {{", "    rank=same;"))
@@ -813,13 +815,13 @@ def dumps_spans(
             last = node_ids[ItemRef(profile.base_tier, span.end - 1)]
         lines.append(
             f"  {node_ids[span_reference]} -> {first} "
-            '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+            f'[xlabel="extent", color="{_EXTENT_COLOR}", style=dashed, arrowhead=tee, '
             "arrowsize=0.6, fontsize=8, constraint=false];"
         )
         if first != last:
             lines.append(
                 f"  {node_ids[span_reference]} -> {last} "
-                '[xlabel="extent", color="#777777", style=dashed, arrowhead=tee, '
+                f'[xlabel="extent", color="{_EXTENT_COLOR}", style=dashed, arrowhead=tee, '
                 "arrowsize=0.6, fontsize=8, constraint=false];"
             )
     lines.append("}")
@@ -966,11 +968,7 @@ def _endpoint_id(
 
 
 def _arc(left: str, right: str, declaration: QualifiedName) -> str:
-    return (
-        f"  {left} -> {right} "
-        f'[label="{_quote(declaration.local_name, "relation name")}", '
-        'color="#5555aa", constraint=false];'
-    )
+    return _arc_labeled(left, right, declaration.local_name)
 
 
 def _quote(value: str, field: str) -> str:

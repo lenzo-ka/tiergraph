@@ -113,6 +113,9 @@ class OrderedPolyadicTraversal:
     _containment_profile: bool = field(
         init=False, default=False, repr=False, compare=False
     )
+    _subject: str = field(
+        init=False, default="ordered polyadic relation", repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_side, PolyadicSide):
@@ -182,46 +185,21 @@ class OrderedPolyadicTraversal:
                 side = getattr(declaration, side_name.value)
                 label = side_name.value[:-1]
                 if not endpoints:
-                    if not side.allow_empty:
-                        if self._containment_profile:
-                            raise ValueError(
-                                f"ordered containment relation {str(self.relation)!r} "
-                                f"instance {instance_index} has an empty {label} side"
-                            )
-                        raise ValueError(
-                            f"ordered polyadic relation {str(self.relation)!r} "
-                            f"instance {instance_index} has an empty {label} side"
-                        )
                     resolved_sides.append(())
                     continue
-                if len(endpoints) < side.minimum or (
-                    side.maximum is not None and len(endpoints) > side.maximum
-                ):
-                    if self._containment_profile:
-                        raise ValueError(
-                            f"ordered containment relation {str(self.relation)!r} "
-                            f"instance {instance_index} {label} arity "
-                            f"{len(endpoints)} is outside declared bounds "
-                            f"{side.minimum}..{side.maximum}"
-                        )
-                    raise ValueError(
-                        f"ordered polyadic relation {str(self.relation)!r} instance "
-                        f"{instance_index} {label} arity {len(endpoints)} is outside "
-                        f"declared bounds {side.minimum}..{side.maximum}"
-                    )
                 nodes: list[Node] = []
                 for endpoint_index, endpoint in enumerate(endpoints):
                     if self._containment_profile:
                         if not isinstance(endpoint, ItemRef):
                             raise ValueError(
-                                f"ordered containment relation "
-                                f"{str(self.relation)!r} instance {instance_index} "
+                                f"{self._subject} {str(self.relation)!r} "
+                                f"instance {instance_index} "
                                 f"{label} {endpoint_index} is not an item"
                             )
                         if endpoint not in self.graph.canonical_items():
                             raise ValueError(
-                                f"ordered containment relation "
-                                f"{str(self.relation)!r} instance {instance_index} "
+                                f"{self._subject} {str(self.relation)!r} "
+                                f"instance {instance_index} "
                                 f"{label} {str(endpoint)!r} is outside its graph"
                             )
                         node = Node(NodeKind.ITEM, endpoint)
@@ -241,7 +219,7 @@ class OrderedPolyadicTraversal:
                         else:
                             detail = "is not a boundary"
                         raise ValueError(
-                            f"ordered polyadic relation {str(self.relation)!r} instance "
+                            f"{self._subject} {str(self.relation)!r} instance "
                             f"{instance_index} {label} {endpoint_index} "
                             f"{str(endpoint)!r} {detail}"
                         )
@@ -249,7 +227,7 @@ class OrderedPolyadicTraversal:
                     assert isinstance(reference, ItemRef | BoundaryRef)
                     if side.tiers is not None and reference.tier not in side.tiers:
                         raise ValueError(
-                            f"ordered polyadic relation {str(self.relation)!r} instance "
+                            f"{self._subject} {str(self.relation)!r} instance "
                             f"{instance_index} {label} endpoint {endpoint_index} "
                             f"{str(endpoint)!r} belongs to tier "
                             f"{str(reference.tier)!r}; tier is not allowed"
@@ -289,16 +267,8 @@ class OrderedPolyadicTraversal:
                 instance_index, target = edges[index]
                 stack[-1] = (node, index + 1)
                 if target in visiting:
-                    if self._containment_profile:
-                        reference = target.reference
-                        assert isinstance(reference, ItemRef)
-                        raise ValueError(
-                            f"ordered containment relation {str(self.relation)!r} "
-                            f"instance {instance_index} closes a cycle at "
-                            f"{str(reference)!r}"
-                        )
                     raise ValueError(
-                        f"ordered polyadic relation {str(self.relation)!r} instance "
+                        f"{self._subject} {str(self.relation)!r} instance "
                         f"{instance_index} closes a cycle at {str(target.reference)!r}"
                     )
                 if target not in visited:
@@ -469,6 +439,7 @@ class OrderedContainment:
             PolyadicSide.TARGETS,
         )
         object.__setattr__(traversal, "_containment_profile", True)
+        object.__setattr__(traversal, "_subject", "ordered containment relation")
         object.__setattr__(self, "_traversal", traversal)
         children, parents = self._build_incidence()
         object.__setattr__(self, "_children", children)

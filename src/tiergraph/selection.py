@@ -27,7 +27,8 @@ from tiergraph.path import (
     StructuralPathProfile,
     resolve_path,
 )
-from tiergraph.schema import Refusal, RefusalStage
+from tiergraph.schema import Refusal, RefusalStage, _refuse_field_set
+from tiergraph.wire import _object, _string
 
 
 class NodeKind(StrEnum):
@@ -507,7 +508,7 @@ def selection_loads(source: str | bytes) -> Selector:
 
 
 def _decode_selector(value: JsonValue, path: str) -> Selector:
-    node = _object(value, path)
+    node = cast(dict[str, JsonValue], _object(value, path))
     discriminators = {"op", "select"} & node.keys()
     if len(discriminators) != 1:
         raise Refusal(
@@ -576,19 +577,8 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
     )
 
 
-def _object(value: JsonValue, path: str) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
-    return value
-
-
 def _keys(value: dict[str, JsonValue], expected: set[str], path: str) -> None:
-    if value.keys() != expected:
-        raise Refusal(
-            RefusalStage.SHAPE,
-            f"{path} must contain exactly {sorted(expected)!r}; "
-            f"found {sorted(value)!r}",
-        )
+    _refuse_field_set(value.keys(), expected, expected, path)
 
 
 def _discriminator(value: JsonValue, path: str) -> str:
@@ -600,12 +590,6 @@ def _discriminator(value: JsonValue, path: str) -> str:
     """
     if not isinstance(value, str):
         raise Refusal(RefusalStage.DISCRIMINATOR, f"{path} must be a string")
-    return value
-
-
-def _string(value: JsonValue, path: str) -> str:
-    if not isinstance(value, str):
-        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a string")
     return value
 
 
