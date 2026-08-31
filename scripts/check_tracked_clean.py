@@ -360,8 +360,15 @@ def name_leaks(path: Path, denylist: Denylist) -> list[str]:
 
 
 def _url_prefix(value: str) -> str:
-    """Return a URL's lowercase host and at most its first two path segments."""
-    parsed = urlsplit(value.rstrip(".,;:!?").removeprefix("git+"))
+    """Return a URL's lowercase host and at most its first two path segments.
+
+    A trailing backslash is stripped with the sentence punctuation because it is
+    never part of a URL: it is what JSON escaping leaves behind when a document
+    containing a URL is itself stored as a JSON string. Without this, a URL that
+    is allowlisted in prose reads as unallowlisted inside embedded JSON, and the
+    gate reports a leak that is an artifact of the quoting.
+    """
+    parsed = urlsplit(value.rstrip(".,;:!?\\").removeprefix("git+"))
     segments = [segment for segment in parsed.path.split("/") if segment][:2]
     return (parsed.hostname or "").lower() + (
         f"/{'/'.join(segments)}" if segments else ""
