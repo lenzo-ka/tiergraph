@@ -40,11 +40,11 @@ def deliveries(provenance: DerivationProvenance) -> tuple[OrderedDelivery, ...]:
 
 
 def mix(carrier: object, values: tuple[object, ...]) -> object:
-    """Add unit gain at each integer coordinate to a mapping carrier."""
+    """Add unit gain for each integer delivery to a mapping carrier."""
     levels = dict(cast(dict[int, int], carrier))
     for value in values:
-        coordinate = cast(int, value)
-        levels[coordinate] = levels.get(coordinate, 0) + 1
+        delivery = cast(int, value)
+        levels[delivery] = levels.get(delivery, 0) + 1
     return {key: levels[key] for key in sorted(levels)}
 
 
@@ -97,14 +97,14 @@ CHAIN = ActionDeclaration[object, object](
     "effect-chain", append, associative=True, idempotent=False, commutative=False
 )
 MARK = ActionDeclaration[object, object](
-    "coordinate-mark",
+    "delivery-mark",
     mark,
     associative=True,
     idempotent=True,
     commutative=True,
 )
 ADD = ActionDeclaration[object, object](
-    "coordinate-sum", add_values, associative=True, idempotent=False, commutative=True
+    "delivery-sum", add_values, associative=True, idempotent=False, commutative=True
 )
 SCALE = ActionDeclaration[object, object](
     "gain-scale",
@@ -143,7 +143,7 @@ def test_semimodule_claim_satisfies_bound_laws() -> None:
 
 
 def test_gain_mix_does_not_claim_integer_semimodule_scaling() -> None:
-    """IndexCoordinate mixing is not the claimed integer scaling operation."""
+    """Delivery mixing is not the claimed integer scaling operation."""
     assert MIX.semimodule is None
     with pytest.raises(ValueError, match=r"gain-mix.*does not implement.*scale"):
         replace(MIX, semimodule=GAIN_MODULE)

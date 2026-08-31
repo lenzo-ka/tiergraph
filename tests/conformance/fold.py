@@ -41,10 +41,10 @@ class Valuation(Protocol):
 
 
 class Action(Protocol[Carrier, ActionResult]):
-    """Apply recognized coordinates to an otherwise opaque carrier."""
+    """Apply recognized deliveries to an otherwise opaque carrier."""
 
     def __call__(
-        self, carrier: Carrier, coordinates: tuple[int, ...], /
+        self, carrier: Carrier, deliveries: tuple[int, ...], /
     ) -> ActionResult:
         """Return the carrier-specific result."""
 
@@ -111,7 +111,7 @@ class FoldFixture:
         cost = self.name("cost")
         gain = self.name("gain")
         tie = self.name("tie")
-        coordinate = self.name("coordinate")
+        delivery = self.name("delivery")
 
         def decimal(name: QualifiedName, lexical: str) -> AttributeValue:
             return AttributeValue(name, XsdType.DECIMAL, lexical)
@@ -126,7 +126,7 @@ class FoldFixture:
                     decimal(cost, "0"),
                     decimal(gain, "0"),
                     decimal(tie, "0"),
-                    integer(coordinate, "0"),
+                    integer(delivery, "0"),
                 ),
             ),
             Item(
@@ -135,7 +135,7 @@ class FoldFixture:
                     decimal(cost, "2"),
                     decimal(gain, "1"),
                     decimal(tie, "0"),
-                    integer(coordinate, "4"),
+                    integer(delivery, "4"),
                 ),
             ),
             Item(
@@ -144,7 +144,7 @@ class FoldFixture:
                     decimal(cost, "1"),
                     decimal(gain, "4"),
                     decimal(tie, "0"),
-                    integer(coordinate, "8"),
+                    integer(delivery, "8"),
                 ),
             ),
             Item(
@@ -153,7 +153,7 @@ class FoldFixture:
                     decimal(cost, "3"),
                     decimal(gain, "1"),
                     decimal(tie, "0"),
-                    integer(coordinate, "12"),
+                    integer(delivery, "12"),
                 ),
             ),
         )
@@ -184,7 +184,7 @@ class FoldFixture:
             AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),
             AttributeDeclaration(gain, AttributeDomain.ITEM, XsdType.DECIMAL),
             AttributeDeclaration(tie, AttributeDomain.ITEM, XsdType.DECIMAL),
-            AttributeDeclaration(coordinate, AttributeDomain.ITEM, XsdType.INTEGER),
+            AttributeDeclaration(delivery, AttributeDomain.ITEM, XsdType.INTEGER),
         )
         return Graph(
             (NamespaceDeclaration("mix", self.namespace),),
@@ -210,10 +210,10 @@ class FoldFixture:
 
         return read
 
-    def coordinates(
+    def deliveries(
         self, graph: Graph, provenance: DerivationProvenance
     ) -> tuple[int, ...]:
-        """Yield structural coordinates after recognition has finished."""
+        """Yield deliveries after recognition has finished."""
         by_id = {
             item.durable_id: item
             for tier in graph.tiers
@@ -221,12 +221,12 @@ class FoldFixture:
             if item.durable_id is not None
         }
         result: list[int] = []
-        coordinate_name = self.name("coordinate")
+        delivery_name = self.name("delivery")
         for path in provenance:
             for durable_id in path:
                 item = by_id[durable_id]
                 value = next(
-                    value for value in item.attributes if value.name == coordinate_name
+                    value for value in item.attributes if value.name == delivery_name
                 )
                 result.append(int(value.lexical))
         return tuple(result)
@@ -293,10 +293,10 @@ def act[Value, Carrier, ActionResult](
     carrier: Carrier,
     action: Action[Carrier, ActionResult],
 ) -> ActionResult:
-    """Apply witness coordinates without allowing recognition to inspect the carrier."""
+    """Apply witness deliveries without allowing recognition to inspect the carrier."""
     if recognition.provenance is None:
         raise ValueError("recognition has no witnesses for action")
-    return action(carrier, fixture.coordinates(graph, recognition.provenance))
+    return action(carrier, fixture.deliveries(graph, recognition.provenance))
 
 
 def canonical_bytes(value: Mapping[str, object]) -> bytes:

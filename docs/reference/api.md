@@ -1436,7 +1436,7 @@ Decode one strict terminal declaration from JSON-compatible data.
 LoweredGrammar(declaration: 'GrammarDeclaration', program: 'Program', as_built: 'AsBuilt') -> None
 ```
 
-Pair a grammar with its replayable coordinate-hedge construction.
+Pair a grammar with its replayable ordered-hedge construction.
 
 #### `LoweredGrammar.to_data`
 
@@ -1542,7 +1542,7 @@ Decode a strict grammar declaration from UTF-8 JSON text or bytes.
 lower_grammar(declaration: 'GrammarDeclaration', namespace: 'str' = 'urn:tiergraph:grammar') -> 'LoweredGrammar'
 ```
 
-Lower a grammar through machine opcodes to an ordered coordinate hedge.
+Lower a grammar through machine opcodes to an ordered hedge.
 
 ### `recognize`
 
