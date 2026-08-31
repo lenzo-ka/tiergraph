@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Self, cast
 
 from tiergraph.core import (
@@ -1357,16 +1357,7 @@ def _opcode_data(opcode: object) -> object:
 
 
 def _validate_graph(graph: Graph) -> Graph:
-    return Graph(
-        graph.namespaces,
-        graph.tiers,
-        graph.relation_declarations,
-        graph.relations,
-        graph.attribute_declarations,
-        graph.boundary_values,
-        graph.attributes,
-        graph.polyadic_relations,
-    )
+    return replace(graph)
 
 
 def _replace(
@@ -1381,19 +1372,30 @@ def _replace(
     attributes: tuple[AttributeValue, ...] | None = None,
     polyadic_relations: tuple[PolyadicRelationInstance, ...] | None = None,
 ) -> Graph:
-    return Graph(
-        graph.namespaces if namespaces is None else namespaces,
-        graph.tiers if tiers is None else tiers,
-        graph.relation_declarations
-        if relation_declarations is None
-        else relation_declarations,
-        graph.relations if relations is None else relations,
-        graph.attribute_declarations
-        if attribute_declarations is None
-        else attribute_declarations,
-        graph.boundary_values if boundary_values is None else boundary_values,
-        graph.attributes if attributes is None else attributes,
-        graph.polyadic_relations if polyadic_relations is None else polyadic_relations,
+    return replace(
+        graph,
+        namespaces=graph.namespaces if namespaces is None else namespaces,
+        tiers=graph.tiers if tiers is None else tiers,
+        relation_declarations=(
+            graph.relation_declarations
+            if relation_declarations is None
+            else relation_declarations
+        ),
+        relations=graph.relations if relations is None else relations,
+        attribute_declarations=(
+            graph.attribute_declarations
+            if attribute_declarations is None
+            else attribute_declarations
+        ),
+        boundary_values=(
+            graph.boundary_values if boundary_values is None else boundary_values
+        ),
+        attributes=graph.attributes if attributes is None else attributes,
+        polyadic_relations=(
+            graph.polyadic_relations
+            if polyadic_relations is None
+            else polyadic_relations
+        ),
     )
 
 

@@ -10,7 +10,9 @@ import time
 
 import pytest
 
+import tiergraph as public_api
 import tiergraph.machine as machine
+from tests import test_wire as wire_fixtures
 from tests.conformance.machine import MachineLawSuite
 from tiergraph import (
     MACHINE_VERSION,
@@ -56,7 +58,7 @@ from tiergraph import (
     steps,
     wire,
 )
-from tiergraph.machine import AttributeTarget, Opcode, _flatten
+from tiergraph.machine import AttributeTarget, Opcode, PrimitiveOpcode, _flatten
 
 
 def build_program(opcodes: tuple[Opcode, ...]) -> Program:
@@ -65,6 +67,55 @@ def build_program(opcodes: tuple[Opcode, ...]) -> Program:
 
 
 LAWS = MachineLawSuite(build_program)
+
+
+def test_every_exported_opcode_preserves_seals_and_layers() -> None:
+    """Every public direct transition carries graph promises and annotations."""
+    graph = wire_fixtures.graph_with_layers(wire_fixtures.six_domain_layer(), seal=1)
+    words = wire_fixtures.WORDS
+    links = wire_fixtures.LINKS
+    vocabulary = wire_fixtures.VOCAB
+
+    def fresh(local: str) -> QualifiedName:
+        return QualifiedName(vocabulary, local)
+
+    opcodes: dict[type[object], PrimitiveOpcode] = {
+        DeclareNamespace: DeclareNamespace(NamespaceDeclaration("n", "urn:new")),
+        DeclareTier: DeclareTier(TierDeclaration(fresh("new-tier"), "New tier")),
+        DeclareRelation: DeclareRelation(
+            PolyadicRelationDeclaration(
+                fresh("new-relation"),
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (words,)),
+                RelationSideDeclaration((RelationEndpointKind.ITEM,), (words,)),
+            )
+        ),
+        DeclareAttribute: DeclareAttribute(
+            AttributeDeclaration(
+                fresh("new-attribute"), AttributeDomain.DOCUMENT, XsdType.STRING
+            )
+        ),
+        AddItem: AddItem(words, Item("w2")),
+        PromoteItem: PromoteItem(ItemRef(words, 0), "w0"),
+        PromoteBoundary: PromoteBoundary(BoundaryRef(words, 0), "w0"),
+        Relate: Relate(RelationInstance(links, ItemRef(words, 1), ItemRef(words, 0))),
+        AttachValue: AttachValue(
+            AttributeDomain.DOCUMENT,
+            None,
+            wire_fixtures.value(AttributeDomain.DOCUMENT, "attached"),
+        ),
+    }
+    exported = {
+        member
+        for name in public_api.__all__
+        if isinstance((member := getattr(public_api, name)), type)
+        and member.__module__ == machine.__name__
+        and callable(getattr(member, "apply", None))
+    }
+    assert opcodes.keys() == exported
+    for opcode in opcodes.values():
+        result = opcode.apply(graph)
+        assert result.seals == graph.seals, type(opcode).__name__
+        assert result.layers == graph.layers, type(opcode).__name__
 
 
 def test_normal_unroll_does_not_run_reference_after_linear_acceptance(

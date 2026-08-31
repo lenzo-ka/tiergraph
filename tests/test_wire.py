@@ -1085,7 +1085,7 @@ def test_unknown_field_probe_family_denominator_is_pinned() -> None:
 
     probes = conformance_probes(_seeds(), DOCUMENT)
     unknown = [probe for probe in probes if probe.mutation == "unknown-field"]
-    assert len(unknown) == 85
+    assert len(unknown) == 148
 
 
 LAYER_NS = "urn:layer-test"
@@ -1563,6 +1563,23 @@ def test_flatten_six_domains_and_polyadic_subjects() -> None:
     )
     with pytest.raises(GraphValidationError, match="without durable relation identity"):
         no_id.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+
+
+# REGRESSION: the shared seal-carrier fragment rejects additions in layer subjects.
+def test_layer_orphan_carrier_refuses_unknown_field() -> None:
+    orphan = OrphanedSubject(WORDS, ItemRef(WORDS, 0))
+    graph = graph_with_layers(
+        Layer(SOURCE_A, (LayerFact(orphan, value(AttributeDomain.ITEM, "old")),))
+    )
+    document = json.loads(dumps(graph))
+    carrier = document["graph"]["layers"][0]["facts"][0]["subject"]["carrier"]
+    carrier["bogus"] = 1
+
+    with pytest.raises(Refusal) as refusal:
+        loads(json.dumps(document))
+    assert str(refusal.value) == (
+        "layers[0].facts[0].subject.carrier has unknown fields ['bogus']"
+    )
 
 
 # REGRESSION: orphan boundary wire and discriminator paths are explicit.

@@ -54,6 +54,7 @@ type AttributeDeclarationInput = (
 )
 
 _MISSING = object()
+_EMPTY_GRAPH = Graph((), (), ())
 
 
 class BuilderError(ValueError):
@@ -485,15 +486,16 @@ class Document:
 
     def build(self) -> Graph:
         """Return a fresh immutable graph without consuming this builder."""
-        return Graph(
-            tuple(self._namespaces),
-            tuple(self._tiers),
-            tuple(self._relations),
-            tuple(self._instances),
-            tuple(self._attribute_declarations),
-            tuple(self._boundaries),
-            tuple(self._attributes),
-            tuple(self._polyadic_instances),
+        return replace(
+            _EMPTY_GRAPH,
+            namespaces=tuple(self._namespaces),
+            tiers=tuple(self._tiers),
+            relation_declarations=tuple(self._relations),
+            relations=tuple(self._instances),
+            attribute_declarations=tuple(self._attribute_declarations),
+            boundary_values=tuple(self._boundaries),
+            attributes=tuple(self._attributes),
+            polyadic_relations=tuple(self._polyadic_instances),
         )
 
     def _name(self, name: Name) -> QualifiedName:
