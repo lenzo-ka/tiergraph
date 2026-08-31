@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
-from scripts import capture_corpus, check_format_semantics
+from scripts import capture_corpus, check_format_semantics, check_tracked_clean
 
 import tiergraph
 import tiergraph.wire
@@ -288,3 +288,22 @@ def test_the_plugin_writes_when_the_environment_names_a_destination(
     rows = [json.loads(line) for line in destination.read_text().splitlines()]
     assert len(rows) == 1
     assert rows[0]["captured_at"] == "9.9.9"
+
+
+def test_a_json_escaped_url_is_read_by_its_real_prefix() -> None:
+    """REGRESSION: the corpus is JSON, so its URLs arrive carrying an escape.
+
+    A document stored as a JSON string turns a trailing quote into a backslash
+    escape, and the URL pattern takes the backslash with it. Before this was
+    stripped, an allowlisted prefix read as unallowlisted purely because of the
+    quoting, and the publishability gate reported a leak that was an artifact of
+    the file format rather than anything in the content.
+    """
+    assert (
+        check_tracked_clean._url_prefix("https://example.com/score\\")
+        == "example.com/score"
+    )
+    assert (
+        check_tracked_clean._url_prefix("https://example.com/score")
+        == "example.com/score"
+    )
