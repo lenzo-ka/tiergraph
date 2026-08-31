@@ -804,6 +804,44 @@ def test_clock_commands_query_full_declarative_profile(
     }
 
 
+def test_clock_item_without_uniform_rate_does_not_inspect_refusal_message(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing uniform rate is detected without calling legacy duration()."""
+    graph_path = tmp_path / "graph.json"
+    profile_path = tmp_path / "clock.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(reference_shape()))
+    profile_path.write_text(json.dumps(clock_profile_data()), encoding="utf-8")
+    item = _structural_path(
+        "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 1
+    )
+
+    def reworded_refusal(
+        self: tiergraph.ClockProfile, tier: QualifiedName, index: int
+    ) -> tuple[int, Any]:
+        del self, tier, index
+        raise ValueError("a uniform clock rate is unavailable")
+
+    monkeypatch.setattr(tiergraph.ClockProfile, "duration", reworded_refusal)
+    assert (
+        main(
+            [
+                "clock",
+                "item",
+                str(graph_path),
+                "--profile",
+                str(profile_path),
+                "--item",
+                item,
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["exact_duration"] is None
+
+
 def test_clock_commands_report_profile_path_kind_and_untimed_errors(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

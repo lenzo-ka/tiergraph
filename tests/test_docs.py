@@ -22,11 +22,19 @@ from scripts.generate_docs import main as docs_main
 
 import tiergraph.schema
 import tiergraph_dot
+from tiergraph.machine import MACHINE_VERSION
 
 
 def test_documentation_gate_is_current() -> None:
     """The in-process gate keeps its validation code inside coverage."""
     assert docs_main(["--check"]) == 0
+
+
+def test_generated_cli_docs_use_the_accepted_machine_version() -> None:
+    """The documented machine header follows the decoder's exported version."""
+    rendered = generate_docs.CLI_PATH.read_text(encoding="utf-8")
+    header = json.dumps({"machine_version": MACHINE_VERSION}, separators=(",", ":"))
+    assert f"`{header}`" in rendered
 
 
 def test_manifest_shape_errors_are_rejected(tmp_path: Path) -> None:

@@ -608,6 +608,7 @@ def test_same_span_events_keep_different_nonuniform_physical_timings() -> None:
     assert profile.timing(ALTERNATE, 0) == PhysicalTiming(
         Decimal("0.12"), Decimal("0.09"), "s"
     )
+    assert not profile.has_uniform_rate
     with pytest.raises(ValueError, match="no uniform rate"):
         profile.duration(SEGMENT, 0)
 
