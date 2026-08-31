@@ -623,6 +623,36 @@ class FoldDeclaration[Value]:
             ] = {}
             solving: set[tuple[ItemRef, ...]] = set()
 
+            def cache_component_value(
+                component_cache: dict[
+                    ItemRef,
+                    tuple[
+                        Value,
+                        DerivationProvenance,
+                        tuple[RankedWitness[Value], ...],
+                        int,
+                    ],
+                ],
+                member: ItemRef,
+                value: Value,
+            ) -> None:
+                """Cache one SCC value with its unbranched witness metadata."""
+                label = _label(self.graph, member)
+                paths: DerivationProvenance = (
+                    () if value == self.semiring.zero else ((label,),)
+                )
+                ranked = (
+                    ()
+                    if not self.ranked_output or value == self.semiring.zero
+                    else ((value, (label,)),)
+                )
+                component_cache[member] = (
+                    value,
+                    paths,
+                    ranked,
+                    len(ranked) or len(paths),
+                )
+
             def solve_component(
                 component: tuple[ItemRef, ...],
                 component_cache: dict[
@@ -648,8 +678,7 @@ class FoldDeclaration[Value]:
                 def equation(current: ItemRef, values: dict[ItemRef, Value]) -> Value:
                     """Evaluate one equation under current SCC approximants."""
                     nonlocal additions, multiplications
-                    item = _item(self.graph, current)
-                    label = item.durable_id or _structural_label(current)
+                    label = _label(self.graph, current)
                     value = self.lift(self.valuation.read(self.graph, current), label)
                     has_children = False
                     for transition in self.transitions:
@@ -698,23 +727,7 @@ class FoldDeclaration[Value]:
                 }
                 if self.semiring.star is None and next_approximants == approximants:
                     for member, value in approximants.items():
-                        label = _item(
-                            self.graph, member
-                        ).durable_id or _structural_label(member)
-                        paths: DerivationProvenance = (
-                            () if value == self.semiring.zero else ((label,),)
-                        )
-                        ranked = (
-                            ()
-                            if not self.ranked_output or value == self.semiring.zero
-                            else ((value, (label,)),)
-                        )
-                        component_cache[member] = (
-                            value,
-                            paths,
-                            ranked,
-                            len(ranked) or len(paths),
-                        )
+                        cache_component_value(component_cache, member, value)
                     active_components.remove(component)
                     return
 
@@ -786,8 +799,7 @@ class FoldDeclaration[Value]:
                 def coefficient(current: ItemRef, target: ItemRef) -> Value:
                     """Return the linear coefficient of one internal child."""
                     nonlocal additions, multiplications
-                    item = _item(self.graph, current)
-                    label = item.durable_id or _structural_label(current)
+                    label = _label(self.graph, current)
                     value = self.lift(self.valuation.read(self.graph, current), label)
                     for transition in self.transitions:
                         children = outgoing[current][transition.relation]
@@ -867,23 +879,7 @@ class FoldDeclaration[Value]:
                 for member in component:
                     value = self.semiring.multiply(closure, approximants[member])
                     multiplications += 1
-                    label = _item(self.graph, member).durable_id or _structural_label(
-                        member
-                    )
-                    member_paths: DerivationProvenance = (
-                        () if value == self.semiring.zero else ((label,),)
-                    )
-                    ranked = (
-                        ()
-                        if not self.ranked_output or value == self.semiring.zero
-                        else ((value, (label,)),)
-                    )
-                    component_cache[member] = (
-                        value,
-                        member_paths,
-                        ranked,
-                        len(ranked) or len(member_paths),
-                    )
+                    cache_component_value(component_cache, member, value)
                 active_components.remove(component)
 
             def visit(
@@ -914,8 +910,7 @@ class FoldDeclaration[Value]:
                     if current in state_cache:
                         continue
                     if not finish:
-                        item = _item(self.graph, current)
-                        label = item.durable_id or _structural_label(current)
+                        label = _label(self.graph, current)
                         local = self.lift(
                             self.valuation.read(self.graph, current), label
                         )
@@ -1330,8 +1325,7 @@ class FoldDeclaration[Value]:
 
         def expand(reference: ItemRef) -> None:
             """Evaluate one item's derivation list from its children's lists."""
-            item = _item(self.graph, reference)
-            label = item.durable_id or _structural_label(reference)
+            label = _label(self.graph, reference)
             values: tuple[Value, ...] = (
                 self.lift(self.valuation.read(self.graph, reference), label),
             )
@@ -1567,6 +1561,11 @@ def _item(graph: Graph, reference: ItemRef) -> Item:
         for tier in graph.tiers
         if tier.declaration.name == reference.tier
     )
+
+
+def _label(graph: Graph, reference: ItemRef) -> str:
+    """Return an item's durable identity or its canonical structural fallback."""
+    return _item(graph, reference).durable_id or _structural_label(reference)
 
 
 def _structural_label(reference: ItemRef) -> str:

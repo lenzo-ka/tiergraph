@@ -130,8 +130,8 @@ def test_selection_query_set_algebra_and_nesting() -> None:
         ({"op": "unknown", "args": [{}]}, "unknown operation"),
         ({"select": "unknown"}, "unknown selector"),
         ({"op": "union", "args": []}, "non-empty list"),
-        ({"select": "tier", "tier": _name("left"), "extra": 1}, "exactly"),
-        ({"select": "tier"}, "exactly"),
+        ({"select": "tier", "tier": _name("left"), "extra": 1}, "unknown fields"),
+        ({"select": "tier"}, "missing fields"),
         (
             {"select": "tier", "tier": {"namespace": [], "local_name": "left"}},
             r"\.namespace must be a string",
@@ -234,7 +234,7 @@ def test_removed_select_is_not_public() -> None:
         ),
         (
             {"select": "tier"},
-            "$ must contain exactly ['select', 'tier']; found ['select']",
+            "$ is missing fields ['tier']",
         ),
         (
             {"op": "union", "select": "tier", "args": []},

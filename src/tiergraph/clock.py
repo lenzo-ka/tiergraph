@@ -20,7 +20,7 @@ from tiergraph.core import (
     RelationEndpointKind,
     XsdType,
 )
-from tiergraph.machine import _decode_object, _decode_qname
+from tiergraph.machine import _QNameFields
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -118,36 +118,19 @@ class ClockProfile:
             "start_attribute",
             "duration_attribute",
         }
-        obj = _decode_object(data, "clock profile", keys)
-
-        def qualified_name(name: str, value: object) -> QualifiedName:
-            """Decode one QName with path-specific validation."""
-            path = f"clock profile.{name}"
-            return _decode_qname(value, path)
-
-        def required(name: str) -> QualifiedName:
-            """Decode one required non-null QName field."""
-            value = obj[name]
-            if value is None:
-                raise ValueError(f"clock profile.{name} must be an object")
-            return qualified_name(name, value)
-
-        def optional(name: str) -> QualifiedName | None:
-            """Decode one explicitly nullable QName field."""
-            value = obj[name]
-            return None if value is None else qualified_name(name, value)
+        fields = _QNameFields(data, "clock profile", keys)
 
         return cls(
             graph,
-            required("clock_tier"),
-            required("binding_relation"),
-            optional("rate_attribute"),
-            required("unit_attribute"),
-            optional("tick_attribute"),
-            optional("gap_attribute"),
-            optional("untimed_attribute"),
-            optional("start_attribute"),
-            optional("duration_attribute"),
+            fields.required("clock_tier"),
+            fields.required("binding_relation"),
+            fields.optional("rate_attribute"),
+            fields.required("unit_attribute"),
+            fields.optional("tick_attribute"),
+            fields.optional("gap_attribute"),
+            fields.optional("untimed_attribute"),
+            fields.optional("start_attribute"),
+            fields.optional("duration_attribute"),
         )
 
     def __post_init__(self) -> None:

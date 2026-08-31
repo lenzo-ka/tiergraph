@@ -17,7 +17,7 @@ from tiergraph.core import (
     QualifiedName,
     Tier,
 )
-from tiergraph.machine import _decode_object, _decode_qname
+from tiergraph.machine import _QNameFields
 from tiergraph.path import ItemBinding, StructuralPathProfile
 
 SPANVIEW_FORMAT_VERSION = "1"
@@ -59,42 +59,24 @@ class SpanViewProfile:
             "char_offset_attribute",
             "alternative_relation",
         }
-        obj = _decode_object(data, "span profile", keys)
-
-        def qualified_name(value: object, path: str) -> QualifiedName:
-            """Decode one QName with path-specific validation."""
-            return _decode_qname(value, path)
-
-        def required(name: str) -> QualifiedName:
-            """Decode one required non-null QName field."""
-            value = obj[name]
-            path = f"span profile.{name}"
-            if value is None:
-                raise ValueError(f"{path} must be an object")
-            return qualified_name(value, path)
-
-        def optional(name: str) -> QualifiedName | None:
-            """Decode one explicitly nullable QName field."""
-            value = obj[name]
-            return (
-                None if value is None else qualified_name(value, f"span profile.{name}")
-            )
+        fields = _QNameFields(data, "span profile", keys)
+        obj = fields.obj
 
         span_tiers = obj["span_tiers"]
         if not isinstance(span_tiers, list):
             raise ValueError("span profile.span_tiers must be a list")
         return cls(
-            required("base_tier"),
+            fields.required("base_tier"),
             tuple(
-                qualified_name(value, f"span profile.span_tiers[{index}]")
+                fields.decode(value, f"span profile.span_tiers[{index}]")
                 for index, value in enumerate(span_tiers)
             ),
-            required("coverage_relation"),
-            required("score_attribute"),
-            required("value_attribute"),
-            required("base_surface_attribute"),
-            optional("char_offset_attribute"),
-            optional("alternative_relation"),
+            fields.required("coverage_relation"),
+            fields.required("score_attribute"),
+            fields.required("value_attribute"),
+            fields.required("base_surface_attribute"),
+            fields.optional("char_offset_attribute"),
+            fields.optional("alternative_relation"),
         )
 
 

@@ -473,6 +473,31 @@ def _decode_qname(value: object, path: str) -> QualifiedName:
     return QualifiedName(namespace, local_name)
 
 
+class _QNameFields:
+    """Decode required and nullable QName fields under one diagnostic subject."""
+
+    def __init__(self, data: object, subject: str, keys: set[str]) -> None:
+        self.subject = subject
+        self.obj = _decode_object(data, subject, keys)
+
+    def decode(self, value: object, path: str) -> QualifiedName:
+        """Decode one QName with path-specific validation."""
+        return _decode_qname(value, path)
+
+    def required(self, name: str) -> QualifiedName:
+        """Decode one required non-null QName field."""
+        value = self.obj[name]
+        path = f"{self.subject}.{name}"
+        if value is None:
+            raise ValueError(f"{path} must be an object")
+        return self.decode(value, path)
+
+    def optional(self, name: str) -> QualifiedName | None:
+        """Decode one explicitly nullable QName field."""
+        value = self.obj[name]
+        return None if value is None else self.decode(value, f"{self.subject}.{name}")
+
+
 def _decode_namespace(value: object, path: str) -> NamespaceDeclaration:
     obj = _decode_object(value, path, {"prefix", "namespace"})
     return NamespaceDeclaration(cast(str, obj["prefix"]), cast(str, obj["namespace"]))

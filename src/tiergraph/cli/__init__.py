@@ -63,9 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--format-version", default=tiergraph.FORMAT_VERSION, metavar="N"
     )
     schema.add_argument("--hash", action="store_true", help="print the shape hash")
-    schema.add_argument(
-        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
-    )
+    _output_argument(schema)
 
     run = subparsers.add_parser("run", help="execute a JSONL machine program")
     _document_arguments(run, input_help="JSONL program file, or - for stdin")
@@ -93,18 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
     walk.add_argument("--relation-local", required=True, metavar="LOCAL")
     walk.add_argument("--direction", choices=("forward", "inverse"), default="forward")
     walk.add_argument("--cap", type=int, metavar="N")
-    walk.add_argument(
-        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
-    )
+    _output_argument(walk)
 
     path = subparsers.add_parser("path", help="resolve and spell tiergraph paths")
     path_subparsers = path.add_subparsers(dest="path_command", required=True)
     resolve = path_subparsers.add_parser("resolve", help="resolve a tiergraph path")
     resolve.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     resolve.add_argument("tgpath", metavar="TGPATH", help="tiergraph path to resolve")
-    resolve.add_argument(
-        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
-    )
+    _output_argument(resolve)
 
     spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
     spell.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
@@ -117,9 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     spell.add_argument("--anchor-tier-namespace", metavar="NS")
     spell.add_argument("--anchor-tier-local", metavar="LOCAL")
     spell.add_argument("--side", choices=("before", "after"))
-    spell.add_argument(
-        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
-    )
+    _output_argument(spell)
 
     grammar = subparsers.add_parser("grammar", help="recognize with tiergraph grammars")
     grammar_subparsers = grammar.add_subparsers(dest="grammar_command", required=True)
@@ -135,13 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
         if grammar_command == "best":
             grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
-        grammar_parser.add_argument(
-            "-o",
-            "--output",
-            default="-",
-            metavar="FILE",
-            help="output file (default: -)",
-        )
+        _output_argument(grammar_parser)
 
     clock = subparsers.add_parser("clock", help="query declarative clock timing")
     clock_subparsers = clock.add_subparsers(dest="clock_command", required=True)
@@ -163,13 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
             clock_parser.add_argument("--tier-local", required=True, metavar="LOCAL")
         elif clock_command == "item":
             clock_parser.add_argument("--item", required=True, metavar="PATH")
-        clock_parser.add_argument(
-            "-o",
-            "--output",
-            default="-",
-            metavar="FILE",
-            help="output file (default: -)",
-        )
+        _output_argument(clock_parser)
 
     span = subparsers.add_parser("span", help="render declarative span views")
     span_subparsers = span.add_subparsers(dest="span_command", required=True)
@@ -182,16 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     span_render.add_argument("--alternatives", action="store_true")
     span_render.add_argument("--jsonl-record", choices=("input", "span"), default=None)
     span_render.add_argument("--include-empty-tiers", action="store_true")
-    span_render.add_argument(
-        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
-    )
+    _output_argument(span_render)
 
     selection = subparsers.add_parser("select", help="evaluate a selector")
     selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     selection.add_argument("--selector", required=True, metavar="FILE")
-    selection.add_argument(
-        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
-    )
+    _output_argument(selection)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
     fold.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
@@ -237,16 +213,12 @@ def build_parser() -> argparse.ArgumentParser:
     fold.add_argument(
         "--output-cap", type=int, metavar="N", help="witness cap; requires --ranked"
     )
-    fold.add_argument(
-        "-o", "--output", default="-", metavar="OUT", help="output file (default: -)"
-    )
+    _output_argument(fold)
 
     semirings = subparsers.add_parser(
         "semirings", help="list the semirings a fold can name"
     )
-    semirings.add_argument(
-        "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
-    )
+    _output_argument(semirings)
     return parser
 
 
@@ -254,6 +226,11 @@ def _document_arguments(
     parser: argparse.ArgumentParser, *, input_help: str = "graph file, or - for stdin"
 ) -> None:
     parser.add_argument("file", metavar="FILE", help=input_help)
+    _output_argument(parser)
+
+
+def _output_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the canonical output destination shared by every emitting command."""
     parser.add_argument(
         "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
     )

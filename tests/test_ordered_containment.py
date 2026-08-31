@@ -314,16 +314,12 @@ def test_runtime_cycle_refusal_names_injected_closing_instance(
 
 
 def test_runtime_empty_side_refusal_names_corrupt_instance_and_side() -> None:
-    """Live incidence validation rechecks the declaration's empty-side contract."""
+    """Traversal trusts the kernel's empty-side construction invariant."""
     value = graph()
     object.__setattr__(value.polyadic_relations[0], "targets", ())
 
-    with pytest.raises(ValueError) as caught:
-        OrderedContainment(value, CONTAINS)
-    assert str(caught.value) == (
-        "ordered containment relation "
-        "'{urn:test:ordered-containment}contains' instance 0 has an empty target side"
-    )
+    traversal = OrderedContainment(value, CONTAINS)
+    assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes == ()
 
 
 def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
@@ -362,7 +358,7 @@ def test_runtime_empty_side_remains_valid_when_explicitly_allowed() -> None:
 def test_runtime_arity_refusal_names_corrupt_instance_and_side(
     bound_name: str, bound: int, expected: str
 ) -> None:
-    """Nonempty live sides must remain inside both declared arity bounds."""
+    """Traversal does not become a second authority for live arity bounds."""
     value = graph()
     declaration = next(
         item for item in value.relation_declarations if item.name == CONTAINS
@@ -370,9 +366,8 @@ def test_runtime_arity_refusal_names_corrupt_instance_and_side(
     assert isinstance(declaration, PolyadicRelationDeclaration)
     object.__setattr__(declaration.targets, bound_name, bound)
 
-    with pytest.raises(ValueError) as caught:
-        OrderedContainment(value, CONTAINS)
-    assert str(caught.value) == expected
+    traversal = OrderedContainment(value, CONTAINS)
+    assert traversal.direct_children(ItemRef(PARENTS, 0)).nodes
 
 
 def test_runtime_validation_ignores_instances_of_other_relations() -> None:

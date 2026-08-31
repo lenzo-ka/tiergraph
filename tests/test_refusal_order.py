@@ -272,7 +272,7 @@ def test_a_selector_field_set_outranks_a_value_it_would_carry() -> None:
         ),
     )
     assert refusal.stage is RefusalStage.SHAPE
-    assert "must contain exactly" in str(refusal)
+    assert "has unknown fields ['zz']" in str(refusal)
 
 
 def test_an_execution_refusal_carries_the_last_stage() -> None:
