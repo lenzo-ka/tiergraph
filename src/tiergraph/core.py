@@ -2210,7 +2210,7 @@ class GraphEditor:
         self._advance_displacement(step)
 
     def _advance_displacement(self, step: Displacement) -> None:
-        """Accumulate one editor step independently of public composition."""
+        """Accumulate one editor step with the helper used by ``then``."""
         current = self._displacement
         items, departed_items = _compose_displacement_space(
             current.items, current.departed_items, step.items, step.departed_items
