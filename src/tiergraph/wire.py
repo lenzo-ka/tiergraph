@@ -436,22 +436,24 @@ def _decode_graph(data: dict[str, object]) -> Graph:
 def _seal(data: dict[str, object], index: int) -> Seal:
     """Decode one tagged tier or graph carrier seal."""
     path = f"seals[{index}]"
-    carrier = _object(data["carrier"], f"{path}.carrier")
-    kind = _string(carrier.get("kind"), f"{path}.carrier.kind")
-    if kind == "tier":
-        _keys(carrier, {"kind", "tier"}, f"{path}.carrier")
-        target: QualifiedName | GraphCarrier = _name(
-            carrier["tier"], f"{path}.carrier.tier"
-        )
-    elif kind == "graph":
-        _keys(carrier, {"kind", "name"}, f"{path}.carrier")
-        target = _enum(GraphCarrier, carrier["name"], f"{path}.carrier.name")
-    else:
-        raise Refusal(
-            RefusalStage.DISCRIMINATOR,
-            f"{path}.carrier.kind {kind!r} is unsupported",
-        )
+    target = _seal_carrier(data["carrier"], f"{path}.carrier")
     return Seal(target, _integer(data["sealed"], f"{path}.sealed"))
+
+
+def _seal_carrier(data: object, path: str) -> QualifiedName | GraphCarrier:
+    """Decode one schema-declared tagged tier or graph carrier."""
+    carrier = _object(data, path)
+    kind = _string(carrier.get("kind"), f"{path}.kind")
+    if kind == "tier":
+        _keys(carrier, object_fields(DECLARATIONS["tier_seal_carrier"]), path)
+        return _name(carrier["tier"], f"{path}.tier")
+    elif kind == "graph":
+        _keys(carrier, object_fields(DECLARATIONS["graph_seal_carrier"]), path)
+        return _enum(GraphCarrier, carrier["name"], f"{path}.name")
+    raise Refusal(
+        RefusalStage.DISCRIMINATOR,
+        f"{path}.kind {kind!r} is unsupported",
+    )
 
 
 def _layer(data: dict[str, object], index: int) -> Layer:
@@ -535,13 +537,7 @@ def _layer_subject(data: dict[str, object], path: str) -> LayerSubject:
         return DurablePolyadicRef(_string(data["durable_id"], f"{path}.durable_id"))
     if kind == "document":
         return DocumentRef()
-    carrier_data = _object(data["carrier"], f"{path}.carrier")
-    carrier_kind = _string(carrier_data.get("kind"), f"{path}.carrier.kind")
-    carrier = (
-        _name(carrier_data["tier"], f"{path}.carrier.tier")
-        if carrier_kind == "tier"
-        else _enum(GraphCarrier, carrier_data["name"], f"{path}.carrier.name")
-    )
+    carrier = _seal_carrier(data["carrier"], f"{path}.carrier")
     was_data = _object(data["was"], f"{path}.was")
     was_kind = _string(was_data.get("kind"), f"{path}.was.kind")
     if was_kind == "index":

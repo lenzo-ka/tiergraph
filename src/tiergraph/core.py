@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
@@ -177,12 +177,14 @@ class Seal:
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the tagged carrier and sealed prefix for wire encoding."""
-        carrier: dict[str, JsonValue]
-        if isinstance(self.carrier, QualifiedName):
-            carrier = {"kind": "tier", "tier": self.carrier.to_data()}
-        else:
-            carrier = {"kind": "graph", "name": self.carrier.value}
-        return {"carrier": carrier, "sealed": self.sealed}
+        return {"carrier": _carrier_data(self.carrier), "sealed": self.sealed}
+
+
+def _carrier_data(carrier: SealedCarrier) -> dict[str, JsonValue]:
+    """Encode one tagged tier or graph carrier."""
+    if isinstance(carrier, QualifiedName):
+        return {"kind": "tier", "tier": carrier.to_data()}
+    return {"kind": "graph", "name": carrier.value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1467,17 +1469,12 @@ class Graph:
         boundary_values: tuple[Boundary, ...] | None = None,
     ) -> Graph:
         """Rebuild immutable graph content for a promotion operation."""
-        return Graph(
-            self.namespaces,
-            self.tiers if tiers is None else tiers,
-            self.relation_declarations,
-            self.relations,
-            self.attribute_declarations,
-            self.boundary_values if boundary_values is None else boundary_values,
-            self.attributes,
-            self.polyadic_relations,
-            self.seals,
-            self.layers,
+        return replace(
+            self,
+            tiers=self.tiers if tiers is None else tiers,
+            boundary_values=(
+                self.boundary_values if boundary_values is None else boundary_values
+            ),
         )
 
     def to_data(self) -> dict[str, JsonValue]:
@@ -1539,18 +1536,7 @@ class Graph:
 
     def _with_seal(self, carrier: SealedCarrier, sealed: int) -> Graph:
         kept = tuple(item for item in self.seals if item.carrier != carrier)
-        return Graph(
-            self.namespaces,
-            self.tiers,
-            self.relation_declarations,
-            self.relations,
-            self.attribute_declarations,
-            self.boundary_values,
-            self.attributes,
-            self.polyadic_relations,
-            (*kept, Seal(carrier, sealed)),
-            self.layers,
-        )
+        return replace(self, seals=(*kept, Seal(carrier, sealed)))
 
     def edit(self) -> GraphEditor:
         """Return a mutable editor holding a copy of this graph's content.
@@ -1725,6 +1711,7 @@ class GraphEditor:
 
     def __init__(self, graph: Graph) -> None:
         """Copy one graph's content into carriers this editor may change."""
+        self._source = graph
         self._displacement = Displacement.stationary(graph)
         self._namespaces = list(graph.namespaces)
         self._tiers = [
@@ -1742,20 +1729,21 @@ class GraphEditor:
 
     def freeze(self) -> Graph:
         """Return a fully validated graph without consuming this editor."""
-        return Graph(
-            tuple(self._namespaces),
-            tuple(
+        return replace(
+            self._source,
+            namespaces=tuple(self._namespaces),
+            tiers=tuple(
                 Tier(tier.declaration, tuple(tier.items), tuple(tier.attributes))
                 for tier in self._tiers
             ),
-            tuple(self._relation_declarations),
-            tuple(self._relations),
-            tuple(self._attribute_declarations),
-            tuple(self._boundary_values),
-            tuple(self._attributes),
-            tuple(self._polyadic_relations),
-            tuple(self._seals),
-            tuple(self._layers),
+            relation_declarations=tuple(self._relation_declarations),
+            relations=tuple(self._relations),
+            attribute_declarations=tuple(self._attribute_declarations),
+            boundary_values=tuple(self._boundary_values),
+            attributes=tuple(self._attributes),
+            polyadic_relations=tuple(self._polyadic_relations),
+            seals=tuple(self._seals),
+            layers=tuple(self._layers),
         )
 
     def displacement(self) -> Displacement:
@@ -2608,18 +2596,19 @@ class _GraphBuilder:
         )
 
     def _finish(self) -> Graph:
-        return Graph(
-            tuple(self.namespaces),
-            tuple(
+        return replace(
+            _EMPTY_GRAPH,
+            namespaces=tuple(self.namespaces),
+            tiers=tuple(
                 Tier(tier.declaration, tuple(tier.items), tuple(tier.attributes))
                 for tier in self.tiers
             ),
-            tuple(self.relation_declarations),
-            tuple(self.relations),
-            tuple(self.attribute_declarations),
-            tuple(self.boundary_values),
-            tuple(self.attributes),
-            tuple(self.polyadic_relations),
+            relation_declarations=tuple(self.relation_declarations),
+            relations=tuple(self.relations),
+            attribute_declarations=tuple(self.attribute_declarations),
+            boundary_values=tuple(self.boundary_values),
+            attributes=tuple(self.attributes),
+            polyadic_relations=tuple(self.polyadic_relations),
         )
 
 
@@ -3348,16 +3337,11 @@ def _layer_subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
         return {"kind": "durable-polyadic", "durable_id": subject.durable_id}
     if isinstance(subject, DocumentRef):
         return {"kind": "document"}
-    carrier: dict[str, JsonValue]
-    if isinstance(subject.carrier, QualifiedName):
-        carrier = {"kind": "tier", "tier": subject.carrier.to_data()}
-    else:
-        carrier = {"kind": "graph", "name": subject.carrier.value}
     if isinstance(subject.was, ItemRef | BoundaryRef):
         was = _layer_subject_data(subject.was)
     else:
         was = {"kind": "index", "index": subject.was}
-    return {"kind": "orphaned", "carrier": carrier, "was": was}
+    return {"kind": "orphaned", "carrier": _carrier_data(subject.carrier), "was": was}
 
 
 def _layer_key(key: tuple[LayerSubject, QualifiedName]) -> tuple[str, str, str]:
@@ -3480,3 +3464,6 @@ def _seal_breach_detail(
             f"and carries {after.durable_id!r} here"
         )
     return f"{coordinate} did not keep its member"
+
+
+_EMPTY_GRAPH = Graph((), (), ())

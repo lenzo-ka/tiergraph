@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -13,7 +14,12 @@ from tests.conformance.declared_schema_codec_divergences import (
     DeclaredDivergence,
 )
 from tests.conformance.schema_codec import conformance_probes, undeclared_drifts
-from tests.test_wire import polyadic_document, rich_graph
+from tests.test_wire import (
+    graph_with_layers,
+    polyadic_document,
+    rich_graph,
+    six_domain_layer,
+)
 from tiergraph import wire as wire_module
 from tiergraph.core import JsonValue
 from tiergraph.schema import DOCUMENT, STRING, TIER, Field
@@ -96,9 +102,19 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
             "attributes": copy.deepcopy(first_boundary["attributes"]),
         }
     )
+    layered = graph_with_layers(six_domain_layer())
+    layered = replace(
+        layered,
+        relations=(
+            *layered.relations,
+            replace(layered.relations[0], durable_id="r1"),
+        ),
+    )
     return (
         ("binary", to_data(rich_graph())),
         ("polyadic", surface),
+        ("layer", to_data(layered)),
+        ("seal", to_data(graph_with_layers(seal=1))),
     )
 
 
@@ -116,6 +132,19 @@ def test_seeds_realize_every_declared_reference_variant() -> None:
         ".position_values[0].attributes[0].lexical:",
     ):
         assert any(fragment in probe_id for probe_id in ids), fragment
+
+
+def test_layer_and_seal_regions_contribute_probes() -> None:
+    """The newest graph regions remain inside the declaration-derived gate."""
+    probes = conformance_probes(_seeds(), DOCUMENT)
+    layer = tuple(
+        probe for probe in probes if probe.seed == "layer" and ".layers" in probe.id
+    )
+    seal = tuple(
+        probe for probe in probes if probe.seed == "seal" and ".seals" in probe.id
+    )
+    assert layer
+    assert seal
 
 
 def test_new_declared_field_is_covered_without_a_handwritten_probe() -> None:
