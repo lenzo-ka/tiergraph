@@ -156,20 +156,62 @@ def test_synthetic_project_prose_is_denied_without_disclosure(
     assert check_tracked_clean.reference_leaks(path) == []
 
 
-def test_denied_name_matching_ignores_case_and_respects_boundaries(
+def test_denied_name_matching_catches_inflections_and_split_spellings(
     tmp_path: Path,
 ) -> None:
-    """Matching case-folds both paths and accepts only token boundaries."""
+    """REGRESSION: matching covers the name, not the bare-token shape of it.
+
+    Every line here is a way someone writes the name by accident. The last two
+    were previously asserted to produce NO finding, under a test named for
+    respecting token boundaries -- the escape was encoded as intended behavior,
+    which is what an external read caught: a plural or a compound shipped clean
+    while the gate reported success, and an owner ruling rested on that report.
+    """
     path = tmp_path / "guide.md"
     path.write_text(
         f"{TOKEN.upper()}\n{TOKEN.title()}\n{TOKEN}_bridge\n{TOKEN}s\nmy{TOKEN}\n",
         encoding="utf-8",
     )
     assert check_tracked_clean.name_leaks(path, _synthetic_denylist()) == [
-        f"{path}:1: a denied name written in shipped text",
-        f"{path}:2: a denied name written in shipped text",
-        f"{path}:3: a denied name written in shipped text",
+        f"{path}:{line}: a denied name written in shipped text"
+        for line in (1, 2, 3, 4, 5)
     ]
+
+
+def test_denied_name_matching_catches_a_separator_split_spelling(
+    tmp_path: Path,
+) -> None:
+    """REGRESSION: a name split by a separator the repository never used.
+
+    `sentinel-token` digests to nothing as two runs, which is exactly why the
+    join exists. The paragraph-break case is the bound: two runs that far apart
+    are not a spelling of one name, and joining them would invent leaks.
+    """
+    head, tail = TOKEN[:8], TOKEN[8:]
+    path = tmp_path / "guide.md"
+    path.write_text(
+        f"{head}-{tail}\n{head}_{tail}\n{head} {tail}\n{head}\n\n{tail}\n",
+        encoding="utf-8",
+    )
+    assert check_tracked_clean.name_leaks(path, _synthetic_denylist()) == [
+        f"{path}:{line}: a denied name written in shipped text" for line in (1, 2, 3)
+    ]
+
+
+def test_denied_name_matching_still_misses_an_interior_occurrence(
+    tmp_path: Path,
+) -> None:
+    """CHARACTERIZATION: the residual limit, witnessed rather than implied.
+
+    Affixes and joins cover how a name gets written by accident; a name buried
+    inside a longer run is not that, and testing every substring would cost
+    quadratically per run for a case nobody produces. This test exists so the
+    limit is a recorded decision instead of a silence -- if it ever needs
+    closing, the failure is here waiting.
+    """
+    path = tmp_path / "guide.md"
+    path.write_text(f"pre{TOKEN}post\n", encoding="utf-8")
+    assert check_tracked_clean.name_leaks(path, _synthetic_denylist()) == []
 
 
 @pytest.mark.parametrize("value", ("", "two words", "hyphenated-token"))
