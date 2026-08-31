@@ -33,6 +33,19 @@ from tiergraph import (
     anchored_boundary,
 )
 
+
+def test_clock_coordinate_to_data() -> None:
+    assert ClockCoordinate(2, 3).to_data() == {"tick": 2, "gap": 3}
+
+
+def test_physical_timing_to_data_uses_canonical_decimal_lexemes() -> None:
+    assert PhysicalTiming(Decimal("0.100"), Decimal("1E-7"), "s").to_data() == {
+        "start": "0.1",
+        "duration": "0.0000001",
+        "unit": "s",
+    }
+
+
 NS = "urn:tiergraph:profile:clock:test"
 CLOCK = QualifiedName(NS, "clock")
 SEGMENT = QualifiedName(NS, "segment")

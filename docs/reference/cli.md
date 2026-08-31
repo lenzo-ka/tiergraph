@@ -123,11 +123,11 @@ options:
 ### `tiergraph schema`
 
 ```text
-usage: tiergraph schema [-h] [--format-version N] [--hash] [-o FILE]
+usage: tiergraph schema [-h] [--format-version VERSION] [--hash] [-o FILE]
 
 options:
   -h, --help            show this help message and exit
-  --format-version N
+  --format-version VERSION
   --hash                print the shape hash
   -o FILE, --output FILE
                         output file (default: -)
