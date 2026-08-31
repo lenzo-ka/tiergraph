@@ -259,6 +259,31 @@ RESERVATIONS: tuple[Reservation, ...] = (
 
 UNENFORCEABLE: tuple[Unenforceable, ...] = (
     Unenforceable(
+        name="declared-readout",
+        site="src/tiergraph/fold.py",
+        symbol="FoldDeclaration",
+        text=(
+            "A readout or final division above the algebra is not currently "
+            "provided. If one\nis introduced, it must be declared as part of what "
+            "the fold profile records. A\nconstruct whose soundness depends on a "
+            "property it cannot verify must declare\nthat property rather than "
+            "assume it."
+        ),
+        condition=(
+            "a shipped module computes a final answer in a post-pass above the "
+            "algebra without recording that readout in the fold profile's "
+            "declared signature"
+        ),
+        why=(
+            "an undeclared post-pass has no reserved name, decorator, return "
+            "type, protocol, or declaration field that distinguishes it from "
+            "ordinary computation; Python syntax can reveal a chosen spelling "
+            "but cannot decide whether that computation is the final answer or "
+            "whether its soundness depends on an unrecorded property, so a "
+            "predicate could miss the arrival it claims to enforce"
+        ),
+    ),
+    Unenforceable(
         name="graph-composition",
         site="examples/json_document.py",
         symbol=MODULE_SYMBOL,

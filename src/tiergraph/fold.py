@@ -335,6 +335,11 @@ class FoldCertificate[Value]:
 class FoldDeclaration[Value]:
     """Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
 
+    A readout or final division above the algebra is not currently provided. If one
+    is introduced, it must be declared as part of what the fold profile records. A
+    construct whose soundness depends on a property it cannot verify must declare
+    that property rather than assume it.
+
     ``witness_order`` and ``tie_policy`` are one mechanism and are declared together:
     the order names the winner and the policy says what happens where it reports a
     tie, so each without the other is refused. The policy is executable and is read
