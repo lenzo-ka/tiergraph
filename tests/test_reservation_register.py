@@ -136,6 +136,54 @@ def test_an_entry_that_no_longer_matches_its_prose_fails(
     assert reason in message
 
 
+def test_the_declared_readout_prose_is_pinned_exactly_once() -> None:
+    """The readout obligation appears once at the declaration readers inspect."""
+    entry = next(
+        entry
+        for entry in check_reservations.UNENFORCEABLE
+        if entry.name == "declared-readout"
+    )
+    documented = dict(check_reservations.docstrings(ROOT / entry.site))
+    assert documented[entry.symbol].count(entry.text) == 1
+    assert check_reservations.unpinned([entry]) == []
+
+
+def test_rewording_the_declared_readout_prose_is_refused() -> None:
+    """The register refuses a changed statement of the readout obligation."""
+    entry = next(
+        entry
+        for entry in check_reservations.UNENFORCEABLE
+        if entry.name == "declared-readout"
+    )
+    changed = check_reservations.Unenforceable(
+        name=entry.name,
+        site=entry.site,
+        symbol=entry.symbol,
+        text=entry.text.replace("must be declared", "should be declared"),
+        condition=entry.condition,
+        why=entry.why,
+    )
+    assert check_reservations.unpinned([changed]) == [
+        "declared-readout: the reserving prose in "
+        "src/tiergraph/fold.py:FoldDeclaration is missing or changed"
+    ]
+
+
+def test_removing_the_declared_readout_entry_is_refused() -> None:
+    """The vocabulary scan refuses the obligation when its entry is removed."""
+    entries = tuple(
+        entry
+        for entry in check_reservations.registered()
+        if entry.name != "declared-readout"
+    )
+    assert check_reservations.undeclared(
+        entries, [ROOT / "src" / "tiergraph" / "fold.py"]
+    ) == [
+        "src/tiergraph/fold.py:FoldDeclaration announces a reservation "
+        "('not currently') that the register does not carry"
+    ]
+
+
 def test_an_undeclared_announcement_is_refused(tmp_path: Path) -> None:
     """A new docstring using the reservation vocabulary must be registered."""
     source = _module(
