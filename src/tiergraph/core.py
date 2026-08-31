@@ -196,7 +196,15 @@ class SealBreach:
 
 @dataclass(frozen=True, slots=True)
 class SealCertificate:
-    """Report what a seal check compared, and over how much."""
+    """Report what a seal check could discriminate, and over how much.
+
+    ``sealed_members`` counts only members whose durable identity made a
+    value-only comparison capable of detecting movement. Anonymous members do
+    not contribute: two graph values cannot reveal whether one anonymous member
+    moved or an indistinguishable one took its coordinate. A zero count is
+    therefore an explicit vacuous pass, not evidence that anonymous geometry was
+    preserved.
+    """
 
     carriers: int
     sealed_members: int
@@ -1509,6 +1517,17 @@ class Graph:
 
     def unseal(self, carrier: SealedCarrier, sealed: int) -> Graph:
         """Return a graph whose seal on one carrier stands lower than it did."""
+        current = next((item for item in self.seals if item.carrier == carrier), None)
+        if current is None:
+            raise GraphValidationError(
+                f"cannot unseal {str(carrier)!r} to {sealed}: this graph carries no "
+                "seal on that carrier"
+            )
+        if sealed >= current.sealed:
+            raise GraphValidationError(
+                f"cannot unseal {str(carrier)!r} from {current.sealed} to {sealed}: "
+                "the requested seal is not lower"
+            )
         return self._with_seal(carrier, sealed)
 
     def is_sealed(self, coordinate: ItemRef | BoundaryRef) -> bool:
@@ -1612,9 +1631,10 @@ class SealDeclaration:
             before = _carrier_members(self.source, seal.carrier)
             after = _carrier_members(self.result, seal.carrier)
             for index in range(seal.sealed):
-                if index >= len(after) or _member_identity(
-                    before[index]
-                ) != _member_identity(after[index]):
+                identity = _member_identity(before[index])
+                if index >= len(after) or (
+                    identity is not None and identity != _member_identity(after[index])
+                ):
                     breaches.append(
                         SealBreach(
                             seal.carrier,
@@ -1645,8 +1665,8 @@ class SealDeclaration:
                 )
             else:
                 detail = (
-                    f"{breach.detail}. A seal is honored when every member up to it "
-                    "stands where it stood carrying what it carried. The breach "
+                    f"{breach.detail}. A seal is honored when every discriminable "
+                    "member up to it stands at the same coordinate. The breach "
                     "reported is the first in the carrier's own order rather than "
                     "the only one or the worst one."
                 )
@@ -1655,7 +1675,12 @@ class SealDeclaration:
                 f"{str(breach.carrier)!r} at {source_seal.sealed}: {detail}"
             )
         return SealCertificate(
-            len(self.source.seals), sum(seal.sealed for seal in self.source.seals)
+            len(self.source.seals),
+            sum(
+                _member_identity(member) is not None
+                for seal in self.source.seals
+                for member in _carrier_members(self.source, seal.carrier)[: seal.sealed]
+            ),
         )
 
 
@@ -3431,23 +3456,14 @@ def _carrier_members(
 
 def _member_identity(
     member: Item | RelationInstance | PolyadicRelationInstance,
-) -> object:
-    """Return geometric identity while deliberately ignoring attribute values."""
-    if isinstance(member, Item):
-        return member.durable_id
-    if isinstance(member, RelationInstance):
-        return (
-            member.declaration,
-            member.left,
-            member.right,
-            member.durable_id,
-        )
-    return (
-        member.declaration,
-        member.sources,
-        member.targets,
-        member.durable_id,
-    )
+) -> str | None:
+    """Return durable geometric identity, or none when values cannot supply it.
+
+    Relation endpoints are coordinates in other carriers. They may shift while
+    the relation itself remains at the same coordinate, so they are deliberately
+    excluded along with attribute values.
+    """
+    return member.durable_id
 
 
 def _seal_breach_detail(

@@ -890,6 +890,26 @@ def test_edits_beyond_a_seal_succeed_and_retreat_is_explicit() -> None:
     assert not sealed.is_sealed(ItemRef(WORD, 2))
 
 
+def test_unseal_refuses_to_raise_or_create_a_seal() -> None:
+    """REGRESSION (F6): unsealing only retreats from an existing seal."""
+    graph = base(relations=())
+    sealed = graph.seal(WORD, 1)
+    raised_message = None
+    try:
+        sealed.unseal(WORD, 3)
+    except GraphValidationError as error:
+        raised_message = str(error)
+    absent_message = None
+    try:
+        graph.unseal(WORD, 2)
+    except GraphValidationError as error:
+        absent_message = str(error)
+    assert (raised_message, absent_message) == (
+        f"cannot unseal '{WORD}' from 1 to 3: the requested seal is not lower",
+        f"cannot unseal '{WORD}' to 2: this graph carries no seal on that carrier",
+    )
+
+
 def test_seal_bounds_and_graph_carrier_edits_are_checked() -> None:
     """REGRESSION (parent: dependency failure): every ordered carrier bites."""
     graph = base()
@@ -938,7 +958,14 @@ def test_seal_declarations_report_vacuity_breaches_and_omission() -> None:
     with pytest.raises(GraphValidationError, match="not withdrawn by omission"):
         SealDeclaration("strip", source, replace(source, seals=())).check_seals()
 
-    relation_source = base().seal(GraphCarrier.RELATIONS, 1)
+    relation_graph = base()
+    relation_source = replace(
+        relation_graph,
+        relations=(
+            replace(relation_graph.relations[0], durable_id="c0"),
+            *relation_graph.relations[1:],
+        ),
+    ).seal(GraphCarrier.RELATIONS, 1)
     relation_result = replace(
         relation_source,
         relations=(relation_source.relations[1], *relation_source.relations[1:]),
@@ -952,7 +979,9 @@ def test_seal_declarations_report_vacuity_breaches_and_omission() -> None:
     poly_name = name("poly")
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORD,), 1, 1, False)
     poly_declaration = PolyadicRelationDeclaration(poly_name, side, side)
-    poly = PolyadicRelationInstance(poly_name, (ItemRef(WORD, 0),), (ItemRef(WORD, 1),))
+    poly = PolyadicRelationInstance(
+        poly_name, (ItemRef(WORD, 0),), (ItemRef(WORD, 1),), "poly-0"
+    )
     poly_source = replace(
         base(relations=()),
         relation_declarations=(poly_declaration,),
@@ -960,9 +989,60 @@ def test_seal_declarations_report_vacuity_breaches_and_omission() -> None:
     ).seal(GraphCarrier.POLYADIC_RELATIONS, 1)
     poly_result = replace(
         poly_source,
-        polyadic_relations=(replace(poly, targets=(ItemRef(WORD, 2),)),),
+        polyadic_relations=(replace(poly, durable_id="poly-replacement"),),
     )
     assert SealDeclaration("poly", poly_source, poly_result).breaches()[0].index == 0
+
+
+def test_anonymous_sealed_members_make_the_certificate_explicitly_vacuous() -> None:
+    """REGRESSION (F2): anonymous values do not pose as compared identities."""
+    anonymous = base(
+        words=(Item(), Item(), Item(), Item()), boundaries=(), relations=()
+    ).seal(WORD, 3)
+    tier = anonymous.tiers[0]
+    reversed_prefix = replace(
+        anonymous,
+        tiers=(
+            replace(tier, items=(*reversed(tier.items[:3]), tier.items[3])),
+            anonymous.tiers[1],
+        ),
+    )
+    certificate = SealDeclaration(
+        "anonymous-prefix", anonymous, reversed_prefix
+    ).check_seals()
+    assert (certificate.carriers, certificate.sealed_members) == (1, 0)
+
+
+def test_relation_identity_excludes_shifted_endpoint_coordinates() -> None:
+    """REGRESSION (F3): a stationary relation survives endpoint remapping."""
+    relation = RelationInstance(
+        COVERS, ItemRef(PHRASE, 0), ItemRef(WORD, 1), "relation-0"
+    )
+    source = base(boundaries=(), relations=(relation,)).seal(GraphCarrier.RELATIONS, 1)
+    result = source.insert_item(WORD, 0, Item("inserted"))
+    assert result.relations[0].left == ItemRef(PHRASE, 0)
+    assert result.relations[0].right == ItemRef(WORD, 2)
+    declaration = SealDeclaration("endpoint-shift", source, result)
+    assert declaration.breaches() == ()
+    certificate = declaration.check_seals()
+    assert (certificate.carriers, certificate.sealed_members) == (1, 1)
+
+
+def test_seal_refusal_describes_geometry_without_claiming_content_stability() -> None:
+    """REGRESSION (F4): refusal text states the geometric comparison."""
+    source = base(relations=()).seal(WORD, 2)
+    tier = source.tiers[0]
+    moved = replace(
+        source,
+        tiers=(
+            replace(tier, items=(tier.items[1], tier.items[0], *tier.items[2:])),
+            source.tiers[1],
+        ),
+    )
+    with pytest.raises(GraphValidationError) as refusal:
+        SealDeclaration("swap", source, moved).check_seals()
+    assert "stands at the same coordinate" in str(refusal.value)
+    assert "carrying what it carried" not in str(refusal.value)
 
 
 def test_seals_are_canonical_optional_and_round_trip() -> None:

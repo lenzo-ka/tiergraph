@@ -179,9 +179,14 @@ Sealing advances freely. It retreats only through `unseal`, which is named,
 public, and deliberately loud — an escape spelled as a flag on the sealing
 operation would make unsealing indistinguishable from sealing at the call site.
 
-`SealCertificate` reports how many members a check actually compared. A seal
-check over a graph that sealed nothing has compared nothing, and the count says
-so rather than letting a vacuous pass read as a strong one.
+`SealCertificate` reports how many members a check could actually discriminate.
+A durable identifier lets two graph values expose movement; an anonymous member
+does not, because an anonymous member that moved is indistinguishable from one
+that did not. Anonymous sealed members therefore do not contribute to
+`sealed_members`. A zero count says plainly that the value-only check was
+vacuous rather than letting that pass read as a strong one. This does not weaken
+an operation's own displacement accounting: the operation sees the movement as
+it happens, while a declaration comparing two values has no such history.
 
 One limit is worth stating plainly rather than papering over: the constructor can
 validate that a seal is internally consistent, but it cannot know whether a
