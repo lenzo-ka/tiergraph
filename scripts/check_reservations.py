@@ -189,13 +189,13 @@ def public_arrivals(words: Sequence[str], paths: Sequence[Path]) -> list[str]:
 def _reserved_refusal_is_produced(paths: Sequence[Path] | None = None) -> str | None:
     """Report shipped code that names the reserved path-refusal member.
 
-    Reach: an attribute access spelling ``POSITION_NOT_IN_PARENT``, which is how
+    Reach: an attribute access spelling ``BOUNDARY_NOT_IN_PARENT``, which is how
     every other member of that enum is used. A resolver reaching the member
     through ``PathRefusalCode(value)`` or ``PathRefusalCode[name]`` would not be
     seen; nothing in the tree constructs a refusal code that way today.
     """
     sites = attribute_references(
-        "POSITION_NOT_IN_PARENT", shipped_python() if paths is None else paths
+        "BOUNDARY_NOT_IN_PARENT", shipped_python() if paths is None else paths
     )
     if not sites:
         return None
@@ -228,15 +228,15 @@ def _build_ergonomics_have_landed(paths: Sequence[Path] | None = None) -> str | 
 
 RESERVATIONS: tuple[Reservation, ...] = (
     Reservation(
-        name="position-not-in-parent",
+        name="boundary-not-in-parent",
         site="src/tiergraph/path.py",
         symbol="PathRefusalCode",
         text=(
-            "``POSITION_NOT_IN_PARENT`` is reserved and is not produced by a "
+            "``BOUNDARY_NOT_IN_PARENT`` is reserved and is not produced by a "
             "current path\nresolver or profile."
         ),
         condition=(
-            "a shipped module names PathRefusalCode.POSITION_NOT_IN_PARENT, "
+            "a shipped module names PathRefusalCode.BOUNDARY_NOT_IN_PARENT, "
             "which is what producing it from a resolver or profile amounts to"
         ),
         overtaken=_reserved_refusal_is_produced,

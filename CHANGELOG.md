@@ -150,6 +150,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `NodeKind.POSITION`, `PathKind.POSITION`, and
+  `PathRefusalCode.POSITION_NOT_IN_PARENT` become `NodeKind.BOUNDARY`,
+  `PathKind.BOUNDARY`, and `PathRefusalCode.BOUNDARY_NOT_IN_PARENT`; their
+  values become `"boundary"` and `"boundary_not_in_parent"` respectively.
+  Boundary-node JSON from `tiergraph path resolve` now reports
+  `"kind": "boundary"` instead of `"kind": "position"`. The wire format is
+  unchanged.
 - **BREAKING:** relation endpoints now admit `DurableItemRef` directly, encoded
   as the disjoint tagged wire arm
   `{"kind": "durable-item", "durable_id": "..."}`, so an item endpoint can

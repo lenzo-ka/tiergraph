@@ -45,7 +45,7 @@ def test_a_resolver_that_produces_the_reserved_refusal_is_named(tmp_path: Path) 
         "\n"
         "\n"
         "def refuse() -> PathRefusalCode:\n"
-        "    return PathRefusalCode.POSITION_NOT_IN_PARENT\n",
+        "    return PathRefusalCode.BOUNDARY_NOT_IN_PARENT\n",
     )
     evidence = check_reservations._reserved_refusal_is_produced([source])
     assert evidence is not None

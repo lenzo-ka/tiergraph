@@ -59,7 +59,7 @@ def test_walk_deduplicates_coincident_anchors_and_refuses_reentry() -> None:
         ),
     )
     boundary = BoundaryRef(LAWS.name("nodes"), 1)
-    source = NodeSet(extended, (Node(NodeKind.POSITION, boundary),))
+    source = NodeSet(extended, (Node(NodeKind.BOUNDARY, boundary),))
     result = Walk(source, relation.name, WalkDirection.FORWARD, 10).evaluate()
     assert result.nodes.nodes == ()
     assert result.truncated is False

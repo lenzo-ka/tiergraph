@@ -36,7 +36,7 @@ class NodeKind(StrEnum):
     DOCUMENT = "document"
     TIER = "tier"
     ITEM = "item"
-    POSITION = "position"
+    BOUNDARY = "boundary"
     RELATION_DECLARATION = "relation_declaration"
     RELATION_INSTANCE = "relation_instance"
     POLYADIC_RELATION_INSTANCE = "polyadic_relation_instance"
@@ -94,7 +94,7 @@ class NodeSet:
             NodeKind.DOCUMENT: 0,
             NodeKind.TIER: 1,
             NodeKind.ITEM: 2,
-            NodeKind.POSITION: 3,
+            NodeKind.BOUNDARY: 3,
             NodeKind.RELATION_DECLARATION: 4,
             NodeKind.RELATION_INSTANCE: 5,
             NodeKind.POLYADIC_RELATION_INSTANCE: 6,
@@ -261,7 +261,7 @@ class BoundariesSelector:
         return NodeSet(
             graph,
             tuple(
-                Node(NodeKind.POSITION, graph.resolve_boundary(boundary.reference))
+                Node(NodeKind.BOUNDARY, graph.resolve_boundary(boundary.reference))
                 for boundary in graph.boundaries(self.tier)
             ),
         )
@@ -289,7 +289,7 @@ class BoundarySelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the boundary identity."""
         return NodeSet(
-            graph, (Node(NodeKind.POSITION, graph.resolve_boundary(self.reference)),)
+            graph, (Node(NodeKind.BOUNDARY, graph.resolve_boundary(self.reference)),)
         )
 
 
@@ -384,7 +384,7 @@ class AttributeSelector:
             )
         elif self.domain is AttributeDomain.BOUNDARY:
             nodes.extend(
-                Node(NodeKind.POSITION, graph.resolve_boundary(boundary.reference))
+                Node(NodeKind.BOUNDARY, graph.resolve_boundary(boundary.reference))
                 for boundary in graph.boundary_values
                 if self._has(boundary.attributes)
             )

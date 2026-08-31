@@ -193,7 +193,7 @@ def test_every_node_kind_has_a_leaf_selector() -> None:
         NodeKind.DOCUMENT: AttributeSelector,
         NodeKind.TIER: TierSelector,
         NodeKind.ITEM: ItemSelector,
-        NodeKind.POSITION: BoundarySelector,
+        NodeKind.BOUNDARY: BoundarySelector,
         NodeKind.RELATION_DECLARATION: AttributeSelector,
         NodeKind.RELATION_INSTANCE: AttributeSelector,
         NodeKind.POLYADIC_RELATION_INSTANCE: AttributeSelector,

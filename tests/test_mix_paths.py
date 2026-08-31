@@ -65,7 +65,7 @@ def test_resolves_and_round_trips_all_three_path_kinds() -> None:
     profile = MixPathProfile(graph)
     item = resolve_path(graph, profile, "/mix/midi/note/0", require=PathKind.ITEM)
     bus = resolve_path(graph, profile, "/mix/mix/bus/0")
-    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
+    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.BOUNDARY)
     first = resolve_path(
         graph, profile, "/mix/arrangement/0", require=PathKind.ALTERNATIVE
     )

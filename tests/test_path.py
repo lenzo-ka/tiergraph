@@ -149,11 +149,11 @@ def test_durable_item_follows_identity_after_insert_but_structural_is_occupant()
         # Inputs whose graph lookup WOULD fail (absent durable id; out-of-range
         # index): a WRONG_KIND with no chained cause proves the kind check runs
         # BEFORE the lookup, not after it.
-        ("/items/durable/absent", PathKind.POSITION, PathKind.ITEM),
+        ("/items/durable/absent", PathKind.BOUNDARY, PathKind.ITEM),
         (
             "/positions/structural/urn:path/tokens/9",
             PathKind.ITEM,
-            PathKind.POSITION,
+            PathKind.BOUNDARY,
         ),
     ],
 )
@@ -314,7 +314,7 @@ class RefusingProfile:
 
 @pytest.mark.parametrize(
     "code",
-    [PathRefusalCode.POSITION_NOT_IN_PARENT, PathRefusalCode.PROFILE_REFUSED],
+    [PathRefusalCode.BOUNDARY_NOT_IN_PARENT, PathRefusalCode.PROFILE_REFUSED],
 )
 def test_profile_owned_refusals_preserve_stable_reason(code: PathRefusalCode) -> None:
     """Profiles can preserve distinctions not inferred by generic resolution."""
