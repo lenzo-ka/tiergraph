@@ -222,7 +222,7 @@ class TraversalLawSuite:
         ).evaluate()
         assert result.nodes.nodes == (
             Node(
-                NodeKind.POSITION,
+                NodeKind.BOUNDARY,
                 extended.resolve_boundary(
                     DurableBoundaryRef(DurableItemRef("node-2"), BoundarySide.BEFORE)
                 ),

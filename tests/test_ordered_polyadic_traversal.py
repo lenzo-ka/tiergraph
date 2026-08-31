@@ -158,7 +158,7 @@ def test_mixed_item_and_boundary_endpoints_resolve_role_neutrally() -> None:
     engine = traversal(value)
     expected = (
         node(1),
-        Node(NodeKind.POSITION, value.resolve_boundary(after_c)),
+        Node(NodeKind.BOUNDARY, value.resolve_boundary(after_c)),
     )
     assert engine.direct(ref(0)).nodes == expected
     assert engine.direct(DurableItemRef("a")).nodes == expected
@@ -168,7 +168,7 @@ def test_mixed_item_and_boundary_endpoints_resolve_role_neutrally() -> None:
     assert engine.direct(structural).nodes == expected
     assert engine.inverse(after_c).nodes == (
         node(0),
-        Node(NodeKind.POSITION, value.resolve_boundary(before_b)),
+        Node(NodeKind.BOUNDARY, value.resolve_boundary(before_b)),
     )
 
 

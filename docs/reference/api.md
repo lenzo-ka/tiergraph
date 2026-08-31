@@ -2541,7 +2541,7 @@ Classify the graph reference produced by a path profile.
 #### `PathKind` members
 
 - `ITEM` = `item`
-- `POSITION` = `position`
+- `BOUNDARY` = `boundary`
 - `ALTERNATIVE` = `alternative`
 
 ### `PathOffender`
@@ -2606,7 +2606,7 @@ PathRefusalCode(*values)
 
 Identify stable classes of path refusal independently of diagnostics.
 
-``POSITION_NOT_IN_PARENT`` is reserved and is not produced by a current path
+``BOUNDARY_NOT_IN_PARENT`` is reserved and is not produced by a current path
 resolver or profile.
 
 #### `PathRefusalCode` members
@@ -2620,7 +2620,7 @@ resolver or profile.
 - `OUT_OF_RANGE` = `out_of_range`
 - `UNKNOWN_DURABLE_ITEM` = `unknown_durable_item`
 - `UNKNOWN_DURABLE_ANCHOR` = `unknown_durable_anchor`
-- `POSITION_NOT_IN_PARENT` = `position_not_in_parent`
+- `BOUNDARY_NOT_IN_PARENT` = `boundary_not_in_parent`
 - `UNSPELLABLE` = `unspellable`
 - `PROFILE_REFUSED` = `profile_refused`
 - `ALTERNATIVE_OUT_OF_RANGE` = `alternative_out_of_range`
@@ -3633,7 +3633,7 @@ Distinguish identities belonging to different graph node classes.
 - `DOCUMENT` = `document`
 - `TIER` = `tier`
 - `ITEM` = `item`
-- `POSITION` = `position`
+- `BOUNDARY` = `boundary`
 - `RELATION_DECLARATION` = `relation_declaration`
 - `RELATION_INSTANCE` = `relation_instance`
 - `POLYADIC_RELATION_INSTANCE` = `polyadic_relation_instance`

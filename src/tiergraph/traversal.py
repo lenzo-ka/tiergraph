@@ -156,7 +156,7 @@ class OrderedPolyadicTraversal:
                 kind = NodeKind.ITEM
             elif isinstance(reference, BoundaryRef | DurableBoundaryRef):
                 resolved = self.graph.resolve_boundary(reference)
-                kind = NodeKind.POSITION
+                kind = NodeKind.BOUNDARY
             else:
                 raise TypeError(f"unsupported endpoint type {type(reference).__name__}")
         except (TypeError, ValueError) as error:
@@ -672,4 +672,4 @@ def _endpoint_node(graph: Graph, reference: RelationEndpointRef) -> Node:
         return Node(NodeKind.ITEM, graph.resolve_item(reference))
     assert isinstance(reference, DurableBoundaryRef)
     resolved: BoundaryRef = graph.resolve_boundary(reference)
-    return Node(NodeKind.POSITION, resolved)
+    return Node(NodeKind.BOUNDARY, resolved)

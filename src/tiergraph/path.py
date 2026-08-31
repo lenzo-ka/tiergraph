@@ -24,14 +24,14 @@ class PathKind(StrEnum):
     """Classify the graph reference produced by a path profile."""
 
     ITEM = "item"
-    POSITION = "position"
+    BOUNDARY = "boundary"
     ALTERNATIVE = "alternative"
 
 
 class PathRefusalCode(StrEnum):
     """Identify stable classes of path refusal independently of diagnostics.
 
-    ``POSITION_NOT_IN_PARENT`` is reserved and is not produced by a current path
+    ``BOUNDARY_NOT_IN_PARENT`` is reserved and is not produced by a current path
     resolver or profile.
     """
 
@@ -44,7 +44,7 @@ class PathRefusalCode(StrEnum):
     OUT_OF_RANGE = "out_of_range"
     UNKNOWN_DURABLE_ITEM = "unknown_durable_item"
     UNKNOWN_DURABLE_ANCHOR = "unknown_durable_anchor"
-    POSITION_NOT_IN_PARENT = "position_not_in_parent"
+    BOUNDARY_NOT_IN_PARENT = "boundary_not_in_parent"
     UNSPELLABLE = "unspellable"
     PROFILE_REFUSED = "profile_refused"
     ALTERNATIVE_OUT_OF_RANGE = "alternative_out_of_range"
@@ -211,7 +211,7 @@ def resolve_path(
     if isinstance(binding, ItemBinding):
         actual = PathKind.ITEM
     elif isinstance(binding, BoundaryBinding):
-        actual = PathKind.POSITION
+        actual = PathKind.BOUNDARY
     else:
         actual = PathKind.ALTERNATIVE
     if require is not None and require is not actual:

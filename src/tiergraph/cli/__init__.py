@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
     spell.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    spell.add_argument("--kind", choices=("item", "position"), required=True)
+    spell.add_argument("--kind", choices=("item", "boundary"), required=True)
     spell.add_argument("--tier-namespace", metavar="NS")
     spell.add_argument("--tier-local", metavar="LOCAL")
     spell.add_argument("--index", type=int, metavar="N")
@@ -326,7 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 elif isinstance(resolved, tiergraph.ResolvedBoundary):
                     value = {
-                        "kind": "position",
+                        "kind": "boundary",
                         "path": str(resolved.path),
                         "current": resolved.current.to_data(),
                     }
@@ -459,7 +459,7 @@ def _resolved_reference(
     resolved = tiergraph.resolve_path(graph, tiergraph.StructuralPathProfile(), text)
     if kind == "item" and isinstance(resolved, tiergraph.ResolvedItem):
         return resolved.current
-    if kind == "position" and isinstance(resolved, tiergraph.ResolvedBoundary):
+    if kind == "boundary" and isinstance(resolved, tiergraph.ResolvedBoundary):
         return resolved.current
     article = "an" if kind == "item" else "a"
     raise ValueError(
@@ -606,7 +606,7 @@ def _clock_query(
     if args.clock_command == "position":
         boundary_reference = cast(
             tiergraph.BoundaryRef,
-            _resolved_reference(graph, args.position, "position", "clock"),
+            _resolved_reference(graph, args.position, "boundary", "clock"),
         )
         return {
             "position": boundary_reference.to_data(),
@@ -694,14 +694,14 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
                 value is not None
                 for value in (*anchor_tier, args.anchor_item_id, args.side)
             ):
-                raise ValueError("item flags cannot include position anchor flags")
+                raise ValueError("item flags cannot include boundary anchor flags")
             return tiergraph.ItemBinding(tiergraph.DurableItemRef(args.durable_id))
         if all(value is not None for value in structural) and args.durable_id is None:
             if any(
                 value is not None
                 for value in (*anchor_tier, args.anchor_item_id, args.side)
             ):
-                raise ValueError("item flags cannot include position anchor flags")
+                raise ValueError("item flags cannot include boundary anchor flags")
             return tiergraph.ItemBinding(
                 tiergraph.ItemRef(
                     tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
@@ -714,12 +714,12 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
         )
 
     if args.durable_id is not None:
-        raise ValueError("position flags cannot include --durable-id")
+        raise ValueError("boundary flags cannot include --durable-id")
     if all(value is not None for value in structural):
         if any(value is not None for value in (*anchor_tier, args.anchor_item_id)):
-            raise ValueError("structural position flags cannot include durable anchors")
+            raise ValueError("structural boundary flags cannot include durable anchors")
         if args.side is not None:
-            raise ValueError("structural position flags cannot include --side")
+            raise ValueError("structural boundary flags cannot include --side")
         return tiergraph.BoundaryBinding(
             tiergraph.BoundaryRef(
                 tiergraph.QualifiedName(args.tier_namespace, args.tier_local),
@@ -728,10 +728,10 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
         )
     if any(value is not None for value in structural):
         raise ValueError(
-            "structural position requires --tier-namespace, --tier-local, and --index"
+            "structural boundary requires --tier-namespace, --tier-local, and --index"
         )
     if args.side is None:
-        raise ValueError("durable position requires --side")
+        raise ValueError("durable boundary requires --side")
     side = tiergraph.BoundarySide(args.side)
     if args.anchor_item_id is not None and all(value is None for value in anchor_tier):
         return tiergraph.BoundaryBinding(
@@ -749,7 +749,7 @@ def _path_binding(args: argparse.Namespace) -> tiergraph.PathBinding:
             )
         )
     raise ValueError(
-        "durable position requires exactly one of --anchor-item-id or "
+        "durable boundary requires exactly one of --anchor-item-id or "
         "--anchor-tier-namespace with --anchor-tier-local"
     )
 

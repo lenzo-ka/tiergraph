@@ -481,7 +481,7 @@ def run_example() -> dict[str, object]:
     graph = build_graph()
     profile = MixPathProfile(graph)
     item = resolve_path(graph, profile, "/mix/midi/note/0", require=PathKind.ITEM)
-    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.POSITION)
+    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.BOUNDARY)
     alternative = resolve_path(
         graph, profile, "/mix/arrangement/0", require=PathKind.ALTERNATIVE
     )

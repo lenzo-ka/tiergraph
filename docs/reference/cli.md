@@ -222,7 +222,7 @@ options:
 ### `tiergraph path spell`
 
 ```text
-usage: tiergraph path spell [-h] --kind {item,position} [--tier-namespace NS]
+usage: tiergraph path spell [-h] --kind {item,boundary} [--tier-namespace NS]
                             [--tier-local LOCAL] [--index N] [--durable-id ID]
                             [--anchor-item-id ID] [--anchor-tier-namespace NS]
                             [--anchor-tier-local LOCAL]
@@ -234,7 +234,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --kind {item,position}
+  --kind {item,boundary}
   --tier-namespace NS
   --tier-local LOCAL
   --index N

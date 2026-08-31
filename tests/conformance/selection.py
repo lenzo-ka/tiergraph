@@ -175,7 +175,7 @@ class SelectionLawSuite:
         graph = self.graph()
         boundaries = evaluate_selection(graph, BoundariesSelector(self.name("left")))
         assert boundaries.nodes == tuple(
-            Node(NodeKind.POSITION, BoundaryRef(self.name("left"), index))
+            Node(NodeKind.BOUNDARY, BoundaryRef(self.name("left"), index))
             for index in range(3)
         )
         anchored_selector = BoundarySelector(
@@ -183,7 +183,7 @@ class SelectionLawSuite:
         )
         anchored = evaluate_selection(graph, anchored_selector)
         assert anchored.nodes == (
-            Node(NodeKind.POSITION, BoundaryRef(self.name("left"), 1)),
+            Node(NodeKind.BOUNDARY, BoundaryRef(self.name("left"), 1)),
         )
         empty_name = self.name("empty")
         empty = Graph(
@@ -194,7 +194,7 @@ class SelectionLawSuite:
             graph.attribute_declarations,
         )
         assert evaluate_selection(empty, BoundariesSelector(empty_name)).nodes == (
-            Node(NodeKind.POSITION, BoundaryRef(empty_name, 0)),
+            Node(NodeKind.BOUNDARY, BoundaryRef(empty_name, 0)),
         )
         assert evaluate_selection(
             empty,
@@ -286,7 +286,7 @@ class SelectionLawSuite:
             AttributeDomain.TIER: Node(NodeKind.TIER, tier_name),
             AttributeDomain.ITEM: Node(NodeKind.ITEM, ItemRef(tier_name, 0)),
             AttributeDomain.BOUNDARY: Node(
-                NodeKind.POSITION, BoundaryRef(tier_name, 0)
+                NodeKind.BOUNDARY, BoundaryRef(tier_name, 0)
             ),
             AttributeDomain.RELATION_DECLARATION: Node(
                 NodeKind.RELATION_DECLARATION, members.name

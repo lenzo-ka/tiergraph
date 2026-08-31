@@ -838,7 +838,7 @@ def test_clock_commands_report_profile_path_kind_and_untimed_errors(
         "items", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
     )
     assert main(["clock", "position", *common, "--position", item]) == 1
-    assert "did not resolve to a position" in capsys.readouterr().err
+    assert "did not resolve to a boundary" in capsys.readouterr().err
 
     boundary = _structural_path(
         "positions", CLOCK_SEGMENT.namespace, CLOCK_SEGMENT.local_name, 0
@@ -1183,7 +1183,7 @@ def test_path_resolve_and_spell(
     assert capsys.readouterr().out.encode() == cli._json_bytes(expected_durable)
 
     expected_boundary = {
-        "kind": "position",
+        "kind": "boundary",
         "path": "/positions/durable/item/beta/after",
         "current": {
             "tier": {"namespace": "urn:path", "local_name": "tokens"},
@@ -1221,7 +1221,7 @@ def test_path_resolve_and_spell(
         (
             [
                 "--kind",
-                "position",
+                "boundary",
                 "--tier-namespace",
                 "urn:path",
                 "--tier-local",
@@ -1234,7 +1234,7 @@ def test_path_resolve_and_spell(
         (
             [
                 "--kind",
-                "position",
+                "boundary",
                 "--anchor-item-id",
                 "beta",
                 "--side",
@@ -1245,7 +1245,7 @@ def test_path_resolve_and_spell(
         (
             [
                 "--kind",
-                "position",
+                "boundary",
                 "--anchor-tier-namespace",
                 "urn:path",
                 "--anchor-tier-local",
@@ -1268,7 +1268,7 @@ def test_path_resolve_and_spell(
     [
         (
             ["--kind", "item", "--durable-id", "alpha", "--side", "after"],
-            "item flags cannot include position anchor flags",
+            "item flags cannot include boundary anchor flags",
         ),
         (
             [
@@ -1283,20 +1283,20 @@ def test_path_resolve_and_spell(
                 "--anchor-item-id",
                 "alpha",
             ],
-            "item flags cannot include position anchor flags",
+            "item flags cannot include boundary anchor flags",
         ),
         (
             ["--kind", "item"],
             "item requires either --durable-id or --tier-namespace, --tier-local, and --index",
         ),
         (
-            ["--kind", "position", "--durable-id", "alpha"],
-            "position flags cannot include --durable-id",
+            ["--kind", "boundary", "--durable-id", "alpha"],
+            "boundary flags cannot include --durable-id",
         ),
         (
             [
                 "--kind",
-                "position",
+                "boundary",
                 "--tier-namespace",
                 "urn:path",
                 "--tier-local",
@@ -1306,12 +1306,12 @@ def test_path_resolve_and_spell(
                 "--anchor-item-id",
                 "alpha",
             ],
-            "structural position flags cannot include durable anchors",
+            "structural boundary flags cannot include durable anchors",
         ),
         (
             [
                 "--kind",
-                "position",
+                "boundary",
                 "--tier-namespace",
                 "urn:path",
                 "--tier-local",
@@ -1321,19 +1321,19 @@ def test_path_resolve_and_spell(
                 "--side",
                 "after",
             ],
-            "structural position flags cannot include --side",
+            "structural boundary flags cannot include --side",
         ),
         (
-            ["--kind", "position", "--tier-namespace", "urn:path"],
-            "structural position requires --tier-namespace, --tier-local, and --index",
+            ["--kind", "boundary", "--tier-namespace", "urn:path"],
+            "structural boundary requires --tier-namespace, --tier-local, and --index",
         ),
         (
-            ["--kind", "position", "--anchor-item-id", "alpha"],
-            "durable position requires --side",
+            ["--kind", "boundary", "--anchor-item-id", "alpha"],
+            "durable boundary requires --side",
         ),
         (
-            ["--kind", "position", "--side", "after"],
-            "durable position requires exactly one of --anchor-item-id or --anchor-tier-namespace with --anchor-tier-local",
+            ["--kind", "boundary", "--side", "after"],
+            "durable boundary requires exactly one of --anchor-item-id or --anchor-tier-namespace with --anchor-tier-local",
         ),
     ],
 )
