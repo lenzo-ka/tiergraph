@@ -1,6 +1,6 @@
 """REGRESSION tests for total positional displacement across graph edits."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Mapping
 from random import Random
 
 import pytest
@@ -35,13 +35,20 @@ GROUP = QualifiedName(NS, "group")
 
 
 def graph_with_spaces(
-    item_count: int = 7, relation_count: int = 4, polyadic_count: int = 3
+    item_count: int = 7,
+    relation_count: int = 4,
+    polyadic_count: int = 3,
+    *,
+    durable_items: bool = False,
 ) -> Graph:
-    """Return one graph with anonymous items and both instance index spaces."""
+    """Return one graph with both instance index spaces."""
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (TIER,))
+    items = tuple(
+        Item(f"item-{index}" if durable_items else None) for index in range(item_count)
+    )
     return Graph(
         (NamespaceDeclaration("d", NS),),
-        (Tier(TierDeclaration(TIER, "tokens"), (Item(),) * item_count),),
+        (Tier(TierDeclaration(TIER, "tokens"), items),),
         (
             SimpleRelationDeclaration(MEMBERSHIP, TIER, ITEM_TYPE),
             BipartiteRelationDeclaration(LINK, ITEM_TYPE, ITEM_TYPE),
@@ -66,41 +73,214 @@ def graph_with_spaces(
     )
 
 
-def assert_total(source: Graph, displacement: Displacement) -> None:
-    """Assert the mapped/departed exclusive partition in all four spaces."""
-    spaces = (
-        (
-            {
-                ItemRef(tier.declaration.name, index)
-                for tier in source.tiers
-                for index in range(len(tier.items))
-            },
-            set(displacement.items),
-            set(displacement.departed_items),
-        ),
-        (
-            {
-                BoundaryRef(tier.declaration.name, index)
-                for tier in source.tiers
-                for index in range(len(tier.items) + 1)
-            },
-            set(displacement.boundaries),
-            set(displacement.departed_boundaries),
-        ),
-        (
-            set(range(len(source.relations))),
-            set(displacement.relations),
-            set(displacement.departed_relations),
-        ),
-        (
-            set(range(len(source.polyadic_relations))),
-            set(displacement.polyadic_relations),
-            set(displacement.departed_polyadic_relations),
-        ),
-    )
-    for source_positions, mapped, departed in spaces:
+def assert_total(source: Graph, result: Graph, displacement: Displacement) -> None:
+    """Assert a total partition with distinct images in the result spaces."""
+
+    def assert_space[Coordinate: Hashable](
+        source_positions: set[Coordinate],
+        mapping: Mapping[Coordinate, Coordinate],
+        departed: frozenset[Coordinate],
+        result_positions: set[Coordinate],
+    ) -> None:
+        mapped = set(mapping)
+        images = set(mapping.values())
         assert mapped.isdisjoint(departed)
         assert mapped | departed == source_positions
+        assert images <= result_positions
+        assert len(images) == len(mapping)
+
+    source_items = {
+        ItemRef(tier.declaration.name, index)
+        for tier in source.tiers
+        for index in range(len(tier.items))
+    }
+    result_items = {
+        ItemRef(tier.declaration.name, index)
+        for tier in result.tiers
+        for index in range(len(tier.items))
+    }
+    assert_space(
+        source_items, displacement.items, displacement.departed_items, result_items
+    )
+    source_boundaries = {
+        BoundaryRef(tier.declaration.name, index)
+        for tier in source.tiers
+        for index in range(len(tier.items) + 1)
+    }
+    result_boundaries = {
+        BoundaryRef(tier.declaration.name, index)
+        for tier in result.tiers
+        for index in range(len(tier.items) + 1)
+    }
+    assert_space(
+        source_boundaries,
+        displacement.boundaries,
+        displacement.departed_boundaries,
+        result_boundaries,
+    )
+    assert_space(
+        set(range(len(source.relations))),
+        displacement.relations,
+        displacement.departed_relations,
+        set(range(len(result.relations))),
+    )
+    assert_space(
+        set(range(len(source.polyadic_relations))),
+        displacement.polyadic_relations,
+        displacement.departed_polyadic_relations,
+        set(range(len(result.polyadic_relations))),
+    )
+
+
+def displacement_oracle(source: Graph, result: Graph) -> Displacement:
+    """Match durable members without using editor displacement or composition."""
+    source_items = {
+        item.durable_id: ItemRef(tier.declaration.name, index)
+        for tier in source.tiers
+        for index, item in enumerate(tier.items)
+        if item.durable_id is not None
+    }
+    result_items = {
+        item.durable_id: ItemRef(tier.declaration.name, index)
+        for tier in result.tiers
+        for index, item in enumerate(tier.items)
+        if item.durable_id is not None
+    }
+    items = {
+        coordinate: result_items[durable_id]
+        for durable_id, coordinate in source_items.items()
+        if durable_id in result_items
+    }
+
+    boundaries: dict[BoundaryRef, BoundaryRef] = {}
+    for tier in source.tiers:
+        result_tier = next(
+            candidate
+            for candidate in result.tiers
+            if candidate.declaration.name == tier.declaration.name
+        )
+        result_ids = [item.durable_id for item in result_tier.items]
+        for index in range(len(tier.items) + 1):
+            left = None if index == 0 else tier.items[index - 1].durable_id
+            right = None if index == len(tier.items) else tier.items[index].durable_id
+            if left is None:
+                image = 0 if result_ids and result_ids[0] == right else None
+            elif right is None:
+                image = (
+                    len(result_ids) if result_ids and result_ids[-1] == left else None
+                )
+            elif left in result_ids and right in result_ids:
+                right_index = result_ids.index(right)
+                image = (
+                    right_index
+                    if right_index > 0 and result_ids[right_index - 1] == left
+                    else None
+                )
+            else:
+                image = None
+            if image is not None:
+                boundaries[BoundaryRef(tier.declaration.name, index)] = BoundaryRef(
+                    tier.declaration.name, image
+                )
+
+    def instance_map(
+        source_instances: tuple[object, ...], result_instances: tuple[object, ...]
+    ) -> dict[int, int]:
+        result_by_id = {
+            instance.durable_id: index
+            for index, instance in enumerate(result_instances)
+            if isinstance(instance, RelationInstance | PolyadicRelationInstance)
+            and instance.durable_id is not None
+        }
+        return {
+            index: result_by_id[instance.durable_id]
+            for index, instance in enumerate(source_instances)
+            if isinstance(instance, RelationInstance | PolyadicRelationInstance)
+            and instance.durable_id in result_by_id
+        }
+
+    relations = instance_map(source.relations, result.relations)
+    polyadic_relations = instance_map(
+        source.polyadic_relations, result.polyadic_relations
+    )
+    all_items = {
+        ItemRef(tier.declaration.name, index)
+        for tier in source.tiers
+        for index in range(len(tier.items))
+    }
+    all_boundaries = {
+        BoundaryRef(tier.declaration.name, index)
+        for tier in source.tiers
+        for index in range(len(tier.items) + 1)
+    }
+    return Displacement(
+        items,
+        boundaries,
+        relations,
+        polyadic_relations,
+        frozenset(all_items - items.keys()),
+        frozenset(all_boundaries - boundaries.keys()),
+        frozenset(set(range(len(source.relations))) - relations.keys()),
+        frozenset(
+            set(range(len(source.polyadic_relations))) - polyadic_relations.keys()
+        ),
+    )
+
+
+def compose_oracle_space[Coordinate: Hashable](
+    earlier: Mapping[Coordinate, Coordinate],
+    earlier_departed: frozenset[Coordinate],
+    later: Mapping[Coordinate, Coordinate],
+    later_departed: frozenset[Coordinate],
+) -> tuple[dict[Coordinate, Coordinate], frozenset[Coordinate]]:
+    """Compose oracle maps without calling either production composition path."""
+    mapped = {
+        source: later[intermediate]
+        for source, intermediate in earlier.items()
+        if intermediate in later
+    }
+    departed = earlier_departed | frozenset(
+        source
+        for source, intermediate in earlier.items()
+        if intermediate in later_departed
+    )
+    assert len(mapped) + len(departed) == len(earlier) + len(earlier_departed)
+    return mapped, departed
+
+
+def compose_oracle(earlier: Displacement, later: Displacement) -> Displacement:
+    """Compose every independently observed positional space."""
+    items, departed_items = compose_oracle_space(
+        earlier.items, earlier.departed_items, later.items, later.departed_items
+    )
+    boundaries, departed_boundaries = compose_oracle_space(
+        earlier.boundaries,
+        earlier.departed_boundaries,
+        later.boundaries,
+        later.departed_boundaries,
+    )
+    relations, departed_relations = compose_oracle_space(
+        earlier.relations,
+        earlier.departed_relations,
+        later.relations,
+        later.departed_relations,
+    )
+    polyadic, departed_polyadic = compose_oracle_space(
+        earlier.polyadic_relations,
+        earlier.departed_polyadic_relations,
+        later.polyadic_relations,
+        later.departed_polyadic_relations,
+    )
+    return Displacement(
+        items,
+        boundaries,
+        relations,
+        polyadic,
+        departed_items,
+        departed_boundaries,
+        departed_relations,
+        departed_polyadic,
+    )
 
 
 def test_displacement_is_total_over_every_source_position() -> None:
@@ -120,14 +300,14 @@ def test_displacement_is_total_over_every_source_position() -> None:
             editor.remove_relation(0)
         if polyadic_count:
             editor.remove_relation("p0")
-        assert_total(source, editor.displacement())
+        assert_total(source, editor.freeze(), editor.displacement())
 
 
 def test_stationary_maps_every_position_to_itself() -> None:
     """REGRESSION (parent: dependency): stationary positions are not silence."""
     graph = graph_with_spaces()
     stationary = Displacement.stationary(graph)
-    assert_total(graph, stationary)
+    assert_total(graph, graph, stationary)
     assert all(source == target for source, target in stationary.items.items())
     assert all(source == target for source, target in stationary.boundaries.items())
     assert stationary.relations == {index: index for index in range(4)}
@@ -179,7 +359,7 @@ def apply_script_step(editor: GraphEditor, step: int) -> None:
     kind = step % 7
     graph = editor.freeze()
     if kind == 0:
-        editor.insert_item(TIER, 2, Item())
+        editor.insert_item(TIER, 2, Item(f"added-item-{step}"))
     elif kind == 1:
         editor.move_item(ItemRef(TIER, len(graph.tiers[0].items) - 1), 2)
     elif kind == 2:
@@ -207,9 +387,10 @@ def apply_script_step(editor: GraphEditor, step: int) -> None:
 
 def test_composed_steps_equal_the_fixed_40_operation_script() -> None:
     """REGRESSION (parent: dependency): T27 detects positional composition."""
-    source = graph_with_spaces()
+    source = graph_with_spaces(durable_items=True)
     whole_script = source.edit()
     composed = Displacement.stationary(source)
+    expected = Displacement.stationary(source)
     current = source
     operations: tuple[Callable[[GraphEditor, int], None], ...] = (apply_script_step,)
     for step in range(40):
@@ -217,9 +398,12 @@ def test_composed_steps_equal_the_fixed_40_operation_script() -> None:
         operations[0](one_step, step)
         operations[0](whole_script, step)
         composed = composed.then(one_step.displacement())
-        current = one_step.freeze()
-    assert composed == whole_script.displacement()
-    assert_total(source, composed)
+        result = one_step.freeze()
+        expected = compose_oracle(expected, displacement_oracle(current, result))
+        current = result
+    assert composed == expected
+    assert whole_script.displacement() == expected
+    assert_total(source, current, composed)
     assert composed.departed_items
     assert composed.departed_boundaries
     assert composed.departed_relations
