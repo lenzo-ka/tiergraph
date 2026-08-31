@@ -171,7 +171,8 @@ class Resolved:
 def parse_version(text: str) -> Version | None:
     """Return the three release numbers in a version, or None if it is not one."""
     parts = text.strip().split(".")
-    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+    release_part_count = 3
+    if len(parts) != release_part_count or not all(part.isdigit() for part in parts):
         return None
     major, minor, patch = (int(part) for part in parts)
     return (major, minor, patch)
@@ -336,7 +337,7 @@ def _bound(
     return []
 
 
-def _types(where: str, node: dict[str, object]) -> tuple[set[str] | None, str | None]:
+def _types(_where: str, node: dict[str, object]) -> tuple[set[str] | None, str | None]:
     """Return the type names a subschema accepts, or why they could not be read."""
     declared = node.get("type")
     if declared is None:

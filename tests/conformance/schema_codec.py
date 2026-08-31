@@ -273,9 +273,11 @@ def _replacements(shape: Shape, value: JsonValue) -> tuple[tuple[str, JsonValue]
                 )
             )
     elif shape.kind is ShapeKind.INTEGER:
-        for number in (-2, -1, 0, 1, 2):
-            if number != value:
-                candidates.append((f"integer-{number}", number))
+        candidates.extend(
+            (f"integer-{number}", number)
+            for number in (-2, -1, 0, 1, 2)
+            if number != value
+        )
         if shape.minimum is not None:
             candidates.extend(
                 (

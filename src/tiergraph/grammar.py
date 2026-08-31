@@ -429,12 +429,12 @@ def lower_grammar(
             ),
         )
     )
-    for local in ("kind", "nonterminal", "boundary", "text", "variable"):
-        opcodes.append(
-            DeclareAttribute(
-                AttributeDeclaration(names[local], AttributeDomain.ITEM, XsdType.STRING)
-            )
+    opcodes.extend(
+        DeclareAttribute(
+            AttributeDeclaration(names[local], AttributeDomain.ITEM, XsdType.STRING)
         )
+        for local in ("kind", "nonterminal", "boundary", "text", "variable")
+    )
     opcodes.append(
         DeclareAttribute(
             AttributeDeclaration(names["weight"], AttributeDomain.ITEM, XsdType.DECIMAL)
@@ -596,8 +596,9 @@ class GrammarChartProfile:
                 ),
             )
         segments = path.segments
+        chart_path_segment_count = 6
         if (
-            len(segments) != 6
+            len(segments) != chart_path_segment_count
             or segments[0] != "chart"
             or segments[4] != "alternatives"
         ):
@@ -1079,8 +1080,10 @@ def recognize(
         opcodes.append(
             Relate(RelationInstance(names["alternatives"], references[parent], app))
         )
-        for child in child_refs:
-            opcodes.append(Relate(RelationInstance(names["children"], app, child)))
+        opcodes.extend(
+            Relate(RelationInstance(names["children"], app, child))
+            for child in child_refs
+        )
         opcodes.append(
             Relate(
                 PolyadicRelationInstance(
@@ -1100,7 +1103,7 @@ def recognize(
             (names["chart-items"], names["applications"]),
         ),
         BOOLEAN,
-        lambda value, label: cast(bool, value),
+        lambda value, _label: cast(bool, value),
         (
             FoldTransition(names["alternatives"], ChildCombination.OR),
             FoldTransition(names["children"], ChildCombination.AND),
@@ -1164,7 +1167,7 @@ def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:
             (names["chart-items"], names["applications"]),
         ),
         COUNTING,
-        lambda value, label: 1 if cast(bool, value) else 0,
+        lambda value, _label: 1 if cast(bool, value) else 0,
         (
             FoldTransition(names["alternatives"], ChildCombination.OR),
             FoldTransition(names["children"], ChildCombination.AND),
@@ -1257,12 +1260,12 @@ def best(
 
 
 __all__ = [
-    "BestDerivation",
     "CHART_NAMESPACE",
     "COMPLETE_BOUNDARY",
     "GRAMMAR_NAMESPACE",
-    "GrammarDeclaration",
+    "BestDerivation",
     "GrammarChartProfile",
+    "GrammarDeclaration",
     "GrammarHole",
     "GrammarRule",
     "GrammarTerminal",

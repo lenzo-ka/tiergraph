@@ -540,7 +540,7 @@ class FoldDeclaration[Value]:
             reference: {relation: [] for relation in selected}
             for reference in references
         }
-        incoming = {reference: 0 for reference in references}
+        incoming = dict.fromkeys(references, 0)
         for relation in self.graph.relations:
             if (
                 relation.declaration in selected
@@ -711,7 +711,7 @@ class FoldDeclaration[Value]:
                     assert has_children
                     return value
 
-                approximants = {member: self.semiring.zero for member in component}
+                approximants = dict.fromkeys(component, self.semiring.zero)
                 for _ in component:
                     approximants = {
                         member: equation(member, approximants) for member in component
@@ -731,6 +731,7 @@ class FoldDeclaration[Value]:
                     active_components.remove(component)
                     return
 
+                minimum_nonlinear_children = 2
                 nonlinear = next(
                     (
                         member
@@ -741,7 +742,7 @@ class FoldDeclaration[Value]:
                             if transition.combination is ChildCombination.AND
                             for child in outgoing[member][transition.relation]
                         )
-                        >= 2
+                        >= minimum_nonlinear_children
                     ),
                     None,
                 )
@@ -1372,9 +1373,11 @@ class FoldDeclaration[Value]:
                         expand(current)
                         continue
                     work.append((current, True))
-                    for transition in reversed(self.transitions):
-                        for child in reversed(outgoing[current][transition.relation]):
-                            work.append((child, False))
+                    work.extend(
+                        (child, False)
+                        for transition in reversed(self.transitions)
+                        for child in reversed(outgoing[current][transition.relation])
+                    )
             combined = self.semiring.zero
             derivations = 0
             for root in item_roots:
@@ -1579,7 +1582,7 @@ def _state_data(state: State) -> dict[str, object]:
 __all__ = [
     "AttributeValuation",
     "ChildCombination",
-    "IndexCoordinate",
+    "DerivationProvenance",
     "ExactnessRefusal",
     "FoldCertificate",
     "FoldCost",
@@ -1588,10 +1591,10 @@ __all__ = [
     "FoldHomomorphism",
     "FoldResult",
     "FoldTransition",
+    "IndexCoordinate",
     "Lift",
     "Path",
-    "DerivationProvenance",
+    "State",
     "TiePolicy",
     "WitnessOrder",
-    "State",
 ]

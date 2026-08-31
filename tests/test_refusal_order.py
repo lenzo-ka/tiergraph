@@ -17,6 +17,7 @@ from tiergraph import (
     program_loads,
     selection_loads,
     to_data,
+    wire,
 )
 from tiergraph.schema import Refusal, RefusalStage, json_schema, validation_errors
 
@@ -211,8 +212,6 @@ def test_a_document_over_the_size_limit_outranks_its_own_bad_bytes(
     never decodes it - so the size is primary, and a fixture carrying only one
     of the two could not tell that apart.
     """
-    from tiergraph import wire
-
     monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
     refusal = refuse(loads, b"\xff\xfe")
     assert refusal.stage is RefusalStage.ENVELOPE

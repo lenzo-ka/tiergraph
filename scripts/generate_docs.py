@@ -380,7 +380,9 @@ def check_cli() -> None:
         (sys.executable, "-m", "tiergraph", "--version"),
     )
     for command in commands:
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        result = subprocess.run(
+            command, cwd=ROOT, check=False, capture_output=True, text=True
+        )
         if result.returncode != 0 or result.stderr:
             raise ValueError(f"CLI contract failed for {command!r}")
     version = subprocess.run(
@@ -488,6 +490,7 @@ def execute_python_fences(pages: set[Path]) -> None:
                 *map(str, modules),
             ),
             cwd=ROOT,
+            check=False,
             capture_output=True,
             text=True,
         )

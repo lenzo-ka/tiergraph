@@ -278,23 +278,35 @@ class StructuralPathProfile:
         """Interpret one of the generic structural or durable forms."""
         del graph
         segments = path.segments
-        if len(segments) == 5 and segments[:2] == ("items", "structural"):
+        structural_item_segment_count = 5
+        durable_item_segment_count = 3
+        durable_tier_position_segment_count = 6
+        if len(segments) == structural_item_segment_count and segments[:2] == (
+            "items",
+            "structural",
+        ):
             return ItemBinding(
                 ItemRef(
                     _tier(segments[2], segments[3], path),
                     _index(segments[4], 4, path),
                 )
             )
-        if len(segments) == 3 and segments[:2] == ("items", "durable"):
+        if len(segments) == durable_item_segment_count and segments[:2] == (
+            "items",
+            "durable",
+        ):
             return ItemBinding(DurableItemRef(_nonempty(segments[2], 2, path)))
-        if len(segments) == 5 and segments[:2] == ("positions", "structural"):
+        if len(segments) == structural_item_segment_count and segments[:2] == (
+            "positions",
+            "structural",
+        ):
             return BoundaryBinding(
                 BoundaryRef(
                     _tier(segments[2], segments[3], path),
                     _index(segments[4], 4, path),
                 )
             )
-        if len(segments) == 5 and segments[:3] == (
+        if len(segments) == structural_item_segment_count and segments[:3] == (
             "positions",
             "durable",
             "item",
@@ -305,7 +317,7 @@ class StructuralPathProfile:
                     _side(segments[4], 4, path),
                 )
             )
-        if len(segments) == 6 and segments[:3] == (
+        if len(segments) == durable_tier_position_segment_count and segments[:3] == (
             "positions",
             "durable",
             "tier",

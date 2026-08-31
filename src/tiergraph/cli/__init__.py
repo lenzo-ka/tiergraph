@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO, cast
@@ -459,6 +459,7 @@ def _fold_lift(
 
         def one(value: object, label: str) -> object:
             """Embed every read value as the semiring's multiplicative identity."""
+            del value, label
             return algebra.one
 
         return one
@@ -767,16 +768,17 @@ def _output_stream(input_name: str, output_name: str) -> Iterator[BinaryIO]:
         replaced = True
     finally:
         if not replaced:
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(temporary)
-            except FileNotFoundError:
-                pass
 
 
 def _check_distinct(input_name: str, output_name: str) -> None:
-    if input_name != "-" and output_name != "-":
-        if Path(input_name).resolve() == Path(output_name).resolve():
-            raise ValueError("input and output paths must differ")
+    if (
+        input_name != "-"
+        and output_name != "-"
+        and Path(input_name).resolve() == Path(output_name).resolve()
+    ):
+        raise ValueError("input and output paths must differ")
 
 
 def _render(graph: tiergraph.Graph, include_empty_tiers: bool) -> str:
@@ -889,6 +891,7 @@ def _step_interactive(program: Program) -> int:
     iterator = iter(tiergraph.steps(program))
     trace: list[Step] = []
     finished = False
+    command_with_argument_word_count = 2
     while True:
         try:
             command = input("step> ").strip()
@@ -913,7 +916,10 @@ def _step_interactive(program: Program) -> int:
             target = trace[-1].index + 1 if trace else 0
         elif name in {"continue", "c"} and len(words) == 1:
             target = None
-        elif name in {"run-to", "break"} and len(words) == 2:
+        elif (
+            name in {"run-to", "break"}
+            and len(words) == command_with_argument_word_count
+        ):
             try:
                 target = int(words[1])
             except ValueError:
@@ -981,29 +987,29 @@ def _inspect(graph: tiergraph.Graph) -> str:
         f"document attributes: {summary['document_attributes']}",
     ]
     tier_summaries = cast(list[dict[str, object]], summary["tier_summaries"])
-    for tier in tier_summaries:
-        lines.append(
+    lines.extend(
+        (
             f"tier: {_qualified_name_text(tier['name'])} | {tier['long_name']} | "
             f"items={tier['items']} | attributes={tier['attributes']}"
         )
+        for tier in tier_summaries
+    )
     relation_summaries = cast(list[dict[str, object]], summary["relation_summaries"])
-    for relation in relation_summaries:
-        lines.append(
+    lines.extend(
+        (
             f"relation: {_qualified_name_text(relation['name'])} "
             f"| kind={relation['kind']}"
         )
+        for relation in relation_summaries
+    )
     return "\n".join(lines) + "\n"
 
 
 def _read_program(filename: str) -> Program:
-    stream: BinaryIO
-    close = filename != "-"
-    stream = Path(filename).open("rb") if close else sys.stdin.buffer
-    try:
+    if filename == "-":
+        return load_program(sys.stdin.buffer)
+    with Path(filename).open("rb") as stream:
         return load_program(stream)
-    finally:
-        if close:
-            stream.close()
 
 
 __all__ = ["build_parser", "main"]

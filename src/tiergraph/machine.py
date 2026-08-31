@@ -147,14 +147,15 @@ class AddItem:
         found = False
         tiers: list[Tier] = []
         for candidate in graph.tiers:
+            updated = candidate
             if candidate.declaration.name == self.tier:
                 found = True
-                candidate = Tier(
+                updated = Tier(
                     candidate.declaration,
                     (*candidate.items, self.item),
                     candidate.attributes,
                 )
-            tiers.append(candidate)
+            tiers.append(updated)
         if not found:
             raise Refusal(
                 RefusalStage.REFERENCE,
@@ -1329,8 +1330,7 @@ def _flatten(opcodes: tuple[Opcode, ...]) -> tuple[PrimitiveOpcode, ...]:
         opcode = block[index]
         stack.append((block, index + 1))
         if type(opcode) is Repeat:
-            for _ in range(opcode.count):
-                stack.append((opcode.body, 0))
+            stack.extend((opcode.body, 0) for _ in range(opcode.count))
         else:
             flattened.append(cast(PrimitiveOpcode, opcode))
     return tuple(flattened)
@@ -1344,9 +1344,9 @@ def _primitive_count(opcodes: tuple[Opcode, ...]) -> int:
         block, visited = stack.pop()
         if not visited:
             stack.append((block, True))
-            for opcode in block:
-                if type(opcode) is Repeat:
-                    stack.append((opcode.body, False))
+            stack.extend(
+                (opcode.body, False) for opcode in block if type(opcode) is Repeat
+            )
             continue
 
         total = 0
@@ -1483,10 +1483,11 @@ def _map_tier(
     found = False
     tiers: list[Tier] = []
     for tier in graph.tiers:
+        updated = tier
         if tier.declaration.name == target:
             found = True
-            tier = replace(tier)
-        tiers.append(tier)
+            updated = replace(tier)
+        tiers.append(updated)
     if not found:
         raise Refusal(
             RefusalStage.REFERENCE,
@@ -1521,10 +1522,11 @@ def _attach_relation_declaration(
     found = False
     declarations: list[RelationDeclaration] = []
     for declaration in graph.relation_declarations:
+        updated = declaration
         if declaration.name == target:
             found = True
-            declaration = _relation_with_value(declaration, value)
-        declarations.append(declaration)
+            updated = _relation_with_value(declaration, value)
+        declarations.append(updated)
     if not found:
         raise Refusal(
             RefusalStage.REFERENCE,

@@ -3121,18 +3121,16 @@ def _validate_polyadic_invariants(
                     )
                 first_source_instance.setdefault(key, index)
                 targets_by_source.setdefault(key, set()).update(resolved_targets)
-            for source in resolved_sources:
-                for target in resolved_targets:
-                    resolved_edges.append(
-                        (
-                            index,
-                            RelationInstance(
-                                name, relation.sources[0], relation.targets[0]
-                            ),
-                            source,
-                            target,
-                        )
-                    )
+            resolved_edges.extend(
+                (
+                    index,
+                    RelationInstance(name, relation.sources[0], relation.targets[0]),
+                    source,
+                    target,
+                )
+                for source in resolved_sources
+                for target in resolved_targets
+            )
         if declaration.single_parent:
             parents: dict[
                 ItemRef | BoundaryRef,

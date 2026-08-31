@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import MappingProxyType
 
@@ -22,6 +23,8 @@ from tiergraph import (
     loads,
 )
 from tiergraph.core import JsonValue
+from tiergraph.schema import validation_errors
+from tiergraph.wire import FORMAT_VERSION, to_data
 
 
 def segment_value() -> JsonValue:
@@ -93,9 +96,6 @@ def test_malformed_value_names_offender_and_neighbour_passes() -> None:
 
 def test_codec_and_schema_accept_and_refuse_same_new_surface() -> None:
     """Generated-schema validation and the codec agree around structured graphs."""
-    from tiergraph.schema import validation_errors
-    from tiergraph.wire import FORMAT_VERSION, to_data
-
     graph, _, _ = json_value_graph({"place": "velar"})
     document = to_data(graph)
     assert validation_errors(document, FORMAT_VERSION) == []
@@ -110,8 +110,6 @@ def test_codec_and_schema_accept_and_refuse_same_new_surface() -> None:
     relation["targets"] = "not-an-array"
     schema_errors = validation_errors(bad, FORMAT_VERSION)
     assert schema_errors == ["document.graph.relations[0].targets must be an array"]
-    import json
-
     with pytest.raises(ValueError, match=r"relations\[0\].targets must be an array"):
         loads(json.dumps(bad))
 

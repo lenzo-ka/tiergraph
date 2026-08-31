@@ -127,7 +127,7 @@ class OrderedRootsProfile:
         """Return dependency roots in canonical item order."""
         domain = self._domain()
         admitted = set(domain)
-        incoming = {reference: 0 for reference in domain}
+        incoming = dict.fromkeys(domain, 0)
         dependencies = set(self.dependency_relations)
         for relation in self.graph.polyadic_relations:
             if relation.declaration not in dependencies:

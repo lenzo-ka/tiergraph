@@ -135,7 +135,7 @@ def test_reused_recognition_bytes_are_immutable_across_actions() -> None:
         {0: 1},
         lambda carrier, deliveries: {
             **carrier,
-            **{delivery: 1 for delivery in deliveries},
+            **dict.fromkeys(deliveries, 1),
         },
     )
     after = canonical_bytes(recognized.to_data(PATH))

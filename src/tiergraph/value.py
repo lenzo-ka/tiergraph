@@ -288,9 +288,9 @@ class JsonValueProfile:
                 f"JSON container node {reference.to_data()!r} has no member relation"
             )
         visiting.add(reference)
-        decoded: list[JsonValue] = []
-        for occurrence in children:
-            decoded.append(self._value(self._values[occurrence], visiting))
+        decoded = [
+            self._value(self._values[occurrence], visiting) for occurrence in children
+        ]
         visiting.remove(reference)
         if kind == "array":
             for occurrence in children:

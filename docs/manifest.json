@@ -374,14 +374,14 @@
       "PATH",
       "PATH_WITNESSES",
       "TROPICAL",
-      "BooleanSemiring",
       "ArcticSemiring",
+      "BooleanSemiring",
       "CountingSemiring",
       "DecimalExtremumSemiring",
       "DoubleExtremumSemiring",
       "ExpectationSemiring",
-      "LexicographicSemiring",
       "LawCheck",
+      "LexicographicSemiring",
       "Path",
       "PathSemiring",
       "PathValue",
@@ -405,16 +405,16 @@
       "main"
     ],
     "tiergraph.spanview": [
-      "SpanViewProfile",
-      "SpanView",
+      "SPANVIEW_FORMAT_VERSION",
       "Span",
       "SpanAlternative",
+      "SpanView",
+      "SpanViewProfile",
       "span_view",
+      "to_html",
       "to_json",
       "to_jsonl",
-      "to_text",
-      "to_html",
-      "SPANVIEW_FORMAT_VERSION"
+      "to_text"
     ]
   }
 }

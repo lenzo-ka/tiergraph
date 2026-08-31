@@ -413,18 +413,15 @@ def test_page_sized_oracle_pins_paths_scores_and_reconvergence() -> None:
         Decimal(4),
     )
     assert tuple(path[-1] for path in expected_paths) == ("jo", "jo")
-    assert (
-        suite.fold(COUNTING, {identity: 1 for identity in _arc_decimals(suite.graph)})
-        == 2
-    )
+    assert suite.fold(COUNTING, dict.fromkeys(_arc_decimals(suite.graph), 1)) == 2
     assert suite.fold(DECIMAL_TROPICAL, _arc_decimals(suite.graph)) == Decimal(4)
 
 
 def test_idempotence_masks_the_double_counting_defect() -> None:
     """Boolean accepts duplicate yield while counting exposes two extra paths."""
     suite = PackedAlternationSuite(diamond_graph())
-    counting_values = {identity: 1 for identity in _arc_decimals(suite.graph)}
-    boolean_values = {identity: True for identity in counting_values}
+    counting_values = dict.fromkeys(_arc_decimals(suite.graph), 1)
+    boolean_values = dict.fromkeys(counting_values, True)
     assert suite.fold(COUNTING, counting_values) == 2
     assert suite.defective_fold(COUNTING, counting_values) == 4
     assert suite.fold(BOOLEAN, boolean_values) is True
@@ -434,8 +431,8 @@ def test_idempotence_masks_the_double_counting_defect() -> None:
 def test_arrival_fold_agrees_without_reconvergence() -> None:
     """A single-arrival chain cannot trigger repeated joined propagation."""
     suite = PackedAlternationSuite(linear_graph())
-    counting_values = {identity: 1 for identity in _arc_decimals(suite.graph)}
-    boolean_values = {identity: True for identity in counting_values}
+    counting_values = dict.fromkeys(_arc_decimals(suite.graph), 1)
+    boolean_values = dict.fromkeys(counting_values, True)
     assert suite.fold(COUNTING, counting_values) == 1
     assert suite.defective_fold(COUNTING, counting_values) == 1
     assert suite.fold(BOOLEAN, boolean_values) is True
