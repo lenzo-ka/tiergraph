@@ -51,7 +51,7 @@ display labels separate from durable ids and prints `['K', 'AE', 'T']`.
 ## Use the command line
 
 The CLI reads graph documents from files or stdin. This validates a document,
-canonicalizes it to compact JSON, and renders the result without intermediate
+canonicalizes it to indented JSON, and renders the result without intermediate
 files:
 
     $ tiergraph validate score.json
