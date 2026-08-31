@@ -29,8 +29,14 @@ make check
 The gate runs Ruff linting and formatting checks, strict mypy checks, pytest,
 the test suite in separate processes with hash seeds 0, 12345, and 999, JSON
 Schema currency checks, the format-growth check, documentation currency checks,
-the tracked-file hygiene check, the public-docstring check, and the reservation
-check. Coverage is measured for the `tiergraph` and `tiergraph_dot` packages and
+the tracked-file hygiene check, the public-docstring check, the reservation
+check, and the changelog-claim check.
+
+`make check` builds the virtualenv and then runs `make gate`, which is the same
+steps against an environment that already exists. Run `gate` where an index
+cannot be reached, rather than copying its steps out by hand: a copied list is a
+claim about the gate that nothing checks, and the one this note carried had
+already fallen a step behind. Coverage is measured for the `tiergraph` and `tiergraph_dot` packages and
 for the `scripts` gates, and must remain at 100% branch coverage.
 
 The tracked-file hygiene check reads **every tracked file**, not a listed set of
