@@ -3,7 +3,7 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth docs docs-check tracked-clean documented reservations changelog-claims check
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth docs docs-check tracked-clean documented reservations changelog-claims gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -67,4 +67,10 @@ docs:
 docs-check:
 	@$(VENV_PYTHON) scripts/generate_docs.py --check
 
-check: venv lint format-check types test determinism schema-check format-growth docs-check tracked-clean documented reservations changelog-claims
+# The gate, named apart from the environment it needs. Every step here runs
+# against an already-built virtualenv, so a checkout that cannot reach an index
+# can still run the whole gate rather than a hand-copied subset of it -- and the
+# list of steps exists once, where it cannot be transcribed wrongly.
+gate: lint format-check types test determinism schema-check format-growth docs-check tracked-clean documented reservations changelog-claims
+
+check: venv gate
