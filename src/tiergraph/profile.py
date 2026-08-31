@@ -103,6 +103,23 @@ class ProfileReport:
     unconfirmed: tuple[str, ...]
     reason: str | None = None
 
+    def to_data(self) -> dict[str, object]:
+        """Return deterministic strict-JSON data.
+
+        Both condition lists are emitted even when one is empty, because
+        together they name every condition the profile declares and a reader
+        cannot reconstruct the second from the first. An accepting outcome with
+        a non-empty ``unconfirmed`` is the case that matters: the check passed
+        and still left something undecided.
+        """
+        return {
+            "profile": self.profile,
+            "outcome": self.outcome.value,
+            "confirmed": list(self.confirmed),
+            "unconfirmed": list(self.unconfirmed),
+            "reason": self.reason,
+        }
+
 
 class GraphProfile(ABC):
     """Declare a graph role whose satisfaction one check decides.

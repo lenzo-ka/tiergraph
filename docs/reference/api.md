@@ -1033,6 +1033,26 @@ found no refutation — it has not proved anything.
 includes any the valuation annihilates, so it is a measure of the search and
 not a restatement of a counting fold's value.
 
+#### `FoldCertificate.to_data`
+
+Method.
+
+```text
+FoldCertificate.to_data(self, semiring: 'Semiring[Value]') -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data.
+
+The semiring is required for the same reason ``FoldResult.to_data``
+requires it: the carrier is arbitrary and only its algebra knows how to
+encode a value of it.
+
+``compared`` and ``probes`` both survive serialization deliberately. A
+certificate that reported only its exactness would let a claim that
+stood on a law search alone read identically to one measured against
+every derivation, which is exactly the distinction this type exists to
+keep.
+
 ### `FoldCost`
 
 ```text
@@ -2218,6 +2238,22 @@ moved or an indistinguishable one took its coordinate. A zero count is
 therefore an explicit vacuous pass, not evidence that anonymous geometry was
 preserved.
 
+#### `SealCertificate.to_data`
+
+Method.
+
+```text
+SealCertificate.to_data(self) -> 'dict[str, int]'
+```
+
+Return deterministic strict-JSON data.
+
+Both counts are carried because either alone misleads. ``carriers``
+without ``sealed_members`` hides a vacuous pass; ``sealed_members``
+without ``carriers`` hides how much was under seal to begin with. A
+reader deciding what this certificate is worth needs the ratio, not
+either half.
+
 ### `SealDeclaration`
 
 ```text
@@ -3051,6 +3087,22 @@ Carry what one check established about one graph, and what it did not.
 condition the profile declares. A refused or inapplicable run confirms
 nothing, so all of them are unconfirmed: the check stopped, and which
 conditions it had already passed over is not evidence a caller can use.
+
+#### `ProfileReport.to_data`
+
+Method.
+
+```text
+ProfileReport.to_data(self) -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data.
+
+Both condition lists are emitted even when one is empty, because
+together they name every condition the profile declares and a reader
+cannot reconstruct the second from the first. An accepting outcome with
+a non-empty ``unconfirmed`` is the case that matters: the check passed
+and still left something undecided.
 
 ### `RoleBinding`
 

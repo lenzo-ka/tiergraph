@@ -505,3 +505,23 @@ def test_an_undeclared_fold_keeps_its_default_through_replace() -> None:
     assert declared.exactness is FoldExactness.UNDECLARED
     assert promoted.exactness is FoldExactness.DISTRIBUTIVE
     assert promoted.run().value == declared.run().value
+
+
+def test_certificate_serialization_keeps_what_makes_it_honest() -> None:
+    """REGRESSION: `compared` survives to_data, so a law search cannot read as a proof.
+
+    A certificate reporting only its exactness would let a claim that stood on
+    the law search alone look identical to one measured against every
+    derivation. That distinction is the reason the type exists, so losing it in
+    serialization would make the wire form say more than the value does.
+    """
+    semiring = cast(Semiring[object], DECIMAL_TROPICAL)
+    certificate = cyclic(semiring, exactness=FoldExactness.STRUCTURAL).check_exactness()
+    data = certificate.to_data(semiring)
+
+    assert data["exactness"] == FoldExactness.STRUCTURAL.value
+    assert data["compared"] is False
+    assert data["derivations"] == 0
+    assert set(data) == {"exactness", "result", "probes", "derivations", "compared"}
+    assert isinstance(data["result"], dict)
+    assert "value" in data["result"]

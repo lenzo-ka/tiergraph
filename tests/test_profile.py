@@ -454,3 +454,27 @@ def test_containment_role_is_enumerable_on_an_ordinary_graph() -> None:
     )
     assert refused.outcome is ProfileOutcome.REFUSED
     assert "requires declared acyclicity" in (refused.reason or "")
+
+
+def test_report_serialization_emits_both_condition_lists() -> None:
+    """REGRESSION: an empty condition list is data, not an omission.
+
+    Together the two lists name every condition the profile declares, and a
+    reader cannot reconstruct one from the other. The case that matters is an
+    accepting outcome carrying a non-empty ``unconfirmed``: the check passed and
+    still left something undecided, which a wire form dropping empty lists would
+    render indistinguishable from a check that decided everything.
+    """
+    report = ProfileReport(
+        profile="p",
+        outcome=ProfileOutcome.SATISFIED,
+        confirmed=("a",),
+        unconfirmed=(),
+    )
+    data = report.to_data()
+
+    assert data["confirmed"] == ["a"]
+    assert data["unconfirmed"] == []
+    assert data["outcome"] == ProfileOutcome.SATISFIED.value
+    assert data["reason"] is None
+    assert set(data) == {"profile", "outcome", "confirmed", "unconfirmed", "reason"}
