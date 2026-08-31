@@ -160,81 +160,98 @@ class ActionDeclaration[Carrier, Result]:
         if law is None:
             return
         apply = cast(ActionFunction[object, object], self.apply)
+        self._validate_module_laws(law)
+        self._validate_scalar_laws(law, apply)
+        self._validate_scale_distribution(law)
 
-        def _require(actual: object, expected: object, description: str) -> None:
-            if actual != expected:
-                raise ValueError(
-                    f"action {self.name!r} semimodule claim violates {description}: "
-                    f"{actual!r} != {expected!r}"
-                )
+    def _require_semimodule(
+        self, actual: object, expected: object, description: str
+    ) -> None:
+        """Refuse one sampled semimodule-law mismatch."""
+        if actual != expected:
+            raise ValueError(
+                f"action {self.name!r} semimodule claim violates {description}: "
+                f"{actual!r} != {expected!r}"
+            )
 
-        _require(
+    def _validate_module_laws(self, law: Semimodule[object, object]) -> None:
+        """Validate the additive module laws and scalar identities."""
+        self._require_semimodule(
             law.module_add(law.module_zero, law.module_zero),
             law.module_zero,
             "module zero identity",
         )
-        _require(
+        self._require_semimodule(
             law.scale(law.scalar_one, law.module_zero),
             law.module_zero,
             "unit scalar on module zero",
         )
         for value in law.module_samples:
-            _require(
+            self._require_semimodule(
                 law.module_add(value, law.module_zero), value, "right module identity"
             )
-            _require(
+            self._require_semimodule(
                 law.module_add(law.module_zero, value), value, "left module identity"
             )
-            _require(law.scale(law.scalar_one, value), value, "unit scalar identity")
-            _require(
+            self._require_semimodule(
+                law.scale(law.scalar_one, value), value, "unit scalar identity"
+            )
+            self._require_semimodule(
                 law.scale(law.scalar_zero, value),
                 law.module_zero,
                 "zero scalar annihilation",
             )
             for left in law.module_samples:
-                _require(
+                self._require_semimodule(
                     law.module_add(value, left),
                     law.module_add(left, value),
                     "module commutativity",
                 )
                 for right in law.module_samples:
-                    _require(
+                    self._require_semimodule(
                         law.module_add(law.module_add(value, left), right),
                         law.module_add(value, law.module_add(left, right)),
                         "module associativity",
                     )
+
+    def _validate_scalar_laws(
+        self,
+        law: Semimodule[object, object],
+        apply: ActionFunction[object, object],
+    ) -> None:
+        """Validate scalar-ring laws and the action's bound scale."""
         for scalar in law.scalar_samples:
-            _require(
+            self._require_semimodule(
                 law.scalar_add(scalar, law.scalar_zero),
                 scalar,
                 "right scalar additive identity",
             )
-            _require(
+            self._require_semimodule(
                 law.scalar_add(law.scalar_zero, scalar),
                 scalar,
                 "left scalar additive identity",
             )
-            _require(
+            self._require_semimodule(
                 law.scalar_multiply(scalar, law.scalar_one),
                 scalar,
                 "right scalar multiplicative identity",
             )
-            _require(
+            self._require_semimodule(
                 law.scalar_multiply(law.scalar_one, scalar),
                 scalar,
                 "left scalar multiplicative identity",
             )
-            _require(
+            self._require_semimodule(
                 law.scalar_multiply(scalar, law.scalar_zero),
                 law.scalar_zero,
                 "right scalar zero annihilation",
             )
-            _require(
+            self._require_semimodule(
                 law.scalar_multiply(law.scalar_zero, scalar),
                 law.scalar_zero,
                 "left scalar zero annihilation",
             )
-            _require(
+            self._require_semimodule(
                 law.scale(scalar, law.module_zero),
                 law.module_zero,
                 "module zero scaling",
@@ -248,15 +265,17 @@ class ActionDeclaration[Carrier, Result]:
                         f"action {self.name!r} does not implement its semimodule "
                         f"scale for {scalar!r}, {value!r}"
                     ) from error
-                _require(actual, expected, f"bound scale for {scalar!r}, {value!r}")
+                self._require_semimodule(
+                    actual, expected, f"bound scale for {scalar!r}, {value!r}"
+                )
             for left_scalar in law.scalar_samples:
-                _require(
+                self._require_semimodule(
                     law.scalar_add(scalar, left_scalar),
                     law.scalar_add(left_scalar, scalar),
                     "scalar additive commutativity",
                 )
                 for right_scalar in law.scalar_samples:
-                    _require(
+                    self._require_semimodule(
                         law.scalar_add(
                             law.scalar_add(scalar, left_scalar), right_scalar
                         ),
@@ -265,7 +284,7 @@ class ActionDeclaration[Carrier, Result]:
                         ),
                         "scalar additive associativity",
                     )
-                    _require(
+                    self._require_semimodule(
                         law.scalar_multiply(
                             law.scalar_multiply(scalar, left_scalar), right_scalar
                         ),
@@ -274,7 +293,7 @@ class ActionDeclaration[Carrier, Result]:
                         ),
                         "scalar multiplicative associativity",
                     )
-                    _require(
+                    self._require_semimodule(
                         law.scalar_multiply(
                             scalar, law.scalar_add(left_scalar, right_scalar)
                         ),
@@ -284,7 +303,7 @@ class ActionDeclaration[Carrier, Result]:
                         ),
                         "left scalar distributivity",
                     )
-                    _require(
+                    self._require_semimodule(
                         law.scalar_multiply(
                             law.scalar_add(left_scalar, right_scalar), scalar
                         ),
@@ -294,10 +313,13 @@ class ActionDeclaration[Carrier, Result]:
                         ),
                         "right scalar distributivity",
                     )
+
+    def _validate_scale_distribution(self, law: Semimodule[object, object]) -> None:
+        """Validate scale distribution and multiplication compatibility."""
         for scalar in law.scalar_samples:
             for left in law.module_samples:
                 for right in law.module_samples:
-                    _require(
+                    self._require_semimodule(
                         law.scale(scalar, law.module_add(left, right)),
                         law.module_add(
                             law.scale(scalar, left), law.scale(scalar, right)
@@ -307,7 +329,7 @@ class ActionDeclaration[Carrier, Result]:
         for left_scalar in law.scalar_samples:
             for right_scalar in law.scalar_samples:
                 for value in law.module_samples:
-                    _require(
+                    self._require_semimodule(
                         law.scale(law.scalar_add(left_scalar, right_scalar), value),
                         law.module_add(
                             law.scale(left_scalar, value),
@@ -315,7 +337,7 @@ class ActionDeclaration[Carrier, Result]:
                         ),
                         "scale distribution over scalar addition",
                     )
-                    _require(
+                    self._require_semimodule(
                         law.scale(
                             law.scalar_multiply(left_scalar, right_scalar), value
                         ),

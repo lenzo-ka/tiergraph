@@ -34,25 +34,29 @@ _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
 }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabulary
     """Return the argument parser."""
     parser = argparse.ArgumentParser(prog="tiergraph")
     parser.add_argument("--version", action="store_true", help="print the version")
     subparsers = parser.add_subparsers(dest="command")
 
     validate = subparsers.add_parser("validate", help="validate a graph document")
+    validate.set_defaults(handler=_handle_validate)
     validate.add_argument("file", metavar="FILE", help="graph file, or - for stdin")
 
     render = subparsers.add_parser("render", help="render a graph as DOT")
+    render.set_defaults(handler=_handle_render)
     _document_arguments(render)
     render.add_argument(
         "--include-empty-tiers", action="store_true", help="include empty tiers"
     )
 
     inspect = subparsers.add_parser("inspect", help="inspect a graph document")
+    inspect.set_defaults(handler=_handle_inspect)
     _document_arguments(inspect)
 
     convert = subparsers.add_parser("convert", help="canonicalize a graph document")
+    convert.set_defaults(handler=_handle_convert)
     _document_arguments(convert)
     convert.add_argument(
         "--to", choices=("json", "json-compact", "bytes"), required=True
@@ -60,10 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     schema = subparsers.add_parser("schema", help="print the graph document schema")
     schema.add_argument("--format-version", metavar="VERSION")
+    schema.set_defaults(handler=_handle_schema)
     schema.add_argument("--hash", action="store_true", help="print the shape hash")
     _output_argument(schema)
 
     run = subparsers.add_parser("run", help="execute a JSONL machine program")
+    run.set_defaults(handler=_handle_run)
     _document_arguments(run, input_help="JSONL program file, or - for stdin")
     run.add_argument(
         "--to", choices=("json", "json-compact", "bytes", "dot"), required=True
@@ -75,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     step = subparsers.add_parser("step", help="step through a JSONL machine program")
+    step.set_defaults(handler=_handle_step)
     _document_arguments(step, input_help="JSONL program file, or - for stdin")
     step.add_argument(
         "--interactive",
@@ -83,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     walk = subparsers.add_parser("walk", help="traverse a transitive relation")
+    walk.set_defaults(handler=_handle_walk)
     walk.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     walk.add_argument("--source", action="append", required=True, metavar="PATH")
     walk.add_argument("--relation-namespace", required=True, metavar="NS")
@@ -94,11 +102,13 @@ def build_parser() -> argparse.ArgumentParser:
     path = subparsers.add_parser("path", help="resolve and spell tiergraph paths")
     path_subparsers = path.add_subparsers(dest="path_command", required=True)
     resolve = path_subparsers.add_parser("resolve", help="resolve a tiergraph path")
+    resolve.set_defaults(handler=_handle_path)
     resolve.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     resolve.add_argument("tgpath", metavar="TGPATH", help="tiergraph path to resolve")
     _output_argument(resolve)
 
     spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
+    spell.set_defaults(handler=_handle_path)
     spell.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     spell.add_argument("--kind", choices=("item", "boundary"), required=True)
     spell.add_argument("--tier-namespace", metavar="NS")
@@ -119,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("best", "find best token-sequence derivations"),
     ):
         grammar_parser = grammar_subparsers.add_parser(grammar_command, help=help_text)
+        grammar_parser.set_defaults(handler=_handle_grammar)
         grammar_parser.add_argument(
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
         )
@@ -136,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("item", "query one timed item"),
     ):
         clock_parser = clock_subparsers.add_parser(clock_command, help=help_text)
+        clock_parser.set_defaults(handler=_handle_clock)
         clock_parser.add_argument(
             "file", metavar="GRAPH", help="graph file, or - for stdin"
         )
@@ -152,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     span = subparsers.add_parser("span", help="render declarative span views")
     span_subparsers = span.add_subparsers(dest="span_command", required=True)
     span_render = span_subparsers.add_parser("render", help="render a span view")
+    span_render.set_defaults(handler=_handle_span)
     span_render.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     span_render.add_argument("--profile", required=True, metavar="FILE")
     span_render.add_argument(
@@ -163,11 +176,13 @@ def build_parser() -> argparse.ArgumentParser:
     _output_argument(span_render)
 
     selection = subparsers.add_parser("select", help="evaluate a selector")
+    selection.set_defaults(handler=_handle_select)
     selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     selection.add_argument("--selector", required=True, metavar="FILE")
     _output_argument(selection)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
+    fold.set_defaults(handler=_handle_fold)
     fold.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     fold.add_argument(
         "--name", default="fold", metavar="NAME", help="name used in refusals"
@@ -216,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     semirings = subparsers.add_parser(
         "semirings", help="list the semirings a fold can name"
     )
+    semirings.set_defaults(handler=_handle_semirings)
     _output_argument(semirings)
     return parser
 
@@ -234,6 +250,170 @@ def _output_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _handle_validate(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    del graph
+    _stdout_text("ok\n")
+
+
+def _handle_render(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    rendered = _render(graph, args.include_empty_tiers)
+    _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
+
+
+def _handle_inspect(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    _write_output(args.file, args.output, _graph_report_bytes(graph, _inspect(graph)))
+
+
+def _handle_convert(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    _write_output(args.file, args.output, _graph_bytes(graph, args.to))
+
+
+def _handle_schema(args: argparse.Namespace) -> None:
+    if args.hash and args.format_version is not None:
+        raise ValueError("--format-version cannot be used with --hash")
+    encoded = (
+        (shape_hash() + "\n").encode("utf-8")
+        if args.hash
+        else _json_bytes(json_schema(args.format_version or tiergraph.FORMAT_VERSION))
+    )
+    _write_output("-", args.output, encoded)
+
+
+def _handle_walk(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    profile = tiergraph.StructuralPathProfile()
+    sources = [_walk_source(graph, profile, text) for text in args.source]
+    source = sources[0]
+    for selection in sources[1:]:
+        source = source | selection
+    result = tiergraph.Walk(
+        source,
+        tiergraph.QualifiedName(args.relation_namespace, args.relation_local),
+        tiergraph.WalkDirection(args.direction),
+        args.cap,
+    ).evaluate()
+    _write_output(args.file, args.output, _json_bytes(result.to_data()))
+
+
+def _handle_path(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    profile = tiergraph.StructuralPathProfile()
+    if args.path_command == "resolve":
+        resolved = tiergraph.resolve_path(graph, profile, args.tgpath)
+        if isinstance(resolved, tiergraph.ResolvedItem):
+            value = {
+                "kind": "item",
+                "path": str(resolved.path),
+                "current": resolved.current.to_data(),
+            }
+        elif isinstance(resolved, tiergraph.ResolvedBoundary):
+            value = {
+                "kind": "boundary",
+                "path": str(resolved.path),
+                "current": resolved.current.to_data(),
+            }
+        else:
+            raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
+                "structural path profile returned an alternative"
+            )
+    else:
+        value = {"path": str(profile.spell(_path_binding(args, profile, graph), graph))}
+    _write_output(args.file, args.output, _json_bytes(value))
+
+
+def _handle_grammar(args: argparse.Namespace) -> None:
+    declaration = tiergraph.grammar_loads(_read_bytes(args.file))
+    lowered = tiergraph.lower_grammar(declaration)
+    tokens = _tokens_json(args.tokens_json)
+    if args.grammar_command == "recognize":
+        value: object = {
+            "recognized": tiergraph.recognize(lowered, tokens).recognized()
+        }
+    elif args.grammar_command == "count":
+        value = {"count": tiergraph.count(lowered, tokens)}
+    else:
+        if args.count < 1:
+            raise ValueError(f"best derivation count {args.count!r} must be positive")
+        value = {
+            "derivations": [
+                item.to_data() for item in tiergraph.best(lowered, tokens, args.count)
+            ]
+        }
+    _write_output(args.file, args.output, _json_bytes(value))
+
+
+def _handle_clock(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    profile = tiergraph.ClockProfile.from_data(
+        graph, json.loads(_read_bytes(args.profile))
+    )
+    _check_distinct(args.profile, args.output)
+    _write_output(
+        args.file, args.output, _json_bytes(_clock_query(graph, profile, args))
+    )
+
+
+def _handle_span(args: argparse.Namespace) -> None:
+    if args.jsonl_record is not None and args.format != "jsonl":
+        raise ValueError("--jsonl-record requires --format jsonl")
+    if args.include_empty_tiers and args.format != "dot":
+        raise ValueError("--include-empty-tiers requires --format dot")
+    graph = tiergraph.loads(_read_bytes(args.file))
+    profile = tiergraph.SpanViewProfile.from_data(json.loads(_read_bytes(args.profile)))
+    _check_distinct(args.profile, args.output)
+    rendered = _span_render(graph, profile, args)
+    _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
+
+
+def _handle_select(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    selector = tiergraph.selection_loads(_read_bytes(args.selector))
+    _check_distinct(args.selector, args.output)
+    result = tiergraph.evaluate_selection(graph, selector)
+    _write_output(args.file, args.output, _json_bytes({"nodes": result.to_data()}))
+
+
+def _handle_fold(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    fold = _fold_declaration(graph, args)
+    _write_output(
+        args.file, args.output, _json_bytes(fold.run().to_data(fold.semiring))
+    )
+
+
+def _handle_semirings(args: argparse.Namespace) -> None:
+    _write_output("-", args.output, _json_bytes(_semiring_report()))
+
+
+def _handle_run(args: argparse.Namespace) -> None:
+    if args.include_empty_tiers and args.to != "dot":
+        raise ValueError("--include-empty-tiers requires --to dot")
+    program = _read_program(args.file)
+    graph = program.unroll().graph
+    encoded = (
+        _graph_report_bytes(graph, _render(graph, args.include_empty_tiers))
+        if args.to == "dot"
+        else _graph_bytes(graph, args.to)
+    )
+    _write_output(args.file, args.output, encoded)
+
+
+def _handle_step(args: argparse.Namespace) -> int:
+    if args.interactive and args.file == "-":
+        raise ValueError("--interactive requires a program file, not stdin")
+    program = _read_program(args.file)
+    interactive = args.interactive or (args.file != "-" and sys.stdin.isatty())
+    if interactive:
+        if args.output != "-":
+            raise ValueError("interactive mode requires stdout output")
+        return _step_interactive(program)
+    return _step_dump(program, args.file, args.output)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command line. Returns the process exit status."""
     parser = build_parser()
@@ -247,157 +427,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if hasattr(args, "output"):
             _check_distinct(getattr(args, "file", "-"), args.output)
-        if args.command == "validate":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            del graph
-            _stdout_text("ok\n")
-        elif args.command == "render":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            rendered = _render(graph, args.include_empty_tiers)
-            _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
-        elif args.command == "inspect":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            _write_output(
-                args.file, args.output, _graph_report_bytes(graph, _inspect(graph))
-            )
-        elif args.command == "convert":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            _write_output(args.file, args.output, _graph_bytes(graph, args.to))
-        elif args.command == "schema":
-            if args.hash and args.format_version is not None:
-                raise ValueError("--format-version cannot be used with --hash")
-            encoded = (
-                (shape_hash() + "\n").encode("utf-8")
-                if args.hash
-                else _json_bytes(
-                    json_schema(args.format_version or tiergraph.FORMAT_VERSION)
-                )
-            )
-            _write_output("-", args.output, encoded)
-        elif args.command == "walk":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            profile = tiergraph.StructuralPathProfile()
-            sources = [
-                _walk_source(graph, profile, source_text) for source_text in args.source
-            ]
-            source = sources[0]
-            for selection in sources[1:]:
-                source = source | selection
-            result = tiergraph.Walk(
-                source,
-                tiergraph.QualifiedName(args.relation_namespace, args.relation_local),
-                tiergraph.WalkDirection(args.direction),
-                args.cap,
-            ).evaluate()
-            _write_output(args.file, args.output, _json_bytes(result.to_data()))
-        elif args.command == "path":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            profile = tiergraph.StructuralPathProfile()
-            if args.path_command == "resolve":
-                resolved = tiergraph.resolve_path(graph, profile, args.tgpath)
-                if isinstance(resolved, tiergraph.ResolvedItem):
-                    value = {
-                        "kind": "item",
-                        "path": str(resolved.path),
-                        "current": resolved.current.to_data(),
-                    }
-                elif isinstance(resolved, tiergraph.ResolvedBoundary):
-                    value = {
-                        "kind": "boundary",
-                        "path": str(resolved.path),
-                        "current": resolved.current.to_data(),
-                    }
-                else:
-                    raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
-                        "structural path profile returned an alternative"
-                    )
-            else:
-                binding = _path_binding(args, profile, graph)
-                value = {"path": str(profile.spell(binding, graph))}
-            _write_output(args.file, args.output, _json_bytes(value))
-        elif args.command == "grammar":
-            declaration = tiergraph.grammar_loads(_read_bytes(args.file))
-            lowered = tiergraph.lower_grammar(declaration)
-            tokens = _tokens_json(args.tokens_json)
-            if args.grammar_command == "recognize":
-                grammar_value: object = {
-                    "recognized": tiergraph.recognize(lowered, tokens).recognized()
-                }
-            elif args.grammar_command == "count":
-                grammar_value = {"count": tiergraph.count(lowered, tokens)}
-            else:
-                if args.count < 1:
-                    raise ValueError(
-                        f"best derivation count {args.count!r} must be positive"
-                    )
-                grammar_value = {
-                    "derivations": [
-                        derivation.to_data()
-                        for derivation in tiergraph.best(lowered, tokens, args.count)
-                    ]
-                }
-            _write_output(args.file, args.output, _json_bytes(grammar_value))
-        elif args.command == "clock":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            clock_profile = tiergraph.ClockProfile.from_data(
-                graph, json.loads(_read_bytes(args.profile))
-            )
-            _check_distinct(args.profile, args.output)
-            clock_value = _clock_query(graph, clock_profile, args)
-            _write_output(args.file, args.output, _json_bytes(clock_value))
-        elif args.command == "span":
-            if args.jsonl_record is not None and args.format != "jsonl":
-                raise ValueError("--jsonl-record requires --format jsonl")
-            if args.include_empty_tiers and args.format != "dot":
-                raise ValueError("--include-empty-tiers requires --format dot")
-            graph = tiergraph.loads(_read_bytes(args.file))
-            span_profile = tiergraph.SpanViewProfile.from_data(
-                json.loads(_read_bytes(args.profile))
-            )
-            _check_distinct(args.profile, args.output)
-            rendered = _span_render(graph, span_profile, args)
-            _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
-        elif args.command == "select":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            selector = tiergraph.selection_loads(_read_bytes(args.selector))
-            _check_distinct(args.selector, args.output)
-            selection_result = tiergraph.evaluate_selection(graph, selector)
-            _write_output(
-                args.file,
-                args.output,
-                _json_bytes({"nodes": selection_result.to_data()}),
-            )
-        elif args.command == "fold":
-            graph = tiergraph.loads(_read_bytes(args.file))
-            fold = _fold_declaration(graph, args)
-            _write_output(
-                args.file,
-                args.output,
-                _json_bytes(fold.run().to_data(fold.semiring)),
-            )
-        elif args.command == "semirings":
-            _write_output("-", args.output, _json_bytes(_semiring_report()))
-        elif args.command == "run":
-            if args.include_empty_tiers and args.to != "dot":
-                raise ValueError("--include-empty-tiers requires --to dot")
-            program = _read_program(args.file)
-            graph = program.unroll().graph
-            encoded = (
-                _graph_report_bytes(graph, _render(graph, args.include_empty_tiers))
-                if args.to == "dot"
-                else _graph_bytes(graph, args.to)
-            )
-            _write_output(args.file, args.output, encoded)
-        else:
-            if args.interactive and args.file == "-":
-                raise ValueError("--interactive requires a program file, not stdin")
-            program = _read_program(args.file)
-            interactive = args.interactive or (args.file != "-" and sys.stdin.isatty())
-            if interactive:
-                if args.output != "-":
-                    raise ValueError("interactive mode requires stdout output")
-                return _step_interactive(program)
-            return _step_dump(program, args.file, args.output)
+        status = args.handler(args)
+        if status is not None:
+            return cast(int, status)
     except ExecutionError as error:
         _diagnostic(args.command, "ExecutionError", error)
         return 1

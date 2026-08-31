@@ -60,7 +60,7 @@ class JsonValueProfile:
     _members: dict[ItemRef, tuple[ItemRef, ...]] = field(init=False, repr=False)
     _values: dict[ItemRef, ItemRef] = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: PLR0915 -- ordered profile contract
         """Validate every role before any structured value can be read."""
         tier = next(
             (
@@ -321,7 +321,7 @@ class JsonValueProfile:
         return {value.name: value for value in tier.items[reference.index].attributes}
 
 
-def json_value_graph(
+def json_value_graph(  # noqa: PLR0915 -- one declarative JSON vocabulary
     value: JsonValue, namespace: str = "urn:tiergraph:json-value"
 ) -> tuple[Graph, JsonValueProfile, ItemRef]:
     """Construct a standalone canonical graph for one recursively nested JSON value."""

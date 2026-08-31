@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import StrEnum
 from functools import total_ordering
 from types import MappingProxyType
-from typing import Protocol, cast
+from typing import NamedTuple, Protocol, cast
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -906,6 +906,15 @@ class Consensus:
     agreed: bool
 
 
+class _GraphIndexes(NamedTuple):
+    """Bundle the four derived indexes shared by graph validation phases."""
+
+    tiers: dict[QualifiedName, Tier]
+    types: dict[QualifiedName, QualifiedName]
+    boundaries: dict[BoundaryRef, Boundary]
+    items: dict[str, ItemRef]
+
+
 @dataclass(frozen=True, slots=True)
 class Graph:
     """Hold a validated immutable graph and derive order and empty boundaries.
@@ -940,38 +949,7 @@ class Graph:
 
     def __post_init__(self) -> None:
         """Canonicalize keyed collections and validate the complete graph."""
-        _canonicalize_attributes(self)
-        object.__setattr__(
-            self,
-            "namespaces",
-            tuple(sorted(self.namespaces, key=lambda item: item.namespace)),
-        )
-        object.__setattr__(
-            self,
-            "relation_declarations",
-            tuple(sorted(self.relation_declarations, key=lambda item: item.name)),
-        )
-        object.__setattr__(
-            self,
-            "attribute_declarations",
-            tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
-        )
-        object.__setattr__(self, "seals", tuple(sorted(self.seals)))
-        object.__setattr__(
-            self,
-            "layers",
-            tuple(
-                sorted(
-                    (
-                        Layer(
-                            layer.name, tuple(sorted(layer.facts, key=_layer_fact_key))
-                        )
-                        for layer in self.layers
-                    ),
-                    key=lambda layer: layer.name,
-                )
-            ),
-        )
+        self._canonicalize_collections()
         namespaces = _unique_by_name(
             ((binding.prefix, binding) for binding in self.namespaces),
             "namespace prefix",
@@ -1079,6 +1057,58 @@ class Graph:
             for index, relation in enumerate(self.polyadic_relations)
             if relation.durable_id is not None
         )
+        self._validate_attribute_values(attributes)
+        bipartite, polyadic = self._validate_relation_instances(
+            declarations, attributes, tiers_by_name, types_by_tier, items_by_id
+        )
+        boundaries_by_ref = self._validate_boundaries(
+            attributes, tiers_by_name, items_by_id
+        )
+        indexes = _GraphIndexes(
+            tiers_by_name, types_by_tier, boundaries_by_ref, items_by_id
+        )
+        self._validate_invariants_and_install(durable_ids, bipartite, polyadic, indexes)
+        self._validate_layers(layer_names, attributes)
+
+    def _canonicalize_collections(self) -> None:
+        """Canonicalize every keyed collection before validation."""
+        _canonicalize_attributes(self)
+        object.__setattr__(
+            self,
+            "namespaces",
+            tuple(sorted(self.namespaces, key=lambda item: item.namespace)),
+        )
+        object.__setattr__(
+            self,
+            "relation_declarations",
+            tuple(sorted(self.relation_declarations, key=lambda item: item.name)),
+        )
+        object.__setattr__(
+            self,
+            "attribute_declarations",
+            tuple(sorted(self.attribute_declarations, key=lambda item: item.name)),
+        )
+        object.__setattr__(self, "seals", tuple(sorted(self.seals)))
+        object.__setattr__(
+            self,
+            "layers",
+            tuple(
+                sorted(
+                    (
+                        Layer(
+                            layer.name, tuple(sorted(layer.facts, key=_layer_fact_key))
+                        )
+                        for layer in self.layers
+                    ),
+                    key=lambda layer: layer.name,
+                )
+            ),
+        )
+
+    def _validate_attribute_values(
+        self, attributes: dict[QualifiedName, AttributeDeclaration]
+    ) -> None:
+        """Validate attribute values in every structural domain."""
         _validate_attributes(self.attributes, AttributeDomain.DOCUMENT, attributes)
         for tier in self.tiers:
             _validate_attributes(tier.attributes, AttributeDomain.TIER, attributes)
@@ -1090,6 +1120,19 @@ class Graph:
                 AttributeDomain.RELATION_DECLARATION,
                 attributes,
             )
+
+    def _validate_relation_instances(
+        self,
+        declarations: dict[QualifiedName, RelationDeclaration],
+        attributes: dict[QualifiedName, AttributeDeclaration],
+        tiers_by_name: dict[QualifiedName, Tier],
+        types_by_tier: dict[QualifiedName, QualifiedName],
+        items_by_id: dict[str, ItemRef],
+    ) -> tuple[
+        dict[QualifiedName, BipartiteRelationDeclaration],
+        dict[QualifiedName, PolyadicRelationDeclaration],
+    ]:
+        """Validate bipartite and polyadic relation instances."""
         bipartite = {
             name: declaration
             for name, declaration in declarations.items()
@@ -1149,6 +1192,15 @@ class Graph:
                 tiers_by_name,
                 items_by_id,
             )
+        return bipartite, polyadic
+
+    def _validate_boundaries(
+        self,
+        attributes: dict[QualifiedName, AttributeDeclaration],
+        tiers_by_name: dict[QualifiedName, Tier],
+        items_by_id: dict[str, ItemRef],
+    ) -> dict[BoundaryRef, Boundary]:
+        """Validate, resolve, and canonicalize sparse boundary values."""
         valued_boundaries: list[tuple[BoundaryRef, Boundary]] = []
         for boundary in self.boundary_values:
             coordinate = _resolve_boundary_reference(
@@ -1178,21 +1230,38 @@ class Graph:
                 )
             ),
         )
+        return boundaries_by_ref
+
+    def _validate_invariants_and_install(
+        self,
+        durable_ids: list[tuple[str, str]],
+        bipartite: dict[QualifiedName, BipartiteRelationDeclaration],
+        polyadic: dict[QualifiedName, PolyadicRelationDeclaration],
+        indexes: _GraphIndexes,
+    ) -> None:
+        """Validate cross-instance invariants and install derived indexes."""
         _require_unique_durable_ids(durable_ids)
         _validate_relation_invariants(
-            self.relations, bipartite, tiers_by_name, items_by_id
+            self.relations, bipartite, indexes.tiers, indexes.items
         )
         _validate_polyadic_invariants(
-            self.polyadic_relations, polyadic, tiers_by_name, items_by_id
+            self.polyadic_relations, polyadic, indexes.tiers, indexes.items
         )
-        object.__setattr__(self, "_tiers_by_name", tiers_by_name)
-        object.__setattr__(self, "_types_by_tier", types_by_tier)
-        object.__setattr__(self, "_boundaries_by_ref", boundaries_by_ref)
+        object.__setattr__(self, "_tiers_by_name", indexes.tiers)
+        object.__setattr__(self, "_types_by_tier", indexes.types)
+        object.__setattr__(self, "_boundaries_by_ref", indexes.boundaries)
         object.__setattr__(
             self,
             "_items_by_id",
-            items_by_id,
+            indexes.items,
         )
+
+    def _validate_layers(
+        self,
+        layer_names: dict[LayerName, Layer],
+        attributes: dict[QualifiedName, AttributeDeclaration],
+    ) -> None:
+        """Validate layer ownership, uniqueness, and subjects."""
         for layer in layer_names.values():
             seen: set[tuple[LayerSubject, QualifiedName]] = set()
             for fact in layer.facts:

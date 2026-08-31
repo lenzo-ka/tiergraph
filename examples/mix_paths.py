@@ -390,7 +390,7 @@ def _vlq(value: int) -> bytes:
     return bytes(reversed(encoded))
 
 
-def render_midi(
+def render_midi(  # noqa: PLR0915 -- SMF event emission is one ordered stream
     graph: Graph, profile: MixPathProfile, arrangement_index: int = 0
 ) -> bytes:
     """Render one addressed arrangement as a playable format-0 MIDI file."""

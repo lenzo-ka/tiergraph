@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from functools import cmp_to_key
@@ -30,6 +30,9 @@ State = tuple[ItemRef, IndexCoordinate]
 Path = tuple[str, ...]
 DerivationProvenance = tuple[Path, ...]
 type RankedWitness[Value] = tuple[Value, Path]
+type _StateResult[Value] = tuple[
+    Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
+]
 type _Outgoing = dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]]
 type _DependencyGraph = tuple[
     _Outgoing,
@@ -38,6 +41,24 @@ type _DependencyGraph = tuple[
     dict[ItemRef, int],
     dict[ItemRef, tuple[ItemRef, ...]],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class _FoldPass[Value]:
+    """Carry the ordered results and operation totals of the coordinate pass."""
+
+    values: tuple[tuple[State, Value], ...]
+    root_states: tuple[State, ...]
+    total: Value
+    selected: tuple[Value, DerivationProvenance] | None
+    ranked_roots: tuple[RankedWitness[Value], ...]
+    additions: int
+    multiplications: int
+    ranked_multiplications: int
+    ranked_additions: list[int]
+    witness_operations: list[int]
+    root_witness_count: int
+
 
 # The law search reads the fold's own state values, so its cost is set by how
 # many distinct ones a fold produces rather than by a caller's probe set. The
@@ -376,7 +397,7 @@ class FoldDeclaration[Value]:
     ranked_output: bool = False
     exactness: FoldExactness = FoldExactness.UNDECLARED
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: PLR0915 -- one ordered declaration contract
         """Validate every declaration-level refusal before a fold can run."""
         if not self.name:
             raise ValueError("fold name '' must not be empty")
@@ -587,6 +608,65 @@ class FoldDeclaration[Value]:
         }
         return outgoing, item_roots, references, canonical_index, adjacency
 
+    def _run_coordinate_pass(
+        self,
+        outgoing: _Outgoing,
+        item_roots: tuple[ItemRef, ...],
+        references: tuple[ItemRef, ...],
+        canonical_index: dict[ItemRef, int],
+        adjacency: dict[ItemRef, tuple[ItemRef, ...]],
+        component_by_item: dict[ItemRef, tuple[ItemRef, ...]],
+        coordinates: tuple[IndexCoordinate, ...],
+    ) -> _FoldPass[Value]:
+        """Evaluate every coordinate while preserving fold and witness order."""
+        accumulator = _FoldAccumulator(self.semiring.zero)
+        for coordinate in coordinates:
+            coordinate_pass = _CoordinatePass(
+                self,
+                outgoing,
+                canonical_index,
+                adjacency,
+                component_by_item,
+                accumulator,
+            )
+            for root in item_roots:
+                accumulator.root_states.append((root, coordinate))
+                root_value, _root_paths, root_ranked, root_count = (
+                    coordinate_pass.visit(root)
+                )
+                accumulator.total = self.semiring.add(accumulator.total, root_value)
+                accumulator.additions += 1
+                if self.ranked_output:
+                    accumulator.ranked_roots.extend(root_ranked)
+                    accumulator.root_witness_count += root_count
+            for reference in references:
+                coordinate_pass.visit(reference)
+            accumulator.values.extend(
+                ((reference, coordinate), coordinate_pass.cache[reference][0])
+                for reference in references
+            )
+            if self.witness_order is not None:
+                for root in item_roots:
+                    candidate = coordinate_pass.cache[root][:2]
+                    accumulator.selected = (
+                        candidate
+                        if accumulator.selected is None
+                        else self._select_paths(accumulator.selected, candidate)
+                    )
+        return _FoldPass(
+            tuple(accumulator.values),
+            tuple(accumulator.root_states),
+            accumulator.total,
+            accumulator.selected,
+            tuple(accumulator.ranked_roots),
+            accumulator.additions,
+            accumulator.multiplications,
+            accumulator.ranked_multiplications,
+            accumulator.ranked_additions,
+            accumulator.witness_operations,
+            accumulator.root_witness_count,
+        )
+
     def run(self) -> FoldResult[Value]:
         """Evaluate every state using only the semiring's addition and multiplication."""
         (
@@ -603,478 +683,26 @@ class FoldDeclaration[Value]:
             for reference in component
         }
         coordinates = self.index_coordinates()
-        additions = 0
-        multiplications = 0
-        ranked_multiplications = 0
-        ranked_additions = [0]
-        witness_operations = [0]
-        root_witness_count = 0
-        all_values: list[tuple[State, Value]] = []
-        root_states: list[State] = []
-        total = self.semiring.zero
-        selected: tuple[Value, DerivationProvenance] | None = None
-        ranked_roots: list[RankedWitness[Value]] = []
-        for coordinate in coordinates:
-            cache: dict[
-                ItemRef,
-                tuple[
-                    Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
-                ],
-            ] = {}
-            solving: set[tuple[ItemRef, ...]] = set()
-
-            def cache_component_value(
-                component_cache: dict[
-                    ItemRef,
-                    tuple[
-                        Value,
-                        DerivationProvenance,
-                        tuple[RankedWitness[Value], ...],
-                        int,
-                    ],
-                ],
-                member: ItemRef,
-                value: Value,
-            ) -> None:
-                """Cache one SCC value with its unbranched witness metadata."""
-                label = _label(self.graph, member)
-                paths: DerivationProvenance = (
-                    () if value == self.semiring.zero else ((label,),)
-                )
-                ranked = (
-                    ()
-                    if not self.ranked_output or value == self.semiring.zero
-                    else ((value, (label,)),)
-                )
-                component_cache[member] = (
-                    value,
-                    paths,
-                    ranked,
-                    len(ranked) or len(paths),
-                )
-
-            def solve_component(
-                component: tuple[ItemRef, ...],
-                component_cache: dict[
-                    ItemRef,
-                    tuple[
-                        Value,
-                        DerivationProvenance,
-                        tuple[RankedWitness[Value], ...],
-                        int,
-                    ],
-                ] = cache,
-                active_components: set[tuple[ItemRef, ...]] = solving,
-            ) -> None:
-                """Resolve one cyclic SCC by the declared ordered trichotomy."""
-                nonlocal additions, multiplications
-                active_components.add(component)
-                members = set(component)
-                for member in component:
-                    for child in adjacency[member]:
-                        if child not in members:
-                            visit(child)
-
-                def equation(current: ItemRef, values: dict[ItemRef, Value]) -> Value:
-                    """Evaluate one equation under current SCC approximants."""
-                    nonlocal additions, multiplications
-                    label = _label(self.graph, current)
-                    value = self.lift(self.valuation.read(self.graph, current), label)
-                    has_children = False
-                    for transition in self.transitions:
-                        children = outgoing[current][transition.relation]
-                        if not children:
-                            continue
-                        has_children = True
-                        child_values = [
-                            values[child]
-                            if child in members
-                            else component_cache[child][0]
-                            for child in children
-                        ]
-                        if transition.combination is ChildCombination.AND:
-                            relation_value = self.semiring.one
-                            for child_value in child_values:
-                                relation_value = self.semiring.multiply(
-                                    relation_value, child_value
-                                )
-                                multiplications += 1
-                        else:
-                            relation_value = child_values[0]
-                            for child_value in child_values[1:]:
-                                relation_value = self.semiring.add(
-                                    relation_value, child_value
-                                )
-                                additions += 1
-                        value = self.semiring.multiply(value, relation_value)
-                        multiplications += 1
-                    assert has_children
-                    return value
-
-                approximants = dict.fromkeys(component, self.semiring.zero)
-                for _ in component:
-                    approximants = {
-                        member: equation(member, approximants) for member in component
-                    }
-                if all(value == self.semiring.zero for value in approximants.values()):
-                    for member in component:
-                        component_cache[member] = (self.semiring.zero, (), (), 0)
-                    active_components.remove(component)
-                    return
-
-                next_approximants = {
-                    member: equation(member, approximants) for member in component
-                }
-                if self.semiring.star is None and next_approximants == approximants:
-                    for member, value in approximants.items():
-                        cache_component_value(component_cache, member, value)
-                    active_components.remove(component)
-                    return
-
-                minimum_nonlinear_children = 2
-                nonlinear = next(
-                    (
-                        member
-                        for member in component
-                        if sum(
-                            child in members
-                            for transition in self.transitions
-                            if transition.combination is ChildCombination.AND
-                            for child in outgoing[member][transition.relation]
-                        )
-                        >= minimum_nonlinear_children
-                    ),
-                    None,
-                )
-                closing_parent, closing_child, closing_relation = next(
-                    (member, child, transition.relation)
-                    for member in component
-                    for transition in self.transitions
-                    for child in outgoing[member][transition.relation]
-                    if child in members
-                )
-                member_data = [member.to_data() for member in component]
-                edge = (
-                    f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
-                    f"through relation {str(closing_relation)!r}"
-                )
-                algebra_name = type(self.semiring).__name__
-                if nonlinear is not None:
-                    chart_item = next(
-                        (
-                            member
-                            for member in component
-                            if _item(self.graph, member).attributes
-                            and {
-                                value.name.local_name: value.lexical
-                                for value in _item(self.graph, member).attributes
-                            }.get("kind")
-                            == "chart-item"
-                        ),
-                        nonlinear,
-                    )
-                    chart_attributes = {
-                        value.name.local_name: value.lexical
-                        for value in _item(self.graph, chart_item).attributes
-                    }
-                    span = (chart_attributes.get("start"), chart_attributes.get("end"))
-                    raise StarRefusal(
-                        f"fold {self.name!r} SCC {member_data!r} is nonlinear at "
-                        f"zero-width chart item {chart_item.to_data()!r} span {span!r}; "
-                        f"closing edge {edge}; algebra {algebra_name}; nonlinear "
-                        "least fixpoints are not supported"
-                    )
-
-                star = self.semiring.star
-                fallback = (
-                    f"fold {self.name!r} transitions form a cycle from "
-                    f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
-                    f"through relation {str(closing_relation)!r}"
-                )
-                if star is None:
-                    raise StarRefusal(
-                        f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
-                        f"algebra {algebra_name} declares no star"
-                    )
-
-                def coefficient(current: ItemRef, target: ItemRef) -> Value:
-                    """Return the linear coefficient of one internal child."""
-                    nonlocal additions, multiplications
-                    label = _label(self.graph, current)
-                    value = self.lift(self.valuation.read(self.graph, current), label)
-                    for transition in self.transitions:
-                        children = outgoing[current][transition.relation]
-                        if not children:
-                            continue
-                        internal = tuple(
-                            child for child in children if child in members
-                        )
-                        if transition.combination is ChildCombination.AND:
-                            relation_value = self.semiring.one
-                            for child in children:
-                                child_value = (
-                                    self.semiring.one
-                                    if child == target
-                                    else self.semiring.zero
-                                    if child in members
-                                    else component_cache[child][0]
-                                )
-                                relation_value = self.semiring.multiply(
-                                    relation_value, child_value
-                                )
-                                multiplications += 1
-                        else:
-                            relation_value = self.semiring.zero
-                            for child in children:
-                                child_value = (
-                                    self.semiring.one
-                                    if child == target
-                                    else self.semiring.zero
-                                    if internal or child in members
-                                    else component_cache[child][0]
-                                )
-                                relation_value = self.semiring.add(
-                                    relation_value,
-                                    child_value,
-                                )
-                                additions += 1
-                        value = self.semiring.multiply(value, relation_value)
-                        multiplications += 1
-                    return value
-
-                coefficients = {
-                    (member, child): coefficient(member, child)
-                    for member in component
-                    for child in members
-                    if child in adjacency[member]
-                }
-                operand = self.semiring.zero
-                for start in component:
-                    start_index = canonical_index[start]
-                    cycle_paths: list[tuple[ItemRef, Value, frozenset[ItemRef]]] = [
-                        (start, self.semiring.one, frozenset((start,)))
-                    ]
-                    while cycle_paths:
-                        current, path_value, seen = cycle_paths.pop()
-                        for child in adjacency[current]:
-                            if child not in members:
-                                continue
-                            edge_value = coefficients[(current, child)]
-                            cycle_value = self.semiring.multiply(path_value, edge_value)
-                            multiplications += 1
-                            if child == start:
-                                operand = self.semiring.add(operand, cycle_value)
-                                additions += 1
-                            elif (
-                                child not in seen
-                                and canonical_index[child] >= start_index
-                            ):
-                                cycle_paths.append((child, cycle_value, seen | {child}))
-                if not star.admits(operand):
-                    raise StarRefusal(
-                        f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
-                        f"algebra {algebra_name}; operand "
-                        f"{self.semiring.encode(operand)!r}; warrant {star.name!r} refuses"
-                    )
-                closure = star.close(operand)
-                for member in component:
-                    value = self.semiring.multiply(closure, approximants[member])
-                    multiplications += 1
-                    cache_component_value(component_cache, member, value)
-                active_components.remove(component)
-
-            def visit(
-                reference: ItemRef,
-                state_cache: dict[
-                    ItemRef,
-                    tuple[
-                        Value,
-                        DerivationProvenance,
-                        tuple[RankedWitness[Value], ...],
-                        int,
-                    ],
-                ] = cache,
-            ) -> tuple[
-                Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
-            ]:
-                """Evaluate one state once for the current index coordinate."""
-                nonlocal additions, multiplications, ranked_multiplications
-                component = component_by_item.get(reference)
-                if component is not None and reference not in state_cache:
-                    solve_component(component)
-                    return state_cache[reference]
-                prepared: dict[ItemRef, tuple[Value, str]] = {}
-                in_progress: set[ItemRef] = set()
-                work: list[tuple[ItemRef, bool]] = [(reference, False)]
-                while work:
-                    current, finish = work.pop()
-                    if current in state_cache:
-                        continue
-                    if not finish:
-                        label = _label(self.graph, current)
-                        local = self.lift(
-                            self.valuation.read(self.graph, current), label
-                        )
-                        prepared[current] = (local, label)
-                        in_progress.add(current)
-                        work.append((current, True))
-                        for transition in reversed(self.transitions):
-                            for child in reversed(
-                                outgoing[current][transition.relation]
-                            ):
-                                child_component = component_by_item.get(child)
-                                if child_component is not None:
-                                    solve_component(child_component)
-                                    continue
-                                if child not in state_cache:
-                                    work.append((child, False))
-                        continue
-
-                    local, label = prepared.pop(current)
-                    value = local
-                    paths: DerivationProvenance = ((label,),)
-                    ranked: tuple[RankedWitness[Value], ...] = (
-                        ()
-                        if not self.ranked_output or local == self.semiring.zero
-                        else ((local, (label,)),)
-                    )
-                    ranked_count = len(ranked)
-                    has_children = False
-                    for transition in self.transitions:
-                        children = outgoing[current][transition.relation]
-                        if not children:
-                            continue
-                        has_children = True
-                        child_results = [state_cache[child] for child in children]
-                        if transition.combination is ChildCombination.AND:
-                            relation_value = self.semiring.one
-                            relation_paths: DerivationProvenance = ((),)
-                            relation_ranked: tuple[RankedWitness[Value], ...] = (
-                                (self.semiring.one, ()),
-                            )
-                            relation_count = 1
-                            for (
-                                child_value,
-                                child_paths,
-                                child_ranked,
-                                child_count,
-                            ) in child_results:
-                                relation_value = self.semiring.multiply(
-                                    relation_value, child_value
-                                )
-                                multiplications += 1
-                                relation_paths = tuple(
-                                    left + right
-                                    for left in relation_paths
-                                    for right in child_paths
-                                )
-                                relation_count *= child_count
-                                if self.ranked_output:
-                                    ranked_products = len(relation_ranked) * len(
-                                        child_ranked
-                                    )
-                                    multiplications += ranked_products
-                                    ranked_multiplications += ranked_products
-                                    relation_ranked = self._rank_candidates(
-                                        tuple(
-                                            (
-                                                self.semiring.multiply(
-                                                    left_value, right_value
-                                                ),
-                                                left_path + right_path,
-                                            )
-                                            for left_value, left_path in relation_ranked
-                                            for right_value, right_path in child_ranked
-                                        ),
-                                        witness_operations,
-                                        ranked_additions,
-                                    )
-                        else:
-                            relation_value = child_results[0][0]
-                            # The value accumulates, because that is what OR means,
-                            # while selection tracks the best sibling separately.
-                            # Comparing against the accumulation instead would let
-                            # a non-selective semiring outgrow every later sibling.
-                            best = child_results[0][:2]
-                            for (
-                                child_value,
-                                child_paths,
-                                _child_ranked,
-                                _child_count,
-                            ) in child_results[1:]:
-                                relation_value = self.semiring.add(
-                                    relation_value, child_value
-                                )
-                                additions += 1
-                                best = self._select_paths(
-                                    best, (child_value, child_paths)
-                                )
-                            relation_paths = best[1]
-                            relation_count = sum(result[3] for result in child_results)
-                            if self.ranked_output:
-                                relation_ranked = self._rank_candidates(
-                                    tuple(
-                                        candidate
-                                        for _child_value, _child_paths, child_ranked, _child_count in child_results
-                                        for candidate in child_ranked
-                                    ),
-                                    witness_operations,
-                                    ranked_additions,
-                                )
-                        value = self.semiring.multiply(value, relation_value)
-                        multiplications += 1
-                        paths = tuple(
-                            left + right for left in paths for right in relation_paths
-                        )
-                        ranked_count *= relation_count
-                        if self.ranked_output:
-                            ranked_products = len(ranked) * len(relation_ranked)
-                            multiplications += ranked_products
-                            ranked_multiplications += ranked_products
-                            ranked = self._rank_candidates(
-                                tuple(
-                                    (
-                                        self.semiring.multiply(left_value, right_value),
-                                        left_path + right_path,
-                                    )
-                                    for left_value, left_path in ranked
-                                    for right_value, right_path in relation_ranked
-                                ),
-                                witness_operations,
-                                ranked_additions,
-                            )
-                    if not has_children:
-                        value = self.semiring.multiply(value, self.semiring.one)
-                        multiplications += 1
-                    state_cache[current] = (value, paths, ranked, ranked_count)
-                    in_progress.remove(current)
-                return state_cache[reference]
-
-            for root in item_roots:
-                state = (root, coordinate)
-                root_states.append(state)
-                root_value, _root_paths, root_ranked, root_count = visit(root)
-                total = self.semiring.add(total, root_value)
-                additions += 1
-                if self.ranked_output:
-                    ranked_roots.extend(root_ranked)
-                    root_witness_count += root_count
-            for reference in self._references():
-                visit(reference)
-            all_values.extend(
-                ((reference, coordinate), cache[reference][0])
-                for reference in self._references()
-            )
-            if self.witness_order is not None:
-                # Selection runs inside the coordinate loop so that provenance
-                # folds over the same domain as the value. Reading it afterwards
-                # would see only the last coordinate's cache.
-                for root in item_roots:
-                    candidate = cache[root][:2]
-                    if selected is None:
-                        selected = candidate
-                    else:
-                        selected = self._select_paths(selected, candidate)
+        pass_result = self._run_coordinate_pass(
+            outgoing,
+            item_roots,
+            references,
+            canonical_index,
+            adjacency,
+            component_by_item,
+            coordinates,
+        )
+        all_values = pass_result.values
+        root_states = pass_result.root_states
+        total = pass_result.total
+        selected = pass_result.selected
+        ranked_roots = pass_result.ranked_roots
+        additions = pass_result.additions
+        multiplications = pass_result.multiplications
+        ranked_multiplications = pass_result.ranked_multiplications
+        ranked_additions = pass_result.ranked_additions
+        witness_operations = pass_result.witness_operations
+        root_witness_count = pass_result.root_witness_count
         complete = None if selected is None else selected[1]
         provenance = None if complete is None else complete[: self.output_cap]
         ranked_witnesses = (
@@ -1457,6 +1085,420 @@ class FoldDeclaration[Value]:
         if self.tie_policy is TiePolicy.CHOOSE_FIRST:
             return left
         return left_value, tuple(dict.fromkeys((*left_paths, *right_paths)))
+
+
+@dataclass(slots=True)
+class _FoldAccumulator[Value]:
+    """Hold mutable fold outputs and operation counts across coordinates."""
+
+    total: Value
+    selected: tuple[Value, DerivationProvenance] | None = None
+    additions: int = 0
+    multiplications: int = 0
+    ranked_multiplications: int = 0
+    ranked_additions: list[int] = field(default_factory=lambda: [0])
+    witness_operations: list[int] = field(default_factory=lambda: [0])
+    root_witness_count: int = 0
+    values: list[tuple[State, Value]] = field(default_factory=list)
+    root_states: list[State] = field(default_factory=list)
+    ranked_roots: list[RankedWitness[Value]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _CoordinatePass[Value]:
+    """Evaluate one coordinate with explicit topology, cache, and counters."""
+
+    fold: FoldDeclaration[Value]
+    outgoing: _Outgoing
+    canonical_index: dict[ItemRef, int]
+    adjacency: dict[ItemRef, tuple[ItemRef, ...]]
+    component_by_item: dict[ItemRef, tuple[ItemRef, ...]]
+    accumulator: _FoldAccumulator[Value]
+    cache: dict[ItemRef, _StateResult[Value]] = field(default_factory=dict)
+
+    def cache_component_value(
+        self,
+        member: ItemRef,
+        value: Value,
+    ) -> None:
+        """Cache one SCC value with its unbranched witness metadata."""
+        label = _label(self.fold.graph, member)
+        paths: DerivationProvenance = (
+            () if value == self.fold.semiring.zero else ((label,),)
+        )
+        ranked = (
+            ()
+            if not self.fold.ranked_output or value == self.fold.semiring.zero
+            else ((value, (label,)),)
+        )
+        self.cache[member] = (
+            value,
+            paths,
+            ranked,
+            len(ranked) or len(paths),
+        )
+
+    def solve_component(  # noqa: PLR0915 -- one ordered SCC refusal and closure trichotomy
+        self,
+        component: tuple[ItemRef, ...],
+    ) -> None:
+        """Resolve one cyclic SCC by the declared ordered trichotomy."""
+        members = set(component)
+        for member in component:
+            for child in self.adjacency[member]:
+                if child not in members:
+                    self.visit(child)
+
+        def equation(current: ItemRef, values: dict[ItemRef, Value]) -> Value:
+            """Evaluate one equation under current SCC approximants."""
+            label = _label(self.fold.graph, current)
+            value = self.fold.lift(
+                self.fold.valuation.read(self.fold.graph, current), label
+            )
+            has_children = False
+            for transition in self.fold.transitions:
+                children = self.outgoing[current][transition.relation]
+                if not children:
+                    continue
+                has_children = True
+                child_values = [
+                    values[child] if child in members else self.cache[child][0]
+                    for child in children
+                ]
+                if transition.combination is ChildCombination.AND:
+                    relation_value = self.fold.semiring.one
+                    for child_value in child_values:
+                        relation_value = self.fold.semiring.multiply(
+                            relation_value, child_value
+                        )
+                        self.accumulator.multiplications += 1
+                else:
+                    relation_value = child_values[0]
+                    for child_value in child_values[1:]:
+                        relation_value = self.fold.semiring.add(
+                            relation_value, child_value
+                        )
+                        self.accumulator.additions += 1
+                value = self.fold.semiring.multiply(value, relation_value)
+                self.accumulator.multiplications += 1
+            assert has_children
+            return value
+
+        approximants = dict.fromkeys(component, self.fold.semiring.zero)
+        for _ in component:
+            approximants = {
+                member: equation(member, approximants) for member in component
+            }
+        if all(value == self.fold.semiring.zero for value in approximants.values()):
+            for member in component:
+                self.cache[member] = (self.fold.semiring.zero, (), (), 0)
+            return
+
+        next_approximants = {
+            member: equation(member, approximants) for member in component
+        }
+        if self.fold.semiring.star is None and next_approximants == approximants:
+            for member, value in approximants.items():
+                self.cache_component_value(member, value)
+            return
+
+        nonlinear = next(
+            (
+                member
+                for member in component
+                if sum(
+                    child in members
+                    for transition in self.fold.transitions
+                    if transition.combination is ChildCombination.AND
+                    for child in self.outgoing[member][transition.relation]
+                )
+                > 1
+            ),
+            None,
+        )
+        closing_parent, closing_child, closing_relation = next(
+            (member, child, transition.relation)
+            for member in component
+            for transition in self.fold.transitions
+            for child in self.outgoing[member][transition.relation]
+            if child in members
+        )
+        member_data = [member.to_data() for member in component]
+        edge = (
+            f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
+            f"through relation {str(closing_relation)!r}"
+        )
+        algebra_name = type(self.fold.semiring).__name__
+        if nonlinear is not None:
+            chart_item = next(
+                (
+                    member
+                    for member in component
+                    if _item(self.fold.graph, member).attributes
+                    and {
+                        value.name.local_name: value.lexical
+                        for value in _item(self.fold.graph, member).attributes
+                    }.get("kind")
+                    == "chart-item"
+                ),
+                nonlinear,
+            )
+            chart_attributes = {
+                value.name.local_name: value.lexical
+                for value in _item(self.fold.graph, chart_item).attributes
+            }
+            span = (chart_attributes.get("start"), chart_attributes.get("end"))
+            raise StarRefusal(
+                f"fold {self.fold.name!r} SCC {member_data!r} is nonlinear at "
+                f"zero-width chart item {chart_item.to_data()!r} span {span!r}; "
+                f"closing edge {edge}; algebra {algebra_name}; nonlinear "
+                "least fixpoints are not supported"
+            )
+
+        star = self.fold.semiring.star
+        fallback = (
+            f"fold {self.fold.name!r} transitions form a cycle from "
+            f"{closing_parent.to_data()!r} to {closing_child.to_data()!r} "
+            f"through relation {str(closing_relation)!r}"
+        )
+        if star is None:
+            raise StarRefusal(
+                f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
+                f"algebra {algebra_name} declares no star"
+            )
+
+        def coefficient(current: ItemRef, target: ItemRef) -> Value:
+            """Return the linear coefficient of one internal child."""
+            label = _label(self.fold.graph, current)
+            value = self.fold.lift(
+                self.fold.valuation.read(self.fold.graph, current), label
+            )
+            for transition in self.fold.transitions:
+                children = self.outgoing[current][transition.relation]
+                if not children:
+                    continue
+                internal = tuple(child for child in children if child in members)
+                if transition.combination is ChildCombination.AND:
+                    relation_value = self.fold.semiring.one
+                    for child in children:
+                        child_value = (
+                            self.fold.semiring.one
+                            if child == target
+                            else self.fold.semiring.zero
+                            if child in members
+                            else self.cache[child][0]
+                        )
+                        relation_value = self.fold.semiring.multiply(
+                            relation_value, child_value
+                        )
+                        self.accumulator.multiplications += 1
+                else:
+                    relation_value = self.fold.semiring.zero
+                    for child in children:
+                        child_value = (
+                            self.fold.semiring.one
+                            if child == target
+                            else self.fold.semiring.zero
+                            if internal or child in members
+                            else self.cache[child][0]
+                        )
+                        relation_value = self.fold.semiring.add(
+                            relation_value,
+                            child_value,
+                        )
+                        self.accumulator.additions += 1
+                value = self.fold.semiring.multiply(value, relation_value)
+                self.accumulator.multiplications += 1
+            return value
+
+        coefficients = {
+            (member, child): coefficient(member, child)
+            for member in component
+            for child in members
+            if child in self.adjacency[member]
+        }
+        operand = self.fold.semiring.zero
+        for start in component:
+            start_index = self.canonical_index[start]
+            cycle_paths: list[tuple[ItemRef, Value, frozenset[ItemRef]]] = [
+                (start, self.fold.semiring.one, frozenset((start,)))
+            ]
+            while cycle_paths:
+                current, path_value, seen = cycle_paths.pop()
+                for child in self.adjacency[current]:
+                    if child not in members:
+                        continue
+                    edge_value = coefficients[(current, child)]
+                    cycle_value = self.fold.semiring.multiply(path_value, edge_value)
+                    self.accumulator.multiplications += 1
+                    if child == start:
+                        operand = self.fold.semiring.add(operand, cycle_value)
+                        self.accumulator.additions += 1
+                    elif (
+                        child not in seen and self.canonical_index[child] >= start_index
+                    ):
+                        cycle_paths.append((child, cycle_value, seen | {child}))
+        if not star.admits(operand):
+            raise StarRefusal(
+                f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
+                f"algebra {algebra_name}; operand "
+                f"{self.fold.semiring.encode(operand)!r}; warrant {star.name!r} refuses"
+            )
+        closure = star.close(operand)
+        for member in component:
+            value = self.fold.semiring.multiply(closure, approximants[member])
+            self.accumulator.multiplications += 1
+            self.cache_component_value(member, value)
+
+    def visit(  # noqa: PLR0915 -- one iterative postorder state evaluation
+        self,
+        reference: ItemRef,
+    ) -> tuple[Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int]:
+        """Evaluate one state once for the current index coordinate."""
+        component = self.component_by_item.get(reference)
+        if component is not None and reference not in self.cache:
+            self.solve_component(component)
+            return self.cache[reference]
+        prepared: dict[ItemRef, tuple[Value, str]] = {}
+        in_progress: set[ItemRef] = set()
+        work: list[tuple[ItemRef, bool]] = [(reference, False)]
+        while work:
+            current, finish = work.pop()
+            if current in self.cache:
+                continue
+            if not finish:
+                label = _label(self.fold.graph, current)
+                local = self.fold.lift(
+                    self.fold.valuation.read(self.fold.graph, current), label
+                )
+                prepared[current] = (local, label)
+                in_progress.add(current)
+                work.append((current, True))
+                for transition in reversed(self.fold.transitions):
+                    for child in reversed(self.outgoing[current][transition.relation]):
+                        child_component = self.component_by_item.get(child)
+                        if child_component is not None:
+                            self.solve_component(child_component)
+                            continue
+                        if child not in self.cache:
+                            work.append((child, False))
+                continue
+
+            local, label = prepared.pop(current)
+            value = local
+            paths: DerivationProvenance = ((label,),)
+            ranked: tuple[RankedWitness[Value], ...] = (
+                ()
+                if not self.fold.ranked_output or local == self.fold.semiring.zero
+                else ((local, (label,)),)
+            )
+            ranked_count = len(ranked)
+            has_children = False
+            for transition in self.fold.transitions:
+                children = self.outgoing[current][transition.relation]
+                if not children:
+                    continue
+                has_children = True
+                child_results = [self.cache[child] for child in children]
+                if transition.combination is ChildCombination.AND:
+                    relation_value = self.fold.semiring.one
+                    relation_paths: DerivationProvenance = ((),)
+                    relation_ranked: tuple[RankedWitness[Value], ...] = (
+                        (self.fold.semiring.one, ()),
+                    )
+                    relation_count = 1
+                    for (
+                        child_value,
+                        child_paths,
+                        child_ranked,
+                        child_count,
+                    ) in child_results:
+                        relation_value = self.fold.semiring.multiply(
+                            relation_value, child_value
+                        )
+                        self.accumulator.multiplications += 1
+                        relation_paths = tuple(
+                            left + right
+                            for left in relation_paths
+                            for right in child_paths
+                        )
+                        relation_count *= child_count
+                        if self.fold.ranked_output:
+                            ranked_products = len(relation_ranked) * len(child_ranked)
+                            self.accumulator.multiplications += ranked_products
+                            self.accumulator.ranked_multiplications += ranked_products
+                            relation_ranked = self.fold._rank_candidates(
+                                tuple(
+                                    (
+                                        self.fold.semiring.multiply(
+                                            left_value, right_value
+                                        ),
+                                        left_path + right_path,
+                                    )
+                                    for left_value, left_path in relation_ranked
+                                    for right_value, right_path in child_ranked
+                                ),
+                                self.accumulator.witness_operations,
+                                self.accumulator.ranked_additions,
+                            )
+                else:
+                    relation_value = child_results[0][0]
+                    # The value accumulates, because that is what OR means,
+                    # while selection tracks the best sibling separately.
+                    # Comparing against the accumulation instead would let
+                    # a non-selective semiring outgrow every later sibling.
+                    best = child_results[0][:2]
+                    for (
+                        child_value,
+                        child_paths,
+                        _child_ranked,
+                        _child_count,
+                    ) in child_results[1:]:
+                        relation_value = self.fold.semiring.add(
+                            relation_value, child_value
+                        )
+                        self.accumulator.additions += 1
+                        best = self.fold._select_paths(best, (child_value, child_paths))
+                    relation_paths = best[1]
+                    relation_count = sum(result[3] for result in child_results)
+                    if self.fold.ranked_output:
+                        relation_ranked = self.fold._rank_candidates(
+                            tuple(
+                                candidate
+                                for _child_value, _child_paths, child_ranked, _child_count in child_results
+                                for candidate in child_ranked
+                            ),
+                            self.accumulator.witness_operations,
+                            self.accumulator.ranked_additions,
+                        )
+                value = self.fold.semiring.multiply(value, relation_value)
+                self.accumulator.multiplications += 1
+                paths = tuple(
+                    left + right for left in paths for right in relation_paths
+                )
+                ranked_count *= relation_count
+                if self.fold.ranked_output:
+                    ranked_products = len(ranked) * len(relation_ranked)
+                    self.accumulator.multiplications += ranked_products
+                    self.accumulator.ranked_multiplications += ranked_products
+                    ranked = self.fold._rank_candidates(
+                        tuple(
+                            (
+                                self.fold.semiring.multiply(left_value, right_value),
+                                left_path + right_path,
+                            )
+                            for left_value, left_path in ranked
+                            for right_value, right_path in relation_ranked
+                        ),
+                        self.accumulator.witness_operations,
+                        self.accumulator.ranked_additions,
+                    )
+            if not has_children:
+                value = self.fold.semiring.multiply(value, self.fold.semiring.one)
+                self.accumulator.multiplications += 1
+            self.cache[current] = (value, paths, ranked, ranked_count)
+            in_progress.remove(current)
+        return self.cache[reference]
 
 
 @dataclass(frozen=True, slots=True)

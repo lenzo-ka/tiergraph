@@ -903,6 +903,42 @@ def recognize(
             for rule_index, (left, pattern) in enumerate(source_rules)
         )
     )
+    keys, applications = _deduce_chart(
+        declaration, recognition_rules, tokens, collapse_units=collapse_units
+    )
+    root_key = (declaration.start, 0, len(tokens))
+    references = {
+        key: ItemRef(_name(namespace, "chart-items"), index)
+        for index, key in enumerate(keys)
+    }
+    app_rows = [
+        (key, rule_index, children, terminals_match)
+        for key in keys
+        for rule_index, children, terminals_match in applications[key]
+    ]
+    return _build_parse_forest(
+        grammar,
+        namespace,
+        collapse_units,
+        keys,
+        root_key,
+        references,
+        app_rows,
+    )
+
+
+type _ChartKey = tuple[QualifiedName, int, int]
+type _ChartApplication = tuple[int, tuple[_ChartKey, ...], bool]
+
+
+def _deduce_chart(
+    declaration: GrammarDeclaration,
+    recognition_rules: tuple[tuple[int, QualifiedName, GrammarPattern], ...],
+    tokens: tuple[str, ...],
+    *,
+    collapse_units: bool,
+) -> tuple[list[_ChartKey], dict[_ChartKey, list[_ChartApplication]]]:
+    """Deduce every chart item and its production applications."""
     applications: dict[
         tuple[QualifiedName, int, int],
         list[tuple[int, tuple[tuple[QualifiedName, int, int], ...], bool]],
@@ -932,16 +968,20 @@ def recognize(
                 choices.append(application)
         if not choices:
             choices.append((-1, (), False))
-    root_key = (declaration.start, 0, size)
-    references = {
-        key: ItemRef(_name(namespace, "chart-items"), index)
-        for index, key in enumerate(keys)
-    }
-    app_rows = [
-        (key, rule_index, children, terminals_match)
-        for key in keys
-        for rule_index, children, terminals_match in applications[key]
-    ]
+    return keys, applications
+
+
+def _build_parse_forest(
+    grammar: LoweredGrammar,
+    namespace: str,
+    collapse_units: bool,
+    keys: list[_ChartKey],
+    root_key: _ChartKey,
+    references: dict[_ChartKey, ItemRef],
+    app_rows: list[tuple[_ChartKey, int, tuple[_ChartKey, ...], bool]],
+) -> ParseForest:
+    """Construct the opcode program and bound recognition fold for a chart."""
+    declaration = grammar.declaration
     names = {
         local: _name(namespace, local)
         for local in (

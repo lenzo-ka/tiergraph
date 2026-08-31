@@ -146,7 +146,7 @@ class ClockProfile:
             fields.optional("duration_attribute"),
         )
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: PLR0915 -- ordered clock contract
         """Validate declarations, totality, refinement, and timing agreement."""
         tiers = {tier.declaration.name: tier for tier in self.graph.tiers}
         clock = tiers.get(self.clock_tier)
