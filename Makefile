@@ -61,6 +61,21 @@ schema-check:
 format-growth:
 	@$(VENV_PYTHON) scripts/check_format_growth.py
 
+# The other half of growth. The schema gate above covers structural shape; this
+# runs the current decoder over documents a previous release ACCEPTED, so a
+# tightened decoder that changes no schema byte still has to answer for itself.
+format-semantics:
+	@$(VENV_PYTHON) scripts/check_format_semantics.py
+
+# Capture is deliberately NOT part of the gate. A corpus regenerated from current
+# code is accepted by current code by construction, and the check over it would
+# pass without ever being able to fail. Run this at a release; the gate runs the
+# frozen result every time.
+corpus-capture:
+	@TIERGRAPH_CORPUS_OUT=corpus/accepted-documents.jsonl \
+	 TIERGRAPH_CORPUS_VERSION=$$($(VENV_PYTHON) -c 'import tiergraph; print(tiergraph.__version__)') \
+	 $(VENV_PYTHON) -m pytest -p scripts.capture_corpus -q
+
 docs:
 	@$(VENV_PYTHON) scripts/generate_docs.py
 
@@ -71,6 +86,6 @@ docs-check:
 # against an already-built virtualenv, so a checkout that cannot reach an index
 # can still run the whole gate rather than a hand-copied subset of it -- and the
 # list of steps exists once, where it cannot be transcribed wrongly.
-gate: lint format-check types test determinism schema-check format-growth docs-check tracked-clean documented reservations changelog-claims
+gate: lint format-check types test determinism schema-check format-growth format-semantics docs-check tracked-clean documented reservations changelog-claims
 
 check: venv gate
