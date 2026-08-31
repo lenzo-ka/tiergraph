@@ -370,6 +370,40 @@ def test_composition_refuses_a_later_displacement_with_no_image() -> None:
     )
 
 
+def test_composition_carries_an_earlier_gap_and_refuses_a_later_one() -> None:
+    """CHARACTERIZATION: totality is the producer's to supply, not the algebra's.
+
+    The same partial displacement is accepted as the earlier argument and refused
+    as the later one. Composition ranges over the earlier map's domain, so a
+    coordinate missing from it is never consulted and the composite inherits the
+    gap; that same coordinate missing from the later map is an image with nowhere
+    to go, which is the refusal the test above pins. Construction cannot decide
+    either case -- a displacement does not carry the graph it is about -- so this
+    records where the asymmetry actually lives. See docs/concepts.md.
+    """
+    source = graph_with_spaces(item_count=3, relation_count=0, polyadic_count=0)
+    total = Displacement.stationary(source)
+    partial = Displacement(
+        items={ItemRef(TIER, 0): ItemRef(TIER, 0)},
+        boundaries={},
+        relations={},
+        polyadic_relations={},
+        departed_items=frozenset(),
+        departed_boundaries=frozenset(),
+        departed_relations=frozenset(),
+        departed_polyadic_relations=frozenset(),
+    )
+
+    carried = partial.then(total)
+    assert carried.items[ItemRef(TIER, 0)] == ItemRef(TIER, 0)
+    assert ItemRef(TIER, 1) not in carried.items
+    assert ItemRef(TIER, 1) not in carried.departed_items
+    assert not carried.boundaries
+
+    with pytest.raises(GraphValidationError):
+        total.then(partial)
+
+
 def apply_script_step(editor: GraphEditor, step: int) -> None:
     """Apply one member of the fixed script to an editor."""
     kind = step % 7

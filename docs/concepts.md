@@ -148,6 +148,24 @@ position that did not move appears at its own coordinate rather than being left
 out. Silence would otherwise have to mean two things — *did not move* and *is not
 described* — and a caller would have to guess which.
 
+Only one half of that totality is decided when the value is built, and the
+difference matters to anyone constructing a `Displacement` directly. A
+displacement does not carry the graph it is about, so *never both* is refused at
+construction while *never neither* is not detectable there: the source space is
+whatever the maps and departed sets name between them, and a coordinate omitted
+from both is indistinguishable from one the source never had. A displacement this
+library produces is total because the operation that built it saw a graph; a
+hand-built one is total by definition rather than by check.
+
+Composition inherits that asymmetry rather than repairing it. Composing refuses a
+later displacement that does not describe the earlier one's result — an image the
+later map neither carries nor departs is an error, because a composition is
+defined only where the first result is the second's source. A gap in the *earlier*
+displacement raises nothing and is carried into the composite, since composition
+ranges over the earlier map's domain and a coordinate missing from it is never
+consulted. Totality is a property the producing operation supplies, not one the
+value or its algebra enforces.
+
 A displacement is accumulated by the operation performing the edit and is never
 recovered by comparing two graph values. Two values cannot carry it: an anonymous
 item that moved is indistinguishable from one that did not.
