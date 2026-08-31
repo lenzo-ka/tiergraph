@@ -25,6 +25,7 @@ from examples.mixing import run_example  # noqa: E402
 import tiergraph  # noqa: E402
 import tiergraph_dot  # noqa: E402
 from tiergraph.cli import build_parser  # noqa: E402
+from tiergraph.machine import MACHINE_VERSION  # noqa: E402
 
 MANIFEST_PATH = ROOT / "docs" / "manifest.json"
 API_PATH = ROOT / "docs" / "reference" / "api.md"
@@ -100,6 +101,8 @@ def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
         return f"{heading}\n\n{descriptions[name]} Current value: `{value}`."
     doc = inspect.getdoc(value)
     if not doc:
+        # These aliases have no runtime marker that distinguishes them from values;
+        # the manifest inventories exports, rather than duplicating type metadata.
         kind = "type alias" if name in {"Path", "PathValue"} else "singleton"
         return f"{heading}\n\nModule-level {kind}: `{type(value).__name__}`."
     signature = _signature(value)
@@ -170,6 +173,8 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
     parts.extend(("", "## Supported secondary surface", ""))
     for module_name, names in manifest["secondary"].items():
         module = importlib.import_module(module_name)
+        # Semirings are the one promised secondary API; the manifest inventories
+        # exports, while this prose records the module's stability policy.
         stability = (
             "This module is a supported secondary API."
             if module_name == "tiergraph.semiring"
@@ -177,6 +182,8 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
             f"API-stability promise at version {tiergraph.__version__}."
         )
         parts.extend((f"### `{module_name}`", "", stability, ""))
+        # BuilderError is intentionally importable but absent from build.__all__, so
+        # it cannot join the manifest's exact inventory of declared exports.
         if module_name == "tiergraph.build":
             parts.extend(
                 (
@@ -200,6 +207,7 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
 def cli_bytes() -> bytes:
     """Render normalized parser help and the checked command contracts."""
     parser = build_parser()
+    # argparse exposes no public traversal API for nested subparser actions.
     action = next(
         candidate
         for candidate in parser._actions
@@ -227,8 +235,11 @@ def cli_bytes() -> bytes:
     help_text = "\n\n".join(
         f"### `{name}`\n\n```text\n{body}\n```" for name, body in helps
     )
+    machine_header = json.dumps(
+        {"machine_version": MACHINE_VERSION}, separators=(",", ":")
+    )
     program = (
-        '{"machine_version":"1"}\n'
+        f"{machine_header}\n"
         '{"opcode":"declare_namespace","declaration":'
         '{"namespace":"urn:step","prefix":"s"}}\n'
     )
@@ -272,7 +283,7 @@ def cli_bytes() -> bytes:
         "`json`, compact `json-compact`, or `bytes`; bytes uses the canonical JSON byte "
         "API and is not another syntax.\n\n"
         "`run` consumes a CLI-owned JSONL stream. Its first line is exactly "
-        '`{"machine_version":"1"}` and each later line has one opcode\'s public '
+        f"`{machine_header}` and each later line has one opcode's public "
         "`to_data()` shape (a repeat body remains nested on that line). Header-only "
         "programs are valid, CRLF and a final line without a newline are accepted, "
         "and whitespace-only lines are rejected. The decoder caps each line at 1 MiB "

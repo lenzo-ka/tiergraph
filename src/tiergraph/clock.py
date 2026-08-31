@@ -576,6 +576,11 @@ class ClockProfile:
             self._unit,
         )
 
+    @property
+    def has_uniform_rate(self) -> bool:
+        """Report whether legacy exact coarse-tick durations are available."""
+        return self._rate is not None
+
     def duration(self, tier: QualifiedName, index: int) -> tuple[int, Decimal]:
         """Return the legacy coarse-tick span and rate when a rate exists."""
         self._refuse_structural_timing("duration")

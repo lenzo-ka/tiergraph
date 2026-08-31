@@ -628,12 +628,10 @@ def _clock_query(
     )
     start, end = profile.structural_span(item_reference.tier, item_reference.index)
     physical = profile.timing(item_reference.tier, item_reference.index)
-    try:
+    if profile.has_uniform_rate:
         ticks, rate = profile.duration(item_reference.tier, item_reference.index)
         exact_duration: object = {"ticks": ticks, "rate": _clock_decimal(rate)}
-    except ValueError as error:
-        if str(error) != "clock has no uniform rate":
-            raise
+    else:
         exact_duration = None
     return {
         "item": item_reference.to_data(),

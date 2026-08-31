@@ -315,6 +315,16 @@ refuses it; :meth:`duration` retains the exact ratio in all cases.
 Explicitly untimed tiers consistently return ``None`` with or without a
 document rate.
 
+#### `ClockProfile.has_uniform_rate`
+
+Property.
+
+```text
+ClockProfile.has_uniform_rate(self) -> 'bool'
+```
+
+Report whether legacy exact coarse-tick durations are available.
+
 #### `ClockProfile.duration`
 
 Method.
