@@ -80,12 +80,12 @@ def test_page_sized_oracle_names_each_expected_product_by_hand() -> None:
     assert result.value == (Decimal(4), (("start", "sting", "out"),))
     assert result.provenance == (("start", "sting", "out"),)
     assert result.truncated is False
-    assert FIXTURE.coordinates(graph, result.provenance) == (0, 8, 12)
+    assert FIXTURE.deliveries(graph, result.provenance) == (0, 8, 12)
     value_data = PATH.encode(result.value)
     provenance_data = [list(path) for path in result.provenance]
-    coordinate_data = list(FIXTURE.coordinates(graph, result.provenance))
+    delivery_data = list(FIXTURE.deliveries(graph, result.provenance))
     assert json.dumps(value_data) != json.dumps(provenance_data)
-    assert json.dumps(provenance_data) != json.dumps(coordinate_data)
+    assert json.dumps(provenance_data) != json.dumps(delivery_data)
 
 
 def test_valuation_and_semiring_vary_independently() -> None:
@@ -126,16 +126,16 @@ def test_reused_recognition_bytes_are_immutable_across_actions() -> None:
         graph,
         FIXTURE,
         "mix",
-        lambda carrier, coordinates: f"{carrier}:{coordinates}",
+        lambda carrier, deliveries: f"{carrier}:{deliveries}",
     )
     levels = act(
         recognized,
         graph,
         FIXTURE,
         {0: 1},
-        lambda carrier, coordinates: {
+        lambda carrier, deliveries: {
             **carrier,
-            **{coordinate: 1 for coordinate in coordinates},
+            **{delivery: 1 for delivery in deliveries},
         },
     )
     after = canonical_bytes(recognized.to_data(PATH))
@@ -183,7 +183,7 @@ def fused_recognize_and_act(
     for relation in graph.relations:
         if relation.left in admitted and relation.right in admitted:
             outgoing[relation.left].append(relation.right)
-    coordinate_name = FIXTURE.name("coordinate")
+    delivery_name = FIXTURE.name("delivery")
     cache: dict[ItemRef, FusedValue] = {}
 
     def carrier_local(reference: ItemRef) -> tuple[int, ...] | str:
@@ -192,10 +192,10 @@ def fused_recognize_and_act(
             for tier in graph.tiers
             if tier.declaration.name == reference.tier
         )
-        coordinate = next(
-            value.lexical for value in item.attributes if value.name == coordinate_name
+        delivery = next(
+            value.lexical for value in item.attributes if value.name == delivery_name
         )
-        return (int(coordinate),) if question == "coordinates" else coordinate
+        return (int(delivery),) if question == "deliveries" else delivery
 
     def add(left: FusedValue, right: FusedValue) -> FusedValue:
         audit.operations.append("semiring:add")
@@ -233,13 +233,11 @@ def fused_recognize_and_act(
         )
         children = outgoing[reference]
         if children:
-            alternatives = FusedValue(
-                PATH.zero, () if question == "coordinates" else ""
-            )
+            alternatives = FusedValue(PATH.zero, () if question == "deliveries" else "")
             for child in children:
                 alternatives = add(alternatives, visit(child))
         else:
-            alternatives = FusedValue(PATH.one, () if question == "coordinates" else "")
+            alternatives = FusedValue(PATH.one, () if question == "deliveries" else "")
         result = multiply(local, alternatives)
         cache[reference] = result
         return result
@@ -251,7 +249,7 @@ def test_rejected_fused_representation_reruns_for_a_second_question() -> None:
     """A carrier-interleaved fold reruns all valuations for a second carrier."""
     valuation = CountingValuation()
     audit = FusedAudit([])
-    assert fused_recognize_and_act("coordinates", valuation, audit) == (0, 8, 12)
+    assert fused_recognize_and_act("deliveries", valuation, audit) == (0, 8, 12)
     first_reads = valuation.reads
     first_operations = tuple(audit.operations)
     assert fused_recognize_and_act("labels", valuation, audit) == "0,8,12"
@@ -267,7 +265,7 @@ def test_fused_carrier_operations_escape_the_semiring_tie_laws() -> None:
     """Carrier selection discards one path that path-semiring addition preserves."""
     sanctioned = recognize_path("tie")
     audit = FusedAudit([])
-    fused = fused_recognize_and_act("coordinates", CountingValuation("tie"), audit)
+    fused = fused_recognize_and_act("deliveries", CountingValuation("tie"), audit)
     assert sanctioned.provenance == (
         ("start", "bed", "out"),
         ("start", "sting", "out"),

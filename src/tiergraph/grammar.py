@@ -1,4 +1,4 @@
-"""Synchronous grammar declarations, coordinate lowering, and chart recognition."""
+"""Synchronous grammar declarations, grammar lowering, and chart recognition."""
 
 from __future__ import annotations
 
@@ -356,7 +356,7 @@ def grammar_loads(source: str | bytes) -> GrammarDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class LoweredGrammar:
-    """Pair a grammar with its replayable coordinate-hedge construction."""
+    """Pair a grammar with its replayable ordered-hedge construction."""
 
     declaration: GrammarDeclaration
     program: Program
@@ -378,7 +378,7 @@ def _name(namespace: str, local: str) -> QualifiedName:
 def lower_grammar(
     declaration: GrammarDeclaration, namespace: str = GRAMMAR_NAMESPACE
 ) -> LoweredGrammar:
-    """Lower a grammar through machine opcodes to an ordered coordinate hedge."""
+    """Lower a grammar through machine opcodes to an ordered hedge."""
     names = {
         local: _name(namespace, local)
         for local in (

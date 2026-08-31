@@ -1,4 +1,4 @@
-# Recognize and act: mixing coordinates
+# Recognize and act: mixing deliveries
 
 This is an advanced example that leads with reactions, semimodules, and tie
 policies. Newcomers should start with the caption alignment, text segmentation,
@@ -6,9 +6,9 @@ and critical-path examples.
 
 This example keeps three claims separate. First, a tropical-semiring fold finds
 the least-cost path through a dependency diamond and retains provenance. Second,
-the provenance becomes coordinates for an action. A `DistributionWitness`
+the provenance becomes deliveries for an action. A `DistributionWitness`
 checks that a complete batch and one-for-one application agree for this run.
-Third, another action makes a sampled `Semimodule` scale claim. The coordinate
+Third, another action makes a sampled `Semimodule` scale claim. The delivery
 action does not claim semimodule scaling.
 
 Run it from the repository root with `python -m examples.mixing`. The example
@@ -67,17 +67,17 @@ def name(local: str) -> QualifiedName:
 
 
 def build_graph() -> Graph:
-    """Build a dependency diamond with a cost and coordinate on each item."""
+    """Build a dependency diamond with a cost and delivery on each item."""
     placement = name("placement")
     cost = name("cost")
-    coordinate = name("coordinate")
+    delivery = name("delivery")
 
     def item(identifier: str, weight: str, order: str) -> Item:
         return Item(
             identifier,
             (
                 AttributeValue(cost, XsdType.DECIMAL, weight),
-                AttributeValue(coordinate, XsdType.INTEGER, order),
+                AttributeValue(delivery, XsdType.INTEGER, order),
             ),
         )
 
@@ -113,7 +113,7 @@ def build_graph() -> Graph:
         ),
         (
             AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),
-            AttributeDeclaration(coordinate, AttributeDomain.ITEM, XsdType.INTEGER),
+            AttributeDeclaration(delivery, AttributeDomain.ITEM, XsdType.INTEGER),
         ),
     )
 
@@ -136,10 +136,10 @@ def _fold(graph: Graph) -> FoldDeclaration[Decimal]:
 
 def _deliveries(graph: Graph, provenance: object) -> tuple[OrderedDelivery, ...]:
     paths = cast(tuple[tuple[str, ...], ...], provenance)
-    coordinate = name("coordinate")
+    delivery = name("delivery")
     values = {
         item.durable_id: int(
-            next(value for value in item.attributes if value.name == coordinate).lexical
+            next(value for value in item.attributes if value.name == delivery).lexical
         )
         for tier in graph.tiers
         for item in tier.items
@@ -151,11 +151,11 @@ def _deliveries(graph: Graph, provenance: object) -> tuple[OrderedDelivery, ...]
     )
 
 
-def _add_coordinates(carrier: object, values: tuple[object, ...]) -> object:
+def _add_deliveries(carrier: object, values: tuple[object, ...]) -> object:
     result = dict(cast(dict[int, int], carrier))
     for value in values:
-        coordinate = cast(int, value)
-        result[coordinate] = result.get(coordinate, 0) + 1
+        delivery = cast(int, value)
+        result[delivery] = result.get(delivery, 0) + 1
     return {key: result[key] for key in sorted(result)}
 
 
@@ -171,18 +171,18 @@ def run_example() -> dict[str, object]:
     graph = build_graph()
     fold = _fold(graph)
     recognition = fold.run()
-    coordinate_action = ActionDeclaration(
-        "coordinate-mix", _add_coordinates, True, False, True
+    delivery_action = ActionDeclaration(
+        "delivery-mix", _add_deliveries, True, False, True
     )
     react = ReactDeclaration(
         "mix-recognized-path",
         fold,
         lambda provenance: _deliveries(graph, provenance),
-        coordinate_action,
+        delivery_action,
         mode=ReactMode.ONE_FOR_ONE,
         distribution=DistributionWitness("batch-equals-one-for-one"),
     )
-    coordinate_result = react.run({})
+    delivery_result = react.run({})
 
     module = Semimodule[object, object](
         0,
@@ -208,9 +208,9 @@ def run_example() -> dict[str, object]:
             ),
             "truncated": recognition.truncated,
         },
-        "coordinate_action": {
+        "delivery_action": {
             str(key): value
-            for key, value in cast(dict[int, int], coordinate_result["result"]).items()
+            for key, value in cast(dict[int, int], delivery_result["result"]).items()
         },
         "separate_semimodule_scale": scale_action.apply(2, (3,)),
     }
@@ -229,6 +229,6 @@ if __name__ == "__main__":
 
 <!-- tiergraph:execute-example -->
 ```json
-{"coordinate_action": {"0": 1, "12": 1, "8": 1}, "recognition": {"provenance": [["start", "sting", "out"]], "truncated": false, "value": "4.0"}, "separate_semimodule_scale": 6}
+{"delivery_action": {"0": 1, "12": 1, "8": 1}, "recognition": {"provenance": [["start", "sting", "out"]], "truncated": false, "value": "4.0"}, "separate_semimodule_scale": 6}
 ```
 <!-- /tiergraph:execute-example -->
