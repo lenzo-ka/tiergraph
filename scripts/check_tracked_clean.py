@@ -194,6 +194,12 @@ PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 # A file whose content genuinely cannot be edited into compliance -- third-party
 # text such as the license -- would be named here with its reason and a witness
 # in tests/test_publishability_guards.py; none currently needs to be.
+#
+# Measured 2026-08-31, after the affix sweep widened what `name_leaks` catches:
+# run against this file with the exemption bypassed, both checks return zero.
+# The exemption is a guard against content this file may acquire, not a prop
+# holding up content it already has -- so anyone pruning it should re-run the
+# checks here rather than assume it is load-bearing, in either direction.
 SELF = Path(__file__).name
 EXEMPT_NAMES: frozenset[str] = frozenset({SELF})
 ROOT = Path(__file__).resolve().parent.parent
