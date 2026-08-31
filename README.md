@@ -129,8 +129,9 @@ dot = tiergraph_dot.dumps(graph)
 
 ## Stability
 
-tiergraph 0.1.x is alpha software. The public Python API may change before 1.0;
-where possible, changes will be additive, but compatibility is not yet promised.
+The current development version and every published pre-1.0 release are alpha
+software. The public Python API may change before 1.0; where possible, changes
+will be additive, but compatibility is not yet promised.
 The JSON wire format, construction machine format, and span-view JSON format
 carry explicit version stamps so a reader can identify the format it receives.
 A format stamp identifies a contract; it does not imply that every version can

@@ -1526,7 +1526,7 @@ class Graph:
             "attribute_declarations": [
                 declaration.to_data() for declaration in self.attribute_declarations
             ],
-            # The wire key keeps its format-6 spelling; only the field renamed.
+            # The wire key retains its earlier spelling; only the field renamed.
             "position_values": [
                 boundary.to_data() for boundary in self.boundary_values
             ],

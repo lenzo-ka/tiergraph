@@ -3,8 +3,8 @@
 ## Supported versions
 
 tiergraph is currently an alpha, pre-1.0 library. Security fixes are made on
-`main` and in the latest 0.1.x release. Older pre-1.0 releases are not supported
-unless a maintainer states otherwise.
+`main` and in the latest published pre-1.0 release. Older pre-1.0 releases are
+not supported unless a maintainer states otherwise.
 
 ## Reporting a vulnerability
 

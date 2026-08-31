@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinate boundary value without one boundary to hold it. This settles the
   rule for removing a durable boundary's anchor: the removal is refused rather
   than reinterpreted. The wire format is untouched.
+- Added total displacement accounting for edits. The new public `Displacement`
+  maps every source item, boundary, binary relation, and polyadic relation to
+  its resulting coordinate or records its departure; `GraphEditor.displacement()`
+  accumulates that account across chained operations and displacements compose
+  with `then()`.
+- Added graph-carried seals over ordered tier, binary-relation, and
+  polyadic-relation carriers. The new public `GraphCarrier`, `SealedCarrier`,
+  and `Seal` name those constraints; `SealDeclaration` compares a source and
+  result, reporting `SealBreach` values or a `SealCertificate` from
+  `check_seals()`.
+- Added separately sourced attribute layers and explicit delivery policy. The
+  new public `LayerName`, `LayerFact`, `Layer`, `LayerRead`, `Delivery`, and
+  `Consensus` support delivered reads, agreement reports, and flattening into
+  the base graph. `LayerSubject` covers the public `TierRef`,
+  `RelationDeclarationRef`, `RelationInstanceRef`, `DurableRelationRef`,
+  `PolyadicInstanceRef`, `DurablePolyadicRef`, and `DocumentRef` subject forms;
+  structural edits preserve departed facts as `OrphanedSubject` values.
 - Added zero-width span support throughout projection, rendering, and the text,
   JSON, JSON Lines, HTML, and DOT emitters; `to_jsonl` now stamps its format
   version (#72).
@@ -190,8 +207,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attribute domain and node kind, the `promote_position` opcode, the
   `/positions/…` canonical path segments, and the command line's own `position`
   vocabulary therefore moved with that format break rather than with this
-  rename. Most retain their earlier spelling in format 0.2.0; the attribute
-  domain is the exception and now spells its wire value `boundary`.
+  rename. The document key, schema definition, opcode, and canonical path
+  segments retain their earlier spelling in format 0.2.0. The attribute domain
+  and node kind now spell their wire values `boundary`, and the command line's
+  `--kind` choice is `boundary` rather than `position`.
 - **BREAKING:** selection is now one graph-free surface: validation moves from
   construction to evaluation, and `evaluate_selection` takes the graph and a
   path profile. `BoundaryPathSelector`, `DifferenceSelector`,
