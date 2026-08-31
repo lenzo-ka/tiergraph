@@ -83,17 +83,36 @@ model and a versioned interchange format.
 
 ## What you can do with it
 
-- Build a graph directly, or record an ordered edit stream as a `Program` and run
-  it — see [construction](docs/guide/construction.md).
-- Select and traverse the structure, including ordered containment — see
-  [selection and traversal](docs/guide/selection-and-traversal.md).
-- Fold a dependency graph with a semiring to measure or recognize it — see
-  [folding](docs/guide/folding.md) and [recognize and act](docs/guide/recognize-and-act.md).
-- Attach a clock profile and resolve physical timing — see [timing](docs/guide/timing.md).
-- Serialize to canonical JSON or render Graphviz DOT — see
-  [serialization](docs/guide/serialization.md).
-- Project segmentation graphs into deterministic span views for JSON, JSON Lines,
-  text, HTML, or DOT — see [span views](docs/guide/span-views.md).
+**Hold aligned layers without drift.** One store, computed views. This is the base
+case and covers most use. Build a graph directly, or record an ordered edit stream
+as a `Program` and run it — see [construction](docs/guide/construction.md).
+
+**Answer structural questions by traversal.** Selection with set algebra, `Walk`
+over declared relation incidence, ordered containment. Replaces hand-written index
+arithmetic — see [selection and traversal](docs/guide/selection-and-traversal.md).
+
+**Measure and recognize by fold.** A fold evaluates an acyclic dependency relation
+with a semiring you supply: min-plus for least cost, counting for path counts,
+boolean for recognition, path semirings for witnesses. This is the capability with
+no common substitute — most alternatives make you write the traversal and the
+accumulation by hand, separately, for each question. See
+[folding](docs/guide/folding.md) and
+[recognize and act](docs/guide/recognize-and-act.md).
+
+**Interchange that does not rot.** Canonical JSON, explicit format and machine
+version stamps, a SHA-pinned schema. Documents round-trip, and two graphs differing
+only in input order serialize identically — see
+[serialization](docs/guide/serialization.md).
+
+Timing and projection build on those: attach a clock profile to resolve physical
+timing ([timing](docs/guide/timing.md)), or project segmentation graphs into
+deterministic span views for JSON, JSON Lines, text, HTML, or DOT
+([span views](docs/guide/span-views.md)).
+
+It is not good for unordered graphs, for mutable working stores with high edit
+rates, or for anything whose layer structure is not known in advance. `Graph` is a
+frozen value validated when it is built; an edit-heavy workload should record a
+`Program` and execute it once.
 
 ## Command line
 
