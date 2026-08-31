@@ -1281,6 +1281,27 @@ def test_removal_orphans_fact_and_flatten_refuses() -> None:
         edited.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
 
 
+def test_durable_item_layer_subject_orphans_and_invalid_subject_refuses_typed() -> None:
+    """REGRESSION (F5): durable layer identity does not veto base removal."""
+    layer = Layer(
+        SOURCE_A,
+        (LayerFact(DurableItemRef("w0"), value(AttributeDomain.ITEM, "gone")),),
+    )
+    edited = (
+        graph_with_layers(layer).remove_relation(0).remove_item(DurableItemRef("w0"))
+    )
+    assert edited.layers[0].facts[0].subject == OrphanedSubject(
+        WORDS, ItemRef(WORDS, 0)
+    )
+
+    invalid = Layer(
+        SOURCE_A,
+        (LayerFact(DurableItemRef("missing"), value(AttributeDomain.ITEM, "invalid")),),
+    )
+    with pytest.raises(GraphValidationError, match="unknown durable item id 'missing'"):
+        graph_with_layers(invalid)
+
+
 # REGRESSION: predicted FAIL against the parent because layers and seals cannot coexist there.
 def test_seal_vetoes_even_where_layer_would_allow_edit() -> None:
     layer = Layer(

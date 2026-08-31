@@ -314,6 +314,22 @@ def test_stationary_maps_every_position_to_itself() -> None:
     assert stationary.polyadic_relations == {index: index for index in range(3)}
 
 
+def test_displacement_refuses_a_position_both_mapped_and_departed() -> None:
+    """REGRESSION (F7): each source-space partition is exclusive."""
+    coordinate = ItemRef(TIER, 0)
+    with pytest.raises(GraphValidationError, match="both mapped and departed"):
+        Displacement(
+            {coordinate: coordinate},
+            {},
+            {},
+            {},
+            frozenset({coordinate}),
+            frozenset(),
+            frozenset(),
+            frozenset(),
+        )
+
+
 def test_relation_removals_shift_both_graph_wide_index_spaces() -> None:
     """REGRESSION (parent: dependency): removal supplies the two missing maps."""
     editor = graph_with_spaces().edit()
