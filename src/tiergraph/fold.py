@@ -351,6 +351,27 @@ class FoldCertificate[Value]:
     derivations: int
     compared: bool
 
+    def to_data(self, semiring: Semiring[Value]) -> dict[str, object]:
+        """Return deterministic strict-JSON data.
+
+        The semiring is required for the same reason ``FoldResult.to_data``
+        requires it: the carrier is arbitrary and only its algebra knows how to
+        encode a value of it.
+
+        ``compared`` and ``probes`` both survive serialization deliberately. A
+        certificate that reported only its exactness would let a claim that
+        stood on a law search alone read identically to one measured against
+        every derivation, which is exactly the distinction this type exists to
+        keep.
+        """
+        return {
+            "exactness": self.exactness.value,
+            "result": self.result.to_data(semiring),
+            "probes": self.probes,
+            "derivations": self.derivations,
+            "compared": self.compared,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class FoldDeclaration[Value]:

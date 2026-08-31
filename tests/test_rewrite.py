@@ -35,6 +35,7 @@ from tiergraph import (
     RelationSideDeclaration,
     RewriteDeclaration,
     RewriteEffect,
+    SealCertificate,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -670,3 +671,18 @@ def test_the_certificate_reports_how_much_the_claim_was_held_to() -> None:
     assert certificate.disturbances == 0
     rich = RewriteDeclaration("rich", BASE, BASE, RewriteEffect.DECORATE).check_effect()
     assert rich.subjects > certificate.subjects
+
+
+def test_seal_certificate_serialization_carries_both_counts() -> None:
+    """REGRESSION: a vacuous pass stays visible on the wire.
+
+    ``sealed_members`` counts only durably-identified members, so zero is an
+    explicit vacuous pass rather than evidence that anonymous geometry held. A
+    wire form carrying only one of the two counts would hide either that fact or
+    how much was under seal to begin with.
+    """
+    vacuous = SealCertificate(carriers=2, sealed_members=0)
+    assert vacuous.to_data() == {"carriers": 2, "sealed_members": 0}
+
+    real = SealCertificate(carriers=2, sealed_members=5)
+    assert real.to_data() == {"carriers": 2, "sealed_members": 5}

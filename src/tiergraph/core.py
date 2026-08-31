@@ -222,6 +222,17 @@ class SealCertificate:
     carriers: int
     sealed_members: int
 
+    def to_data(self) -> dict[str, int]:
+        """Return deterministic strict-JSON data.
+
+        Both counts are carried because either alone misleads. ``carriers``
+        without ``sealed_members`` hides a vacuous pass; ``sealed_members``
+        without ``carriers`` hides how much was under seal to begin with. A
+        reader deciding what this certificate is worth needs the ratio, not
+        either half.
+        """
+        return {"carriers": self.carriers, "sealed_members": self.sealed_members}
+
 
 @dataclass(frozen=True, slots=True)
 class NamespaceDeclaration:
