@@ -10,6 +10,16 @@ secrecy: the salt is tracked so CI can reproduce digests from a clean checkout.
 A reader can confirm a name they already guess in milliseconds, and a short
 lowercase name falls to an ordinary dictionary sweep.
 
+Matching covers the name rather than the bare-token shape of it: every prefix
+and suffix of each alphanumeric run is tested, and runs a short separator apart
+are joined, so an inflection (`{name}s`), a compound (`my{name}`, `{name}Client`)
+and a split spelling (`{na}-{me}`) are all refused. What remains uncovered is an
+occurrence buried inside a longer run, which is not how the name gets written by
+accident and would cost quadratically per run to reach; that limit has its own
+test rather than being left implied. The affix sweep raises the false-positive
+risk for any listed name that also prefixes ordinary vocabulary, which is a
+further reason short names are poor denylist entries.
+
 A denylist pins the spellings listed, so a sibling nobody listed is still
 invisible in bare prose. A name that is also ordinary vocabulary cannot be listed
 without false positives. Inverting this check -- allowlisting known-good prose
@@ -188,6 +198,14 @@ SELF = Path(__file__).name
 EXEMPT_NAMES: frozenset[str] = frozenset({SELF})
 ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE = re.compile(r"[A-Za-z0-9]+")
+# A run shorter than two characters is not a repository name, and one longer
+# than sixty-four is not either; both bounds exist to keep the affix sweep flat.
+MIN_NAME_LENGTH = 2
+MAX_NAME_LENGTH = 64
+# How far apart two runs may sit and still spell one name, and how many runs one
+# spelling may span: `side-kick` is two runs one separator apart.
+MAX_JOIN_GAP = 2
+MAX_JOIN_RUNS = 3
 DENIED_DIGESTS_PATH: Path = ROOT / "denied-name-digests.txt"
 
 
@@ -277,17 +295,62 @@ def denied_digests(path: Path) -> Denylist:
     return Denylist(salt=salt, digests=frozenset(digests))
 
 
+def _affixes(token: str) -> set[str]:
+    """Return every prefix and suffix of one run, within the name-length bounds.
+
+    Affixes, not every substring: the accidental spellings of a denied name are
+    an inflection or a compound at one end of a token -- ``{name}s``,
+    ``my{name}``, ``{name}Client`` -- while a name buried inside a longer run is
+    not how anyone writes it by mistake. Affixes cost ``2n`` candidates for a run
+    of length ``n`` against the ``n(n+1)/2`` of every substring, and the length
+    bounds hold the per-run cost flat over the long alphanumeric runs shipped
+    text really contains, such as the 64-character digests in the denylist.
+    """
+    bounded = range(MIN_NAME_LENGTH, min(len(token), MAX_NAME_LENGTH) + 1)
+    return {token[:length] for length in bounded} | {
+        token[len(token) - length :] for length in bounded
+    }
+
+
+def _joined_runs(text: str, matches: list[re.Match[str]], start: int) -> set[str]:
+    """Return the run at `start` joined with the runs that follow it closely.
+
+    Catches a name split by a separator its author chose and the repository did
+    not -- ``side-kick``, ``side_kick``, ``side kick`` -- which tokenizes into
+    pieces that individually digest to nothing. The gap and run bounds are what
+    keep this a spelling rather than a coincidence: two runs on either side of a
+    paragraph break are not a way of writing one name. A join is not length-bounded
+    the way an affix is: at most three runs can combine, so the cost is already
+    bounded, and a join longer than any denied name simply fails to match.
+    """
+    joined: set[str] = set()
+    value = matches[start].group(0).lower()
+    previous_end = matches[start].end()
+    for match in matches[start + 1 : start + MAX_JOIN_RUNS]:
+        separator = text[previous_end : match.start()]
+        if len(separator) > MAX_JOIN_GAP or "\n" in separator:
+            break
+        value += match.group(0).lower()
+        joined.add(value)
+        previous_end = match.end()
+    return joined
+
+
 def name_leaks(path: Path, denylist: Denylist) -> list[str]:
     """Return one line-numbered message per denied name in one shipped file."""
     text = shipped_text(path)
-    # Maximal runs preserve the old case-insensitive, alphanumeric-boundary
-    # regex behavior for every name that digest() accepts.
-    return [
-        f"{path}:{text.count(chr(10), 0, match.start()) + 1}: "
-        "a denied name written in shipped text"
-        for match in CANDIDATE.finditer(text)
-        if digest(match.group(0), denylist.salt) in denylist.digests
-    ]
+    matches = list(CANDIDATE.finditer(text))
+    findings: list[str] = []
+    for position, match in enumerate(matches):
+        candidates = _affixes(match.group(0).lower())
+        candidates |= _joined_runs(text, matches, position)
+        if any(
+            digest(candidate, denylist.salt) in denylist.digests
+            for candidate in candidates
+        ):
+            line = text.count(chr(10), 0, match.start()) + 1
+            findings.append(f"{path}:{line}: a denied name written in shipped text")
+    return findings
 
 
 def _url_prefix(value: str) -> str:
