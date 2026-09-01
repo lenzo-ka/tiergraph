@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tarfile
 from collections.abc import Callable
@@ -570,6 +571,41 @@ def test_every_file_in_the_built_distribution_is_gated(
     # The build has to have produced something, or the assertion above is vacuous.
     assert "pyproject.toml" in members
     assert "SECURITY.md" in members
+
+
+def test_nothing_under_the_local_agent_directory_can_reach_the_distribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION: `.claude/` stays out of the distribution, proved on a live file.
+
+    This project's git worktrees live under `.claude/worktrees/<name>/`, and a
+    worktree is a full second copy of the repository. The backend selects the
+    working tree minus what version control ignores and never asks git what is
+    tracked, so while that directory was unignored a copy shipped whole, every
+    file of it unread: the gate reads the index, and a worktree is not in it.
+
+    A checkout with no `.claude/` satisfies any claim about the distribution's
+    members for free, and a CI checkout is exactly that, so this plants a file
+    there and then asks. What holds the directory out is one line in
+    `.gitignore` -- the size of line a later change drops without noticing,
+    which is why the claim is worth a test of its own rather than being left to
+    the membership check above.
+    """
+    monkeypatch.chdir(check_tracked_clean.ROOT)
+    local = check_tracked_clean.ROOT / ".claude"
+    # A developer's own `.claude/` holds live worktrees, so the cleanup below
+    # removes the topmost directory this test had to create and nothing above it.
+    created = local if not local.is_dir() else local / "sentinel-worktree"
+    planted = local / "sentinel-worktree" / "CONTRIBUTING.md"
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_text("Local scratch that must never ship.\n", encoding="utf-8")
+    try:
+        members = _distribution_members(tmp_path)
+    finally:
+        shutil.rmtree(created)
+    assert [name for name in members if name.startswith(".claude/")] == []
+    # The build has to have produced something, or the assertion above is vacuous.
+    assert "pyproject.toml" in members
 
 
 @pytest.mark.parametrize(

@@ -20,3 +20,15 @@ uv.lock
 # would place one deliberately. A contributor's machine-local global ignore
 # file is not a property of this repository, so this repository says it too.
 .DS_Store
+# Where this project's git worktrees live, one full copy of the repository per
+# worktree. The build backend selects the working tree minus what version
+# control ignores and never asks git what is tracked, so while this was
+# unignored a worktree shipped whole -- and arrived unread, because the
+# publishability gate reads the index and a worktree is not in it.
+#
+# Anchored deliberately. The backend drops every exclusion pattern it holds if
+# the pattern set matches the build root's own absolute path, and an unanchored
+# `.claude/` matches that component wherever it sits -- so building from inside
+# a worktree here would silently ship everything this file excludes. The leading
+# slash names the one directory meant, at the root where it lives.
+/.claude/
