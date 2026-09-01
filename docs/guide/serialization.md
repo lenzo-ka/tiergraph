@@ -7,13 +7,15 @@ document whose `format_version` it does not implement rather than migrating it
 silently.
 
 Graph-contract validation performed while `loads()` reconstructs an immutable
-graph raises `GraphValidationError`, a `ValueError` subclass. Decoding is one
-construction boundary among several rather than the only one: the editing
-operations on `Graph` and `GraphEditor` build a graph as well, and refuse with
-the same error. Invalid lookup, resolution, and profile arguments against an
-already-valid `Graph` remain plain `ValueError`, and wrong Python argument kinds
-may raise `TypeError`. See [Construction](construction.md#error-boundary) for
-the whole boundary.
+graph raises `GraphValidationError`, a `Refusal` and so a `ValueError`
+subclass; it is the last rank of the
+[refusal order](../format.md#refusal-order), which `except Refusal` catches
+whole. Decoding is one construction boundary among several rather than the only
+one: the editing operations on `Graph` and `GraphEditor` build a graph as well,
+and refuse with the same error. Invalid lookup, resolution, and profile
+arguments against an already-valid `Graph` remain plain `ValueError` carrying no
+stage, and wrong Python argument kinds may raise `TypeError`. See
+[Construction](construction.md#error-boundary) for the whole boundary.
 
 ## JSON round-trip
 

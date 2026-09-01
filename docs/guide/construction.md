@@ -310,11 +310,14 @@ rewrite because a pair of graphs is the only place it can be true.
 ## Error boundary
 
 Invalid declarations or graph content at a graph-construction boundary raise
-`GraphValidationError`, a subclass of `ValueError`. This includes validation
-performed while decoding a serialized document into a graph. Once a `Graph` is
-valid, invalid arguments to the lookup, resolution, and promotion methods
-`resolve_item()`, `boundaries()`, and `promote_item()` deliberately remain plain
-`ValueError`; wrong Python argument kinds may raise `TypeError`. The editing
+`GraphValidationError`, a subclass of `Refusal` and so of `ValueError`, carrying
+the stage the [refusal order](../format.md#refusal-order) declares. This
+includes validation performed while decoding a serialized document into a graph.
+Once a `Graph` is valid, invalid arguments to the lookup, resolution, and
+promotion methods `resolve_item()`, `boundaries()`, and `promote_item()`
+deliberately remain plain `ValueError` and carry no stage, because a lookup
+against an already-valid graph is not a reading of a document; wrong Python
+argument kinds may raise `TypeError`. The editing
 operations on `Graph` and `GraphEditor` refuse with `GraphValidationError`,
 because each one is a construction boundary: the frozen carrier builds a graph
 on the spot, and the editor builds one at `freeze()`. The build machine reports

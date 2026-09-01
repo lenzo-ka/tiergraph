@@ -63,18 +63,63 @@ class RefusalStage(IntEnum):
     SEMANTICS = 9
 
 
-class GraphValidationError(ValueError):
+class Refusal(ValueError):
+    """Refuse one read, naming its stage and every further applicable condition.
+
+    ``stage`` places the refusal in the declared total order, and ``also``
+    carries the conditions that remain applicable once this one is known, each a
+    refusal in its own right.  Both are data rather than prose, so a caller acts
+    on the order without matching message text.  Both are declared on the class
+    as well as assigned, so a caller reads them as fields of what it caught
+    rather than recovering them with ``getattr``.
+
+    This is the one base every staged refusal has.  The order is published as
+    governing every document reader this package exposes, so ``except Refusal``
+    has to catch all of it: a base that covered a prefix of the order would send
+    a caller who read the declaration past the ranks it left out.  Subclasses
+    say which channel refused, never which ranks a caller has to expect.
+
+    A ``Refusal`` is a ``ValueError``, so every caller that already catches one
+    still does.
+
+    It is declared here, beside ``RefusalStage`` and for the same reason: this
+    module is the base every other imports, so the channel that refuses from
+    here can share the base without the cycle that reaching upward would create.
+    """
+
+    stage: RefusalStage
+    also: tuple[Refusal, ...]
+
+    def __init__(
+        self,
+        stage: RefusalStage,
+        message: str,
+        also: Iterable[Refusal] = (),
+    ) -> None:
+        """Record the stage and the further conditions that still apply."""
+        super().__init__(message)
+        self.stage = stage
+        self.also = tuple(also)
+
+
+class GraphValidationError(Refusal):
     """Report a declaration or graph-contract validation failure.
 
     A caller meets refusals from two channels and should have to learn one
-    vocabulary, so this failure carries the same ``stage`` a ``Refusal`` does,
-    as data rather than prose.  The stage defaults to ``SEMANTICS`` because a
-    violated declaration or graph contract is semantic by nature: the document
-    parsed, its shapes held, and what it says is still not sayable.  A site with
-    a sharper condition names it, and the default keeps every other site
-    correct without restating what it already means.  The message stays first so
-    an existing raise reads unchanged.  This is still a ``ValueError``, so every
-    caller that already catches one still does.
+    vocabulary, so this failure ranks in the same order under the same base, and
+    carries its ``stage`` as data rather than prose.  The stage defaults to
+    ``SEMANTICS`` because a violated declaration or graph contract is semantic
+    by nature: the document parsed, its shapes held, and what it says is still
+    not sayable.  Every raise site in this package takes that default; a site
+    whose condition is sharper may name one, and the argument is kept for that
+    reason and for a caller constructing one of these itself.  The message stays
+    first so an existing raise reads unchanged.
+
+    A graph contract is one condition about the whole graph rather than a node
+    whose siblings are still judged, so ``also`` is empty here.
+
+    This is still a ``ValueError``, so every caller that already catches one
+    still does.
     """
 
     def __init__(
@@ -83,8 +128,7 @@ class GraphValidationError(ValueError):
         stage: RefusalStage = RefusalStage.SEMANTICS,
     ) -> None:
         """Record the stage this failure belongs to beside its wording."""
-        super().__init__(message)
-        self.stage = stage
+        super().__init__(stage, message)
 
 
 class AttributeDomain(StrEnum):

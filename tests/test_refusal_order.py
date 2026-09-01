@@ -317,15 +317,40 @@ def test_each_document_reading_stage_is_reachable(
     declaration and reachable by nothing fails here rather than joining
     quietly.
 
-    The refusals are read as staged `ValueError`s because the last stage is
-    where the graph constructor judges the document, and it reports through
-    `GraphValidationError`, which carries the same stage without being a
-    `Refusal`.
+    The refusals are read as `ValueError`s here because that is the guarantee
+    every reader in this package made before the stage existed, and this test
+    is what says the census did not narrow it.
     """
     assert {declared for _, declared in DOCUMENT_STAGES} == set(RefusalStage)
     with pytest.raises(ValueError) as caught:
         loads(source)
     assert getattr(caught.value, "stage", None) is stage
+
+
+@pytest.mark.parametrize(("source", "stage"), DOCUMENT_STAGES)
+def test_one_except_catches_every_stage_of_the_declared_order(
+    source: str | bytes, stage: RefusalStage
+) -> None:
+    """REGRESSION: `except Refusal` catches the whole order, not a prefix of it.
+
+    The format document publishes one numbered order and names `Refusal` as
+    what carries a stage, so a caller who reads it writes `except Refusal` and
+    believes it covers every rank.  While the last rank arrived through a class
+    that shared no base with `Refusal` but `ValueError`, that caller caught
+    eight of nine and let the ninth escape as an unhandled exception.  The
+    population is `RefusalStage` itself rather than a written-out list, so a
+    stage added to the order and left outside the base fails here.
+
+    The stage and the further conditions are read as attributes rather than
+    through `getattr` or an `isinstance` narrowing, because a caller having to
+    guess whether the exception it caught carries them is the same defect one
+    level down.
+    """
+    assert {declared for _, declared in DOCUMENT_STAGES} == set(RefusalStage)
+    with pytest.raises(Refusal) as caught:
+        loads(source)
+    assert caught.value.stage is stage
+    assert isinstance(caught.value.also, tuple)
 
 
 @pytest.mark.parametrize(
