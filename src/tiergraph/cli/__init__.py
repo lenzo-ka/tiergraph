@@ -18,7 +18,7 @@ import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program, semiring
 from tiergraph import core as _core
 from tiergraph import wire as _wire
-from tiergraph.schema import json_schema, shape_hash
+from tiergraph.schema import Refusal, RefusalStage, json_schema, shape_hash
 
 # The published semiring constants of the supported secondary module, spelled for
 # a shell. The listing command and the fold command share this one mapping, so the
@@ -43,6 +43,27 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     validate = subparsers.add_parser("validate", help="validate a graph document")
     validate.set_defaults(handler=_handle_validate)
     validate.add_argument("file", metavar="FILE", help="graph file, or - for stdin")
+
+    discharge = subparsers.add_parser(
+        "discharge", help="discharge a declaration against its inputs"
+    )
+    discharge_subparsers = discharge.add_subparsers(
+        dest="discharge_command", required=True
+    )
+    seals = discharge_subparsers.add_parser(
+        "seals", help="discharge a source graph's seals against a result graph"
+    )
+    seals.set_defaults(handler=_handle_discharge)
+    seals.add_argument(
+        "file", metavar="SOURCE", help="source graph file, or - for stdin"
+    )
+    seals.add_argument(
+        "--result", required=True, metavar="FILE", help="result graph file"
+    )
+    seals.add_argument(
+        "--name", default="rewrite", metavar="NAME", help="name used in refusals"
+    )
+    _output_argument(seals)
 
     render = subparsers.add_parser("render", help="render a graph as DOT")
     render.set_defaults(handler=_handle_render)
@@ -254,6 +275,92 @@ def _handle_validate(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
     del graph
     _stdout_text("ok\n")
+
+
+def _discharge_seals(args: argparse.Namespace) -> object:
+    """Bind a source graph's seals to the result that claims to honor them.
+
+    The declaration is assembled from flags rather than read from a document of
+    its own, the way ``fold`` assembles its own declaration: both inputs are
+    ordinary graph documents that ``loads`` already validates, and the only part
+    left is a name, which exists so a refusal can say whose claim failed.
+    """
+    _check_distinct(args.result, args.output)
+    source = tiergraph.loads(_read_bytes(args.file))
+    result = tiergraph.loads(_read_bytes(args.result))
+    return tiergraph.SealDeclaration(args.name, source, result).check_seals().to_data()
+
+
+# One entry per capability this verb carries. The four declaration kinds this
+# package publishes take genuinely different inputs -- a pair of graphs here, a
+# graph and a role binding for a profile, a whole valuation for a fold -- so the
+# dispatch is a table of handlers rather than one shared shape they would all
+# have to be bent into. Another capability is one subparser naming its inputs
+# and one entry here returning its certificate's ``to_data()``.
+_DISCHARGES: dict[str, Callable[[argparse.Namespace], object]] = {
+    "seals": _discharge_seals,
+}
+
+
+def _handle_discharge(args: argparse.Namespace) -> int:
+    """Emit the certificate a discharged declaration yields, or its refusal.
+
+    This sits beside ``validate`` rather than inside it. ``validate`` answers
+    whether one document is well formed; this answers whether a declaration
+    holds against its inputs, which is a question about several documents at
+    once and has an answer even when every one of them is well formed.
+
+    A refusal leaves stdout and any ``--output`` file untouched, so an artifact
+    this verb wrote is always a discharged certificate and never a report of
+    failure wearing the same name.
+    """
+    try:
+        certificate = _DISCHARGES[args.discharge_command](args)
+    except (tiergraph.GraphValidationError, Refusal) as error:
+        _refusal_diagnostic(args.command, error)
+        return 1
+    _write_output(args.file, args.output, _json_bytes(certificate))
+    return 0
+
+
+def _refusal_diagnostic(
+    command: str, error: tiergraph.GraphValidationError | Refusal
+) -> None:
+    """Report one staged refusal as a diagnostic line and as data beside it.
+
+    The line keeps this command's stderr readable the way every other command's
+    is; the object after it carries the stage, which a caller acts on and must
+    not have to recover by matching the wording. ``step`` already writes its
+    extra refusal detail to stderr after the same diagnostic line, so this is
+    the shape a reader of this CLI's failures already meets.
+    """
+    _diagnostic(command, type(error).__name__, error)
+    sys.stderr.write(_json_text({"refusal": _refusal_data(error)}))
+
+
+def _refusal_data(error: tiergraph.GraphValidationError | Refusal) -> dict[str, object]:
+    """Encode one refusal's declared stage, its rank, and any further condition.
+
+    The stage is carried twice because either half alone forces the reader to
+    supply the other: ``stage`` names the class of condition, and ``rank`` is its
+    place in the declared total order, which is what says that this refusal
+    explains the ones a later stage would have reported. ``also`` carries the
+    conditions that stay applicable once this one is known, each with its own
+    stage, so a document that meets two conditions is read as two rather than as
+    one sentence mentioning both.
+    """
+    also = error.also if isinstance(error, Refusal) else ()
+    return {
+        "stage": _stage_name(error.stage),
+        "rank": int(error.stage),
+        "message": str(error),
+        "also": [_refusal_data(entry) for entry in also],
+    }
+
+
+def _stage_name(stage: RefusalStage) -> str:
+    """Spell one refusal stage the way this CLI spells every other enum member."""
+    return stage.name.lower()
 
 
 def _handle_render(args: argparse.Namespace) -> None:
@@ -840,7 +947,13 @@ def _graph_report_bytes(graph: tiergraph.Graph, rendered: str) -> bytes:
     return rendered.encode("utf-8")
 
 
-def _json_bytes(value: object) -> bytes:
+def _json_text(value: object) -> str:
+    """Render one report as the CLI's canonical JSON text.
+
+    Split from ``_json_bytes`` because stderr is a text stream: a diagnostic
+    written there must not have to encode and be decoded again, and both
+    channels stay one refusal rule and one spelling.
+    """
     _wire._refuse_unencodable_strings(cast(_core.JsonValue, value), "")
     return (
         json.dumps(
@@ -851,7 +964,11 @@ def _json_bytes(value: object) -> bytes:
             sort_keys=True,
         )
         + "\n"
-    ).encode("utf-8")
+    )
+
+
+def _json_bytes(value: object) -> bytes:
+    return _json_text(value).encode("utf-8")
 
 
 def _step_bytes(step: Step) -> bytes:

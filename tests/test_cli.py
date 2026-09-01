@@ -231,6 +231,145 @@ def test_select_help_retires_the_query_spelling(
     assert "query" not in select_help
 
 
+SEAL_TIER = QualifiedName("urn:seal", "word")
+
+
+def _sealed_source(tmp_path: Path) -> tuple[Path, tiergraph.Graph]:
+    """Write a source graph whose first two word coordinates are under seal."""
+    graph = tiergraph.Graph(
+        (NamespaceDeclaration("s", "urn:seal"),),
+        (
+            Tier(
+                TierDeclaration(SEAL_TIER, "Words"),
+                (Item("w0"), Item("w1"), Item("w2")),
+            ),
+        ),
+        (),
+    ).seal(SEAL_TIER, 2)
+    source = tmp_path / "source.json"
+    source.write_bytes(tiergraph.dump_bytes(graph))
+    return source, graph
+
+
+def _refusal_report(captured: str) -> Any:
+    """Read the JSON refusal object that follows the stderr diagnostic line."""
+    line, report = captured.split("\n", 1)
+    assert line.startswith("tiergraph: discharge: ")
+    return json.loads(report)
+
+
+def test_discharge_seals_certifies_a_result_that_honors_the_seal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An edit beyond the seal is discharged, and the counts stay the seal's own."""
+    source, graph = _sealed_source(tmp_path)
+    result = tmp_path / "result.json"
+    result.write_bytes(
+        tiergraph.dump_bytes(graph.insert_item(SEAL_TIER, 3, Item("w3")))
+    )
+
+    assert main(["discharge", "seals", str(source), "--result", str(result)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"carriers": 1, "sealed_members": 2}
+
+
+def test_discharge_seals_reports_a_breach_stage_as_data(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A moved sealed member refuses at SEMANTICS and writes no output file."""
+    source, graph = _sealed_source(tmp_path)
+    tier = graph.tiers[0]
+    breached = tmp_path / "breached.json"
+    breached.write_bytes(
+        tiergraph.dump_bytes(
+            replace(
+                graph,
+                tiers=(
+                    replace(
+                        tier,
+                        items=(tier.items[0], Item("replacement"), tier.items[2]),
+                    ),
+                ),
+            )
+        )
+    )
+    output = tmp_path / "certificate.json"
+
+    assert (
+        main(
+            [
+                "discharge",
+                "seals",
+                str(source),
+                "--result",
+                str(breached),
+                "--name",
+                "replace-word",
+                "-o",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    report = _refusal_report(captured.err)["refusal"]
+    assert (report["stage"], report["rank"], report["also"]) == ("semantics", 9, [])
+    assert "carried durable id 'w1'" in report["message"]
+    assert "replace-word" in report["message"]
+    assert not output.exists()
+
+
+def test_discharge_seals_carries_every_condition_of_a_refused_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A result document meeting two conditions reports both, each with its stage."""
+    source, _ = _sealed_source(tmp_path)
+    document = json.loads(source.read_bytes())
+    del document["graph"]
+    document["aa"] = 1
+    document["zz"] = 2
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(json.dumps(document), encoding="utf-8")
+
+    assert main(["discharge", "seals", str(source), "--result", str(malformed)]) == 1
+    report = _refusal_report(capsys.readouterr().err)["refusal"]
+    assert (report["stage"], report["rank"]) == ("shape", 6)
+    assert [(entry["stage"], entry["message"]) for entry in report["also"]] == [
+        ("shape", "document has unknown fields ['aa', 'zz']")
+    ]
+
+
+def test_discharge_reports_a_stage_only_where_the_refusal_declares_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unnamed declaration and an unreadable input keep their own exit codes."""
+    source, graph = _sealed_source(tmp_path)
+    result = tmp_path / "result.json"
+    result.write_bytes(tiergraph.dump_bytes(graph))
+
+    assert (
+        main(["discharge", "seals", str(source), "--result", str(result), "--name", ""])
+        == 1
+    )
+    unnamed = capsys.readouterr().err
+    assert "must not be empty" in unnamed
+    assert '"stage"' not in unnamed
+
+    assert (
+        main(
+            [
+                "discharge",
+                "seals",
+                str(source),
+                "--result",
+                str(tmp_path / "absent.json"),
+            ]
+        )
+        == 3
+    )
+    assert '"stage"' not in capsys.readouterr().err
+
+
 def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
     """Spell the fixture's simple structural item or boundary path."""
     return f"/{kind}/structural/{namespace}/{local}/{index}"
@@ -1012,11 +1151,12 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,render,inspect,convert,schema,run,step,walk,path,grammar,"
-        "clock,span,select,fold,semirings}" in capsys.readouterr().out
+        "{validate,discharge,render,inspect,convert,schema,run,step,walk,path,"
+        "grammar,clock,span,select,fold,semirings}" in capsys.readouterr().out
     )
     for command in (
         "validate",
+        "discharge",
         "render",
         "inspect",
         "convert",
@@ -1043,6 +1183,7 @@ def test_version_default_help_and_every_command_help(
     )
     assert list(action.choices) == [
         "validate",
+        "discharge",
         "render",
         "inspect",
         "convert",
@@ -1939,7 +2080,7 @@ def test_cli_output_emitters_are_audited() -> None:
         ("_handle_schema", "encode"),
         ("_graph_bytes", "encode"),
         ("_graph_report_bytes", "encode"),
-        ("_json_bytes", "json.dumps"),
+        ("_json_text", "json.dumps"),
         ("_json_bytes", "encode"),
         ("_step_bytes", "json.dumps"),
         ("_step_bytes", "encode"),

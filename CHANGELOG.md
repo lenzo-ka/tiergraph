@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `discharge`, the command-line verb for declarations. It sits beside
+  `validate` rather than inside it: `validate` asks whether one document is
+  well formed, and `discharge` asks whether a declaration holds against its
+  inputs. `discharge seals` binds a source graph's seals to the result graph
+  claiming to honor them and emits the public `SealCertificate.to_data()`
+  counts. A refused discharge writes no certificate and reports the refusal's
+  declared stage, its rank in the refusal order, and any further applicable
+  condition as JSON on stderr, so a caller routes on the stage instead of
+  matching wording. No graph document is written or read differently.
 - Added enum-member emission and made `NodeSet` ordering an explicit contract (#71).
 - Added a public editing API: one operation set over two carriers. A frozen
   `Graph` answers `declare`, `set_attribute`, `remove_attribute`, `insert_item`,

@@ -37,12 +37,13 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
+                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
                  ...
 
 positional arguments:
-  {validate,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
+  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
     validate            validate a graph document
+    discharge           discharge a declaration against its inputs
     render              render a graph as DOT
     inspect             inspect a graph document
     convert             canonicalize a graph document
@@ -73,6 +74,36 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
+```
+
+### `tiergraph discharge`
+
+```text
+usage: tiergraph discharge [-h] {seals} ...
+
+positional arguments:
+  {seals}
+    seals     discharge a source graph's seals against a result graph
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `tiergraph discharge seals`
+
+```text
+usage: tiergraph discharge seals [-h] --result FILE [--name NAME] [-o FILE]
+                                 SOURCE
+
+positional arguments:
+  SOURCE                source graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --result FILE         result graph file
+  --name NAME           name used in refusals
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph render`
