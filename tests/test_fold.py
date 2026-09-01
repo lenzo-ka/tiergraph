@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from decimal import Decimal
 from typing import cast
 
@@ -31,6 +31,7 @@ from tiergraph import (
 from tiergraph.fold import (
     AttributeValuation,
     ChildCombination,
+    FoldCost,
     FoldDeclaration,
     FoldHomomorphism,
     FoldTransition,
@@ -515,7 +516,29 @@ def test_plain_tropical_carrier_accumulates_provenance_and_applies_ties() -> Non
 
 
 def test_cost_bound_uses_each_distinct_measured_quantity() -> None:
-    """Deleting any of D, R, I, C, or capped output invalidates the exact account."""
+    """Deleting any of D, R, I, C, or capped output invalidates the exact account.
+
+    "Each quantity" is `FoldCost`'s own fields less the counters the bound does
+    not read, so a field added to the account is classified here rather than
+    inheriting the claim.  The capped term is `min(W, K)`, and one fixture
+    where the two are equal cannot tell that from either term alone, so the
+    same fold is run on both sides of the cap.
+    """
+    counters = {
+        "carrier_additions",
+        "carrier_multiplications",
+        "emitted_count",
+        "witness_operations",
+        "ranked_multiplications",
+    }
+    assert {field.name for field in fields(FoldCost)} - counters == {
+        "document_size",
+        "relation_incidence",
+        "index_product_size",
+        "carrier_operation_cost",
+        "witness_count",
+        "output_cap",
+    }
     base = declaration("tie")
     extra_name = FIXTURE.name("excluded")
     extra = Tier(TierDeclaration(extra_name, "Excluded"), (Item("extra"),))
@@ -549,6 +572,22 @@ def test_cost_bound_uses_each_distinct_measured_quantity() -> None:
     for deleted_term in terms:
         with pytest.raises(AssertionError):
             assert cost.measured_work == cost.bound - deleted_term
+
+    capped: dict[int, int] = {}
+    for cap in (1, 3):
+        run = (
+            replace(base, graph=graph, carrier_operation_cost=7, output_cap=cap)
+            .run()
+            .cost
+        )
+        structural = (
+            (run.document_size + run.relation_incidence)
+            * run.index_product_size
+            * run.carrier_operation_cost
+        )
+        assert run.witness_count == 2
+        capped[cap] = run.bound - structural
+    assert capped == {1: 1, 3: 2}
 
 
 class ForbiddenInspectionSemiring:
@@ -730,8 +769,24 @@ def test_valuation_declaration_refusals() -> None:
         wrong_domain.declaration_type(document_graph)
 
 
+VALUE_KIND_READINGS: dict[XsdType, tuple[str, object]] = {
+    XsdType.INTEGER: ("3", Decimal("3")),
+    XsdType.DECIMAL: ("1.5", Decimal("1.5")),
+    XsdType.DOUBLE: ("2.5", 2.5),
+    XsdType.BOOLEAN: ("true", True),
+    XsdType.STRING: ("text", "text"),
+}
+
+
 def test_valuation_reads_every_admitted_xsd_value_kind() -> None:
-    """Typed lexical values become the corresponding Python input to a lift."""
+    """Typed lexical values become the corresponding Python input to a lift.
+
+    "Every kind" is `XsdType` itself rather than the three someone wrote down,
+    so a kind admitted by the declaration and read by nothing fails here.  The
+    two decimal kinds were outside the written list while the reader's own
+    `Decimal` branch answered for both of them.
+    """
+    assert set(VALUE_KIND_READINGS) == set(XsdType)
     graph = FIXTURE.graph()
     reference = graph.canonical_items()[0]
     with pytest.raises(ValueError, match="excludes tier"):
@@ -741,11 +796,7 @@ def test_valuation_reads_every_admitted_xsd_value_kind() -> None:
     with pytest.raises(ValueError, match="lacks attribute"):
         valuation("missing").read(graph, reference)
 
-    for value_type, lexical, expected in (
-        (XsdType.DOUBLE, "2.5", 2.5),
-        (XsdType.BOOLEAN, "true", True),
-        (XsdType.STRING, "text", "text"),
-    ):
+    for value_type, (lexical, expected) in VALUE_KIND_READINGS.items():
         field = FIXTURE.name(f"field-{value_type.value}")
         item = Item("only", (AttributeValue(field, value_type, lexical),))
         tier = Tier(graph.tiers[0].declaration, (item,))

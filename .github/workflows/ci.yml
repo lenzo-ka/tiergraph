@@ -81,11 +81,25 @@ jobs:
       # second.
       - run: python scripts/check_tracked_clean.py
       # Everything below is expensive -- the suite under three hash seeds,
-      # coverage, strict types, schema and documentation currency -- and depends
-      # only on code, documentation, the schema, and the build files. A change
-      # confined to release notes or the release workflow cannot affect it, so it
-      # stays filtered, and the job still reports success so the required check
-      # does not hang.
+      # coverage, strict types, schema and documentation currency -- so it stays
+      # filtered to the paths its steps read, and the job still reports success
+      # so the required check does not hang.
+      #
+      # The list is hand-maintained and has been wrong. `corpus/**` was missing
+      # while `format-semantics` loaded every document in it, so a change to
+      # `corpus/accepted-documents.jsonl` reported green in eighteen seconds
+      # without the one gate that reads it ever running. What a step opens
+      # belongs here whether or not it is code: `format-semantics` reads
+      # `corpus/`, and `docs-check` renders `CONTRIBUTING.md` from the makefile's
+      # `gate` target and compares the result, so that file is a generated
+      # artifact and an input, not prose.
+      #
+      # It cannot be made complete, and the design already accounts for that.
+      # `tracked-clean` reads every tracked file, so every tracked file is an
+      # input to `make check`; that is why the publishability gate is hoisted
+      # above this filter and run unconditionally. `format-growth` reads the
+      # release tags rather than any path, which is what `fetch-depth: 0` is for.
+      # This filter covers the steps that do name their inputs.
       - uses: dorny/paths-filter@v3
         id: changes
         with:
@@ -97,10 +111,12 @@ jobs:
               - 'scripts/**'
               - 'docs/**'
               - 'schema/**'
+              - 'corpus/**'
               - 'pyproject.toml'
               - 'Makefile'
               - 'README.md'
               - 'CHANGELOG.md'
+              - 'CONTRIBUTING.md'
               - 'denied-name-digests.txt'
               - '.github/workflows/ci.yml'
       # make check builds its own environment, so CI runs the same path as a

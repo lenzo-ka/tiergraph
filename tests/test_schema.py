@@ -491,18 +491,33 @@ def test_validator_names_every_scalar_construction_it_refuses() -> None:
     covered by its minimum facet and BOOLEAN by the codec's wording, so the
     validator's own spelling for both went unread, and one of them said 'a
     integer'. Every realized scalar leaf is walked instead.
+
+    The scalar kinds are `ShapeKind` minus its three composite arms rather than
+    a set written out here, because the closing assertion otherwise measures
+    the hand-written dictionary against itself and cannot see a fourth kind.
+    That is how `NULLABLE_STRING` sat outside a test claiming every scalar
+    construction the validator refuses.
     """
     valid = cast(dict[str, object], json.loads(dumps(rich_graph())))
+    scalar_kinds = set(ShapeKind) - {
+        ShapeKind.OBJECT,
+        ShapeKind.ARRAY,
+        ShapeKind.REFERENCE,
+    }
     wrong: dict[ShapeKind, object] = {
         ShapeKind.STRING: 0,
         ShapeKind.INTEGER: "wrong",
         ShapeKind.BOOLEAN: "wrong",
+        ShapeKind.NULLABLE_STRING: 0,
     }
     expected = {
         ShapeKind.STRING: "must be a string",
         ShapeKind.INTEGER: "must be an integer",
         ShapeKind.BOOLEAN: "must be a boolean",
+        ShapeKind.NULLABLE_STRING: "must be a string or null",
     }
+    assert set(wrong) == scalar_kinds
+    assert set(expected) == scalar_kinds
     seen: set[ShapeKind] = set()
     for path, shape in _scalar_paths(valid, DOCUMENT):
         if shape.kind not in wrong:
@@ -516,7 +531,7 @@ def test_validator_names_every_scalar_construction_it_refuses() -> None:
             f"{rendered} {expected[shape.kind]}"
         ]
         seen.add(shape.kind)
-    assert seen == set(wrong)
+    assert seen == scalar_kinds
 
 
 def test_published_schema_declares_its_single_scalar_type_divergence() -> None:

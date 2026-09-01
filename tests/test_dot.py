@@ -451,6 +451,31 @@ def test_each_structural_rendered_string_surface_names_its_field() -> None:
     with pytest.raises(ValueError, match="relation name"):
         tiergraph_dot.dumps(relation_graph)
 
+    # The presentation overrides render through the same boundary and name
+    # their own fields.  Both were outside a test claiming each structural
+    # rendered string surface, and an override is exactly where a caller's own
+    # text reaches the renderer.
+    clean = Graph(
+        (NamespaceDeclaration("d", NS),),
+        (Tier(TierDeclaration(name("tier"), "Tier"), (Item("item"),)),),
+        (SimpleRelationDeclaration(name("members"), name("tier"), item_type),),
+    )
+    assert tiergraph_dot.dumps(clean)
+    with pytest.raises(ValueError, match="item label"):
+        tiergraph_dot.dumps(
+            clean,
+            presentation=tiergraph_dot.DotPresentation(
+                item_label=lambda _item, _tier: "bad\x00label"
+            ),
+        )
+    with pytest.raises(ValueError, match="tier name"):
+        tiergraph_dot.dumps(
+            clean,
+            presentation=tiergraph_dot.DotPresentation(
+                tier_name=lambda _tier: "bad\x00tier-name"
+            ),
+        )
+
 
 def test_clock_view_refuses_its_rendered_unit_lexical_value() -> None:
     """The profile view uses the same quoting/refusal boundary as structure."""
@@ -2009,3 +2034,32 @@ def test_relation_style_hook_is_evaluated_exactly_once_per_relation() -> None:
         f'{_fixture_node_id("/clock/0/segment/0")} [label="contains"'
     )
     assert rendered.count(edge) == 1
+
+    # One relation cannot tell "once per relation" from "once per render", so
+    # the claim is measured again on a graph carrying a second instance: a hook
+    # consulted once for the whole render would report one call here.
+    two = replace(
+        graph,
+        polyadic_relations=(
+            *graph.polyadic_relations,
+            PolyadicRelationInstance(
+                _ik("contains-0"),
+                (ItemRef(_ik("tier-0"), 0),),
+                (ItemRef(_ik("tier-1"), 2),),
+            ),
+        ),
+    )
+    assert len(two.polyadic_relations) == len(graph.polyadic_relations) + 1
+    repeated: list[str] = []
+
+    def counting_style(relation: PolyadicRelationInstance) -> str | None:
+        repeated.append(str(relation.declaration.local_name))
+        return "bipartite"
+
+    tiergraph_dot.dumps(
+        graph=two,
+        clock=_structural_clock(two),
+        presentation=replace(base_presentation, relation_style=counting_style),
+        binding=binding,
+    )
+    assert repeated == ["contains-0", "contains-0"]

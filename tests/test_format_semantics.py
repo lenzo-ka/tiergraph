@@ -26,6 +26,17 @@ def a_document() -> str:
     return dumps(Graph((NamespaceDeclaration("c", NS),), (), ()))
 
 
+def another_document() -> str:
+    """Return a second valid graph, distinct from the minimal one."""
+    return dumps(
+        Graph(
+            (NamespaceDeclaration("c", NS), NamespaceDeclaration("d", NS + ":other")),
+            (),
+            (),
+        )
+    )
+
+
 def corpus_line(document: str, disposition: str = "unadjudicated", **extra: str) -> str:
     """Return one corpus row as it is written to disk."""
     row = {"document": document, "captured_at": "0.2.0", "disposition": disposition}
@@ -97,9 +108,21 @@ def test_read_corpus_skips_blank_lines(tmp_path: Path) -> None:
 
 
 def test_the_gate_passes_when_every_document_still_loads(tmp_path: Path) -> None:
-    """CHARACTERIZATION: green against the release that captured it."""
+    """CHARACTERIZATION: green against the release that captured it.
+
+    A one-row corpus cannot tell "every document loads" from "the first one
+    does": a gate reading only its first entry passes that fixture exactly as a
+    correct one would.  Two distinct documents are written and the entry count
+    is asserted, so the quantifier has something to range over.
+    """
     path = tmp_path / "corpus.jsonl"
-    path.write_text(corpus_line(a_document()) + "\n", encoding="utf-8")
+    documents = (a_document(), another_document())
+    assert len(set(documents)) == len(documents)
+    path.write_text(
+        "".join(corpus_line(document) + "\n" for document in documents),
+        encoding="utf-8",
+    )
+    assert len(check_format_semantics.read_corpus(path)) == len(documents)
     assert check_format_semantics.main(["--corpus", str(path)]) == 0
 
 

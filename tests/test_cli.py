@@ -2398,6 +2398,14 @@ def test_module_entry_point_and_pipelines(tmp_path: Path) -> None:
 def test_every_remaining_opcode_shape_round_trips_through_decoder(
     tmp_path: Path,
 ) -> None:
+    """The primitive shapes no neighboring test drives round-trip through the CLI.
+
+    "Remaining" is the complement of a named set within the machine's own
+    primitive opcode tuple rather than a list someone kept current: an opcode
+    added to the machine is either driven here or declared covered elsewhere,
+    and otherwise fails this assertion instead of shipping undriven.
+    """
+    covered_elsewhere = {DeclareRelation, PromoteItem, PromoteBoundary, Relate}
     ns = "urn:all"
     name = QualifiedName(ns, "name")
     attribute = QualifiedName(ns, "attribute")
@@ -2413,6 +2421,9 @@ def test_every_remaining_opcode_shape_round_trips_through_decoder(
             None,
             AttributeValue(attribute, XsdType.STRING, "value"),
         ),
+    )
+    assert {type(opcode) for opcode in opcodes} == (
+        set(machine._PRIMITIVE_OPCODE_TYPES) - covered_elsewhere
     )
     source = tmp_path / "all.jsonl"
     _program(source, *opcodes)
