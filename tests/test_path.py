@@ -169,46 +169,65 @@ def test_required_kind_is_checked_before_lookup(
     assert caught.value.cause is None
 
 
-@pytest.mark.parametrize(
-    ("text", "code"),
-    [
-        ("/unknown", PathRefusalCode.UNKNOWN_FORM),
-        ("", PathRefusalCode.UNKNOWN_FORM),
-        (
-            "/items/structural/urn:path/tokens/01",
-            PathRefusalCode.NONCANONICAL_SEGMENT,
-        ),
-        (
-            "/items/structural/urn:path/tokens/+1",
-            PathRefusalCode.NONCANONICAL_SEGMENT,
-        ),
-        (
-            "/items/structural/urn:path/tokens/１",
-            PathRefusalCode.NONCANONICAL_SEGMENT,
-        ),
-        (
-            "/items/structural/urn:path/tokens/-1",
-            PathRefusalCode.INVALID_SEGMENT,
-        ),
-        (
-            "/items/structural/urn:path/missing/0",
-            PathRefusalCode.UNKNOWN_TIER,
-        ),
-        (
-            "/items/structural/urn:path/tokens/9",
-            PathRefusalCode.OUT_OF_RANGE,
-        ),
-        ("/items/durable/absent", PathRefusalCode.UNKNOWN_DURABLE_ITEM),
-        (
-            "/positions/durable/item/absent/before",
-            PathRefusalCode.UNKNOWN_DURABLE_ANCHOR,
-        ),
-    ],
+RESOLVER_REFUSALS: tuple[tuple[str, PathRefusalCode], ...] = (
+    ("/unknown", PathRefusalCode.UNKNOWN_FORM),
+    ("", PathRefusalCode.UNKNOWN_FORM),
+    (
+        "/items/structural/urn:path/tokens/01",
+        PathRefusalCode.NONCANONICAL_SEGMENT,
+    ),
+    (
+        "/items/structural/urn:path/tokens/+1",
+        PathRefusalCode.NONCANONICAL_SEGMENT,
+    ),
+    (
+        "/items/structural/urn:path/tokens/１",
+        PathRefusalCode.NONCANONICAL_SEGMENT,
+    ),
+    (
+        "/items/structural/urn:path/tokens/-1",
+        PathRefusalCode.INVALID_SEGMENT,
+    ),
+    (
+        "/items/structural/urn:path/missing/0",
+        PathRefusalCode.UNKNOWN_TIER,
+    ),
+    (
+        "/items/structural/urn:path/tokens/9",
+        PathRefusalCode.OUT_OF_RANGE,
+    ),
+    ("/items/durable/absent", PathRefusalCode.UNKNOWN_DURABLE_ITEM),
+    (
+        "/positions/durable/item/absent/before",
+        PathRefusalCode.UNKNOWN_DURABLE_ANCHOR,
+    ),
 )
+
+
+@pytest.mark.parametrize(("text", "code"), RESOLVER_REFUSALS)
 def test_each_generic_refusal_class_has_a_discriminating_input(
     text: str, code: PathRefusalCode
 ) -> None:
-    """Each input selects its intended refusal class and retains its cause."""
+    """Each input selects its intended refusal class and retains its cause.
+
+    "Each class" is `PathRefusalCode` less two named remainders rather than the
+    codes someone wrote down, so a class added to the vocabulary is either
+    reached by an input here or classified, and otherwise fails.  The reserved
+    code is the one the enum's own docstring says no resolver produces; the
+    rest are answered by the spelling, kind, and alternation tests around this
+    one, which reach them through calls this resolver walk cannot make.
+    """
+    reserved = {PathRefusalCode.BOUNDARY_NOT_IN_PARENT}
+    covered_elsewhere = {
+        PathRefusalCode.MALFORMED_POINTER,
+        PathRefusalCode.WRONG_KIND,
+        PathRefusalCode.UNSPELLABLE,
+        PathRefusalCode.PROFILE_REFUSED,
+        PathRefusalCode.ALTERNATIVE_OUT_OF_RANGE,
+    }
+    assert {declared for _, declared in RESOLVER_REFUSALS} == (
+        set(PathRefusalCode) - reserved - covered_elsewhere
+    )
     with pytest.raises(PathRefusal) as caught:
         resolve_path(GRAPH, PROFILE, text)
     assert caught.value.code is code

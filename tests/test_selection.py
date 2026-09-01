@@ -198,7 +198,14 @@ def test_every_node_kind_has_a_leaf_selector() -> None:
         NodeKind.RELATION_INSTANCE: AttributeSelector,
         NodeKind.POLYADIC_RELATION_INSTANCE: AttributeSelector,
     }
-    assert all(kind in leaf_by_kind for kind in NodeKind)
+    # Set equality rather than containment: a mapping still naming a kind the
+    # vocabulary dropped satisfies `all(... in ...)` while claiming to be the
+    # vocabulary.  The named leaves are held to being public too, because a
+    # leaf a caller cannot import addresses nothing for them.
+    assert set(leaf_by_kind) == set(NodeKind)
+    for leaf in set(leaf_by_kind.values()):
+        assert leaf.__name__ in tiergraph.__all__
+        assert getattr(tiergraph, leaf.__name__) is leaf
 
 
 def test_removed_select_is_not_public() -> None:
