@@ -993,9 +993,10 @@ class Graph:
 
     Collections keyed by names or references are canonicalized because supply
     order has no graph meaning: namespaces, relation and attribute declarations,
-    every attribute-value collection, sparse boundary values, and relation-side
-    allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
-    endpoint sequences remain ordered because their sequence carries graph meaning.
+    every attribute-value collection, seals, layers and the facts within each
+    layer, sparse boundary values, and relation-side allowed kinds and tiers.
+    Tiers, tier items, relation instances, and polyadic endpoint sequences
+    remain ordered because their sequence carries graph meaning.
     """
 
     namespaces: tuple[NamespaceDeclaration, ...]

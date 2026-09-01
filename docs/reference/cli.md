@@ -16,7 +16,7 @@ Every command that reads an input document accepts `-` in place of that document
 
 `inspect` reports tiers in graph order and relation declarations in canonical graph order (qualified-name order), not source declaration order.
 
-`semirings` lists every algebra a fold can name, with its carrier boundary, its five declared law checks, and its declared properties. The listed names are exactly the values `fold --semiring` accepts.
+`semirings` lists every algebra this shell can name, with its carrier boundary, its five declared law checks, and its declared properties. The listed names are exactly the values `fold --semiring` accepts.
 
 `fold` evaluates a finite dependency relation with one of those algebras and emits the public `FoldResult.to_data()` report. `--tier` and `--transition` are repeatable; `--root` is repeatable and, when omitted, the roots are the domain items nothing depends on. The valuation carries the attribute's local name, because that name only ever appears in a refusal. Two lifts are nameable: `value` embeds the read attribute value in the carrier, and `one` embeds the semiring's multiplicative identity regardless of the value. A general lift, a witness order, and an index product are caller code, so they stay in the Python API; without a witness order the report's `provenance` is always null, and `--ranked` is the shell's route to witnesses. `--ranked` needs an algebra that declares `multiply_preserves_witness_order` and supplies the tie policy the declaration requires but ranked selection never consults. `--output-cap` caps ranked witnesses and so requires `--ranked`.
 
@@ -57,7 +57,7 @@ positional arguments:
     span                render declarative span views
     select              evaluate a selector
     fold                fold a dependency relation
-    semirings           list the semirings a fold can name
+    semirings           list the semirings this shell can name
 
 options:
   -h, --help            show this help message and exit

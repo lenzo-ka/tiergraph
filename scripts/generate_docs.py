@@ -337,7 +337,7 @@ def cli_bytes() -> bytes:
         "from a file because stdin carries REPL commands.\n\n"
         "`inspect` reports tiers in graph order and relation declarations in canonical "
         "graph order (qualified-name order), not source declaration order.\n\n"
-        "`semirings` lists every algebra a fold can name, with its carrier "
+        "`semirings` lists every algebra this shell can name, with its carrier "
         "boundary, its five declared law checks, and its declared properties. "
         "The listed names are exactly the values `fold --semiring` accepts.\n\n"
         "`fold` evaluates a finite dependency relation with one of those "

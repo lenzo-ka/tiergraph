@@ -32,7 +32,14 @@ class WalkDirection(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
-    """Return reached nodes and disclose whether a step cap stopped the walk."""
+    """Return reached nodes and a one-sided report of the step cap.
+
+    ``truncated`` is ``False`` only when the walk ran out of new nodes before
+    it ran out of steps, so a ``False`` report is a guarantee that ``nodes`` is
+    the whole reachable set. ``True`` says only that the cap ended a step that
+    was still finding nodes, which a walk that had already reached everything
+    also reports; separating the two costs another step.
+    """
 
     nodes: NodeSet
     truncated: bool

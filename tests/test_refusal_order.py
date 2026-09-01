@@ -1,4 +1,4 @@
-"""One declared total order governs every reader's refusals."""
+"""One declared total order governs every document reader's refusals."""
 
 from __future__ import annotations
 
@@ -245,7 +245,8 @@ def test_every_reader_stages_the_text_before_reading_it(
 ) -> None:
     """REGRESSION: the grammar and selector readers stage their own text.
 
-    The declared order governs every reader in the package, so a reader that
+    The declared order governs every document reader this package exposes, so
+    a reader that
     let the JSON parser's own exception escape would leave a caller matching
     wording for a condition the order already names.  These are the conditions
     the document reader answers before it looks at any member, and the stage

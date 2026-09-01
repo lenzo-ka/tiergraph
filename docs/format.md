@@ -96,9 +96,14 @@ rest rather than whichever check happened to run first:
 5. `DISCRIMINATOR` — the member that selects which declaration applies names one
    this release implements. `format_version` and a program's `machine_version`
    are discriminators, and so are a relation's `kind`, an opcode's name, and a
-   selector's `op` or `select`. A discriminator that is absent or not a string
-   never reaches this rank: it is a construction condition, reported at rank 4,
-   because there is no spelling yet to judge against the implemented set.
+   selector's `op` or `select`. A discriminator that selects one node's
+   declaration — a relation's `kind`, an opcode's name — reaches this rank only
+   once it spells something: absent or not a string, it is a construction
+   condition reported at rank 4, because there is no spelling yet to judge
+   against the implemented set. A discriminator that selects the whole read —
+   `format_version`, `machine_version`, a selector's `op` or `select` — is
+   reported here whether it is absent, unreadable, or unimplemented, because
+   nothing else about the input can be ranked until it is settled.
 6. `SHAPE` — this node's field set is the selected declaration's, naming every
    missing and every unknown member at once.
 7. `VALUE` — this node's own value lies in the declared language: an enumerated

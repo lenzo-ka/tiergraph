@@ -311,12 +311,14 @@ class ProfileRegistry:
         )
 
     def satisfied(self, graph: Graph, roles: RoleBinding) -> tuple[ProfileReport, ...]:
-        """Return the reports of the profiles whose check refused nothing.
+        """Return the reports of the profiles whose check ran and accepted.
 
-        Reports are returned rather than bare names because a name alone would
-        read as a whole guarantee. A report carries its outcome and its
-        unconfirmed conditions, so a caller holding one can see how far the
-        answer reaches.
+        These are the ``satisfied`` and ``satisfied_as_checked`` ones. A
+        profile reported ``not_applicable`` refused nothing and is still
+        absent, because an unanswered question is not an accepted one. Reports
+        are returned rather than bare names because a name alone would read as
+        a whole guarantee. A report carries its outcome and its unconfirmed
+        conditions, so a caller holding one can see how far the answer reaches.
         """
         return tuple(
             report

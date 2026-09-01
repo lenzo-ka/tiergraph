@@ -856,8 +856,11 @@ class AsBuilt:
     def fingerprint(self) -> str:
         """Return a SHA-256 fingerprint of canonical as-built state bytes.
 
-        Durable ids are genuine as-built content, not metadata, so promotion
-        changes these bytes and therefore this fingerprint.
+        Durable ids are genuine as-built content, not metadata, so promoting
+        an item or an interior boundary changes these bytes and therefore this
+        fingerprint.  A tier's leading and trailing boundaries are already
+        addressable by side, so promoting one returns the same graph and leaves
+        this fingerprint alone.
         """
         encoded = json.dumps(
             self.graph.to_data(),
