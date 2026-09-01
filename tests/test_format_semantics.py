@@ -307,3 +307,33 @@ def test_a_json_escaped_url_is_read_by_its_real_prefix() -> None:
         check_tracked_clean._url_prefix("https://example.com/score")
         == "example.com/score"
     )
+
+
+def test_the_committed_corpus_splits_exactly_where_its_dispositions_say() -> None:
+    """The reader refuses every never-legal entry and still reads the rest.
+
+    The seven never-legal entries were dispositioned ahead of the refusal that
+    now meets them: each names the unpaired surrogate in a namespace URI as
+    something the format never had a canonical byte form for. This pins both
+    halves of that claim against the committed file, so a reader that stopped
+    refusing them and a reader that started refusing anything else each fail
+    here, rather than only in the gate's aggregate count.
+    """
+    entries = check_format_semantics.read_corpus(check_format_semantics.CORPUS_PATH)
+    assert len(entries) == 186
+    never_legal = check_format_semantics.Disposition.NEVER_LEGAL
+
+    refused = [entry for entry in entries if entry.disposition is never_legal]
+    assert len(refused) == 7
+    for entry in refused:
+        with pytest.raises(ValueError) as refusal:
+            loads(entry.document)
+        assert type(refusal.value) is Refusal
+        assert refusal.value.stage is RefusalStage.ENCODING
+        assert "namespace value " in str(refusal.value)
+        assert "has unsupported character U+D800" in str(refusal.value)
+
+    accepted = [entry for entry in entries if entry.disposition is not never_legal]
+    assert len(accepted) == 179
+    for entry in accepted:
+        loads(entry.document)
