@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -211,12 +211,28 @@ def test_profile_from_data_is_strict_and_hardens_every_qname() -> None:
         SpanViewProfile.from_data(
             {**data, "span_tiers": [{"namespace": ["x"], "local_name": "x"}]}
         )
-    with pytest.raises(
-        ValueError, match="span profile.base_tier.local_name must be a string"
-    ):
-        SpanViewProfile.from_data(
-            {**data, "base_tier": {"namespace": NS, "local_name": 12}}
-        )
+    # "Every qname" is the profile's own field list rather than the two fields
+    # this test used to reach: a field added to the profile and decoded without
+    # hardening arrives here as a case.  `span_tiers` is the one plural field,
+    # and carries its element index in the path, so it is checked above.
+    singular = tuple(
+        field.name for field in fields(SpanViewProfile) if field.name != "span_tiers"
+    )
+    assert set(singular) | {"span_tiers"} == set(profile_data(profile))
+    for field_name in singular:
+        with pytest.raises(
+            ValueError,
+            match=rf"span profile\.{field_name}\.local_name must be a string",
+        ):
+            SpanViewProfile.from_data(
+                {**data, field_name: {"namespace": NS, "local_name": 12}}
+            )
+        with pytest.raises(
+            ValueError, match=rf"span profile\.{field_name}\.namespace must be a string"
+        ):
+            SpanViewProfile.from_data(
+                {**data, field_name: {"namespace": 12, "local_name": "x"}}
+            )
 
 
 def test_projection_offsets_paths_values_and_ranked_alternatives() -> None:

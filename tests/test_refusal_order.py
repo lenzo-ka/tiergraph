@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+import tiergraph
 from tests.test_wire import rich_graph
 from tiergraph import (
     FORMAT_VERSION,
@@ -22,7 +23,6 @@ from tiergraph import (
     TierDeclaration,
     core,
     execute,
-    grammar_loads,
     loads,
     machine_codec,
     program_dumps,
@@ -353,15 +353,32 @@ def test_one_except_catches_every_stage_of_the_declared_order(
     assert isinstance(caught.value.also, tuple)
 
 
-@pytest.mark.parametrize(
-    ("reader", "scope"),
-    [
-        (loads, ""),
-        (grammar_loads, ""),
-        (selection_loads, ""),
-        (program_loads, "JSONL line 1: "),
-    ],
-)
+def document_readers() -> frozenset[str]:
+    """Return the exported name of every document reader the package publishes.
+
+    The readers are not a list this file keeps: they are the `loads`-suffixed
+    names on the package's own public surface, so a fifth one exported without
+    being staged reaches these tests as a case rather than as an omission.
+    """
+    return frozenset(name for name in tiergraph.__all__ if name.endswith("loads"))
+
+
+READER_SCOPES: dict[str, str] = {
+    "loads": "",
+    "grammar_loads": "",
+    "selection_loads": "",
+    "program_loads": "JSONL line 1: ",
+}
+
+READER_ENVELOPES: dict[str, tuple[object, str]] = {
+    "loads": (wire, "document size 2 bytes exceeds limit 1"),
+    "grammar_loads": (wire, "document size 2 bytes exceeds limit 1"),
+    "selection_loads": (wire, "document size 2 bytes exceeds limit 1"),
+    "program_loads": (machine_codec, "JSONL program exceeds 1 bytes"),
+}
+
+
+@pytest.mark.parametrize("reader_name", sorted(document_readers()))
 @pytest.mark.parametrize(
     ("source", "stage", "message"),
     [
@@ -380,8 +397,7 @@ def test_one_except_catches_every_stage_of_the_declared_order(
     ],
 )
 def test_every_reader_stages_the_text_before_reading_it(
-    reader: object,
-    scope: str,
+    reader_name: str,
     source: str | bytes,
     stage: RefusalStage,
     message: str,
@@ -395,31 +411,22 @@ def test_every_reader_stages_the_text_before_reading_it(
     and the wording are asserted together because a refusal at the right stage
     carrying a different account of it is a different contract.
 
-    The population is the four readers `docs/format.md` names, because a
-    universal claim tested on a subset is how the program reader came to answer
-    two of these conditions differently from the other three.  Line orientation
-    shows up only as the scope each condition is reported in: the program
-    reader says which line the text it could not read was on, and says nothing
-    else differently.
+    The population is read off the package's public surface rather than written
+    out here, because a universal claim tested on a subset is how the program
+    reader came to answer two of these conditions differently from the other
+    three.  Line orientation shows up only as the scope each condition is
+    reported in: the program reader says which line the text it could not read
+    was on, and says nothing else differently.
     """
-    refusal = refuse(reader, source)
+    assert set(READER_SCOPES) == document_readers()
+    refusal = refuse(getattr(tiergraph, reader_name), source)
     assert refusal.stage is stage
-    assert str(refusal) == scope + message
+    assert str(refusal) == READER_SCOPES[reader_name] + message
 
 
-@pytest.mark.parametrize(
-    ("reader", "limits", "message"),
-    [
-        (loads, wire, "document size 2 bytes exceeds limit 1"),
-        (grammar_loads, wire, "document size 2 bytes exceeds limit 1"),
-        (selection_loads, wire, "document size 2 bytes exceeds limit 1"),
-        (program_loads, machine_codec, "JSONL program exceeds 1 bytes"),
-    ],
-)
+@pytest.mark.parametrize("reader_name", sorted(document_readers()))
 def test_every_reader_measures_its_own_envelope_before_decoding(
-    reader: object,
-    limits: object,
-    message: str,
+    reader_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """REGRESSION: the envelope is the first condition each reader meets.
@@ -436,9 +443,14 @@ def test_every_reader_measures_its_own_envelope_before_decoding(
     name and reports the program rather than the document.  Patching `wire`
     for it would leave the limit it actually consults untouched, and the test
     would pass without exercising anything.
+
+    The population is the package's own `loads`-suffixed public surface, so a
+    reader exported without an envelope of its own arrives here as a case.
     """
+    assert set(READER_ENVELOPES) == document_readers()
+    limits, message = READER_ENVELOPES[reader_name]
     monkeypatch.setattr(limits, "MAX_DOCUMENT_BYTES", 1)
-    refusal = refuse(reader, b"\xff\xfe")
+    refusal = refuse(getattr(tiergraph, reader_name), b"\xff\xfe")
     assert refusal.stage is RefusalStage.ENVELOPE
     assert str(refusal) == message
 

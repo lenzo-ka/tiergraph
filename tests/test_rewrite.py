@@ -315,18 +315,51 @@ def test_declaring_collapse_over_a_revision_is_refused() -> None:
 
 
 def test_each_mispaired_claim_is_contradicted_on_its_own_terms() -> None:
-    """Every refusable pairing argues against the declared effect, not a neighbor."""
-    revised = graph((labeled("a"), labeled("changed")), (Item(),))
-    collapsed = graph((labeled("a"),), (Item(),))
-    cases = (
-        (RewriteEffect.DECORATE, revised, "so a value standing where another"),
-        (RewriteEffect.DECORATE, collapsed, "so a structure with no counterpart"),
-        (RewriteEffect.REVISE, collapsed, "A rewrite that revises leaves every"),
-        (RewriteEffect.COLLAPSE, revised, "A rewrite that collapses leaves some"),
-    )
-    for declared, result, expected in cases:
+    """Every refusable pairing argues against the declared effect, not a neighbor.
+
+    "Each pairing" is the declarable effects crossed with the effects a result
+    exhibits, both taken from `RewriteEffect` itself: three claims against
+    three outcomes, less the three that agree, is six refusals.  Four of them
+    were written out here, and the two that contradict a decoration-only result
+    were reachable only through neighboring tests, so a claim added to the
+    enum would have grown the population without growing this list.
+    """
+    exhibited = {
+        RewriteEffect.DECORATE: AttachValue(
+            AttributeDomain.TIER, WORD, AttributeValue(TIER_NOTE, XsdType.STRING, "x")
+        ).apply(BASE),
+        RewriteEffect.REVISE: graph((labeled("a"), labeled("changed")), (Item(),)),
+        RewriteEffect.COLLAPSE: graph((labeled("a"),), (Item(),)),
+    }
+    declarable = set(RewriteEffect) - {RewriteEffect.UNDECLARED}
+    assert set(exhibited) == declarable
+    contradictions = {
+        (RewriteEffect.DECORATE, RewriteEffect.REVISE): (
+            "so a value standing where another"
+        ),
+        (RewriteEffect.DECORATE, RewriteEffect.COLLAPSE): (
+            "so a structure with no counterpart"
+        ),
+        (RewriteEffect.REVISE, RewriteEffect.DECORATE): "so nothing was replaced",
+        (RewriteEffect.REVISE, RewriteEffect.COLLAPSE): (
+            "A rewrite that revises leaves every"
+        ),
+        (RewriteEffect.COLLAPSE, RewriteEffect.DECORATE): "so nothing was lost",
+        (RewriteEffect.COLLAPSE, RewriteEffect.REVISE): (
+            "A rewrite that collapses leaves some"
+        ),
+    }
+    assert set(contradictions) == {
+        (declared, observed)
+        for declared in declarable
+        for observed in declarable
+        if declared is not observed
+    }
+    for (declared, observed), expected in contradictions.items():
         with pytest.raises(EffectRefusal) as refusal:
-            RewriteDeclaration("pair", BASE, result, declared).check_effect()
+            RewriteDeclaration(
+                "pair", BASE, exhibited[observed], declared
+            ).check_effect()
         assert expected in str(refusal.value)
 
 

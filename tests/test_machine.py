@@ -331,6 +331,16 @@ def test_execution_revalidates_each_returned_graph(
     # Per-opcode apply/revalidation is the reference execute/steps mechanism.
     with pytest.raises(ExecutionError, match="opcode 0 .*duplicate tier"):
         execute((DeclareTier(tier.declaration),))
+    # One opcode cannot tell "each returned graph" from "the first returned
+    # graph", so the same forgery is placed after a step that succeeds: a
+    # machine revalidating only its first result would run this to completion.
+    with pytest.raises(ExecutionError, match="opcode 1 .*duplicate tier"):
+        execute(
+            (
+                DeclareNamespace(NamespaceDeclaration("m", "urn:machine-test")),
+                DeclareTier(tier.declaration),
+            )
+        )
 
 
 def test_execution_refuses_a_non_graph_result(monkeypatch: pytest.MonkeyPatch) -> None:
