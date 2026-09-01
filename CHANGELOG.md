@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared stage, its rank in the refusal order, and any further applicable
   condition as JSON on stderr, so a caller routes on the stage instead of
   matching wording. No graph document is written or read differently.
+- Added `discharge fold`, which demands a fold's exactness claim against the
+  graph, valuation, algebra, and dependency relation it reads and emits the
+  public `FoldCertificate.to_data()` reach: the claim, the fold's own result,
+  the probes the law search took, the derivations enumerated, and whether the
+  enumeration finished. It is assembled from `fold`'s own flags with
+  `--exactness` added, and `fold` itself gains no such flag, because it runs the
+  declaration and never consults the claim. Omitting `--exactness` is not a
+  usage error: it reaches the refusal that hands back the declaration to be
+  made. `discharge` still covers two of the four published declaration kinds; a
+  rewrite effect and a graph profile remain reachable only through the library.
 - Added enum-member emission and made `NodeSet` ordering an explicit contract (#71).
 - Added a public editing API: one operation set over two carriers. A frozen
   `Graph` answers `declare`, `set_attribute`, `remove_attribute`, `insert_item`,
