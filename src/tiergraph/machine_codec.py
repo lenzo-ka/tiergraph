@@ -13,7 +13,11 @@ from tiergraph.machine import (
     _decode_opcode,
 )
 from tiergraph.schema import Refusal, RefusalStage
-from tiergraph.wire import MAX_DOCUMENT_BYTES, MAX_JSON_DEPTH
+from tiergraph.wire import (
+    MAX_DOCUMENT_BYTES,
+    MAX_JSON_DEPTH,
+    _object_without_duplicate_keys,
+)
 
 # Owner-tunable policy: keep an individual JSONL record bounded independently
 # of the complete program stream.
@@ -28,6 +32,22 @@ def program_loads(source: str | bytes) -> Program:
 
 def load_program(stream: BinaryIO) -> Program:
     """Read a versioned JSONL machine program incrementally from a binary stream."""
+    # The envelope, encoding, and syntax conditions below are the ones
+    # `wire._parsed_json` answers for a whole-document reader, and they are
+    # answered here at the same stages, in the same order, and in the same
+    # wording: bytes that are not UTF-8 are an encoding condition rather than a
+    # parse failure, and a repeated object key is refused through the very hook
+    # that reader passes, imported rather than restated, so the two cannot
+    # drift into two accounts of one rule.
+    #
+    # What cannot be shared is the frame those conditions are measured
+    # against. `_parsed_json` measures one text: it takes the complete input,
+    # decodes it once, and names the document in what it reports. A program is
+    # a stream of lines read incrementally, so its envelope is a running total
+    # plus a per-line bound, its decoding happens a line at a time, and every
+    # diagnostic is scoped by the line number that says where to look. Calling
+    # `_parsed_json` here would mean holding the whole stream in memory to
+    # decode it at once, which is what reading incrementally exists to avoid.
     records: list[object] = []
     total = 0
     for number, line in enumerate(stream, 1):
@@ -42,16 +62,30 @@ def load_program(stream: BinaryIO) -> Program:
                 RefusalStage.ENVELOPE,
                 f"JSONL line {number} exceeds {_JSONL_LINE_BYTES} bytes",
             )
-        if not line.strip():
+        try:
+            text = line.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise Refusal(
+                RefusalStage.ENCODING,
+                f"JSONL line {number}: parse UTF-8 failed: {error.reason}",
+            ) from error
+        if not text.strip():
             raise Refusal(
                 RefusalStage.SYNTAX, f"JSONL line {number} is whitespace-only"
             )
+        _check_jsonl_depth(line, number)
         try:
-            _check_jsonl_depth(line, number)
-            records.append(json.loads(line))
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            records.append(
+                json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+            )
+        except json.JSONDecodeError as error:
             raise Refusal(
-                RefusalStage.SYNTAX, f"JSONL line {number}: {error}"
+                RefusalStage.SYNTAX,
+                f"JSONL line {number}: parse JSON failed: {error.msg}",
+            ) from error
+        except Refusal as error:
+            raise Refusal(
+                error.stage, f"JSONL line {number}: {error}", error.also
             ) from error
         except RecursionError as error:
             raise Refusal(
