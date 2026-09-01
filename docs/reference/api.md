@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 188 top-level `tiergraph` exports exactly once.
+It covers 190 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2052,14 +2052,20 @@ GraphValidationError(message: 'str', stage: 'RefusalStage' = <RefusalStage.SEMAN
 Report a declaration or graph-contract validation failure.
 
 A caller meets refusals from two channels and should have to learn one
-vocabulary, so this failure carries the same ``stage`` a ``Refusal`` does,
-as data rather than prose.  The stage defaults to ``SEMANTICS`` because a
-violated declaration or graph contract is semantic by nature: the document
-parsed, its shapes held, and what it says is still not sayable.  A site with
-a sharper condition names it, and the default keeps every other site
-correct without restating what it already means.  The message stays first so
-an existing raise reads unchanged.  This is still a ``ValueError``, so every
-caller that already catches one still does.
+vocabulary, so this failure ranks in the same order under the same base, and
+carries its ``stage`` as data rather than prose.  The stage defaults to
+``SEMANTICS`` because a violated declaration or graph contract is semantic
+by nature: the document parsed, its shapes held, and what it says is still
+not sayable.  Every raise site in this package takes that default; a site
+whose condition is sharper may name one, and the argument is kept for that
+reason and for a caller constructing one of these itself.  The message stays
+first so an existing raise reads unchanged.
+
+A graph contract is one condition about the whole graph rather than a node
+whose siblings are still judged, so ``also`` is empty here.
+
+This is still a ``ValueError``, so every caller that already catches one
+still does.
 
 ### `Item`
 
@@ -2173,6 +2179,80 @@ QualifiedName.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the expanded name independently of document prefix choices.
+
+### `Refusal`
+
+```text
+Refusal(stage: 'RefusalStage', message: 'str', also: 'Iterable[Refusal]' = ()) -> 'None'
+```
+
+Refuse one read, naming its stage and every further applicable condition.
+
+``stage`` places the refusal in the declared total order, and ``also``
+carries the conditions that remain applicable once this one is known, each a
+refusal in its own right.  Both are data rather than prose, so a caller acts
+on the order without matching message text.  Both are declared on the class
+as well as assigned, so a caller reads them as fields of what it caught
+rather than recovering them with ``getattr``.
+
+This is the one base every staged refusal has.  The order is published as
+governing every document reader this package exposes, so ``except Refusal``
+has to catch all of it: a base that covered a prefix of the order would send
+a caller who read the declaration past the ranks it left out.  Subclasses
+say which channel refused, never which ranks a caller has to expect.
+
+A ``Refusal`` is a ``ValueError``, so every caller that already catches one
+still does.
+
+It is declared here, beside ``RefusalStage`` and for the same reason: this
+module is the base every other imports, so the channel that refuses from
+here can share the base without the cycle that reaching upward would create.
+
+### `RefusalStage`
+
+```text
+RefusalStage(*values)
+```
+
+Number the classes a refusal can belong to, lowest reported first.
+
+A reader routinely meets several conditions at once.  The stage numbers put
+them in one order, so a caller is told the condition that explains the rest
+rather than whichever check happened to run first: a refusal at one stage
+explains what a later stage would have reported, and the converse never
+holds.  Bytes that are not text have no JSON to nest; a document announcing
+a format this release does not implement has a field set this release cannot
+judge; a member of the wrong construction has no value to place in a
+declared language; a name that does not resolve cannot keep a promise.
+
+The stages rank the conditions that apply to one node.  Nodes are read from
+the outside in and members in their declared order, so an enclosing node's
+condition precedes its members' whatever their stages, and the pair of a
+node and a stage totally orders every condition one read can meet.
+
+A condition is carried beside the primary one only while it stays
+applicable once the primary is known.  A field set is not judged against a
+declaration the document never selected, so a foreign version is reported
+alone rather than with the fields that being foreign introduces.
+
+The stage is the stable part of a refusal; the wording is diagnostic.
+
+The vocabulary lives here, beside the other declared enumerations, because
+both refusal channels have to name it: this module is the base every other
+imports, so a refusal raised from here can carry a stage without the cycle
+that reaching upward for it would create.
+
+#### `RefusalStage` members
+
+- `ENVELOPE` = `1`
+- `ENCODING` = `2`
+- `SYNTAX` = `3`
+- `CONSTRUCTION` = `4`
+- `DISCRIMINATOR` = `5`
+- `SHAPE` = `6`
+- `VALUE` = `7`
+- `REFERENCE` = `8`
+- `SEMANTICS` = `9`
 
 ### `RelationEndpointKind`
 
@@ -5548,8 +5628,22 @@ Refuse one read, naming its stage and every further applicable condition.
 ``stage`` places the refusal in the declared total order, and ``also``
 carries the conditions that remain applicable once this one is known, each a
 refusal in its own right.  Both are data rather than prose, so a caller acts
-on the order without matching message text.  A ``Refusal`` is a
-``ValueError``, so every caller that already catches one still does.
+on the order without matching message text.  Both are declared on the class
+as well as assigned, so a caller reads them as fields of what it caught
+rather than recovering them with ``getattr``.
+
+This is the one base every staged refusal has.  The order is published as
+governing every document reader this package exposes, so ``except Refusal``
+has to catch all of it: a base that covered a prefix of the order would send
+a caller who read the declaration past the ranks it left out.  Subclasses
+say which channel refused, never which ranks a caller has to expect.
+
+A ``Refusal`` is a ``ValueError``, so every caller that already catches one
+still does.
+
+It is declared here, beside ``RefusalStage`` and for the same reason: this
+module is the base every other imports, so the channel that refuses from
+here can share the base without the cycle that reaching upward would create.
 
 ### `RefusalStage`
 

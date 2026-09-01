@@ -204,6 +204,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected. `RefusalStage` itself moves to `tiergraph.core`, the one module
   both channels reach without a cycle, and stays exported from
   `tiergraph.schema`, where callers import it.
+- `GraphValidationError` is now a subclass of `Refusal`, so `except Refusal`
+  catches every rank of the refusal order rather than the eight the document
+  readers raise directly. The last rank, `RefusalStage.SEMANTICS`, is reported
+  by the graph constructor through `GraphValidationError`, which shared no base
+  with `Refusal` but `ValueError`; a caller who read the format document and
+  wrote `except Refusal` therefore let the last stage of the order that document
+  defines escape unhandled. `Refusal` and `RefusalStage` are now exported from
+  `tiergraph` itself and documented beside `GraphValidationError`, so the base
+  the order is declared in terms of is reached by a promised import rather than
+  from `tiergraph.schema`, which carries no stability promise; both stay
+  importable from `tiergraph.schema` as before. `Refusal` declares `stage` and
+  `also` as typed attributes, so a caller reads them off what it caught instead
+  of through `getattr` or an `isinstance` narrowing, and `GraphValidationError`
+  now carries an empty `also`. Both remain `ValueError` subclasses, the stage
+  values and their ranks are unchanged, and no document is read or written
+  differently.
 - **BREAKING:** the clock CLI now names the values it returns: `tiergraph clock
   positions` becomes `tiergraph clock coordinates`, and `tiergraph clock
   position --position PATH` becomes `tiergraph clock boundary --boundary PATH`.

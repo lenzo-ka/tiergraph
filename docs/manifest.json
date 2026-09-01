@@ -80,6 +80,8 @@
       "PolyadicRelationDeclaration",
       "PolyadicRelationInstance",
       "QualifiedName",
+      "Refusal",
+      "RefusalStage",
       "RelationEndpointKind",
       "RelationInstance",
       "RelationSideDeclaration",
