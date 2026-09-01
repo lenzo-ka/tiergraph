@@ -118,15 +118,52 @@ def undeclared_drifts(
 
 
 def conformance_probes(
-    seeds: tuple[tuple[str, dict[str, JsonValue]], ...], document_shape: Shape
+    seeds: tuple[tuple[str, dict[str, JsonValue]], ...],
+    document_shape: Shape,
+    realized: set[str] | None = None,
 ) -> tuple[Probe, ...]:
-    """Construct every applicable near-miss from the live declaration and seeds."""
+    """Construct every applicable near-miss from the live declaration and seeds.
+
+    ``realized`` collects the reference variants the seed documents themselves
+    resolve to, so the witnesses can be measured against the declared
+    population rather than against whichever ones somebody remembered.
+    """
     probes = [
         probe
         for seed_name, seed in seeds
-        for probe in _walk(seed_name, seed, seed, document_shape, ())
+        for probe in _walk(seed_name, seed, seed, document_shape, (), realized)
     ]
     return tuple(sorted(probes, key=lambda probe: probe.id))
+
+
+def declared_variants(document_shape: Shape) -> frozenset[str]:
+    """Return every reference variant the declaration names below one shape."""
+    found: set[str] = set()
+    seen: set[int] = set()
+    pending = [document_shape]
+    while pending:
+        shape = pending.pop()
+        if id(shape) in seen:
+            continue
+        seen.add(id(shape))
+        if shape.kind is ShapeKind.REFERENCE:
+            found.update(shape.variants)
+            pending.extend(DECLARATIONS[name] for name in shape.variants)
+        elif shape.kind is ShapeKind.OBJECT:
+            pending.extend(field.shape for field in shape.fields)
+        elif shape.kind is ShapeKind.ARRAY:
+            assert shape.item is not None
+            pending.append(shape.item)
+    return frozenset(found)
+
+
+def realized_variants(
+    seeds: tuple[tuple[str, dict[str, JsonValue]], ...], document_shape: Shape
+) -> frozenset[str]:
+    """Return the reference variants the seed documents themselves realize."""
+    realized: set[str] = set()
+    conformance_probes(seeds, document_shape, realized)
+    return frozenset(realized)
 
 
 def _walk(
@@ -135,6 +172,7 @@ def _walk(
     value: JsonValue,
     shape: Shape,
     path: Path,
+    realized: set[str] | None = None,
 ) -> list[Probe]:
     if shape.kind is ShapeKind.REFERENCE:
         matching = [
@@ -148,7 +186,9 @@ def _walk(
             raise AssertionError(
                 f"{seed_name}:{path!r} matches {matching!r}, expected one variant"
             )
-        return _walk(seed_name, seed, value, DECLARATIONS[matching[0]], path)
+        if realized is not None:
+            realized.add(matching[0])
+        return _walk(seed_name, seed, value, DECLARATIONS[matching[0]], path, realized)
 
     probes = (
         []
@@ -174,6 +214,9 @@ def _walk(
                 expanded = copy.deepcopy(seed)
                 expanded_data = cast(dict[str, JsonValue], _at(expanded, path))
                 expanded_data[field.name] = _example(field.shape)
+                # A synthesized value is not a witness: counting the variant it
+                # happens to satisfy as realized would let a declaration cover
+                # itself and hide the region no seed reaches.
                 probes.extend(
                     _walk(
                         seed_name,
@@ -195,6 +238,7 @@ def _walk(
                     data[field.name],
                     field.shape,
                     (*path, field.name),
+                    realized,
                 )
             )
         extra = copy.deepcopy(seed)
@@ -203,7 +247,9 @@ def _walk(
     elif shape.kind is ShapeKind.ARRAY:
         assert shape.item is not None
         for index, item in enumerate(cast(list[JsonValue], value)):
-            probes.extend(_walk(seed_name, seed, item, shape.item, (*path, index)))
+            probes.extend(
+                _walk(seed_name, seed, item, shape.item, (*path, index), realized)
+            )
     return probes
 
 

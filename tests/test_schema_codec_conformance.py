@@ -13,8 +13,14 @@ from tests.conformance.declared_schema_codec_divergences import (
     LIVE_DIVERGENCES,
     DeclaredDivergence,
 )
-from tests.conformance.schema_codec import conformance_probes, undeclared_drifts
+from tests.conformance.schema_codec import (
+    conformance_probes,
+    declared_variants,
+    realized_variants,
+    undeclared_drifts,
+)
 from tests.test_wire import (
+    every_reference_variant_graph,
     graph_with_layers,
     polyadic_document,
     rich_graph,
@@ -22,7 +28,14 @@ from tests.test_wire import (
 )
 from tiergraph import wire as wire_module
 from tiergraph.core import JsonValue
-from tiergraph.schema import DOCUMENT, QUALIFIED_NAME, STRING, TIER, Field
+from tiergraph.schema import (
+    DECLARATIONS,
+    DOCUMENT,
+    QUALIFIED_NAME,
+    STRING,
+    TIER,
+    Field,
+)
 from tiergraph.wire import to_data
 
 
@@ -115,23 +128,29 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
         ("polyadic", surface),
         ("layer", to_data(layered)),
         ("seal", to_data(graph_with_layers(seal=1))),
+        ("variants", to_data(every_reference_variant_graph())),
     )
 
 
 def test_seeds_realize_every_declared_reference_variant() -> None:
-    """Witnesses reach both carriers, both anchors, and every lexical declaration."""
-    ids = {probe.id for probe in conformance_probes(_seeds(), DOCUMENT)}
-    for fragment in (
-        ".relations[0].left.index:",
-        ".relations[1].sources[0].index:",
-        ".position_values[0].reference.anchor.durable_id:",
-        ".position_values[1].reference.anchor.tier:",
-        ".attributes[0].lexical:",
-        ".attributes[1].lexical:",
-        ".tiers[0].items[0].attributes[0].lexical:",
-        ".position_values[0].attributes[0].lexical:",
-    ):
-        assert any(fragment in probe_id for probe_id in ids), fragment
+    """The declaration names the population the witnesses have to cover.
+
+    Listing the reachable variants by hand made this probe blind to its own
+    gap: a variant no seed realized fell outside the enumeration instead of
+    failing it, and the codec went unmeasured over the region that variant
+    named. Both sides of the comparison are read from the declaration now, so
+    an unrealized variant fails here rather than going unnoticed.
+    """
+    declared = declared_variants(DOCUMENT)
+    assert realized_variants(_seeds(), DOCUMENT) == declared
+    assert declared == frozenset(DECLARATIONS)
+
+
+def test_a_seed_that_misses_a_declared_variant_fails_the_coverage_gate() -> None:
+    """Dropping the witness for one region leaves the gate failing, not silent."""
+    thinned = tuple(seed for seed in _seeds() if seed[0] != "variants")
+    missing = declared_variants(DOCUMENT) - realized_variants(thinned, DOCUMENT)
+    assert "layer_orphan" in missing
 
 
 def test_layer_and_seal_regions_contribute_probes() -> None:
