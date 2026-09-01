@@ -88,10 +88,12 @@ follows from the major being zero or not, so nothing here needs editing at 1.0.
 Pre-1.0 the leading zero puts breakage at the minor, so a break costs a minor
 step and a patch release must grow or leave the format alone; from 1.0 the major
 carries it and a break costs a major step. That is the repository's own claim
-and not a stricter one invented beside it -- ``README.md`` calls the alpha series
-"0.1.x" and ``SECURITY.md`` supports "the latest 0.1.x release", and everything
-is unstable until 1.0. The price is lower now on purpose. Lower is not free:
-fair game means a break may be taken, not that it may be taken without saying so.
+and not a stricter one invented beside it -- ``README.md`` says "every published
+pre-1.0 release" is alpha software and that before 1.0 "a 0.X.0 release is in
+effect a major release", and ``SECURITY.md`` supports "the latest published
+pre-1.0 release". Everything is unstable until 1.0. The price is lower now on
+purpose. Lower is not free: fair game means a break may be taken, not that it may
+be taken without saying so.
 
 Between a version bump and the tag that releases it, the current line has no
 release yet. The gate does not fall silent there: it compares against the newest

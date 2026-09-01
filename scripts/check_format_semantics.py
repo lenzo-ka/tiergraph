@@ -6,11 +6,18 @@ everything else -- declaration compatibility, acyclicity, reference validity --
 and a release that tightens one of those refuses a document the previous release
 accepted while changing no schema byte. This gate is the other half.
 
-It reads a corpus of documents a previous release ACCEPTED, and runs the current
-decoder over them. The corpus is captured at a release and frozen; it is not
-regenerated, because a corpus derived from current code is trivially accepted by
-current code and the check would pass by construction. What is continuous is the
-checking, not the capture.
+It reads a corpus of documents ACCEPTED when the corpus was captured, and runs
+the current decoder over them. The corpus is frozen and not regenerated, because
+a corpus derived from current code is trivially accepted by current code and the
+check would pass by construction. What is continuous is the checking, not the
+capture.
+
+Capture belongs at a release, so that the frozen entries are ones a release
+accepted and this gate then covers the span since that release. Every entry the
+corpus holds today was captured from a development tree instead: each records the
+version its capture ran under, and no published release has accepted any of them.
+So what this gate currently catches is a decoder that has tightened since that
+capture, and it enforces nothing about cross-release compatibility yet.
 
 A document that no longer loads is not automatically a break. Owner ruling
 2026-08-31: a narrowing prices a version position only if the document was LEGAL.
@@ -48,7 +55,7 @@ class Disposition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Entry:
-    """One document a release accepted, and what is known about it."""
+    """One document accepted at capture time, and what is known about it."""
 
     document: str
     captured_at: str
