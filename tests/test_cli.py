@@ -1691,13 +1691,27 @@ def test_inspect_uses_canonical_relation_order(tmp_path: Path) -> None:
 def test_run_header_only_edges_and_all_outputs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # "All outputs" is the parser's own list of them, so a target added to
+    # `run --to` is exercised here on the day it is added.
+    subcommands = next(
+        candidate
+        for candidate in build_parser()._actions
+        if isinstance(candidate, argparse._SubParsersAction)
+    )
+    target_choice = next(
+        candidate
+        for candidate in subcommands.choices["run"]._actions
+        if candidate.dest == "to"
+    )
+    targets = tuple(target_choice.choices or ())
+    assert targets == ("json", "json-compact", "bytes", "dot")
     for suffix, content in (
         ("nonewline", b'{"machine_version":"1"}'),
         ("crlf", b'{"machine_version":"1"}\r\n'),
     ):
         source = tmp_path / suffix
         source.write_bytes(content)
-        for target in ("json", "json-compact", "bytes", "dot"):
+        for target in targets:
             output = tmp_path / f"{suffix}-{target}"
             args = ["run", str(source), "--to", target, "-o", str(output)]
             if target == "dot":

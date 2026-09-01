@@ -86,6 +86,11 @@ def test_every_allowlisted_external_reference_is_accepted(tmp_path: Path) -> Non
         )
         + "\n"
         + "\n".join(check_tracked_clean.ALLOWED_DOMAINS)
+        + "\n"
+        # The email allowlist is empty today, which is why leaving it out of
+        # this page still read as a complete sweep: the first address ever
+        # added to it would have been the first one nothing here accepted.
+        + "\n".join(check_tracked_clean.ALLOWED_EMAILS)
         + "\n",
         encoding="utf-8",
     )
@@ -581,6 +586,34 @@ def test_unallowlisted_distribution_is_reported_from_every_group(
     ]
 
 
+@pytest.mark.parametrize(
+    ("text", "opening"),
+    (
+        (
+            '[build-system]\nrequires = ["hatchling"]\n',
+            "no [project] table declaring distributions",
+        ),
+        ("project = 1\n", "no [project] table declaring distributions"),
+        ("not = toml = [\n", "unreadable TOML ("),
+    ),
+)
+def test_a_project_table_this_gate_cannot_read_is_reported_not_raised(
+    tmp_path: Path, text: str, opening: str
+) -> None:
+    """REGRESSION: an unreadable project table ends the gate with a message.
+
+    Every other condition this gate meets is written into its report and
+    decides the exit status. Reading the project table was the one place that
+    trusted its input, so a file with no such table ended the whole run in an
+    unhandled `KeyError` naming nothing at all.
+    """
+    project = tmp_path / "pyproject.toml"
+    project.write_text(text, encoding="utf-8")
+    reported = check_tracked_clean.reference_leaks(project)
+    assert len(reported) == 1
+    assert reported[0].startswith(f"{project}: {opening}")
+
+
 def test_allowlisted_email_is_accepted_case_insensitively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -770,7 +803,12 @@ def test_only_the_gate_script_itself_is_exempt(
 
     The gate has to write down the patterns it forbids and the references it
     allows, so it cannot pass its own check. Every other file can.
+
+    "Only" is a claim about the whole exemption list, so the list itself is
+    read here: a second name added to it fails this test rather than joining
+    an exemption nothing measures.
     """
+    assert check_tracked_clean.EXEMPT_NAMES == frozenset({check_tracked_clean.SELF})
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
     digest_path = tmp_path / "digests.txt"

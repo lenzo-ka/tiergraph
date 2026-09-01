@@ -40,6 +40,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
+    machine,
 )
 
 NS = "urn:rewrite"
@@ -205,6 +206,10 @@ def test_every_build_machine_opcode_decorates() -> None:
             AttributeValue(EDGE, XsdType.STRING, "e"),
         ),
     )
+    # "Every" is measured against the machine's own primitive opcode table, so
+    # an opcode added there and left out of this list fails here rather than
+    # inheriting a characterization nothing ran against it.
+    assert {type(opcode) for opcode in opcodes} == set(machine._PRIMITIVE_OPCODE_TYPES)
     for opcode in opcodes:
         RewriteDeclaration(
             type(opcode).__name__, source, opcode.apply(source), RewriteEffect.DECORATE

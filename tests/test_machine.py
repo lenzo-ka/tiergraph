@@ -482,6 +482,13 @@ def test_all_attribute_domains_are_checked_transitions() -> None:
             ),
         )
     )
+    # The declarations above are already taken from `AttributeDomain`; the
+    # attachments were written out one by one, so this measures them against
+    # the same population. A domain added to the enum and attached by nothing
+    # fails here rather than passing on the strength of its declaration alone.
+    assert {
+        opcode.domain for opcode in program.opcodes if isinstance(opcode, AttachValue)
+    } == set(AttributeDomain)
     outcome = program.unroll()
     assert execute(outcome.trace) == outcome.graph
     assert outcome.graph.attributes == (value(AttributeDomain.DOCUMENT),)

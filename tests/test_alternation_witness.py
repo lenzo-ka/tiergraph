@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from decimal import Decimal
 from fractions import Fraction
 from typing import Protocol, TypeVar, cast
@@ -546,18 +546,28 @@ def test_complexity_account_is_executable() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "omitted",
-    ("document_size", "relation_incidence", "index_product_size"),
-)
+COMPLEXITY_TERMS = {
+    "document_size": "document_visits",
+    "relation_incidence": "endpoint_visits",
+    "index_product_size": "index_slots",
+}
+
+
+@pytest.mark.parametrize("omitted", tuple(COMPLEXITY_TERMS))
 def test_each_complexity_term_is_required_by_measured_work(omitted: str) -> None:
-    """Deleting any structural term makes the bound reject measured operations."""
+    """Deleting any structural term makes the bound reject measured operations.
+
+    "Each" is the profile's own structural record less the folded value, so a
+    field added to `FoldProfile` and left out of the claimed bound fails here
+    rather than being work the bound silently stops accounting for.
+    """
+    structural = {field.name for field in fields(FoldProfile)} - {"value"}
+    assert set(COMPLEXITY_TERMS.values()) == structural
     profile = PackedAlternationSuite(diamond_graph()).profiled_counting_fold()
-    terms = {
-        "document_size": profile.document_visits,
-        "relation_incidence": profile.endpoint_visits,
-        "index_product_size": profile.index_slots,
-    }
-    claimed_bound = sum(value for name, value in terms.items() if name != omitted)
+    claimed_bound = sum(
+        getattr(profile, measured)
+        for name, measured in COMPLEXITY_TERMS.items()
+        if name != omitted
+    )
     with pytest.raises(AssertionError):
         assert profile.operations <= claimed_bound

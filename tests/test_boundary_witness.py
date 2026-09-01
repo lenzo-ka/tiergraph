@@ -148,7 +148,11 @@ FIXTURE = BoundaryFixture()
 
 
 def test_page_sized_oracle_addresses_every_boundary() -> None:
-    """Two placements have three boundaries; one stem has two, all distinct."""
+    """Two placements have three boundaries; one stem has two, all distinct.
+
+    "Every" is the graph's own boundary set rather than the two tiers named
+    below, so a tier added to the fixture is addressed here or fails here.
+    """
     graph = FIXTURE.graph()
     placement_positions = tuple(
         boundary.reference for boundary in graph.boundaries(PLACEMENT_TIER)
@@ -165,7 +169,13 @@ def test_page_sized_oracle_addresses_every_boundary() -> None:
         BoundaryRef(STEM_TIER, 0),
         BoundaryRef(STEM_TIER, 1),
     )
-    assert len(set((*placement_positions, *stem_positions))) == 5
+    addressed = {*placement_positions, *stem_positions}
+    assert len(addressed) == 5
+    assert addressed == {
+        boundary.reference
+        for tier in graph.tiers
+        for boundary in graph.boundaries(tier.declaration.name)
+    }
     assert FIXTURE.neighbors(graph, placement_positions[0]) == (
         "<start>",
         "ambient-bed",
