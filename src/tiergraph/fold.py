@@ -113,8 +113,10 @@ class FoldExactness(Enum):
 
     ``DISTRIBUTIVE``
         The value **is** the combination over every derivation. Gate: no
-        counterexample may exist, and none may be found at the values this fold
-        itself produces.
+        counterexample may exist, and none may be found among the bounded set
+        of probes taken from the values this fold produces. The probe set is
+        capped, so a carrier that denies distributivity only at values past the
+        cap is not caught here.
     ``APPROXIMATE``
         The value is a sound approximation of that combination, and that is a
         fact about the published result rather than a footnote about the
@@ -335,10 +337,12 @@ class FoldCertificate[Value]:
     """Report what discharged one fold's exactness claim, and what it never reached.
 
     ``compared`` is the honest part. It is true only when the fold's derivations
-    were enumerated in full within the declared budget and the combination over
-    them was compared against the published value. When it is false the claim
-    stood on the law search alone, and a law search that finds no refutation has
-    found no refutation — it has not proved anything.
+    were enumerated in full within the declared budget, which is what makes a
+    comparison against the published value available at all. When it is false
+    the claim stood on the law search alone, and a law search that finds no
+    refutation has found no refutation — it has not proved anything. It reports
+    the enumeration rather than the comparison: where the law search already
+    settles the claim, the enumerated combination is not read.
 
     ``derivations`` counts the structural derivations that were enumerated, which
     includes any the valuation annihilates, so it is a measure of the search and
@@ -395,8 +399,10 @@ class FoldDeclaration[Value]:
     ranked by the semiring's own order, which its multiplication must preserve
     (``multiply_preserves_witness_order``); a custom ``witness_order`` is refused, and
     so is a ``tie_policy``. Ranked selection breaks an equal-valued tie by the
-    canonical witness path, which is a total order over distinct witnesses, so it
-    leaves no tie for a policy to decide and would never read one. The resulting
+    canonical witness path, so it leaves no tie for a policy to decide and would
+    never read one. That order is total wherever the paths are distinct, which
+    holds when the document's item labels are; two witnesses whose labels
+    collide compare equal and are then ordered by arrival. The resulting
     order is deterministic, and the paths it compares are the fold's own structural
     labels, so it is canonical for a given document rather than globally so.
 
@@ -693,7 +699,12 @@ class FoldDeclaration[Value]:
         )
 
     def run(self) -> FoldResult[Value]:
-        """Evaluate every state using only the semiring's addition and multiplication."""
+        """Evaluate every state with the semiring's own declared operations.
+
+        Addition and multiplication carry an acyclic relation. A cyclic
+        component reaches the algebra's ``star`` as well, which is what
+        specifies the fixpoint there.
+        """
         (
             outgoing,
             item_roots,
@@ -799,8 +810,10 @@ class FoldDeclaration[Value]:
         The first way is a law search over **probes the fold produces itself**,
         rather than a probe set a caller supplies. Distributivity is what
         regroups a sum over derivations into a fold over shared structure, so a
-        carrier that fails it at the values this fold actually reaches cannot be
-        folded exactly, whatever its declared ``LawCheck`` says. A carrier that
+        carrier that fails it at one of those probes cannot be folded exactly,
+        whatever its declared ``LawCheck`` says. The probes are capped, so this
+        is a search over some of the values the fold reaches and not over all of
+        them: finding no refutation here is not a proof. A carrier that
         cannot evaluate its own laws at its own values raises; that is a defect
         in the carrier boundary, not something to be swallowed here.
 

@@ -370,6 +370,139 @@ def test_discharge_reports_a_stage_only_where_the_refusal_declares_one(
     assert '"stage"' not in capsys.readouterr().err
 
 
+def test_discharge_fold_certifies_a_claim_the_derivations_bear_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A distributive count is discharged, and the certificate says how far it reached.
+
+    The flags are `fold`'s own, prefixed with the verb, because both commands
+    assemble the one declaration from the one vocabulary. What the certificate
+    adds over a fold's result is the reach of the check: that the derivations
+    were enumerated in full and how many there were, which is what separates a
+    claim measured against every derivation from one left standing on a law
+    search alone.
+    """
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+
+    assert (
+        main(
+            [
+                "discharge",
+                *_fold_args(source, "counting", "one"),
+                "--exactness",
+                "distributive",
+            ]
+        )
+        == 0
+    )
+    certificate = json.loads(capsys.readouterr().out)
+    assert certificate["exactness"] == "distributive"
+    assert (certificate["compared"], certificate["derivations"]) == (True, 2)
+    assert certificate["probes"] == 3
+    assert certificate["result"]["value"] == 2
+
+
+@pytest.mark.parametrize(
+    ("claim", "fragment"),
+    (
+        ((), "exactness is UNDECLARED: say whether this fold's value is"),
+        (("--exactness", "approximate"), "nothing here approximates anything"),
+        (("--exactness", "structural"), "declares no star"),
+    ),
+)
+def test_discharge_fold_refuses_a_claim_the_fold_does_not_make_good(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    claim: tuple[str, ...],
+    fragment: str,
+) -> None:
+    """Each unmet claim is one exit-one refusal that writes no certificate.
+
+    Omitting `--exactness` is not a usage error: it reaches the library's own
+    refusal, which hands back the declaration to be made. An exactness refusal
+    declares no stage, so the diagnostic line stands alone with no staged object
+    after it, which is the rule the seal path already follows -- the object
+    appears where the refusal carries a stage and nowhere else.
+    """
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+    output = tmp_path / "certificate.json"
+
+    assert (
+        main(
+            [
+                "discharge",
+                *_fold_args(source, "counting", "one", *claim),
+                "-o",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tiergraph: discharge: ValueError: fold 'fold' ")
+    assert fragment in captured.err
+    assert '"stage"' not in captured.err
+    assert not output.exists()
+
+
+def test_discharge_fold_reports_an_input_stage_before_it_weighs_a_claim(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A malformed graph reaches the staged reporter the seal path already uses.
+
+    Both discharges read their inputs through the one document reader, so a
+    condition the graph fails is reported by stage and rank here exactly as it is
+    under `seals`, and the claim that would have been refused afterwards is never
+    weighed.
+    """
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+    document = json.loads(source.read_bytes())
+    document["zz"] = 1
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(json.dumps(document), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "discharge",
+                *_fold_args(malformed, "counting", "one"),
+                "--exactness",
+                "approximate",
+            ]
+        )
+        == 1
+    )
+    report = _refusal_report(capsys.readouterr().err)["refusal"]
+    assert (report["stage"], report["rank"]) == ("shape", 6)
+    assert "unknown fields ['zz']" in report["message"]
+
+
+def test_fold_offers_no_exactness_flag_to_the_command_that_never_reads_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`fold` runs a declaration, so the claim is spelled only where it is demanded.
+
+    The declaration `fold` builds stays UNDECLARED rather than standing in a
+    claim the caller never made, and the flag that would state one is absent
+    from the running verb rather than accepted and ignored.
+    """
+    source = tmp_path / "plan.json"
+    _fold_graph(source, *DIAMOND)
+
+    with pytest.raises(SystemExit) as raised:
+        main(_fold_args(source, "counting", "one", "--exactness", "distributive"))
+    assert raised.value.code == 2
+    assert "unrecognized arguments: --exactness" in capsys.readouterr().err
+
+    parsed = cli.build_parser().parse_args(_fold_args(source, "counting", "one"))
+    declaration = cli._fold_declaration(tiergraph.loads(source.read_bytes()), parsed)
+    assert declaration.exactness is tiergraph.FoldExactness.UNDECLARED
+
+
 def _structural_path(kind: str, namespace: str, local: str, index: int) -> str:
     """Spell the fixture's simple structural item or boundary path."""
     return f"/{kind}/structural/{namespace}/{local}/{index}"

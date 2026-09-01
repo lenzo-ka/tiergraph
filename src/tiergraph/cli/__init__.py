@@ -66,6 +66,22 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     _output_argument(seals)
 
+    discharge_fold = discharge_subparsers.add_parser(
+        "fold", help="discharge a fold's exactness claim against its graph"
+    )
+    discharge_fold.set_defaults(handler=_handle_discharge)
+    _fold_arguments(discharge_fold)
+    discharge_fold.add_argument(
+        "--exactness",
+        choices=tuple(
+            member.value
+            for member in tiergraph.FoldExactness
+            if member is not tiergraph.FoldExactness.UNDECLARED
+        ),
+        help="the claim to discharge; omitted, the library refuses UNDECLARED",
+    )
+    _output_argument(discharge_fold)
+
     render = subparsers.add_parser("render", help="render a graph as DOT")
     render.set_defaults(handler=_handle_render)
     _document_arguments(render)
@@ -204,50 +220,8 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     _output_argument(selection)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
-    fold.set_defaults(handler=_handle_fold)
-    fold.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    fold.add_argument(
-        "--name", default="fold", metavar="NAME", help="name used in refusals"
-    )
-    fold.add_argument("--attribute-namespace", required=True, metavar="NS")
-    fold.add_argument("--attribute-local", required=True, metavar="LOCAL")
-    fold.add_argument(
-        "--tier",
-        action="append",
-        nargs=2,
-        required=True,
-        metavar=("NS", "LOCAL"),
-        help="one valuation domain tier; repeatable",
-    )
-    fold.add_argument("--semiring", choices=tuple(_SEMIRINGS), required=True)
-    fold.add_argument(
-        "--lift",
-        choices=("one", "value"),
-        required=True,
-        help="embed the read value, or the semiring's multiplicative identity",
-    )
-    fold.add_argument(
-        "--transition",
-        action="append",
-        nargs=3,
-        required=True,
-        metavar=("NS", "LOCAL", "COMBINATION"),
-        help="one dependency relation and its and/or meaning; repeatable",
-    )
-    fold.add_argument(
-        "--root",
-        action="append",
-        metavar="TGPATH",
-        help="one declared root item; repeatable, inferred when omitted",
-    )
-    fold.add_argument(
-        "--ranked",
-        action="store_true",
-        help="also report witnesses ranked by the semiring's own order",
-    )
-    fold.add_argument(
-        "--output-cap", type=int, metavar="N", help="witness cap; requires --ranked"
-    )
+    fold.set_defaults(handler=_handle_fold, exactness=None)
+    _fold_arguments(fold)
     _output_argument(fold)
 
     semirings = subparsers.add_parser(
@@ -272,6 +246,61 @@ def _output_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _fold_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the flags one fold declaration is assembled from.
+
+    ``fold`` and ``discharge fold`` build the same declaration from the same
+    graph, valuation, algebra, and dependency relation, so they name those
+    inputs once here. What separates them is the claim: ``fold`` runs the
+    declaration and never consults its exactness, so it offers no flag for one,
+    and ``discharge fold`` adds the flag whose claim is the whole of what it
+    discharges.
+    """
+    parser.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    parser.add_argument(
+        "--name", default="fold", metavar="NAME", help="name used in refusals"
+    )
+    parser.add_argument("--attribute-namespace", required=True, metavar="NS")
+    parser.add_argument("--attribute-local", required=True, metavar="LOCAL")
+    parser.add_argument(
+        "--tier",
+        action="append",
+        nargs=2,
+        required=True,
+        metavar=("NS", "LOCAL"),
+        help="one valuation domain tier; repeatable",
+    )
+    parser.add_argument("--semiring", choices=tuple(_SEMIRINGS), required=True)
+    parser.add_argument(
+        "--lift",
+        choices=("one", "value"),
+        required=True,
+        help="embed the read value, or the semiring's multiplicative identity",
+    )
+    parser.add_argument(
+        "--transition",
+        action="append",
+        nargs=3,
+        required=True,
+        metavar=("NS", "LOCAL", "COMBINATION"),
+        help="one dependency relation and its and/or meaning; repeatable",
+    )
+    parser.add_argument(
+        "--root",
+        action="append",
+        metavar="TGPATH",
+        help="one declared root item; repeatable, inferred when omitted",
+    )
+    parser.add_argument(
+        "--ranked",
+        action="store_true",
+        help="also report witnesses ranked by the semiring's own order",
+    )
+    parser.add_argument(
+        "--output-cap", type=int, metavar="N", help="witness cap; requires --ranked"
+    )
+
+
 def _handle_validate(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
     del graph
@@ -292,13 +321,37 @@ def _discharge_seals(args: argparse.Namespace) -> object:
     return tiergraph.SealDeclaration(args.name, source, result).check_seals().to_data()
 
 
+def _discharge_fold(args: argparse.Namespace) -> object:
+    """Demand a fold's exactness claim against the graph and valuation it reads.
+
+    The declaration is the one ``fold`` already assembles from the same flags,
+    with the claim added, so the two commands cannot drift into describing
+    different folds. ``--exactness`` is optional on purpose: leaving it off is
+    not a usage error but reaches the library's own refusal, which hands back
+    the declaration to be made rather than quietly standing in the weaker claim.
+    """
+    declaration = _fold_declaration(tiergraph.loads(_read_bytes(args.file)), args)
+    return declaration.check_exactness().to_data(declaration.semiring)
+
+
 # One entry per capability this verb carries. The four declaration kinds this
-# package publishes take genuinely different inputs -- a pair of graphs here, a
-# graph and a role binding for a profile, a whole valuation for a fold -- so the
-# dispatch is a table of handlers rather than one shared shape they would all
-# have to be bent into. Another capability is one subparser naming its inputs
-# and one entry here returning its certificate's ``to_data()``.
+# package publishes take genuinely different inputs -- a pair of graphs for
+# seals, a whole valuation for a fold, a graph and a role binding for a profile
+# -- so the dispatch is a table of handlers rather than one shared shape they
+# would all have to be bent into. Another capability is one subparser naming its
+# inputs and one entry here returning its certificate's ``to_data()``.
+#
+# Two kinds are absent because that last clause is what they cannot supply, and
+# both absences are the library's shape rather than an omission here. A rewrite
+# effect takes the same pair of graphs seals does and refuses the same way, but
+# ``RewriteCertificate`` publishes no ``to_data()``, and encoding it in this
+# shell would put a public type's serialization somewhere no reader of that type
+# would look for it. A profile is further off: its check returns nothing to
+# certify, and ``ProfileRegistry.report`` answers a failing check with an
+# accepting report, which is precisely the artifact ``discharge`` promises never
+# to write under the name of a certificate.
 _DISCHARGES: dict[str, Callable[[argparse.Namespace], object]] = {
+    "fold": _discharge_fold,
     "seals": _discharge_seals,
 }
 
@@ -627,6 +680,11 @@ def _fold_declaration(
     only ever appears in a refusal and a second flag for it would buy nothing.
     Ranked output needs a declared tie policy that ranked selection then never
     consults, so the shell supplies one rather than offering an inert flag.
+
+    ``args.exactness`` is ``None`` under ``fold``, which runs the declaration
+    and never reads the claim, and is the claim itself under ``discharge fold``.
+    The command that offers no flag leaves the declaration UNDECLARED rather
+    than choosing a claim on the caller's behalf.
     """
     if args.output_cap is not None and not args.ranked:
         raise ValueError("--output-cap requires --ranked")
@@ -661,6 +719,11 @@ def _fold_declaration(
         ),
         output_cap=1 if args.output_cap is None else args.output_cap,
         ranked_output=args.ranked,
+        exactness=(
+            tiergraph.FoldExactness.UNDECLARED
+            if args.exactness is None
+            else tiergraph.FoldExactness(args.exactness)
+        ),
     )
 
 

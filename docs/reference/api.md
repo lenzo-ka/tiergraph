@@ -15,9 +15,10 @@ Declare executable behavior and trusted normalization tolerances.
 
 ``associative``, ``idempotent``, and ``commutative`` are self-attested at
 declaration time. React uses them as normalization gates but does not prove
-them; callers can separately execute ``ActionToleranceLawSuite``. The
-An optional semimodule claim is checked over its declared finite samples
-before the declaration can exist.
+them; a caller who wants them proved runs a law suite of its own over its
+own samples, which this package does from its conformance tests rather than
+from an importable surface. An optional semimodule claim is checked over
+its declared finite samples before the declaration can exist.
 
 ### `DistributionWitness`
 
@@ -1027,10 +1028,12 @@ FoldCertificate(exactness: 'FoldExactness', result: 'FoldResult[Value]', probes:
 Report what discharged one fold's exactness claim, and what it never reached.
 
 ``compared`` is the honest part. It is true only when the fold's derivations
-were enumerated in full within the declared budget and the combination over
-them was compared against the published value. When it is false the claim
-stood on the law search alone, and a law search that finds no refutation has
-found no refutation — it has not proved anything.
+were enumerated in full within the declared budget, which is what makes a
+comparison against the published value available at all. When it is false
+the claim stood on the law search alone, and a law search that finds no
+refutation has found no refutation — it has not proved anything. It reports
+the enumeration rather than the comparison: where the law search already
+settles the claim, the enumerated combination is not read.
 
 ``derivations`` counts the structural derivations that were enumerated, which
 includes any the valuation annihilates, so it is a measure of the search and
@@ -1130,8 +1133,10 @@ With ``ranked_output`` the fold instead returns up to ``output_cap`` witnesses
 ranked by the semiring's own order, which its multiplication must preserve
 (``multiply_preserves_witness_order``); a custom ``witness_order`` is refused, and
 so is a ``tie_policy``. Ranked selection breaks an equal-valued tie by the
-canonical witness path, which is a total order over distinct witnesses, so it
-leaves no tie for a policy to decide and would never read one. The resulting
+canonical witness path, so it leaves no tie for a policy to decide and would
+never read one. That order is total wherever the paths are distinct, which
+holds when the document's item labels are; two witnesses whose labels
+collide compare equal and are then ordered by arrival. The resulting
 order is deterministic, and the paths it compares are the fold's own structural
 labels, so it is canonical for a given document rather than globally so.
 
@@ -1169,7 +1174,11 @@ Method.
 FoldDeclaration.run(self) -> 'FoldResult[Value]'
 ```
 
-Evaluate every state using only the semiring's addition and multiplication.
+Evaluate every state with the semiring's own declared operations.
+
+Addition and multiplication carry an acyclic relation. A cyclic
+component reaches the algebra's ``star`` as well, which is what
+specifies the fixpoint there.
 
 #### `FoldDeclaration.check_exactness`
 
@@ -1193,8 +1202,10 @@ confirms whatever the declaration says rather than testing it.
 The first way is a law search over **probes the fold produces itself**,
 rather than a probe set a caller supplies. Distributivity is what
 regroups a sum over derivations into a fold over shared structure, so a
-carrier that fails it at the values this fold actually reaches cannot be
-folded exactly, whatever its declared ``LawCheck`` says. A carrier that
+carrier that fails it at one of those probes cannot be folded exactly,
+whatever its declared ``LawCheck`` says. The probes are capped, so this
+is a search over some of the values the fold reaches and not over all of
+them: finding no refutation here is not a proof. A carrier that
 cannot evaluate its own laws at its own values raises; that is a defect
 in the carrier boundary, not something to be swallowed here.
 
@@ -1215,8 +1226,10 @@ State how a fold's published value stands to the combination over every derivati
 
 ``DISTRIBUTIVE``
     The value **is** the combination over every derivation. Gate: no
-    counterexample may exist, and none may be found at the values this fold
-    itself produces.
+    counterexample may exist, and none may be found among the bounded set
+    of probes taken from the values this fold produces. The probe set is
+    capped, so a carrier that denies distributivity only at values past the
+    cap is not caught here.
 ``APPROXIMATE``
     The value is a sound approximation of that combination, and that is a
     fact about the published result rather than a footnote about the
@@ -2988,14 +3001,19 @@ side. Its target incidence order is the declared root order. Dependency
 relations determine root membership: every item on an admitted root tier
 with no incoming dependency incidence is a root. Stored order adds
 information, but stored membership may not contradict that derived set:
-stored roots must be a subset of the inferred set, so every declared root
-is parentless. A curated ordered subset is allowed; use
-:meth:`is_exhaustive` to require stored roots to equal the inferred set.
+stored roots must be a subset of the inferred set. A curated ordered subset
+is allowed; use :meth:`is_exhaustive` to require stored roots to equal the
+inferred set.
 
+Two narrowings bound what "parentless" means here, and neither is enforced.
 Reconciliation considers exactly the caller-supplied
-``dependency_relations``. It checks stored roots against the roots inferred
-over that enumerated set, but is silent about dependencies omitted from it;
-enumeration is not enforcement.
+``dependency_relations``, and is silent about dependencies omitted from it.
+Within those, it counts an incidence only when both endpoints lie on the
+root relation's admitted target tiers, so an incoming dependency whose
+source sits on another tier is not counted and its target is inferred a
+root. A declared root is therefore parentless over the enumerated
+dependencies restricted to the admitted domain, which is weaker than
+parentless in the graph; enumeration is not enforcement.
 
 #### `OrderedRootsProfile.inferred`
 
@@ -3027,7 +3045,8 @@ OrderedRootsProfile.is_exhaustive(self) -> 'bool'
 
 Return whether declared roots include every inferred parentless item.
 
-A subset is sound because every declared root is parentless; exhaustive
+A subset is sound because every declared root is parentless in the
+sense this profile infers, which the class docstring bounds; exhaustive
 consumers can use this check to require the complete inferred set.
 
 ### `PROFILES`
@@ -3268,7 +3287,7 @@ See PEP 695 for more information.
 SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
 ```
 
-Name every graph declaration used to interpret a segmentation.
+Name the graph declarations a segmentation has to be selected among.
 
 ``coverage_relation`` and ``alternative_relation`` must name bipartite
 declarations.  A span is an interval over the base tier, so each fact this
@@ -3277,6 +3296,13 @@ reading of a polyadic instance's ordered sides that keeps that meaning.
 Naming a non-bipartite declaration is refused rather than skipped, because
 silently reading only the bipartite collection would report a partial
 segmentation as a complete one.
+
+One declaration the projection reads is deliberately absent: a span's
+``label`` is the item type its tier's simple membership supplies, read
+through :meth:`Graph.item_type` and falling back to the tier's short name
+when the tier is untyped.  A profile names what a reading has to be
+selected among, and a tier carries at most one simple membership, so there
+is nothing there to select.
 
 #### `SpanViewProfile.from_data`
 
@@ -3505,8 +3531,10 @@ asserts, every one of which was examined. A ``DECORATE`` claim over a
 source that asserts three things has been held to three things; the count
 is there so a nearly vacuous claim cannot be read as a strong one.
 
-``disturbances`` counts the structures that were not left standing as the
-source had them, which is zero exactly when the rewrite decorated.
+``disturbances`` counts the ways the result failed to leave the source's
+structures standing, which is zero exactly when the rewrite decorated. One
+structure contributes one entry per way, so this is not a count of
+structures and does not sit on the same scale as ``subjects``.
 
 ### `RewriteDeclaration`
 
@@ -3534,7 +3562,7 @@ Method.
 RewriteDeclaration.disturbances(self) -> 'tuple[RewriteDisturbance, ...]'
 ```
 
-Return every structure the rewrite disturbed, in the source's order.
+Return every way the rewrite disturbed a structure, in source order.
 
 The order is the source graph's own reading order -- namespaces, then
 each tier and its items, then relation declarations, attribute
@@ -4124,7 +4152,11 @@ to_data(graph: 'Graph') -> 'dict[str, JsonValue]'
 Return the versioned primitive document as strict JSON data.
 
 A string the UTF-8 encoder refuses is refused here, named by its field path,
-so no writer built on this function emits text `loads` would then refuse.
+so no writer built on this function emits text `loads` would refuse for its
+encoding.  That is the one condition this function answers, and it is not a
+round trip over the whole refusal order: the reader ranks conditions this
+writer never asks, so `dumps` returning is not on its own a promise that
+`loads` accepts what it wrote.
 
 ## Inspection
 
@@ -4381,11 +4413,14 @@ WalkResult(nodes: 'NodeSet', truncated: 'bool', cap: 'int | None') -> None
 
 Return reached nodes and a one-sided report of the step cap.
 
-``truncated`` is ``False`` only when the walk ran out of new nodes before
-it ran out of steps, so a ``False`` report is a guarantee that ``nodes`` is
-the whole reachable set. ``True`` says only that the cap ended a step that
-was still finding nodes, which a walk that had already reached everything
-also reports; separating the two costs another step.
+``truncated`` is ``False`` when the last step found nothing the walk had
+not already reached, which is also what a step that exhausts the frontier
+and the cap at once reports: the cap being reached is not what this field
+says. A ``False`` report is a guarantee that ``nodes`` is the whole
+reachable set less the source selection, which :meth:`Walk.evaluate`
+excludes from what it returns. ``True`` says only that the cap ended a step
+that was still finding nodes, which a walk that had already reached
+everything also reports; separating the two costs another step.
 
 #### `WalkResult.to_data`
 
@@ -5777,7 +5812,7 @@ Hold reconstructed input text and its ordered, non-overlapping spans.
 SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
 ```
 
-Name every graph declaration used to interpret a segmentation.
+Name the graph declarations a segmentation has to be selected among.
 
 ``coverage_relation`` and ``alternative_relation`` must name bipartite
 declarations.  A span is an interval over the base tier, so each fact this
@@ -5786,6 +5821,13 @@ reading of a polyadic instance's ordered sides that keeps that meaning.
 Naming a non-bipartite declaration is refused rather than skipped, because
 silently reading only the bipartite collection would report a partial
 segmentation as a complete one.
+
+One declaration the projection reads is deliberately absent: a span's
+``label`` is the item type its tier's simple membership supplies, read
+through :meth:`Graph.item_type` and falling back to the tier's short name
+when the tier is untyped.  A profile names what a reading has to be
+selected among, and a tier carries at most one simple membership, so there
+is nothing there to select.
 
 #### `SpanViewProfile.from_data`
 
@@ -5863,8 +5905,10 @@ item's :class:`tiergraph.ItemRef`; and ``item_label`` as
 ``item_label(item, tier)`` with the :class:`tiergraph.Item` and its owning
 :class:`tiergraph.Tier`, so a consumer can fall back to a tier-derived
 label. When ``item_label`` is absent or returns ``None`` the default label
-is built from the item's durable id and attributes without querying clock
-timing, so the default holds under a structural clock as well.
+is built from the item's durable id and attributes, and appends the item's
+physical timing when a clock is rendering one. On the occupied-spine path
+no clock reaches that default, so it holds under a structural clock as
+well.
 
 Two further hooks shape relation rendering on the occupied-spine path.
 ``relation_style`` is called as ``relation_style(relation)`` with the

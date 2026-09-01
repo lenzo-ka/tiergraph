@@ -136,9 +136,10 @@ class ActionDeclaration[Carrier, Result]:
 
     ``associative``, ``idempotent``, and ``commutative`` are self-attested at
     declaration time. React uses them as normalization gates but does not prove
-    them; callers can separately execute ``ActionToleranceLawSuite``. The
-    An optional semimodule claim is checked over its declared finite samples
-    before the declaration can exist.
+    them; a caller who wants them proved runs a law suite of its own over its
+    own samples, which this package does from its conformance tests rather than
+    from an importable surface. An optional semimodule claim is checked over
+    its declared finite samples before the declaration can exist.
     """
 
     name: str
