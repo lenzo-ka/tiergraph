@@ -10,13 +10,22 @@ import pytest
 from tests.test_wire import rich_graph
 from tiergraph import (
     FORMAT_VERSION,
+    AddItem,
+    DeclareNamespace,
+    DeclareTier,
     ExecutionError,
     Graph,
     GraphValidationError,
+    NamespaceDeclaration,
+    Program,
+    QualifiedName,
+    TierDeclaration,
     core,
     execute,
     grammar_loads,
     loads,
+    machine_codec,
+    program_dumps,
     program_loads,
     schema,
     selection_loads,
@@ -185,6 +194,80 @@ def test_a_stamped_machine_header_is_still_held_to_its_field_set() -> None:
     )
 
 
+def test_a_program_line_that_is_not_text_is_an_encoding_condition() -> None:
+    """REGRESSION: bad bytes outrank bad syntax in the program reader too.
+
+    The order separates "the bytes are text" from "the text is JSON", and a
+    line that is not UTF-8 has no JSON to be wrong about.  Handing the
+    undecoded line to the JSON parser reported the condition one rank late and
+    under that parser's own encoding guess: a line opening with a UTF-16
+    byte-order mark was read as UTF-16 rather than refused as not UTF-8.  The
+    offending line follows the header so the reported number is shown to be
+    the line the bytes are on rather than a constant.
+    """
+    refusal = refuse(program_loads, b'{"machine_version":"1"}\n\xff\n')
+    assert refusal.stage is RefusalStage.ENCODING
+    assert str(refusal) == "JSONL line 2: parse UTF-8 failed: invalid start byte"
+    assert refusal.also == ()
+
+
+def test_a_program_in_a_foreign_encoding_is_refused_rather_than_read() -> None:
+    """REGRESSION: the reader decodes UTF-8 instead of guessing an encoding.
+
+    Handing an undecoded line to `json.loads` let that function sniff an
+    encoding from the leading bytes, so a program written in UTF-16BE or
+    UTF-32BE was not mis-staged but *read*: it came back as an equal `Program`
+    carrying every opcode and a matching fingerprint, built from bytes the
+    format does not admit.  Only the big-endian encodings reached that far,
+    because they place the newline byte last and so survive splitting on it,
+    which is why this uses a multi-line program rather than a bare header --
+    a single-line fixture would show a wrong success but not that the whole
+    program was reconstructed from it.
+
+    A condition reported at the wrong rank is a diagnostic defect.  Accepting
+    a document in an encoding the format does not admit is a soundness one, so
+    the assertion here is that nothing is returned at all.
+    """
+    namespace = "urn:refusal"
+    tier = QualifiedName(namespace, "events")
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("c", namespace)),
+            DeclareTier(TierDeclaration(tier, "Events")),
+            AddItem(tier),
+        )
+    )
+    canonical = program_dumps(program)
+    assert program_loads(canonical.encode("utf-8")) == program
+
+    for encoding in ("utf-16-be", "utf-32-be", "utf-16-le", "utf-32-le", "utf-8-sig"):
+        refusal = refuse(program_loads, canonical.encode(encoding))
+        assert refusal.stage in {RefusalStage.ENCODING, RefusalStage.SYNTAX}
+        assert str(refusal).startswith("JSONL line 1: ")
+
+
+def test_a_program_line_with_a_repeated_key_is_a_syntax_condition() -> None:
+    """REGRESSION: an ambiguous object is refused rather than resolved.
+
+    A repeated key is a syntax condition for the other three readers, and the
+    program reader parsed without the hook that raises it, so the JSON
+    library's last-wins rule silently chose a reading the input does not
+    determine.  The header case would otherwise be accepted outright, and the
+    opcode case would otherwise be reported as whatever the surviving member
+    made of the record, which is a later stage judging a text that was never
+    settled.
+    """
+    header = refuse(program_loads, b'{"machine_version":"1","machine_version":"1"}\n')
+    assert header.stage is RefusalStage.SYNTAX
+    assert str(header) == (
+        "JSONL line 1: parse JSON failed: duplicate object key 'machine_version'"
+    )
+
+    opcode = refuse(program_loads, b'{"machine_version":"1"}\n{"a":1,"a":2}\n')
+    assert opcode.stage is RefusalStage.SYNTAX
+    assert str(opcode) == "JSONL line 2: parse JSON failed: duplicate object key 'a'"
+
+
 @pytest.mark.parametrize(
     ("source", "stage"),
     [
@@ -206,23 +289,15 @@ def test_each_document_reading_stage_is_reachable(
     assert refuse(loads, source).stage is stage
 
 
-def test_a_document_over_the_size_limit_outranks_its_own_bad_bytes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """REGRESSION: two conditions hold at once and the lower stage is reported.
-
-    These bytes are both over the accepted size and not text.  The envelope
-    condition explains the encoding one - a reader that will not hold the input
-    never decodes it - so the size is primary, and a fixture carrying only one
-    of the two could not tell that apart.
-    """
-    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
-    refusal = refuse(loads, b"\xff\xfe")
-    assert refusal.stage is RefusalStage.ENVELOPE
-    assert str(refusal) == "document size 2 bytes exceeds limit 1"
-
-
-@pytest.mark.parametrize("reader", [grammar_loads, selection_loads])
+@pytest.mark.parametrize(
+    ("reader", "scope"),
+    [
+        (loads, ""),
+        (grammar_loads, ""),
+        (selection_loads, ""),
+        (program_loads, "JSONL line 1: "),
+    ],
+)
 @pytest.mark.parametrize(
     ("source", "stage", "message"),
     [
@@ -241,39 +316,67 @@ def test_a_document_over_the_size_limit_outranks_its_own_bad_bytes(
     ],
 )
 def test_every_reader_stages_the_text_before_reading_it(
-    reader: object, source: str | bytes, stage: RefusalStage, message: str
+    reader: object,
+    scope: str,
+    source: str | bytes,
+    stage: RefusalStage,
+    message: str,
 ) -> None:
-    """REGRESSION: the grammar and selector readers stage their own text.
+    """REGRESSION: all four document readers stage their own text alike.
 
-    The declared order governs every document reader this package exposes, so
-    a reader that
-    let the JSON parser's own exception escape would leave a caller matching
-    wording for a condition the order already names.  These are the conditions
-    the document reader answers before it looks at any member, and the stage
+    The declared order governs every document reader this package exposes, so a
+    reader that let the JSON parser's own exception escape would leave a caller
+    matching wording for a condition the order already names.  These are the
+    conditions a reader answers before it looks at any member, and the stage
     and the wording are asserted together because a refusal at the right stage
     carrying a different account of it is a different contract.
+
+    The population is the four readers `docs/format.md` names, because a
+    universal claim tested on a subset is how the program reader came to answer
+    two of these conditions differently from the other three.  Line orientation
+    shows up only as the scope each condition is reported in: the program
+    reader says which line the text it could not read was on, and says nothing
+    else differently.
     """
     refusal = refuse(reader, source)
     assert refusal.stage is stage
-    assert str(refusal) == message
-    assert refuse(loads, source).stage is stage
-    assert str(refuse(loads, source)) == message
+    assert str(refusal) == scope + message
 
 
-@pytest.mark.parametrize("reader", [grammar_loads, selection_loads])
-def test_every_reader_holds_the_same_envelope_before_decoding(
-    reader: object, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("reader", "limits", "message"),
+    [
+        (loads, wire, "document size 2 bytes exceeds limit 1"),
+        (grammar_loads, wire, "document size 2 bytes exceeds limit 1"),
+        (selection_loads, wire, "document size 2 bytes exceeds limit 1"),
+        (program_loads, machine_codec, "JSONL program exceeds 1 bytes"),
+    ],
+)
+def test_every_reader_measures_its_own_envelope_before_decoding(
+    reader: object,
+    limits: object,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """REGRESSION: the shared envelope limit is the first condition each meets.
+    """REGRESSION: the envelope is the first condition each reader meets.
 
     An oversized input that is also not text meets two conditions at once, and
     only a reader enforcing the envelope first reports the lower stage; a
-    reader that decoded before measuring would report the encoding one.
+    reader that decoded before measuring would report the encoding one.  A
+    fixture carrying only one of the two could not tell those apart.
+
+    The envelope is each reader's own rather than one shared limit, which is
+    why the module the limit is read from is a parameter here.  Three readers
+    measure a whole text against `wire.MAX_DOCUMENT_BYTES`; the program reader
+    reads lines, so it measures a running total against its own binding of that
+    name and reports the program rather than the document.  Patching `wire`
+    for it would leave the limit it actually consults untouched, and the test
+    would pass without exercising anything.
     """
-    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
+    monkeypatch.setattr(limits, "MAX_DOCUMENT_BYTES", 1)
     refusal = refuse(reader, b"\xff\xfe")
     assert refusal.stage is RefusalStage.ENVELOPE
-    assert str(refusal) == "document size 2 bytes exceeds limit 1"
+    assert str(refusal) == message
 
 
 def test_a_graph_reference_outranks_no_further_structural_condition() -> None:

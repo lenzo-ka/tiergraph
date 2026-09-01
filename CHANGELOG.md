@@ -371,6 +371,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed a soundness hole in the JSON Lines program reader, found while
+  reconciling that reader with the one refusal order `docs/format.md` declares
+  over every document reader this package exposes. `load_program` handed each
+  undecoded line to `json.loads`, which sniffs an encoding from the leading
+  bytes, so a program written in UTF-16BE, UTF-32BE, or UTF-8 with a byte-order
+  mark was not refused but read: it came back as an equal `Program` carrying
+  every opcode and a matching fingerprint, built from bytes the format does not
+  admit. The same sniffing mis-staged the refusals it did produce, reporting at
+  `SYNTAX` a condition the order ranks at `ENCODING`. Separately, a repeated
+  object key was accepted outright, because the reader parsed without the hook
+  the other three readers pass, so
+  `{"machine_version":"1","machine_version":"1"}` loaded as an empty program
+  under the JSON library's last-wins rule instead of refusing an object the
+  input does not determine. `load_program` and `program_loads` now decode each
+  line as UTF-8 before parsing it and refuse a repeated key at `SYNTAX`, in the
+  wording the document readers already used and scoped by the line the
+  condition was met on; a syntax refusal now reads `JSONL line 2: parse JSON
+  failed: Expecting value` rather than carrying the parser's line-and-column
+  suffix, which measured a position inside a single line. The three
+  whole-document readers were never exposed to this: they decode UTF-8
+  explicitly. This refuses input that was previously accepted, including
+  programs that previously loaded successfully.
+
 - Closed four gate checks whose enumeration was narrower than the population
   each claimed, every one of them found by constructing a case that passed and
   should not have. `make gate` derives its import path from the makefile's own
