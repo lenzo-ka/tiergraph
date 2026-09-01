@@ -312,7 +312,7 @@ rewrite because a pair of graphs is the only place it can be true.
 Invalid declarations or graph content at a graph-construction boundary raise
 `GraphValidationError`, a subclass of `ValueError`. This includes validation
 performed while decoding a serialized document into a graph. Once a `Graph` is
-valid, invalid arguments to lookup and mutation-style methods such as
+valid, invalid arguments to the lookup, resolution, and promotion methods
 `resolve_item()`, `boundaries()`, and `promote_item()` deliberately remain plain
 `ValueError`; wrong Python argument kinds may raise `TypeError`. The editing
 operations on `Graph` and `GraphEditor` refuse with `GraphValidationError`,

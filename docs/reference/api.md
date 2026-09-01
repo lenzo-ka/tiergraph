@@ -441,8 +441,11 @@ AsBuilt.fingerprint(self) -> 'str'
 
 Return a SHA-256 fingerprint of canonical as-built state bytes.
 
-Durable ids are genuine as-built content, not metadata, so promotion
-changes these bytes and therefore this fingerprint.
+Durable ids are genuine as-built content, not metadata, so promoting
+an item or an interior boundary changes these bytes and therefore this
+fingerprint.  A tier's leading and trailing boundaries are already
+addressable by side, so promoting one returns the same graph and leaves
+this fingerprint alone.
 
 #### `AsBuilt.to_data`
 
@@ -1748,9 +1751,10 @@ Hold a validated immutable graph and derive order and empty boundaries.
 
 Collections keyed by names or references are canonicalized because supply
 order has no graph meaning: namespaces, relation and attribute declarations,
-every attribute-value collection, sparse boundary values, and relation-side
-allowed kinds and tiers.  Tiers, tier items, relation instances, and polyadic
-endpoint sequences remain ordered because their sequence carries graph meaning.
+every attribute-value collection, seals, layers and the facts within each
+layer, sparse boundary values, and relation-side allowed kinds and tiers.
+Tiers, tier items, relation instances, and polyadic endpoint sequences
+remain ordered because their sequence carries graph meaning.
 
 #### `Graph.layer_values`
 
@@ -3089,12 +3093,14 @@ Method.
 ProfileRegistry.satisfied(self, graph: 'Graph', roles: 'RoleBinding') -> 'tuple[ProfileReport, ...]'
 ```
 
-Return the reports of the profiles whose check refused nothing.
+Return the reports of the profiles whose check ran and accepted.
 
-Reports are returned rather than bare names because a name alone would
-read as a whole guarantee. A report carries its outcome and its
-unconfirmed conditions, so a caller holding one can see how far the
-answer reaches.
+These are the ``satisfied`` and ``satisfied_as_checked`` ones. A
+profile reported ``not_applicable`` refused nothing and is still
+absent, because an unanswered question is not an accepted one. Reports
+are returned rather than bare names because a name alone would read as
+a whole guarantee. A report carries its outcome and its unconfirmed
+conditions, so a caller holding one can see how far the answer reaches.
 
 ### `ProfileReport`
 
@@ -4293,7 +4299,13 @@ Choose the declared descending direction or its computed inverse view.
 WalkResult(nodes: 'NodeSet', truncated: 'bool', cap: 'int | None') -> None
 ```
 
-Return reached nodes and disclose whether a step cap stopped the walk.
+Return reached nodes and a one-sided report of the step cap.
+
+``truncated`` is ``False`` only when the walk ran out of new nodes before
+it ran out of steps, so a ``False`` report is a guarantee that ``nodes`` is
+the whole reachable set. ``True`` says only that the cap ended a step that
+was still finding nodes, which a walk that had already reached everything
+also reports; separating the two costs another step.
 
 #### `WalkResult.to_data`
 
