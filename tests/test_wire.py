@@ -516,26 +516,74 @@ def test_canonical_read_back_corpus_denominator_is_pinned() -> None:
     assert len(read_back_corpus()) == 10
 
 
-def test_no_writer_returns_text_this_reader_would_refuse() -> None:
-    """The reader-accepted surrogate document cannot become unreadable output.
+SURROGATE_DOCUMENT = (
+    '{"format_version":"0.2.0","graph":'
+    '{"namespaces":[{"namespace":"\\ud800","prefix":"p"}]}}'
+)
 
-    This is the whole defect in one place: the reader accepts this 87-byte
-    ASCII document, and every writer used to hand back either a string holding
-    a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  Every
-    writer must now make the same decision, name the same field path, and
+
+def test_the_reader_refuses_the_document_no_writer_will_emit() -> None:
+    """The reader decides the encoding condition the writers already decide.
+
+    This 87-byte document is ASCII, so every check that reads bytes passes it;
+    the unpaired surrogate is present only as an escape and becomes a character
+    when the parser builds the value.  The reader used to return a ``Graph``
+    for it while all four writers refused it, which left the format holding a
+    document with no canonical byte form that a reader nonetheless accepted.
+
+    The stage is the writers' stage.  ``docs/format.md`` defines rank 2 as the
+    text being one the encoder can write, and the canonical text of this
+    document -- what ``dumps`` writes, without ASCII escaping -- carries the
+    character itself.  Reporting a later rank because the check must run after
+    parsing would rank the condition by where it was found rather than by what
+    it is, and would give one condition two stages depending on which side of
+    the codec met it.
+    """
+    assert len(SURROGATE_DOCUMENT.encode("ascii")) == 87
+    with pytest.raises(ValueError) as refusal:
+        loads(SURROGATE_DOCUMENT)
+    assert type(refusal.value) is Refusal
+    assert refusal.value.stage is RefusalStage.ENCODING
+    assert refusal.value.also == ()
+    assert str(refusal.value) == (
+        "graph.namespaces[0].namespace value '\\ud800' has unsupported character U+D800"
+    )
+
+
+def test_the_reader_refuses_the_escape_the_bytes_alone_cannot_show() -> None:
+    """Bytes and escape spell one condition, and both reach the same stage.
+
+    The raw spelling cannot survive a byte channel at all, so the two are not
+    interchangeable inputs: the escape is the only way this document reaches a
+    reader, and it is exactly the way that used to pass.
+    """
+    with pytest.raises(Refusal) as escaped:
+        loads(SURROGATE_DOCUMENT.encode("ascii"))
+    assert escaped.value.stage is RefusalStage.ENCODING
+    assert "graph.namespaces[0].namespace" in str(escaped.value)
+
+    raw = SURROGATE_DOCUMENT.replace("\\ud800", "\ud800")
+    with pytest.raises(Refusal) as unescaped:
+        loads(raw)
+    assert unescaped.value.stage is RefusalStage.ENCODING
+    with pytest.raises(UnicodeEncodeError):
+        raw.encode("utf-8")
+
+
+def test_no_writer_returns_text_this_reader_would_refuse() -> None:
+    """A graph the writers refuse is a graph the reader will not hand back.
+
+    Every writer must make the same decision, name the same field path, and
     raise this reader's own encoding-staged ``Refusal`` rather than leaking an
-    encoder exception.
+    encoder exception.  The graph is built directly because the reader now
+    refuses the document that used to produce it, which is the point: the two
+    halves of the codec agree on the stage and on the field path.
 
     The population is the module's own declared surface less the one reader in
     it, so a writer added to ``__all__`` is covered by this claim on the day it
     is added rather than on the day someone remembers to list it here.
     """
-    document = (
-        '{"format_version":"0.2.0","graph":'
-        '{"namespaces":[{"namespace":"\\ud800","prefix":"p"}]}}'
-    )
-    assert len(document.encode("ascii")) == 87
-    graph = loads(document)
+    graph = Graph((NamespaceDeclaration("p", "\ud800"),), (), ())
     writers = tuple(
         member
         for name in wire.__all__

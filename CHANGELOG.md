@@ -370,6 +370,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance probes kept their outcomes. The later format break in this
   release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"` and changed both the
   schema artifact and its stamp.
+- **BREAKING:** every document reader now refuses a string the UTF-8 encoder
+  cannot write, whichever way the text spells it. This is a soundness fix, not a
+  change to the refusal order: `docs/format.md` already ranked this condition at
+  `RefusalStage.ENCODING`, and the reader simply never asked. A character
+  standing in the text was already refused there, but one written as an escape
+  is not in the text at all -- `\ud800` is six ASCII bytes -- so it passed every
+  check that reads bytes and became a character only once the parser built the
+  value. `loads` therefore returned a `Graph` for
+  `{"format_version":"0.2.0","graph":{"namespaces":[{"namespace":"\ud800","prefix":"p"}]}}`
+  while `dumps`, `dump_compact`, `dump_bytes`, and `to_data` all refused that
+  same graph at `RefusalStage.ENCODING`, so the format admitted documents with
+  no canonical byte form -- the byte API `docs/format.md` names for `convert --to
+  bytes` -- and a round trip through this package could not reproduce them.
+  `loads`, `grammar_loads`, and `selection_loads` now run the writer's own check
+  on the parsed value and report the writer's own stage and wording, named by the
+  path in the document that was read. Running the check after parsing does not
+  make it a later condition: the order ranks conditions rather than the checks
+  that find them, and the canonical text of such a document, which `dumps` writes
+  without ASCII escaping, carries the character itself. One consequence is that
+  the order is not fully realized on a document that is both unparseable and
+  unencodable: it is reported at `SYNTAX`, rank 3, because until the text parses
+  there is no value for the higher-ranked condition to hold of. `tiergraph
+  validate` now refuses such a document at exit 1 where it previously reported
+  success and left `convert` to refuse the same input, and seven captured corpus
+  documents, already dispositioned `never-legal` for exactly this reason, now
+  refuse rather than load. No narrowing is priced here and `FORMAT_VERSION` stays
+  `"0.2.0"`: what shrinks is the set the reader admitted past what the format ever
+  allowed, and nothing this package could write is refused.
 
 ### Removed
 

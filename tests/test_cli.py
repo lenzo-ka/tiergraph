@@ -2134,7 +2134,19 @@ def test_cli_binds_no_private_name_from_another_module() -> None:
 def test_surrogate_reports_are_refused_with_field_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every CLI report refuses surrogate data with its report or graph path."""
+    """Every CLI entry refuses surrogate data by field path, never by traceback.
+
+    Which side names the path depends on where the surrogate enters. A graph
+    read from a file is refused by the reader, which names the path in the
+    document it read, so every subcommand taking a graph file reports the same
+    ``graph.namespaces[...]`` path however far past decoding its own report
+    would have gone. Only ``step`` and ``run``, which build their graph from a
+    JSONL program rather than a document, still reach a writer, and those name
+    the writer's own path.
+
+    What every case shares is the part worth pinning: exit 1, this package's
+    field-path wording, and no ``UnicodeEncodeError`` reaching a user.
+    """
     source = tmp_path / "path-graph.json"
     source.write_text(
         '{"format_version":"0.2.0","graph":{"namespaces":'
@@ -2184,8 +2196,13 @@ def test_surrogate_reports_are_refused_with_field_paths(
     namespaces.append({"namespace": surrogate, "prefix": "bad"})
     span_graph.write_text(json.dumps(span_data))
 
+    # The reader names the path in the document it read, so every graph file
+    # reports the binding that carries the surrogate rather than wherever that
+    # namespace would have surfaced in the subcommand's own report.
+    graph_zero = "graph.namespaces[0].namespace"
+    graph_one = "graph.namespaces[1].namespace"
     cases = [
-        (["inspect", str(source)], "namespaces[0].namespace"),
+        (["inspect", str(source)], graph_zero),
         (
             [
                 "walk",
@@ -2197,11 +2214,11 @@ def test_surrogate_reports_are_refused_with_field_paths(
                 "--relation-local",
                 "contains",
             ],
-            "nodes[0].reference.tier.namespace",
+            graph_zero,
         ),
         (
             ["path", "resolve", str(source), "/items/durable/a"],
-            "current.tier.namespace",
+            graph_zero,
         ),
         (
             [
@@ -2217,11 +2234,11 @@ def test_surrogate_reports_are_refused_with_field_paths(
                 "--index",
                 "0",
             ],
-            "path",
+            graph_zero,
         ),
         (
             ["select", str(source), "--selector", str(selector)],
-            "nodes[0].reference.tier.namespace",
+            graph_zero,
         ),
         *[
             (
@@ -2245,7 +2262,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
                     "or",
                     *extra_flags,
                 ],
-                "roots[0].item.tier.namespace",
+                graph_zero,
             )
             for semiring_name, lift_name, extra_flags in (
                 ("counting", "one", ()),
@@ -2260,7 +2277,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
                 "--profile",
                 str(clock_profile),
             ],
-            "clock_tier.namespace",
+            graph_zero,
         ),
         (
             [
@@ -2272,7 +2289,7 @@ def test_surrogate_reports_are_refused_with_field_paths(
                 "--item",
                 _structural_path("items", surrogate, CLOCK_SEGMENT.local_name, 0),
             ],
-            "item.tier.namespace",
+            graph_zero,
         ),
         *[
             (
@@ -2285,12 +2302,12 @@ def test_surrogate_reports_are_refused_with_field_paths(
                     "--format",
                     name,
                 ],
-                "namespaces[1].namespace",
+                graph_one,
             )
             for name in ("text", "json", "jsonl", "html")
         ],
-        (["step", str(program)], "declaration.namespace"),
-        (["render", str(span_graph)], "namespaces[1].namespace"),
+        (["step", str(program)], "opcode.declaration.namespace"),
+        (["render", str(span_graph)], graph_one),
         (["run", str(program), "--to", "dot"], "namespaces[0].namespace"),
     ]
     for arguments, field_path in cases:
@@ -2317,22 +2334,34 @@ def test_invalid_utf8_profile_remains_an_exit_three_decode_failure(
     assert "UnicodeDecodeError" in capsys.readouterr().err
 
 
-def test_validate_accepts_surrogate_but_convert_refuses_emission(
+def test_validate_and_convert_agree_about_the_escaped_surrogate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """`validate` no longer passes a document `convert` cannot canonicalize.
+
+    ``json.dumps`` writes the lone surrogate as the ASCII escape ``\\ud800``, so
+    this file is byte-for-byte writable and reaches the reader intact. It used
+    to validate at exit 0 and then fail conversion at exit 1, which said the
+    document was one this format admits while no writer here could produce it.
+    Both commands now refuse it, at the same stage and by the same field path.
+    """
     source = tmp_path / "surrogate.json"
     data = tiergraph.to_data(tiergraph.Graph((), (), ()))
     graph_data = data["graph"]
     assert isinstance(graph_data, dict)
     graph_data["namespaces"] = [{"prefix": "p", "namespace": chr(0xD800)}]
     source.write_text(json.dumps(data))
-    assert main(["validate", str(source)]) == 0
-    capsys.readouterr()
-    # Deliberately exercise the writer's refusal after reader-only validation.
-    assert main(["convert", str(source), "--to", "json-compact"]) == 1
-    error = capsys.readouterr().err
-    assert "ValueError" in error
-    assert "namespaces[0].namespace" in error
+    assert source.read_text().count("\\ud800") == 1
+
+    for arguments in (
+        ["validate", str(source)],
+        ["convert", str(source), "--to", "json-compact"],
+    ):
+        assert main(arguments) == 1, arguments
+        error = capsys.readouterr().err
+        assert "ValueError" in error, arguments
+        assert "graph.namespaces[0].namespace value " in error, arguments
+        assert "unsupported character U+D800" in error, arguments
 
 
 def test_module_entry_point_and_pipelines(tmp_path: Path) -> None:

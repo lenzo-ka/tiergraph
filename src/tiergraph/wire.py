@@ -193,10 +193,28 @@ def _parsed_json(document: str | bytes) -> object:
     them at the same stage and in the same wording, rather than each reader
     deciding for itself whether a parse failure is a staged refusal or the JSON
     library's own exception.
+
+    The encoding condition is answered twice, because a JSON text can spell an
+    unencodable character two ways.  ``_checked_document`` answers it for a
+    character standing in the text itself.  A character written as an escape is
+    not in the text at all -- ``\\ud800`` is six ASCII bytes -- so it survives
+    every check that reads bytes and only becomes a character when the parser
+    builds the value.  The same check therefore runs again on the parsed value,
+    which is why the reader is handed ``_refuse_unencodable_strings``, the very
+    function ``to_data`` uses: one condition, one wording, one stage, whichever
+    direction a caller met it from.
+
+    Running it after parsing does not make it a later condition.  The order in
+    ``docs/format.md`` ranks conditions, not the checks that find them, and
+    rank 2 is defined as the text being one the encoder can write.  This
+    document's canonical text -- the one ``dumps`` would write, with
+    ``ensure_ascii=False`` -- holds the character rather than an escape, and is
+    a text the encoder cannot write.  The escape changes when the condition
+    becomes visible, not what the condition is.
     """
     try:
         text = _checked_document(document)
-        return json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+        parsed = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
     except json.JSONDecodeError as error:
         raise Refusal(RefusalStage.SYNTAX, f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
@@ -211,6 +229,8 @@ def _parsed_json(document: str | bytes) -> object:
         raise Refusal(
             RefusalStage.SYNTAX, "parse JSON failed: document nesting is too deep"
         ) from error
+    _refuse_unencodable_strings(cast(JsonValue, parsed), "")
+    return parsed
 
 
 def loads(document: str | bytes) -> Graph:
