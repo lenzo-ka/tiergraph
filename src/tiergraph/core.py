@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from functools import total_ordering
 from types import MappingProxyType
 from typing import NamedTuple, Protocol, cast
@@ -22,8 +22,69 @@ _DOUBLE_LEXICAL = re.compile(
 )
 
 
+class RefusalStage(IntEnum):
+    """Number the classes a refusal can belong to, lowest reported first.
+
+    A reader routinely meets several conditions at once.  The stage numbers put
+    them in one order, so a caller is told the condition that explains the rest
+    rather than whichever check happened to run first: a refusal at one stage
+    explains what a later stage would have reported, and the converse never
+    holds.  Bytes that are not text have no JSON to nest; a document announcing
+    a format this release does not implement has a field set this release cannot
+    judge; a member of the wrong construction has no value to place in a
+    declared language; a name that does not resolve cannot keep a promise.
+
+    The stages rank the conditions that apply to one node.  Nodes are read from
+    the outside in and members in their declared order, so an enclosing node's
+    condition precedes its members' whatever their stages, and the pair of a
+    node and a stage totally orders every condition one read can meet.
+
+    A condition is carried beside the primary one only while it stays
+    applicable once the primary is known.  A field set is not judged against a
+    declaration the document never selected, so a foreign version is reported
+    alone rather than with the fields that being foreign introduces.
+
+    The stage is the stable part of a refusal; the wording is diagnostic.
+
+    The vocabulary lives here, beside the other declared enumerations, because
+    both refusal channels have to name it: this module is the base every other
+    imports, so a refusal raised from here can carry a stage without the cycle
+    that reaching upward for it would create.
+    """
+
+    ENVELOPE = 1
+    ENCODING = 2
+    SYNTAX = 3
+    CONSTRUCTION = 4
+    DISCRIMINATOR = 5
+    SHAPE = 6
+    VALUE = 7
+    REFERENCE = 8
+    SEMANTICS = 9
+
+
 class GraphValidationError(ValueError):
-    """Report a declaration or graph-contract validation failure."""
+    """Report a declaration or graph-contract validation failure.
+
+    A caller meets refusals from two channels and should have to learn one
+    vocabulary, so this failure carries the same ``stage`` a ``Refusal`` does,
+    as data rather than prose.  The stage defaults to ``SEMANTICS`` because a
+    violated declaration or graph contract is semantic by nature: the document
+    parsed, its shapes held, and what it says is still not sayable.  A site with
+    a sharper condition names it, and the default keeps every other site
+    correct without restating what it already means.  The message stays first so
+    an existing raise reads unchanged.  This is still a ``ValueError``, so every
+    caller that already catches one still does.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        stage: RefusalStage = RefusalStage.SEMANTICS,
+    ) -> None:
+        """Record the stage this failure belongs to beside its wording."""
+        super().__init__(message)
+        self.stage = stage
 
 
 class AttributeDomain(StrEnum):

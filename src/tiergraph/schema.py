@@ -8,46 +8,13 @@ import re
 from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 from typing import cast
 
-from tiergraph.core import JsonValue
-
-
-class RefusalStage(IntEnum):
-    """Number the classes a refusal can belong to, lowest reported first.
-
-    A reader routinely meets several conditions at once.  The stage numbers put
-    them in one order, so a caller is told the condition that explains the rest
-    rather than whichever check happened to run first: a refusal at one stage
-    explains what a later stage would have reported, and the converse never
-    holds.  Bytes that are not text have no JSON to nest; a document announcing
-    a format this release does not implement has a field set this release cannot
-    judge; a member of the wrong construction has no value to place in a
-    declared language; a name that does not resolve cannot keep a promise.
-
-    The stages rank the conditions that apply to one node.  Nodes are read from
-    the outside in and members in their declared order, so an enclosing node's
-    condition precedes its members' whatever their stages, and the pair of a
-    node and a stage totally orders every condition one read can meet.
-
-    A condition is carried beside the primary one only while it stays
-    applicable once the primary is known.  A field set is not judged against a
-    declaration the document never selected, so a foreign version is reported
-    alone rather than with the fields that being foreign introduces.
-
-    The stage is the stable part of a refusal; the wording is diagnostic.
-    """
-
-    ENVELOPE = 1
-    ENCODING = 2
-    SYNTAX = 3
-    CONSTRUCTION = 4
-    DISCRIMINATOR = 5
-    SHAPE = 6
-    VALUE = 7
-    REFERENCE = 8
-    SEMANTICS = 9
+# RefusalStage is declared in the base module, the one place both refusal
+# channels can reach without a cycle.  It stays named here, and in __all__, so
+# that this remains the module a reader of refusals imports the stage from.
+from tiergraph.core import JsonValue, RefusalStage
 
 
 class Refusal(ValueError):

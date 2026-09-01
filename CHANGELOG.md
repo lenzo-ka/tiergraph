@@ -167,6 +167,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `GraphValidationError` now carries a `stage`, so both channels this package
+  refuses through report one vocabulary rather than two shapes. The stage
+  defaults to `RefusalStage.SEMANTICS`, which is what a declaration or
+  graph-contract violation already meant, and the message stays the first
+  argument, so every existing raise and every existing `except ValueError` is
+  unaffected. `RefusalStage` itself moves to `tiergraph.core`, the one module
+  both channels reach without a cycle, and stays exported from
+  `tiergraph.schema`, where callers import it.
 - **BREAKING:** the clock CLI now names the values it returns: `tiergraph clock
   positions` becomes `tiergraph clock coordinates`, and `tiergraph clock
   position --position PATH` becomes `tiergraph clock boundary --boundary PATH`.
