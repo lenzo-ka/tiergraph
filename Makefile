@@ -76,8 +76,10 @@ format-growth:
 	@$(VENV_PYTHON) scripts/check_format_growth.py
 
 # The other half of growth. The schema gate above covers structural shape; this
-# runs the current decoder over documents a previous release ACCEPTED, so a
-# tightened decoder that changes no schema byte still has to answer for itself.
+# runs the current decoder over documents ACCEPTED when the corpus was captured,
+# so a tightened decoder that changes no schema byte still has to answer for
+# itself. Every entry in the corpus today was captured from a development tree,
+# so the span covered is since that capture and not since any release.
 format-semantics:
 	@$(VENV_PYTHON) scripts/check_format_semantics.py
 

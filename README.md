@@ -189,10 +189,15 @@ The gate reads the schema, and the schema is not the whole format. The decoder i
 the authority for semantic constraints such as declaration compatibility,
 acyclicity, and reference validity, and a release that tightened one of those
 would refuse a document the previous release accepted without changing a schema
-byte. A second gate replays a frozen corpus of documents an earlier release
-accepted through the current decoder, and fails on any refusal the corpus entry's
-disposition does not already account for. So the semantic half of *only grows* is
-partly enforced as well — over the documents that corpus holds, which are the ones
-this repository's own test suite happened to construct rather than a survey of the
-format. A reader deciding whether an existing document still loads should read the
-changelog, not the version alone.
+byte. A second gate replays a frozen corpus of accepted documents through the
+current decoder, and fails on any refusal the corpus entry's disposition does not
+already account for. Each entry records the version its capture ran under, and
+every entry the corpus holds today was captured from the development tree rather
+than from a published release: what this gate catches is a decoder that has
+tightened since that capture, and it enforces nothing about cross-release
+compatibility yet. Capture belongs at a release, and once entries taken there are
+frozen in the corpus the same gate covers the span since that release. So the
+semantic half of *only grows* is partly enforced as well — over the documents that
+corpus holds, which are the ones this repository's own test suite happened to
+construct rather than a survey of the format. A reader deciding whether an
+existing document still loads should read the changelog, not the version alone.
