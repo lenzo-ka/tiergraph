@@ -17,7 +17,13 @@ VENV_PYTHON := $(VENV)/bin/python
 MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 export PYTHONPATH := $(MAKEFILE_DIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth docs docs-check tracked-clean documented reservations changelog-claims gate check
+# Every target below is a command, not a file it builds. The declaration is
+# load-bearing rather than decorative: `docs` and `schema` name directories that
+# exist in the checkout, and without it make reads those targets as up to date
+# and runs nothing. A target left off this line is silent until something in the
+# tree happens to share its name, which is why `format-semantics` and
+# `corpus-capture` sat missing here without ever being noticed.
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
