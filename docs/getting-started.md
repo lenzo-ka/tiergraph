@@ -66,8 +66,9 @@ object per line. Run one with `tiergraph run program.jsonl --to json`.
 
 A working graph usually declares more: a type for its items, a typed attribute,
 and a relation between items. The next graph gives each step a decimal `cost`
-and a `depends` relation, declared acyclic so it can be walked and folded
-without a step cap.
+and a `depends` relation, declared acyclic so an unbounded walk over it is
+admitted. A fold reads the same relation and asks nothing of that promise; it
+evaluates a cyclic relation too.
 
 ```python
 from decimal import Decimal

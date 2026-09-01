@@ -1,10 +1,13 @@
 # Folding
 
-A fold evaluates a finite acyclic dependency relation with a semiring. The graph
-and the relation stay the same; the semiring decides what the fold computes. The
-same dependency structure yields a least-cost path under min-plus arithmetic and
-a count of paths under natural-number arithmetic, because addition and
-multiplication mean different things in each.
+A fold evaluates a finite dependency relation with a semiring. The graph and the
+relation stay the same; the semiring decides what the fold computes. The same
+dependency structure yields a least-cost path under min-plus arithmetic and a
+count of paths under natural-number arithmetic, because addition and
+multiplication mean different things in each. An acyclic relation has a finite
+derivation set. A cyclic one does not, and is specified instead by the starred
+fixpoint the algebra's `star` solves, which
+[exactness](#exactness-is-a-declared-claim) returns to.
 
 ## Declaring a fold
 
@@ -328,9 +331,10 @@ runs has already been checked for this mismatch.
 
 ## From the command line
 
-`tiergraph semirings` lists the algebras a fold can name, with their carrier
-boundaries and declared laws, and `tiergraph fold` runs the declaration the
-flags describe over a stored document. The two folds above read as:
+`tiergraph semirings` lists the algebras the `tiergraph fold` shell can name,
+with their carrier boundaries and declared laws, and `tiergraph fold` runs the
+declaration the flags describe over a stored document. The two folds above read
+as:
 
 ```console
 tiergraph fold plan.json \
@@ -353,7 +357,9 @@ The shell names one of two lifts: `value` embeds the read value, and `one`
 embeds the semiring's multiplicative identity whatever the value is. A general
 `lift`, a `witness_order`, and an index product are caller code and stay here in
 the Python API; `--ranked` is the shell's route to witnesses, and it needs an
-algebra that declares `multiply_preserves_witness_order`.
+algebra that declares `multiply_preserves_witness_order`. `tiergraph.semiring`
+also publishes `PATH_WITNESSES`, which the shell has no spelling for and a
+Python fold names directly.
 
 Ranked output is the other mechanism, and it takes neither a `witness_order` nor
 a `TiePolicy`. It ranks by the semiring's own order and settles an equal-valued

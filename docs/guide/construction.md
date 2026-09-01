@@ -1,12 +1,15 @@
 # Construction
 
-There are three ways to make a graph, and one way to make a graph from a graph
-you already hold. Most newcomers should start with the
-ergonomic `tiergraph.build` builder used in [Getting started](../getting-started.md).
+This page covers the ways to author a graph, and the way to make a graph from a
+graph you already hold. Most newcomers should start with the ergonomic
+`tiergraph.build` builder used in [Getting started](../getting-started.md).
 Direct constructors build an immutable value in one step, which suits data
 already held in memory. The build machine records an ordered stream of edits as
 a `Program`, which suits input where the sequence of declarations and additions
 is itself part of the contract, such as a deserialized or generated document.
+A graph also arrives ready-made from `tiergraph.loads`, covered in
+[Serialization](serialization.md), and from `json_value_graph`, covered in
+[Profiles](profiles.md).
 
 ## The ergonomic builder
 
@@ -141,8 +144,10 @@ expansion.
 
 `Program.unroll()` returns `AsBuilt`, including promoted references; `execute()`
 is the convenience operation that returns its `Graph`. `AsBuilt` pairs the graph
-with the flattened primitive trace, and re-executes that trace to confirm it
-builds the graph it claims.
+with the flattened primitive trace. `unroll()` builds that graph from that trace,
+so the pair it hands back holds by construction and is not executed a second
+time; an `AsBuilt` a caller assembles itself re-executes its trace and refuses a
+pair that does not agree.
 
 ```python
 from tiergraph import (

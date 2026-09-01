@@ -375,7 +375,11 @@ class FoldCertificate[Value]:
 
 @dataclass(frozen=True, slots=True)
 class FoldDeclaration[Value]:
-    """Bind one named interpretation to a graph, valuation, algebra, and finite DAG.
+    """Bind one named interpretation to a graph, valuation, algebra, and relation.
+
+    The dependency relation is finite and need not be acyclic. An acyclic one has a
+    finite derivation set; a cyclic one is specified by the starred fixpoint the
+    algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
     A readout or final division above the algebra is not currently provided. If one
     is introduced, it must be declared as part of what the fold profile records. A
