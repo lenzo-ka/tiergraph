@@ -142,12 +142,12 @@ transition: `DeclareNamespace`, `DeclareTier`, `DeclareAttribute`,
 declared upper bound, so a serialized program cannot request unbounded
 expansion.
 
-`Program.unroll()` returns `AsBuilt`, including promoted references; `execute()`
-is the convenience operation that returns its `Graph`. `AsBuilt` pairs the graph
-with the flattened primitive trace. `unroll()` builds that graph from that trace,
-so the pair it hands back holds by construction and is not executed a second
-time; an `AsBuilt` a caller assembles itself re-executes its trace and refuses a
-pair that does not agree.
+`Program.unroll()` returns `AsBuilt`, including promoted references; the
+module-level `execute(opcodes)` is the convenience operation that returns the
+`Graph` alone. `AsBuilt` pairs the graph with the flattened primitive trace.
+`unroll()` builds that graph from that trace, so the pair it hands back holds by
+construction and is not executed a second time; an `AsBuilt` a caller assembles
+itself re-executes its trace and refuses a pair that does not agree.
 
 ```python
 from tiergraph import (

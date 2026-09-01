@@ -806,7 +806,7 @@ def test_fold_json_shape_does_not_vary_with_cardinality(
     empty = tmp_path / "empty.json"
     _fold_graph(empty)
     assert main(_fold_args(empty, "counting", "one")) == 1
-    assert "dependency DAG has no root" in capsys.readouterr().err
+    assert "dependency graph has no root" in capsys.readouterr().err
 
 
 def test_semirings_lists_exactly_the_algebras_a_fold_can_name(

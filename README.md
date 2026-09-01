@@ -91,7 +91,7 @@ as a `Program` and run it — see [construction](docs/guide/construction.md).
 over declared relation incidence, ordered containment. Replaces hand-written index
 arithmetic — see [selection and traversal](docs/guide/selection-and-traversal.md).
 
-**Measure and recognize by fold.** A fold evaluates an acyclic dependency relation
+**Measure and recognize by fold.** A fold evaluates a finite dependency relation
 with a semiring you supply: min-plus for least cost, counting for path counts,
 boolean for recognition, path semirings for witnesses. This is the capability with
 no common substitute — most alternatives make you write the traversal and the

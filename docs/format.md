@@ -81,10 +81,11 @@ later release is not supported.
 
 ## Refusal order
 
-An input routinely breaks several rules at once. Every reader in this package
-ranks the conditions it can meet by one numbered order, `RefusalStage`, so the
-condition reported first is the one that explains the rest rather than whichever
-check happened to run first:
+An input routinely breaks several rules at once. Every document reader this
+package exposes — `loads`, `grammar_loads`, `selection_loads`, and
+`load_program` — ranks the conditions it can meet by one numbered order,
+`RefusalStage`, so the condition reported first is the one that explains the
+rest rather than whichever check happened to run first:
 
 1. `ENVELOPE` — a byte or line limit the reader enforces before interpreting the
    input at all.
@@ -109,6 +110,13 @@ The stages rank the conditions of one node. Nodes are read from the outside in
 and members in their declared order, so an enclosing node's condition precedes
 its members' whatever their stages; the pair of a node and a stage totally
 orders every condition a read can meet.
+
+The command line decodes some of its own inputs outside those readers. `clock
+--profile` and `span render --profile` read a profile file with the JSON module
+directly, and `grammar --tokens-json` decodes an inline argument the same way. A
+malformed value at any of the three is refused with the underlying decoder's
+message and no stage, so this order governs the document readers rather than
+every JSON this package parses.
 
 A further condition is reported beside the primary one only while it stays
 applicable once the primary is known. A document announcing a format this

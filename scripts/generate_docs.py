@@ -336,7 +336,7 @@ def cli_bytes() -> bytes:
         "`semirings` lists every algebra a fold can name, with its carrier "
         "boundary, its five declared law checks, and its declared properties. "
         "The listed names are exactly the values `fold --semiring` accepts.\n\n"
-        "`fold` evaluates a finite acyclic dependency relation with one of those "
+        "`fold` evaluates a finite dependency relation with one of those "
         "algebras and emits the public `FoldResult.to_data()` report. `--tier` and "
         "`--transition` are repeatable; `--root` is repeatable and, when omitted, "
         "the roots are the domain items nothing depends on. The valuation carries "

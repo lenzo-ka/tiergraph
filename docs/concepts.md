@@ -14,7 +14,7 @@ items or boundaries according to their declarations. That is the whole store.
 The views are computed, not stored. Selection reads tiers, items, and
 boundaries as nodes. Traversal follows declared relation incidence. Profiles
 interpret particular declarations as clocks, roots, choices, or recursive JSON
-values. Folds evaluate an acyclic dependency relation with a caller-supplied
+values. Folds evaluate a finite dependency relation with a caller-supplied
 semiring. None of these views adds a new kind of stored node; each is a reading
 of the same graph.
 
