@@ -26,8 +26,11 @@ from tests.test_wire import rich_graph
 from tiergraph import schema as schema_module
 from tiergraph.core import JsonValue
 from tiergraph.schema import (
+    ARITY_MAXIMUM,
     DECLARATIONS,
     DOCUMENT,
+    INTEGER,
+    NON_NEGATIVE_INTEGER,
     NULLABLE_STRING,
     STRING,
     TIER,
@@ -35,6 +38,7 @@ from tiergraph.schema import (
     Shape,
     ShapeKind,
     array_item,
+    declared_minimum,
     field_shape,
     json_schema,
     json_schema_for,
@@ -344,6 +348,12 @@ def test_validation_rejects_each_declared_json_construction() -> None:
         field_shape(STRING, "field")
     with pytest.raises(TypeError, match="requires an array shape"):
         array_item(STRING)
+    assert declared_minimum(NON_NEGATIVE_INTEGER) == 0
+    assert declared_minimum(ARITY_MAXIMUM) == -1
+    with pytest.raises(TypeError, match="requires a bounded integer shape"):
+        declared_minimum(STRING)
+    with pytest.raises(TypeError, match="requires a bounded integer shape"):
+        declared_minimum(INTEGER)
     nullable_document = replace(
         DOCUMENT, fields=(*DOCUMENT.fields, Field("optional", NULLABLE_STRING))
     )
@@ -352,24 +362,24 @@ def test_validation_rejects_each_declared_json_construction() -> None:
     assert "minLength" not in json.dumps(nullable_properties["optional"])
 
 
-def _facet_paths(
+def _scalar_paths(
     value: object, shape: Shape, path: tuple[str | int, ...] = ()
 ) -> list[tuple[tuple[str | int, ...], Shape]]:
-    """Walk every scalar facet realized by a valid fixture."""
+    """Walk every scalar leaf realized by a valid fixture, with its declaration."""
     if shape.kind is ShapeKind.REFERENCE:
         matching = next(
             DECLARATIONS[name]
             for name in shape.variants
             if not validation_errors_for_shape(value, DECLARATIONS[name])
         )
-        return _facet_paths(value, matching, path)
+        return _scalar_paths(value, matching, path)
     if shape.kind is ShapeKind.OBJECT:
         data = cast(dict[str, object], value)
         return [
             found
             for field in shape.fields
             if field.name in data
-            for found in _facet_paths(
+            for found in _scalar_paths(
                 data[field.name], field.shape, (*path, field.name)
             )
         ]
@@ -378,9 +388,20 @@ def _facet_paths(
         return [
             found
             for index, item in enumerate(cast(list[object], value))
-            for found in _facet_paths(item, shape.item, (*path, index))
+            for found in _scalar_paths(item, shape.item, (*path, index))
         ]
-    return [(path, shape)] if shape.min_length is not None else []
+    return [(path, shape)]
+
+
+def _facet_paths(
+    value: object, shape: Shape, path: tuple[str | int, ...] = ()
+) -> list[tuple[tuple[str | int, ...], Shape]]:
+    """Walk every realized scalar facet carrying a non-empty declaration."""
+    return [
+        found
+        for found in _scalar_paths(value, shape, path)
+        if found[1].min_length is not None
+    ]
 
 
 def validation_errors_for_shape(value: object, shape: Shape) -> list[str]:
@@ -461,6 +482,41 @@ def test_all_declared_nonempty_facets_match_codec_acceptance() -> None:
         assert not validator.is_valid(document)
         with pytest.raises(ValueError):
             loads(json.dumps(document))
+
+
+def test_validator_names_every_scalar_construction_it_refuses() -> None:
+    """The refused-construction population is read from the realized declaration.
+
+    Naming the cases by hand reached this arm through STRING alone: INTEGER was
+    covered by its minimum facet and BOOLEAN by the codec's wording, so the
+    validator's own spelling for both went unread, and one of them said 'a
+    integer'. Every realized scalar leaf is walked instead.
+    """
+    valid = cast(dict[str, object], json.loads(dumps(rich_graph())))
+    wrong: dict[ShapeKind, object] = {
+        ShapeKind.STRING: 0,
+        ShapeKind.INTEGER: "wrong",
+        ShapeKind.BOOLEAN: "wrong",
+    }
+    expected = {
+        ShapeKind.STRING: "must be a string",
+        ShapeKind.INTEGER: "must be an integer",
+        ShapeKind.BOOLEAN: "must be a boolean",
+    }
+    seen: set[ShapeKind] = set()
+    for path, shape in _scalar_paths(valid, DOCUMENT):
+        if shape.kind not in wrong:
+            continue
+        document = cast(dict[str, object], json.loads(json.dumps(valid)))
+        _replace_path(document, path, wrong[shape.kind])
+        rendered = "document" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path
+        )
+        assert validation_errors(document, FORMAT_VERSION) == [
+            f"{rendered} {expected[shape.kind]}"
+        ]
+        seen.add(shape.kind)
+    assert seen == set(wrong)
 
 
 def test_published_schema_declares_its_single_scalar_type_divergence() -> None:

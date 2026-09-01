@@ -1135,7 +1135,7 @@ def test_unknown_field_probe_family_denominator_is_pinned() -> None:
 
     probes = conformance_probes(_seeds(), DOCUMENT)
     unknown = [probe for probe in probes if probe.mutation == "unknown-field"]
-    assert len(unknown) == 148
+    assert len(unknown) == 239
 
 
 LAYER_NS = "urn:layer-test"
@@ -1214,6 +1214,111 @@ def six_domain_layer(name: LayerName = SOURCE_A) -> Layer:
             ),
             LayerFact(DocumentRef(), value(AttributeDomain.DOCUMENT, "document")),
         ),
+    )
+
+
+POLY = q("poly")
+
+
+def every_reference_variant_graph() -> Graph:
+    """Build one accepted graph realizing every declared reference variant.
+
+    The declaration's variants are the population a conformance seed set has to
+    cover; the regions that only an edited graph reaches -- orphaned subjects,
+    durable layer identities, both seal carriers -- are what a hand-written
+    witness leaves out, so they are written here on purpose.
+    """
+    layer = Layer(
+        SOURCE_A,
+        (
+            LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "item")),
+            LayerFact(DurableItemRef("w1"), value(AttributeDomain.ITEM, "durable")),
+            LayerFact(TierRef(WORDS), value(AttributeDomain.TIER, "tier")),
+            LayerFact(
+                RelationDeclarationRef(LINKS),
+                value(AttributeDomain.RELATION_DECLARATION, "declaration"),
+            ),
+            LayerFact(
+                RelationInstanceRef(0),
+                value(AttributeDomain.RELATION_INSTANCE, "instance"),
+            ),
+            LayerFact(
+                DurableRelationRef("r0"),
+                value(AttributeDomain.RELATION_INSTANCE, "durable relation"),
+            ),
+            LayerFact(
+                PolyadicInstanceRef(0),
+                value(AttributeDomain.RELATION_INSTANCE, "polyadic"),
+            ),
+            LayerFact(
+                DurablePolyadicRef("p0"),
+                value(AttributeDomain.RELATION_INSTANCE, "durable polyadic"),
+            ),
+            LayerFact(
+                BoundaryRef(WORDS, 1), value(AttributeDomain.BOUNDARY, "boundary")
+            ),
+            LayerFact(
+                DurableBoundaryRef(DurableItemRef("w1"), BoundarySide.BEFORE),
+                value(AttributeDomain.BOUNDARY, "durable boundary"),
+            ),
+            LayerFact(
+                OrphanedSubject(GraphCarrier.RELATIONS, 3),
+                value(AttributeDomain.RELATION_INSTANCE, "orphaned relation"),
+            ),
+            LayerFact(
+                OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, 4),
+                value(AttributeDomain.RELATION_INSTANCE, "orphaned polyadic"),
+            ),
+            LayerFact(
+                OrphanedSubject(WORDS, ItemRef(WORDS, 7)),
+                value(AttributeDomain.ITEM, "orphaned item"),
+            ),
+            LayerFact(
+                OrphanedSubject(WORDS, BoundaryRef(WORDS, 7)),
+                value(AttributeDomain.BOUNDARY, "orphaned boundary"),
+            ),
+            LayerFact(DocumentRef(), value(AttributeDomain.DOCUMENT, "document")),
+        ),
+    )
+    return (
+        Graph(
+            (NamespaceDeclaration("o", LAYER_NS), NamespaceDeclaration("g", VOCAB)),
+            (Tier(TierDeclaration(WORDS, "Words"), (Item("w0"), Item("w1"))),),
+            (
+                SimpleRelationDeclaration(MEMBER, WORDS, TOKEN),
+                BipartiteRelationDeclaration(
+                    LINKS,
+                    TOKEN,
+                    TOKEN,
+                    RelationEndpointKind.ITEM,
+                    RelationEndpointKind.ITEM,
+                ),
+                PolyadicRelationDeclaration(
+                    POLY,
+                    RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORDS,), 1),
+                    RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORDS,), 1),
+                ),
+            ),
+            (
+                RelationInstance(LINKS, ItemRef(WORDS, 0), ItemRef(WORDS, 1), "r0"),
+                RelationInstance(LINKS, DurableItemRef("w0"), ItemRef(WORDS, 1), "r1"),
+            ),
+            tuple(
+                AttributeDeclaration(NAMES[domain], domain, XsdType.STRING)
+                for domain in AttributeDomain
+            ),
+            polyadic_relations=(
+                PolyadicRelationInstance(
+                    POLY, (ItemRef(WORDS, 0),), (ItemRef(WORDS, 1),), "p0"
+                ),
+                PolyadicRelationInstance(
+                    POLY, (ItemRef(WORDS, 1),), (ItemRef(WORDS, 0),), "p1"
+                ),
+            ),
+            layers=(layer,),
+        )
+        .seal(WORDS, 1)
+        .seal(GraphCarrier.RELATIONS, 1)
     )
 
 
@@ -1654,6 +1759,61 @@ def test_layer_orphan_carrier_refuses_unknown_field() -> None:
         loads(json.dumps(document))
     assert str(refusal.value) == (
         "layers[0].facts[0].subject.carrier has unknown fields ['bogus']"
+    )
+
+
+# REGRESSION: the reader admitted a negative index the declaration refuses.
+def test_layer_subject_index_is_held_to_its_declared_minimum() -> None:
+    """Every layer-subject coordinate is refused below the declared minimum.
+
+    An orphaned subject is never re-anchored and is unreachable from reads, so
+    nothing downstream ever addressed its coordinate; the bound the declaration
+    states was the only one it had, and the reader did not apply it.
+    """
+    subjects = (
+        (
+            "was-index",
+            OrphanedSubject(GraphCarrier.RELATIONS, 0),
+            AttributeDomain.RELATION_INSTANCE,
+        ),
+        ("was-item", OrphanedSubject(WORDS, ItemRef(WORDS, 0)), AttributeDomain.ITEM),
+        (
+            "was-boundary",
+            OrphanedSubject(WORDS, BoundaryRef(WORDS, 1)),
+            AttributeDomain.BOUNDARY,
+        ),
+    )
+    for label, subject, domain in subjects:
+        graph = graph_with_layers(
+            Layer(SOURCE_A, (LayerFact(subject, value(domain, "old")),))
+        )
+        document = json.loads(dumps(graph))
+        was = document["graph"]["layers"][0]["facts"][0]["subject"]["was"]
+        was["index"] = -1
+        assert validation_errors(document, FORMAT_VERSION) == [
+            "document.graph.layers[0].facts[0].subject.was.index must be at least 0"
+        ], label
+        with pytest.raises(Refusal) as refusal:
+            loads(json.dumps(document))
+        assert str(refusal.value) == (
+            "layers[0].facts[0].subject.was.index must be at least 0"
+        ), label
+        assert refusal.value.stage is RefusalStage.VALUE
+
+    # A live subject was already refused, but as a reference that fails to
+    # resolve rather than as a value the format does not admit.
+    live = json.loads(dumps(graph_with_layers(six_domain_layer())))
+    facts = live["graph"]["layers"][0]["facts"]
+    position = next(
+        index
+        for index, fact in enumerate(facts)
+        if fact["subject"]["kind"] == "relation-instance"
+    )
+    facts[position]["subject"]["index"] = -1
+    with pytest.raises(Refusal) as refusal:
+        loads(json.dumps(live))
+    assert str(refusal.value) == (
+        f"layers[0].facts[{position}].subject.index must be at least 0"
     )
 
 

@@ -60,8 +60,10 @@ from tiergraph.schema import (
     TIER_DECLARATION,
     Refusal,
     RefusalStage,
+    Shape,
     _refuse_field_set,
     array_item,
+    declared_minimum,
     field_shape,
     object_fields,
     required_object_fields,
@@ -524,18 +526,23 @@ def _layer_subject(data: dict[str, object], path: str) -> LayerSubject:
         raise Refusal(
             RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unsupported"
         )
-    _keys(data, object_fields(DECLARATIONS[declaration]), path)
+    shape = DECLARATIONS[declaration]
+    _keys(data, object_fields(shape), path)
     if kind == "item-coordinate":
         return ItemRef(
             _name(data["tier"], f"{path}.tier"),
-            _integer(data["index"], f"{path}.index"),
+            _bounded_integer(
+                data["index"], f"{path}.index", field_shape(shape, "index")
+            ),
         )
     if kind == "durable-item":
         return DurableItemRef(_string(data["durable_id"], f"{path}.durable_id"))
     if kind == "boundary-coordinate":
         return BoundaryRef(
             _name(data["tier"], f"{path}.tier"),
-            _integer(data["index"], f"{path}.index"),
+            _bounded_integer(
+                data["index"], f"{path}.index", field_shape(shape, "index")
+            ),
         )
     if kind == "durable-boundary":
         return _durable_boundary({"anchor": data["anchor"], "side": data["side"]}, path)
@@ -544,11 +551,19 @@ def _layer_subject(data: dict[str, object], path: str) -> LayerSubject:
     if kind == "relation-declaration":
         return RelationDeclarationRef(_name(data["relation"], f"{path}.relation"))
     if kind == "relation-instance":
-        return RelationInstanceRef(_integer(data["index"], f"{path}.index"))
+        return RelationInstanceRef(
+            _bounded_integer(
+                data["index"], f"{path}.index", field_shape(shape, "index")
+            )
+        )
     if kind == "durable-relation":
         return DurableRelationRef(_string(data["durable_id"], f"{path}.durable_id"))
     if kind == "polyadic-instance":
-        return PolyadicInstanceRef(_integer(data["index"], f"{path}.index"))
+        return PolyadicInstanceRef(
+            _bounded_integer(
+                data["index"], f"{path}.index", field_shape(shape, "index")
+            )
+        )
     if kind == "durable-polyadic":
         return DurablePolyadicRef(_string(data["durable_id"], f"{path}.durable_id"))
     if kind == "document":
@@ -557,11 +572,12 @@ def _layer_subject(data: dict[str, object], path: str) -> LayerSubject:
     was_data = _object(data["was"], f"{path}.was")
     was_kind = _string(was_data.get("kind"), f"{path}.was.kind")
     if was_kind == "index":
-        _keys(
-            was_data, object_fields(DECLARATIONS["layer_orphan_index"]), f"{path}.was"
-        )
-        was: ItemRef | BoundaryRef | int = _integer(
-            was_data["index"], f"{path}.was.index"
+        orphan_index = DECLARATIONS["layer_orphan_index"]
+        _keys(was_data, object_fields(orphan_index), f"{path}.was")
+        was: ItemRef | BoundaryRef | int = _bounded_integer(
+            was_data["index"],
+            f"{path}.was.index",
+            field_shape(orphan_index, "index"),
         )
     else:
         was = cast(ItemRef | BoundaryRef, _layer_subject(was_data, f"{path}.was"))
@@ -855,6 +871,22 @@ def _integer(value: object, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an integer")
     return value
+
+
+def _bounded_integer(value: object, path: str, shape: Shape) -> int:
+    """Decode an integer and hold it to the lower bound its declaration states.
+
+    A coordinate the format does not admit is a condition of the value, not of
+    what it fails to address: a subject that is never re-anchored has nothing
+    downstream to address, so a bound left to a later reader is no bound at all
+    there.  The bound is read from the declaration so that narrowing one cannot
+    leave this reader admitting what the format has stopped admitting.
+    """
+    number = _integer(value, path)
+    minimum = declared_minimum(shape)
+    if number < minimum:
+        raise Refusal(RefusalStage.VALUE, f"{path} must be at least {minimum}")
+    return number
 
 
 def _boolean(value: object, path: str) -> bool:

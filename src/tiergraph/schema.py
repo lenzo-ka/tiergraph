@@ -503,6 +503,17 @@ def array_item(shape: Shape) -> Shape:
     return shape.item
 
 
+def declared_minimum(shape: Shape) -> int:
+    """Return a declared integer lower bound for parser metadata traversal.
+
+    A reader that spelled the bound itself would keep admitting what the
+    declaration had stopped admitting, so the bound is read from here.
+    """
+    if shape.kind is not ShapeKind.INTEGER or shape.minimum is None:
+        raise TypeError("minimum metadata requires a bounded integer shape")
+    return shape.minimum
+
+
 def declaration_data() -> dict[str, JsonValue]:
     """Return the declaration itself as deterministic JSON data."""
     return {
@@ -654,7 +665,10 @@ def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
         ShapeKind.BOOLEAN: bool,
     }[shape.kind]
     if type(value) is not expected_type:
-        return [f"{path} must be a {shape.kind.value}"]
+        # The article follows the spelling rather than the kind, so a
+        # construction named later cannot reintroduce 'a integer'.
+        article = "an" if shape.kind.value[0] in "aeiou" else "a"
+        return [f"{path} must be {article} {shape.kind.value}"]
     if shape.values and value not in shape.values:
         return [f"{path} has unsupported value {value!r}"]
     if shape.kind is ShapeKind.STRING:
