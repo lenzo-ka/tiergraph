@@ -856,7 +856,7 @@ def test_isolated_anonymous_item_uses_a_deterministic_structural_label() -> None
     assert declared.run().provenance == ((f"{FIXTURE.namespace}:placement:0",),)
 
 
-def test_undeclared_incidence_does_not_enter_the_dependency_dag() -> None:
+def test_undeclared_incidence_does_not_enter_the_dependency_graph() -> None:
     """Only relation names listed by the fold contribute transitions or cost."""
     graph = FIXTURE.graph()
     depends = cast(
