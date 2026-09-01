@@ -3,6 +3,20 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
+# The gate reads the checkout this file lives in, not whatever the ambient
+# environment resolves. A git worktree has no virtualenv of its own, so it is
+# run with VENV pointing at another checkout's -- and that virtualenv carries an
+# editable install pinned to the checkout it was built from. Every step that
+# does `import tiergraph` then exercises that other checkout's library while
+# reporting on this one's diff, so the gate passes a change under src/ that it
+# never read. Deriving the path from this makefile's own location is what makes
+# the answer independent of how the gate was invoked; asking each caller to
+# remember to export PYTHONPATH is the same defect one level up. An inherited
+# PYTHONPATH is kept, behind this checkout, so a caller can still add to the
+# path without being able to displace the code under test.
+MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+export PYTHONPATH := $(MAKEFILE_DIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
+
 .PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth docs docs-check tracked-clean documented reservations changelog-claims gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
