@@ -126,8 +126,8 @@ tiergraph span render graph.json --profile span-profile.json --format text
 tiergraph semirings
 ```
 
-See the generated [CLI reference](docs/reference/cli.md) for all fifteen
-commands and their options.
+See the generated [CLI reference](docs/reference/cli.md) for every command and
+its options.
 
 ## Documentation
 
@@ -189,7 +189,10 @@ The gate reads the schema, and the schema is not the whole format. The decoder i
 the authority for semantic constraints such as declaration compatibility,
 acyclicity, and reference validity, and a release that tightened one of those
 would refuse a document the previous release accepted without changing a schema
-byte, drawing a finding, or costing a version position. Within a release line the
-structural half of *only grows* is enforced; the semantic half is intended and
-rests on review. A reader deciding whether an existing document still loads should
-read the changelog, not the version alone.
+byte. A second gate replays a frozen corpus of documents an earlier release
+accepted through the current decoder, and fails on any refusal the corpus entry's
+disposition does not already account for. So the semantic half of *only grows* is
+partly enforced as well — over the documents that corpus holds, which are the ones
+this repository's own test suite happened to construct rather than a survey of the
+format. A reader deciding whether an existing document still loads should read the
+changelog, not the version alone.
