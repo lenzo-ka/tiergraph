@@ -29,6 +29,7 @@ from tiergraph import (
     DurablePolyadicRef,
     DurableRelationRef,
     Graph,
+    GraphCarrier,
     GraphValidationError,
     Item,
     ItemRef,
@@ -47,6 +48,7 @@ from tiergraph import (
     RelationInstance,
     RelationInstanceRef,
     RelationSideDeclaration,
+    Seal,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
@@ -59,7 +61,7 @@ from tiergraph import (
     to_data,
     wire,
 )
-from tiergraph.schema import Refusal, RefusalStage
+from tiergraph.schema import Refusal, RefusalStage, validation_errors
 
 NS = "urn:wire-test"
 META_NS = "urn:wire-meta"
@@ -663,6 +665,43 @@ def test_empty_polyadic_sides_remain_distinguishable_after_omission() -> None:
     relation = cast(list[dict[str, object]], document["relations"])[0]
     assert "sources" not in relation and "targets" not in relation
     assert loads(dump_bytes(graph)) == graph
+
+
+def test_polyadic_relations_seal_carrier_round_trips() -> None:
+    """The polyadic graph carrier reaches the wire and comes back.
+
+    Both graph-wide seal carriers are spelled in the schema, but only
+    ``relations`` was ever encoded by a test or captured in the corpus, so a
+    schema narrowed to that one name alone left every gate green while refusing
+    a document the codec still accepted. Encoding the other name is what keeps
+    the two from drifting apart unobserved.
+    """
+    tier_name = name("polyadic-seal-tier")
+    poly_name = name("polyadic-seal")
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier_name,))
+    graph = Graph(
+        (NamespaceDeclaration("w", NS),),
+        (Tier(TierDeclaration(tier_name, "Polyadic seal"), (Item("a"), Item("b"))),),
+        (PolyadicRelationDeclaration(poly_name, side, side),),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                poly_name, (ItemRef(tier_name, 0),), (ItemRef(tier_name, 1),), "poly-0"
+            ),
+        ),
+    ).seal(GraphCarrier.POLYADIC_RELATIONS, 1)
+
+    encoded = dumps(graph)
+    document = json.loads(encoded)
+    assert document["graph"]["seals"] == [
+        {"carrier": {"kind": "graph", "name": "polyadic_relations"}, "sealed": 1}
+    ]
+    decoded = loads(encoded)
+    assert decoded.seals == (Seal(GraphCarrier.POLYADIC_RELATIONS, 1),)
+    assert decoded == graph
+    assert loads(dump_bytes(graph)) == graph
+    # The codec reads the carrier name from the enum and the schema spells it
+    # separately, so a round trip alone cannot see the two disagree.
+    assert validation_errors(document, FORMAT_VERSION) == []
 
 
 def test_relation_side_tier_restriction_preserves_all_three_states() -> None:
