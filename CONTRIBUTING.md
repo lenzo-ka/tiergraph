@@ -36,11 +36,11 @@ The gate runs these steps, in this order:
 - `determinism` — the suite again in separate processes, with hash seeds 0, 12345, and 999
 - `schema-check` — the committed JSON Schema still matches a fresh render
 - `format-growth` — the wire format may only grow within a release line
-- `format-semantics` — the current decoder still accepts the documents the frozen corpus recorded as accepted when it was captured
+- `format-semantics` — the current decoder still accepts the documents the frozen corpus recorded as accepted when it was captured, bar any since adjudicated never legal
 - `docs-check` — generated documentation matches a fresh deterministic render
 - `tracked-clean` — tracked-file hygiene, over every tracked file
 - `documented` — the public-docstring check
-- `reservations` — the reservation register is pinned and undischarged
+- `reservations` — every registered reservation's prose is still pinned, and every enforceable one is still undischarged
 - `changelog-claims` — the changelog-claim check
 <!-- /tiergraph:gate-steps -->
 
