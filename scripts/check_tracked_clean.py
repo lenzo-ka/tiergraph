@@ -223,18 +223,59 @@ class Denylist:
     digests: frozenset[str]
 
 
-def tracked_files() -> list[Path]:
-    """Return every file in the git index."""
+def tracked_files(root: Path | None = None) -> list[Path]:
+    """Return every file in the git index, whatever directory the gate runs in.
+
+    `git ls-files` reports only what lies beneath the process's working
+    directory, so running this check from a subdirectory silently shrinks the
+    population it claims to cover while the exit status goes on saying the
+    whole index is clean. A wrapper script, a pre-commit hook, or a CI job with
+    a `working-directory:` key is enough to narrow it, and nothing in the output
+    says the set moved. Anchoring the listing to the repository root is the
+    difference between a gate and a gate-shaped report.
+
+    The root is not assumed to be one: git is asked where the top level is and
+    the answer is compared against it, so a directory that is not the
+    repository root -- a nested repository, a stray `.git` below it -- refuses
+    rather than returning a subset that reads as the whole.
+    """
+    base = ROOT if root is None else root
+    toplevel = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=base,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if Path(toplevel).resolve() != base.resolve():
+        raise ValueError(
+            f"{base} is not the top level of its git repository ({toplevel}); "
+            "the index listing there would cover only part of what ships"
+        )
     listing = subprocess.run(
-        ["git", "ls-files", "-z"], check=True, capture_output=True, text=True
+        ["git", "ls-files", "-z"], cwd=base, check=True, capture_output=True, text=True
     )
     return [Path(name) for name in listing.stdout.split("\0") if name]
+
+
+def in_repository(path: Path) -> Path:
+    """Return a tracked path anchored to the repository rather than to the cwd.
+
+    The listing names files relative to the repository root, so opening one by
+    that bare name reads whatever happens to sit at the same name under the
+    working directory -- usually nothing, which is how a narrowed run reports a
+    clean tree it never opened. Enumerating the whole index is only half the
+    fix; the reads have to land in the same place the names came from. Joining
+    is a no-op for a path that is already absolute, so a caller holding a full
+    path is unaffected.
+    """
+    return ROOT / path
 
 
 def shipped_text(path: Path) -> str:
     """Return one shipped file's text, refusing content that is not UTF-8."""
     try:
-        return path.read_text(encoding="utf-8")
+        return in_repository(path).read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise ValueError(
             f"{path} ships but is not UTF-8 text, so its references cannot be "
@@ -245,7 +286,7 @@ def shipped_text(path: Path) -> str:
 def leaks(path: Path) -> list[str]:
     """Return one message per forbidden match in the file."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = in_repository(path).read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return []
     return [
@@ -455,7 +496,9 @@ def is_shipped_surface(path: Path) -> bool:
 def main() -> int:
     """Check every tracked file but the exempt ones. Returns the exit status."""
     paths = [
-        path for path in tracked_files() if path.is_file() and is_shipped_surface(path)
+        path
+        for path in tracked_files()
+        if in_repository(path).is_file() and is_shipped_surface(path)
     ]
     denylist = denied_digests(DENIED_DIGESTS_PATH)
     found = [message for path in paths for message in leaks(path)]

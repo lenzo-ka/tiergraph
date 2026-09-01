@@ -352,6 +352,7 @@ def test_main_runs_denied_digest_check(
 ) -> None:
     """Main fails and recovers as synthetic denied prose appears and disappears."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
     path = Path("docs/guide.md")
     path.parent.mkdir()
     digest_path = tmp_path / "digests.txt"
@@ -398,22 +399,133 @@ def test_documented_accepts_documented_public_names(
     assert check_documented.undocumented(path) == []
 
 
-def test_tracked_files_reads_the_git_index_not_the_working_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("body", "description"),
+    (
+        ('""', "an empty docstring"),
+        ('"   "', "a spaces-only docstring"),
+        ('"""\n    """', "a blank multi-line docstring"),
+    ),
+)
+def test_documented_refuses_a_docstring_that_says_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str, description: str
 ) -> None:
-    """CHARACTERIZATION: the listing is exactly the index, subdirectories included."""
-    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
-    (tmp_path / "top.md").write_text("portable prose\n", encoding="utf-8")
-    nested = tmp_path / "docs"
+    """REGRESSION: a string literal that documents nothing is not documentation.
+
+    `ast.get_docstring` returns `''` rather than None for each of these, so the
+    older `is None` test read them as documented and `def f(x): ""` passed the
+    gate. Whitespace-only is here for the same reason: cleaning reduces it to
+    the empty string, so accepting it would be accepting the empty docstring
+    under another spelling.
+    """
+    monkeypatch.setattr(check_documented, "ROOT", tmp_path)
+    path = tmp_path / "sample.py"
+    path.write_text(
+        f'"""Module."""\n\ndef public(x):\n    {body}\n',
+        encoding="utf-8",
+    )
+    assert check_documented.undocumented(path) == ["sample.py:public"], description
+
+
+def test_documented_refuses_an_empty_module_docstring(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """REGRESSION: the module is held to the same bar as the names inside it."""
+    monkeypatch.setattr(check_documented, "ROOT", tmp_path)
+    path = tmp_path / "sample.py"
+    path.write_text('""\n', encoding="utf-8")
+    assert check_documented.undocumented(path) == ["sample.py: the module itself"]
+
+
+def _indexed_repository(root: Path) -> None:
+    """Build a small repository whose index spans the root and a subdirectory."""
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+    (root / "top.md").write_text("portable prose\n", encoding="utf-8")
+    nested = root / "docs"
     nested.mkdir()
     (nested / "guide.md").write_text("portable prose\n", encoding="utf-8")
-    (tmp_path / "scratch.md").write_text("local scratch\n", encoding="utf-8")
-    subprocess.run(["git", "add", "top.md", "docs/guide.md"], cwd=tmp_path, check=True)
-    monkeypatch.chdir(tmp_path)
-    assert check_tracked_clean.tracked_files() == [
+    (root / "scratch.md").write_text("local scratch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "top.md", "docs/guide.md"], cwd=root, check=True)
+
+
+def test_tracked_files_reads_the_git_index_not_the_working_tree(
+    tmp_path: Path,
+) -> None:
+    """CHARACTERIZATION: the listing is exactly the index, subdirectories included."""
+    _indexed_repository(tmp_path)
+    assert check_tracked_clean.tracked_files(tmp_path) == [
         Path("docs/guide.md"),
         Path("top.md"),
     ]
+
+
+def test_tracked_files_covers_the_repository_from_any_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION: a run started one level down still reads the whole index.
+
+    `git ls-files` reports only what lies beneath the process's working
+    directory. With the listing left to inherit that, running the gate from
+    `docs/` enumerated one file, found nothing wrong with the rest because it
+    never opened the rest, and exited zero -- a leak planted in a tracked
+    top-level file passed. A wrapper, a hook, or a CI `working-directory:` key
+    is all it takes to narrow the population a green result speaks for.
+    """
+    _indexed_repository(tmp_path)
+    monkeypatch.chdir(tmp_path / "docs")
+    assert check_tracked_clean.tracked_files(tmp_path) == [
+        Path("docs/guide.md"),
+        Path("top.md"),
+    ]
+
+
+def test_a_leak_outside_the_working_directory_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION: the end-to-end construction -- leak at the top, run from below.
+
+    Enumerating the whole index is only half of it: the reads have to land
+    where the names came from. With bare relative names opened against the
+    working directory, the top-level file resolves to nothing under `docs/` and
+    the gate reports clean on a file it failed to open.
+    """
+    _indexed_repository(tmp_path)
+    digest_path = tmp_path / "digests.txt"
+    _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
+    (tmp_path / "top.md").write_text("# " + LEAK_URL + "\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path / "docs")
+    assert check_tracked_clean.main() == 1
+    (tmp_path / "top.md").write_text("portable prose\n", encoding="utf-8")
+    assert check_tracked_clean.main() == 0
+
+
+def test_a_directory_below_the_repository_root_refuses_to_be_listed(
+    tmp_path: Path,
+) -> None:
+    """A partial listing fails closed rather than passing as the whole index.
+
+    Asking git where the top level is, and comparing, is what turns "this
+    happens to be the root" from an assumption into a checked fact.
+    """
+    _indexed_repository(tmp_path)
+    with pytest.raises(ValueError) as excinfo:
+        check_tracked_clean.tracked_files(tmp_path / "docs")
+    assert "is not the top level of its git repository" in str(excinfo.value)
+
+
+def test_in_repository_anchors_relative_names_and_passes_absolute_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tracked name resolves under the root; a full path is returned unchanged."""
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
+    assert check_tracked_clean.in_repository(Path("docs/guide.md")) == (
+        tmp_path / "docs" / "guide.md"
+    )
+    elsewhere = tmp_path.parent / "elsewhere" / "guide.md"
+    assert check_tracked_clean.in_repository(elsewhere) == elsewhere
 
 
 def test_unparsable_python_fails_closed_rather_than_passing(tmp_path: Path) -> None:
@@ -635,6 +747,7 @@ def test_main_refuses_an_external_reference_in_each_shipped_file(
     class of reference and had to be corrected by hand.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
     path = Path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     digest_path = tmp_path / "digests.txt"
@@ -659,6 +772,7 @@ def test_only_the_gate_script_itself_is_exempt(
     allows, so it cannot pass its own check. Every other file can.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
     digest_path = tmp_path / "digests.txt"
     _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
     monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
@@ -679,6 +793,7 @@ def test_a_tracked_entry_that_is_not_a_file_is_skipped(
 ) -> None:
     """CHARACTERIZATION: the index can name a directory, and reading one would raise."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
     digest_path = tmp_path / "digests.txt"
     _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
     monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)

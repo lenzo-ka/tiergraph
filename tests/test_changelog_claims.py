@@ -70,6 +70,23 @@ def test_each_false_claim_shape_is_refused_by_name(
     assert message in refused[0]
 
 
+def test_a_byte_identity_claim_naming_no_artifact_is_refused(tmp_path: Path) -> None:
+    """REGRESSION: a byte-identity claim that resolves to nothing is refused.
+
+    The phrase matched, `named_artifacts` returned an empty tuple, the
+    comparison loop ran zero times, and the entry passed -- a green result
+    stating the claim was checked when nothing had been compared. The
+    vocabulary this gate can resolve is closed on purpose, so a claim outside
+    it has to be refused rather than waved through as verified.
+    """
+    root = repository(tmp_path)
+    text = "## [Unreleased]\n\n- This release is byte-identical to the last one.\n"
+    assert claims.named_artifacts(text) == ()
+    refused = claims.findings(text, root, "0.2.0")
+    assert len(refused) == 1
+    assert "names no artifact this gate can resolve" in refused[0]
+
+
 def test_a_clean_entry_and_an_old_release_claim_pass(tmp_path: Path) -> None:
     """POSITIVE CONTROL: truthful current prose and historical prose pass."""
     root = repository(tmp_path)

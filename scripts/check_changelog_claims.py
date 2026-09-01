@@ -6,7 +6,9 @@ It recognizes only three closed lexical shapes:
 
 * ``FORMAT_VERSION`` followed in the same entry by a quoted value;
 * ``byte-identical`` naming the schema artifact, its stamp, or either literal
-  tracked path; and
+  tracked path -- and refused outright when it names none of them, because a
+  phrase that matches and then resolves to nothing is checked by no one while
+  reading as checked; and
 * ``the wire is untouched`` or ``the document format is unchanged``.
 
 The first shape is checked only under ``[Unreleased]``.  The other two compare
@@ -158,9 +160,24 @@ def findings(
             )
 
         if BYTE_IDENTICAL.search(entry.text):
+            named = named_artifacts(entry.text)
+            if not named:
+                # A claim that matches the phrase and then resolves to no
+                # artifact compared nothing, and the old code reported that as
+                # agreement: the loop below ran zero times and the entry passed.
+                # `- This release is byte-identical to the last one.` is the
+                # whole counter-example. The vocabulary this gate can check is
+                # closed on purpose, so a byte-identity claim outside it is not
+                # a claim this gate verified -- and passing it is worse than
+                # having no check, because the green says it was.
+                reasons.append(
+                    "claims byte identity but names no artifact this gate can "
+                    "resolve; name the schema artifact, its stamp, "
+                    f"{SCHEMA_PATH.as_posix()}, or {STAMP_PATH.as_posix()}"
+                )
             changed = [
                 path.as_posix()
-                for path in named_artifacts(entry.text)
+                for path in named
                 if released_bytes(tag, path, cwd) != (cwd / path).read_bytes()
             ]
             if changed:

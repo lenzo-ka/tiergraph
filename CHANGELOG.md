@@ -351,6 +351,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed four gate checks whose enumeration was narrower than the population
+  each claimed, every one of them found by constructing a case that passed and
+  should not have. `make gate` derives its import path from the makefile's own
+  location, so a worktree run reads the checkout it is reporting on rather than
+  whichever library the borrowed virtualenv installed -- with `FORMAT_VERSION`
+  altered under `src/`, the schema step used to exit 0. The publishability gate
+  enumerates the git index from the repository root and opens each file there,
+  so a run started in a subdirectory no longer reports a clean tree it never
+  read; the root is checked against `git rev-parse --show-toplevel` rather than
+  assumed. The docstring gate requires a docstring that says something, so
+  `def f(x): ""` no longer passes as documented. The changelog gate refuses a
+  byte-identity claim that names no artifact it can resolve, instead of
+  comparing nothing and reporting agreement. The wire format is untouched.
+
 - Closed a file that could ship without being read. The publishability gate
   reads the git index while a source distribution is built from the working
   tree, so a file that is neither tracked nor ignored rode out unscanned; the
