@@ -36,7 +36,7 @@ The gate runs these steps, in this order:
 - `determinism` — the suite again in separate processes, with hash seeds 0, 12345, and 999
 - `schema-check` — the committed JSON Schema still matches a fresh render
 - `format-growth` — the wire format may only grow within a release line
-- `format-semantics` — the current decoder still accepts the documents a previous release accepted
+- `format-semantics` — the current decoder still accepts the documents the frozen corpus recorded as accepted when it was captured
 - `docs-check` — generated documentation matches a fresh deterministic render
 - `tracked-clean` — tracked-file hygiene, over every tracked file
 - `documented` — the public-docstring check
