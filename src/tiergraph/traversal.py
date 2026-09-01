@@ -34,11 +34,14 @@ class WalkDirection(StrEnum):
 class WalkResult:
     """Return reached nodes and a one-sided report of the step cap.
 
-    ``truncated`` is ``False`` only when the walk ran out of new nodes before
-    it ran out of steps, so a ``False`` report is a guarantee that ``nodes`` is
-    the whole reachable set. ``True`` says only that the cap ended a step that
-    was still finding nodes, which a walk that had already reached everything
-    also reports; separating the two costs another step.
+    ``truncated`` is ``False`` when the last step found nothing the walk had
+    not already reached, which is also what a step that exhausts the frontier
+    and the cap at once reports: the cap being reached is not what this field
+    says. A ``False`` report is a guarantee that ``nodes`` is the whole
+    reachable set less the source selection, which :meth:`Walk.evaluate`
+    excludes from what it returns. ``True`` says only that the cap ended a step
+    that was still finding nodes, which a walk that had already reached
+    everything also reports; separating the two costs another step.
     """
 
     nodes: NodeSet

@@ -26,7 +26,7 @@ SPANVIEW_FORMAT_VERSION = "1"
 
 @dataclass(frozen=True, slots=True)
 class SpanViewProfile:
-    """Name every graph declaration used to interpret a segmentation.
+    """Name the graph declarations a segmentation has to be selected among.
 
     ``coverage_relation`` and ``alternative_relation`` must name bipartite
     declarations.  A span is an interval over the base tier, so each fact this
@@ -35,6 +35,13 @@ class SpanViewProfile:
     Naming a non-bipartite declaration is refused rather than skipped, because
     silently reading only the bipartite collection would report a partial
     segmentation as a complete one.
+
+    One declaration the projection reads is deliberately absent: a span's
+    ``label`` is the item type its tier's simple membership supplies, read
+    through :meth:`Graph.item_type` and falling back to the tier's short name
+    when the tier is untyped.  A profile names what a reading has to be
+    selected among, and a tier carries at most one simple membership, so there
+    is nothing there to select.
     """
 
     base_tier: QualifiedName
