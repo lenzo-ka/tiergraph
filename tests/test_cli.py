@@ -2613,9 +2613,16 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
 ) -> None:
     program = tmp_path / "program"
     program.write_bytes(b'{"machine_version":"1"}')
+    # The stub names `object_pairs_hook` rather than absorbing it into
+    # `**kwargs` so that it stops accepting the call if the reader ever stops
+    # passing the duplicate-key hook.  A stub permissive about its keywords
+    # would hold this test green while the hook silently disappeared, which is
+    # the failure a substitute for a real function is most able to hide.
     monkeypatch.setattr(
         "tiergraph.machine_codec.json.loads",
-        lambda line: (_ for _ in ()).throw(RecursionError("parser recursion")),
+        lambda line, object_pairs_hook: (_ for _ in ()).throw(
+            RecursionError("parser recursion")
+        ),
     )
     with pytest.raises(
         ValueError,

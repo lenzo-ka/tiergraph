@@ -10,14 +10,22 @@ import pytest
 from tests.test_wire import rich_graph
 from tiergraph import (
     FORMAT_VERSION,
+    AddItem,
+    DeclareNamespace,
+    DeclareTier,
     ExecutionError,
     Graph,
     GraphValidationError,
+    NamespaceDeclaration,
+    Program,
+    QualifiedName,
+    TierDeclaration,
     core,
     execute,
     grammar_loads,
     loads,
     machine_codec,
+    program_dumps,
     program_loads,
     schema,
     selection_loads,
@@ -201,6 +209,41 @@ def test_a_program_line_that_is_not_text_is_an_encoding_condition() -> None:
     assert refusal.stage is RefusalStage.ENCODING
     assert str(refusal) == "JSONL line 2: parse UTF-8 failed: invalid start byte"
     assert refusal.also == ()
+
+
+def test_a_program_in_a_foreign_encoding_is_refused_rather_than_read() -> None:
+    """REGRESSION: the reader decodes UTF-8 instead of guessing an encoding.
+
+    Handing an undecoded line to `json.loads` let that function sniff an
+    encoding from the leading bytes, so a program written in UTF-16BE or
+    UTF-32BE was not mis-staged but *read*: it came back as an equal `Program`
+    carrying every opcode and a matching fingerprint, built from bytes the
+    format does not admit.  Only the big-endian encodings reached that far,
+    because they place the newline byte last and so survive splitting on it,
+    which is why this uses a multi-line program rather than a bare header --
+    a single-line fixture would show a wrong success but not that the whole
+    program was reconstructed from it.
+
+    A condition reported at the wrong rank is a diagnostic defect.  Accepting
+    a document in an encoding the format does not admit is a soundness one, so
+    the assertion here is that nothing is returned at all.
+    """
+    namespace = "urn:refusal"
+    tier = QualifiedName(namespace, "events")
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("c", namespace)),
+            DeclareTier(TierDeclaration(tier, "Events")),
+            AddItem(tier),
+        )
+    )
+    canonical = program_dumps(program)
+    assert program_loads(canonical.encode("utf-8")) == program
+
+    for encoding in ("utf-16-be", "utf-32-be", "utf-16-le", "utf-32-le", "utf-8-sig"):
+        refusal = refuse(program_loads, canonical.encode(encoding))
+        assert refusal.stage in {RefusalStage.ENCODING, RefusalStage.SYNTAX}
+        assert str(refusal).startswith("JSONL line 1: ")
 
 
 def test_a_program_line_with_a_repeated_key_is_a_syntax_condition() -> None:
