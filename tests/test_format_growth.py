@@ -959,9 +959,9 @@ def test_a_pointer_that_names_nothing_returns_nothing() -> None:
 def test_the_release_line_follows_the_repositorys_own_series_names() -> None:
     """REGRESSION. Predict 0.MINOR pre-1.0 and MAJOR after, as the docs already say.
 
-    ``SECURITY.md`` supports "the latest 0.1.x release" and ``README.md`` calls
-    the alpha series "0.1.x". The line rule is read off those rather than
-    invented beside them.
+    ``README.md`` says that before 1.0 "a 0.X.0 release is in effect a major
+    release", and ``SECURITY.md`` supports "the latest published pre-1.0
+    release". The line rule is read off those rather than invented beside them.
     """
     assert growth.release_line((0, 1, 9)) == (0, 1)
     assert growth.release_line((0, 2, 0)) == (0, 2)
