@@ -115,8 +115,10 @@ class RewriteCertificate:
     source that asserts three things has been held to three things; the count
     is there so a nearly vacuous claim cannot be read as a strong one.
 
-    ``disturbances`` counts the structures that were not left standing as the
-    source had them, which is zero exactly when the rewrite decorated.
+    ``disturbances`` counts the ways the result failed to leave the source's
+    structures standing, which is zero exactly when the rewrite decorated. One
+    structure contributes one entry per way, so this is not a count of
+    structures and does not sit on the same scale as ``subjects``.
     """
 
     effect: RewriteEffect
@@ -150,7 +152,7 @@ class RewriteDeclaration:
             raise ValueError("rewrite name '' must not be empty")
 
     def disturbances(self) -> tuple[RewriteDisturbance, ...]:
-        """Return every structure the rewrite disturbed, in the source's order.
+        """Return every way the rewrite disturbed a structure, in source order.
 
         The order is the source graph's own reading order -- namespaces, then
         each tier and its items, then relation declarations, attribute

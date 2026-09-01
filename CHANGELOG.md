@@ -305,7 +305,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The documentation gate now holds every module in the manifest's secondary
   surface to that module's own `__all__`, rather than only `tiergraph.build` and
   `tiergraph.semiring`, and refuses to publish a surface for a module that
-  declares none. `tiergraph.schema` now declares the two names it publishes, so
+  declares none. `tiergraph.schema` now declares the names it publishes, so
   the module rather than the manifest states the surface.
 - The gate scripts under `scripts/` are now inside the coverage bar and reach
   100% with the shipped packages. The bar previously measured only `tiergraph`
@@ -369,9 +369,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requiring one. The requirement demanded the one declaration that configuration
   could never read: ranked selection asks the semiring's addition which value it
   prefers and then orders equal-valued witnesses by their canonical witness path,
-  which is total over distinct witnesses, so the executable policy in
-  `_select_paths` was reached only through a `witness_order`, which ranked output
-  already refuses. Every tied witness is retained, in canonical path order, up to
+  which is total wherever the document's item labels are distinct, so the
+  executable policy in `_select_paths` was reached only through a
+  `witness_order`, which ranked output already refuses. Every tied witness is retained, in canonical path order, up to
   `output_cap`, and that is now stated where the tie is broken rather than left to
   be inferred. `witness_order` and `tie_policy` remain one mechanism, declared
   together or not at all. `grammar.best()` and `tiergraph fold --ranked` declare no
@@ -380,14 +380,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance probes kept their outcomes. The later format break in this
   release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"` and changed both the
   schema artifact and its stamp.
-- **BREAKING:** every document reader now refuses a string the UTF-8 encoder
-  cannot write, whichever way the text spells it. This is a soundness fix, not a
-  change to the refusal order: `docs/format.md` already ranked this condition at
-  `RefusalStage.ENCODING`, and the reader simply never asked. A character
-  standing in the text was already refused there, but one written as an escape
-  is not in the text at all -- `\ud800` is six ASCII bytes -- so it passed every
-  check that reads bytes and became a character only once the parser built the
-  value. `loads` therefore returned a `Graph` for
+- **BREAKING:** the three whole-document readers now refuse a string the UTF-8
+  encoder cannot write, whichever way the text spells it. This is a soundness
+  fix, not a change to the refusal order: `docs/format.md` already ranked this
+  condition at `RefusalStage.ENCODING`, and the reader simply never asked. A
+  character standing in the text was already refused there, but one written as
+  an escape is not in the text at all -- `\ud800` is six ASCII bytes -- so it
+  passed every check that reads bytes and became a character only once the
+  parser built the value. `loads` therefore returned a `Graph` for
   `{"format_version":"0.2.0","graph":{"namespaces":[{"namespace":"\ud800","prefix":"p"}]}}`
   while `dumps`, `dump_compact`, `dump_bytes`, and `to_data` all refused that
   same graph at `RefusalStage.ENCODING`, so the format admitted documents with
@@ -492,11 +492,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on exactly that file. The test now asserts that what ships is a subset of the
   paths the gate selects, and a planted untracked, unignored file fails it. A
   resolved lock file and a macOS Finder directory record, the two artifacts
-  this tree can acquire in that condition, are now ignored: this project
-  publishes libraries, which declare ranges and pin nothing for the programs
-  that install them, so a lock belongs to whoever resolved it. The gate scripts
-  also join the strict type-checking bar they were already outside of, having
-  been inside every other bar this project keeps.
+  this tree was then known to acquire in that condition, are now ignored: this
+  project publishes libraries, which declare ranges and pin nothing for the
+  programs that install them, so a lock belongs to whoever resolved it. A
+  third was found later in the same release and is ignored too: this project's
+  git worktrees live under `.claude/`, one whole copy of the repository each,
+  and the build backend selects the working tree minus what version control
+  ignores. The gate scripts also join the strict type-checking bar they were
+  already outside of, having been inside every other bar this project keeps.
 
 ## [0.1.0] - 2026-08-23
 

@@ -219,11 +219,13 @@ The declared laws of a semiring are necessary and not sufficient here.
 `COUNTING` checks distributivity exactly, and that is a statement about the
 algebra; whether *this* fold equals the combination over its own derivations is
 a statement about the fold. So the check is made two ways. It searches for a
-counterexample to distributivity among the values this fold itself produces,
-and, when the whole enumeration fits in `derivation_budget`, it enumerates the
-derivations with no sharing at all and compares. Re-running the fold under a
-second algebra would not do: both algebras read the same `FoldTransition`
-tuple, so a swap confirms whatever the declaration says instead of testing it.
+counterexample to distributivity among a bounded set of probes taken from the
+values this fold itself produces — a search, not a proof, since the probe set is
+capped — and, when the whole enumeration fits in `derivation_budget`, it
+enumerates the derivations with no sharing at all and compares. Re-running the
+fold under a second algebra would not do: both algebras read the same
+`FoldTransition` tuple, so a swap confirms whatever the declaration says
+instead of testing it.
 
 `FoldCertificate.compared` reports which of the two happened. When it is false
 the enumeration did not fit and the claim stood on the law search alone — and a
@@ -363,7 +365,7 @@ Python fold names directly.
 
 Ranked output is the other mechanism, and it takes neither a `witness_order` nor
 a `TiePolicy`. It ranks by the semiring's own order and settles an equal-valued
-tie by the canonical witness path, which is a total order over distinct
-witnesses; every tied witness is kept, in that order, up to `output_cap`. A
-`TiePolicy` alongside `ranked_output` is refused rather than accepted and
-ignored, because nothing would ever read it.
+tie by the canonical witness path, which is total wherever the document's item
+labels are distinct; every tied witness is kept, in that order, up to
+`output_cap`. A `TiePolicy` alongside `ranked_output` is refused rather than
+accepted and ignored, because nothing would ever read it.
