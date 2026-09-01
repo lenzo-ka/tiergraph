@@ -79,14 +79,15 @@ options:
 ### `tiergraph discharge`
 
 ```text
-usage: tiergraph discharge [-h] {seals} ...
+usage: tiergraph discharge [-h] {seals,fold} ...
 
 positional arguments:
-  {seals}
-    seals     discharge a source graph's seals against a result graph
+  {seals,fold}
+    seals       discharge a source graph's seals against a result graph
+    fold        discharge a fold's exactness claim against its graph
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help    show this help message and exit
 ```
 
 ### `tiergraph discharge seals`
@@ -102,6 +103,47 @@ options:
   -h, --help            show this help message and exit
   --result FILE         result graph file
   --name NAME           name used in refusals
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph discharge fold`
+
+```text
+usage: tiergraph discharge fold [-h] [--name NAME] --attribute-namespace NS
+                                --attribute-local LOCAL --tier NS LOCAL
+                                --semiring
+                                {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+                                --lift {one,value} --transition NS LOCAL
+                                COMBINATION [--root TGPATH] [--ranked]
+                                [--output-cap N]
+                                [--exactness {distributive,approximate,structural}]
+                                [-o FILE]
+                                GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --name NAME           name used in refusals
+  --attribute-namespace NS
+  --attribute-local LOCAL
+  --tier NS LOCAL       one valuation domain tier; repeatable
+  --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+  --lift {one,value}    embed the read value, or the semiring's multiplicative
+                        identity
+  --transition NS LOCAL COMBINATION
+                        one dependency relation and its and/or meaning;
+                        repeatable
+  --root TGPATH         one declared root item; repeatable, inferred when
+                        omitted
+  --ranked              also report witnesses ranked by the semiring's own
+                        order
+  --output-cap N        witness cap; requires --ranked
+  --exactness {distributive,approximate,structural}
+                        the claim to discharge; omitted, the library refuses
+                        UNDECLARED
   -o FILE, --output FILE
                         output file (default: -)
 ```
