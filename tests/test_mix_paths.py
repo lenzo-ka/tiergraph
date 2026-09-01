@@ -64,12 +64,18 @@ def test_resolves_and_round_trips_all_three_path_kinds() -> None:
     """Items, shared-clock boundaries, and both diamond routes stay distinct."""
     graph = build_graph()
     profile = MixPathProfile(graph)
-    item = resolve_path(graph, profile, "/mix/midi/note/0", require=PathKind.ITEM)
-    bus = resolve_path(graph, profile, "/mix/mix/bus/0")
-    boundary = resolve_path(graph, profile, "/mix/clock/2", require=PathKind.BOUNDARY)
-    first = resolve_path(
-        graph, profile, "/mix/arrangement/0", require=PathKind.ALTERNATIVE
+    covered = {
+        PathKind.ITEM: "/mix/midi/note/0",
+        PathKind.BOUNDARY: "/mix/clock/2",
+        PathKind.ALTERNATIVE: "/mix/arrangement/0",
+    }
+    # The name of this test says three; `PathKind` says how many there are.
+    assert set(covered) == set(PathKind)
+    item, boundary, first = (
+        resolve_path(graph, profile, text, require=kind)
+        for kind, text in covered.items()
     )
+    bus = resolve_path(graph, profile, "/mix/mix/bus/0")
     second = resolve_path(graph, profile, "/mix/arrangement/1")
     assert isinstance(item, ResolvedItem)
     assert isinstance(bus, ResolvedItem)

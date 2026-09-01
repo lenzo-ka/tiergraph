@@ -521,10 +521,14 @@ def test_no_writer_returns_text_this_reader_would_refuse() -> None:
 
     This is the whole defect in one place: the reader accepts this 87-byte
     ASCII document, and every writer used to hand back either a string holding
-    a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  All four
-    writers must now make the same decision, name the same field path, and
+    a raw lone surrogate or the encoder's own ``UnicodeEncodeError``.  Every
+    writer must now make the same decision, name the same field path, and
     raise this reader's own encoding-staged ``Refusal`` rather than leaking an
     encoder exception.
+
+    The population is the module's own declared surface less the one reader in
+    it, so a writer added to ``__all__`` is covered by this claim on the day it
+    is added rather than on the day someone remembers to list it here.
     """
     document = (
         '{"format_version":"0.2.0","graph":'
@@ -532,7 +536,13 @@ def test_no_writer_returns_text_this_reader_would_refuse() -> None:
     )
     assert len(document.encode("ascii")) == 87
     graph = loads(document)
-    for writer in (to_data, dumps, dump_compact, dump_bytes):
+    writers = tuple(
+        member
+        for name in wire.__all__
+        if name != "loads" and callable(member := getattr(wire, name))
+    )
+    assert len(writers) == 4
+    for writer in writers:
         with pytest.raises(ValueError) as refusal:
             writer(graph)
         assert type(refusal.value) is Refusal
@@ -1258,6 +1268,10 @@ def test_two_sources_and_first_last_all_are_distinct() -> None:
 # REGRESSION: predicted FAIL against the parent because the layer API is absent.
 def test_all_six_domains_read_back() -> None:
     layer = six_domain_layer()
+    # Six is what `AttributeDomain` holds today; the fixture is measured
+    # against it so a seventh domain arrives here as a failure, not as a
+    # test whose name has quietly become wrong.
+    assert len(layer.facts) == len(AttributeDomain)
     graph = graph_with_layers(layer)
     delivery = Delivery((SOURCE_A,), LayerRead.ALL)
     for fact in layer.facts:

@@ -241,11 +241,27 @@ def test_undocumented_definitions_and_module_are_skipped(tmp_path: Path) -> None
 
 
 def test_shipped_python_reads_every_covered_surface() -> None:
-    """The covered surfaces are the two packages and the runnable examples."""
+    """The covered surfaces are the two packages and the runnable examples.
+
+    "Every" is measured against `SURFACES` rather than against the three
+    witnesses below, so a surface added to the declaration and read by nothing
+    fails here instead of shipping unexamined.
+    """
     paths = check_reservations.shipped_python()
     assert ROOT / "src" / "tiergraph" / "path.py" in paths
     assert ROOT / "src" / "tiergraph_dot" / "__init__.py" in paths
     assert ROOT / "examples" / "json_document.py" in paths
+    surfaces = check_reservations.SURFACES
+    assert {
+        surface
+        for surface in surfaces
+        if any(path.is_relative_to(surface) for path in paths)
+    } == set(surfaces)
+    assert not [
+        path
+        for path in paths
+        if not any(path.is_relative_to(surface) for surface in surfaces)
+    ]
     assert not [path for path in paths if path.is_relative_to(ROOT / "tests")]
     assert check_reservations.shipped_python(()) == []
 

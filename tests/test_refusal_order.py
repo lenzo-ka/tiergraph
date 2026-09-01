@@ -268,25 +268,64 @@ def test_a_program_line_with_a_repeated_key_is_a_syntax_condition() -> None:
     assert str(opcode) == "JSONL line 2: parse JSON failed: duplicate object key 'a'"
 
 
-@pytest.mark.parametrize(
-    ("source", "stage"),
-    [
-        (b"\xff\xfe", RefusalStage.ENCODING),
-        ("{", RefusalStage.SYNTAX),
-        ("[]", RefusalStage.CONSTRUCTION),
-        ('{"graph":{}}', RefusalStage.DISCRIMINATOR),
-        ('{"format_version":"0.2.0","graph":{},"zz":1}', RefusalStage.SHAPE),
-    ],
+def tier(name: str) -> str:
+    """Return a one-tier document naming its tier however the caller spells it."""
+    return json.dumps(
+        {
+            "format_version": FORMAT_VERSION,
+            "graph": {"tiers": [{"declaration": {"name": name, "long_name": "X"}}]},
+        }
+    )
+
+
+DOCUMENT_STAGES: tuple[tuple[str | bytes, RefusalStage], ...] = (
+    ("x" * (wire.MAX_DOCUMENT_BYTES + 1), RefusalStage.ENVELOPE),
+    (b"\xff\xfe", RefusalStage.ENCODING),
+    ("{", RefusalStage.SYNTAX),
+    ("[]", RefusalStage.CONSTRUCTION),
+    ('{"graph":{}}', RefusalStage.DISCRIMINATOR),
+    ('{"format_version":"0.2.0","graph":{},"zz":1}', RefusalStage.SHAPE),
+    (tier("unqualified"), RefusalStage.VALUE),
+    (tier("p:words"), RefusalStage.REFERENCE),
+    (
+        json.dumps(
+            {
+                "format_version": FORMAT_VERSION,
+                "graph": {
+                    "namespaces": [
+                        {"prefix": "p", "namespace": "urn:a"},
+                        {"prefix": "p", "namespace": "urn:b"},
+                    ]
+                },
+            }
+        ),
+        RefusalStage.SEMANTICS,
+    ),
 )
+
+
+@pytest.mark.parametrize(("source", "stage"), DOCUMENT_STAGES)
 def test_each_document_reading_stage_is_reachable(
     source: str | bytes, stage: RefusalStage
 ) -> None:
-    """CHARACTERIZATION: the document reader can refuse at each early stage.
+    """CHARACTERIZATION: the document reader can refuse at every declared stage.
 
     The census is only a claim about the tree until each named class is shown
-    to be produced by some input the reader actually meets.
+    to be produced by some input the reader actually meets, and the claim is
+    about the whole order rather than a remembered prefix of it, so the
+    population is taken from `RefusalStage` itself: a stage added to the
+    declaration and reachable by nothing fails here rather than joining
+    quietly.
+
+    The refusals are read as staged `ValueError`s because the last stage is
+    where the graph constructor judges the document, and it reports through
+    `GraphValidationError`, which carries the same stage without being a
+    `Refusal`.
     """
-    assert refuse(loads, source).stage is stage
+    assert {declared for _, declared in DOCUMENT_STAGES} == set(RefusalStage)
+    with pytest.raises(ValueError) as caught:
+        loads(source)
+    assert getattr(caught.value, "stage", None) is stage
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TypeAliasType, get_args
 
 import pytest
 
@@ -490,23 +491,37 @@ def test_an_item_coordinate_outside_its_tier_is_refused() -> None:
 
 
 def test_each_declaration_kind_is_added() -> None:
-    """One operation covers namespaces, tiers, attributes, and relations."""
+    """One operation covers namespaces, tiers, attributes, and relations.
+
+    "Each" is the parameter type's own arms, so a fifth kind admitted by
+    `EditDeclaration` and declared by nothing fails here rather than reaching
+    the operation untried.
+    """
     graph = base()
     other = "urn:other"
-    graph = graph.declare(NamespaceDeclaration("o", other))
-    graph = graph.declare(TierDeclaration(QualifiedName(other, "gloss"), "glosses"))
-    graph = graph.declare(
+    declarations = (
+        NamespaceDeclaration("o", other),
+        TierDeclaration(QualifiedName(other, "gloss"), "glosses"),
         AttributeDeclaration(
             QualifiedName(other, "note"), AttributeDomain.ITEM, XsdType.STRING
-        )
-    )
-    graph = graph.declare(
+        ),
         SimpleRelationDeclaration(
             QualifiedName(other, "glosses"),
             QualifiedName(other, "gloss"),
             QualifiedName(other, "Gloss"),
-        )
+        ),
     )
+    arms = tuple(
+        arm.__value__ if isinstance(arm, TypeAliasType) else arm
+        for arm in get_args(EditDeclaration.__value__)
+    )
+    assert len(declarations) == len(arms)
+    assert all(
+        any(isinstance(declaration, arm) for declaration in declarations)
+        for arm in arms
+    )
+    for declaration in declarations:
+        graph = graph.declare(declaration)
     assert len(graph.namespaces) == 2
     assert len(graph.tiers) == 3
     assert len(graph.attribute_declarations) == len(DECLARATIONS) + 1

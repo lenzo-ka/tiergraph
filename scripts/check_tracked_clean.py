@@ -473,7 +473,16 @@ def reference_leaks(path: Path) -> list[str]:
         for imported in sorted(_imports(source, label) - ALLOWED_IMPORTS)
     )
     if path.name == "pyproject.toml":
-        project = tomllib.loads(text)["project"]
+        # A file this gate cannot read is a file whose distributions it cannot
+        # check, so it is reported as a condition like any other rather than
+        # ending the run in whatever exception the parse happened to raise.
+        try:
+            document = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            return [*messages, f"{path}: unreadable TOML ({error})"]
+        project = document.get("project")
+        if not isinstance(project, dict):
+            return [*messages, f"{path}: no [project] table declaring distributions"]
         requirements = list(project.get("dependencies", ()))
         requirements.extend(
             requirement

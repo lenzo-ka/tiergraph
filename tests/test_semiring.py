@@ -72,6 +72,9 @@ DECIMALS = st.decimals(
 )
 COUNTING_VALUES = st.integers(min_value=0, max_value=1_000_000)
 PATHS = st.lists(st.text(min_size=1, max_size=4), max_size=4).map(tuple)
+WITNESS_VALUES: SearchStrategy[tuple[tuple[str, ...], ...]] = st.sets(
+    PATHS, max_size=4
+).map(lambda paths: tuple(sorted(paths)))
 PATH_VALUES: SearchStrategy[PathValue] = st.one_of(
     st.just(PATH.zero),
     st.tuples(
@@ -184,6 +187,7 @@ CASES = (
     ),
     SemiringCase("counting", COUNTING, COUNTING_VALUES),
     SemiringCase("path", PATH, PATH_VALUES),
+    SemiringCase("path-witnesses", PATH_WITNESSES, WITNESS_VALUES),
     SemiringCase(
         "product",
         PRODUCT,
@@ -530,6 +534,17 @@ def test_composite_constructions_quote_the_first_unchecked_law() -> None:
         ExpectationSemiring(TROPICAL)
 
 
+def module_singletons() -> set[str]:
+    """Return the names the module binds to a semiring instance it defines."""
+    return {
+        name
+        for name, value in vars(semiring_module).items()
+        if not name.startswith("_")
+        and not isinstance(value, type)
+        and type(value).__module__ == semiring_module.__name__
+    }
+
+
 def test_every_semiring_the_module_defines_is_declared_public() -> None:
     """REGRESSION: an implementation or singleton absent from __all__ is unreachable."""
     declared = set(semiring_module.__all__)
@@ -541,12 +556,28 @@ def test_every_semiring_the_module_defines_is_declared_public() -> None:
         and value.__module__ == semiring_module.__name__
         and name.endswith("Semiring")
     }
-    singletons = {
-        name
-        for name, value in vars(semiring_module).items()
-        if not name.startswith("_")
-        and not isinstance(value, type)
-        and type(value).__module__ == semiring_module.__name__
-    }
+    singletons = module_singletons()
     assert implementations and singletons
     assert sorted((set(implementations) | singletons) - declared) == []
+
+
+def test_every_sanctioned_singleton_is_a_law_case() -> None:
+    """REGRESSION: a singleton absent from CASES is a shipped carrier nothing checks.
+
+    `CASES` is the denominator of every law suite in this module, so a
+    singleton left out of it is exempt from the whole file while still being
+    public.  `PATH_WITNESSES` was exactly that, and the omission is invisible
+    unless the population is measured against the module rather than against a
+    list someone remembered to extend.
+    """
+    covered = [case.semiring for case in CASES]
+    assert (
+        sorted(
+            name
+            for name in module_singletons()
+            if not any(
+                getattr(semiring_module, name) is instance for instance in covered
+            )
+        )
+        == []
+    )
