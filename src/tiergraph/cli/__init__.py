@@ -20,9 +20,10 @@ from tiergraph import core as _core
 from tiergraph import wire as _wire
 from tiergraph.schema import Refusal, RefusalStage, json_schema, shape_hash
 
-# The published semiring constants of the supported secondary module, spelled for
-# a shell. The listing command and the fold command share this one mapping, so the
-# vocabulary a user can read is exactly the vocabulary a fold can name.
+# The published semiring constants this shell has a spelling for, which is not
+# every algebra a Python fold can name. The listing command and the fold command
+# share this one mapping, so the vocabulary a user can read is exactly the
+# vocabulary `fold --semiring` accepts.
 _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
     "arctic": semiring.ARCTIC,
     "boolean": semiring.BOOLEAN,
@@ -250,7 +251,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     _output_argument(fold)
 
     semirings = subparsers.add_parser(
-        "semirings", help="list the semirings a fold can name"
+        "semirings", help="list the semirings this shell can name"
     )
     semirings.set_defaults(handler=_handle_semirings)
     _output_argument(semirings)

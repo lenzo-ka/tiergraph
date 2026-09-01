@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   undeclared.
 - Added `tiergraph fold`, which evaluates a declared dependency relation with a
   named semiring and emits the public `FoldResult` report, and `tiergraph
-  semirings`, which lists every algebra a fold can name with its carrier
+  semirings`, which lists every algebra the shell can name with its carrier
   boundary, declared law checks, and declared properties. The listed names are
   exactly the values `fold --semiring` accepts. The shell names one of two
   lifts, `value` and `one`; a general lift, a witness order, and an index

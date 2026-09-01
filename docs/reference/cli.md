@@ -57,7 +57,7 @@ positional arguments:
     span                render declarative span views
     select              evaluate a selector
     fold                fold a dependency relation
-    semirings           list the semirings a fold can name
+    semirings           list the semirings this shell can name
 
 options:
   -h, --help            show this help message and exit
