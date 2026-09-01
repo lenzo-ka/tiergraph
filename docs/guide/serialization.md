@@ -92,9 +92,21 @@ reconstructs a graph equal to the original. A graph carrying a string that
 UTF-8 cannot encode is refused by the writer instead of being emitted as an
 unreadable document.
 
-Qualified names, declaration order, tier order, item order, relation endpoint
-order, and boundary indexes are all data. A reader must not infer a relation's
-meaning from its name or collapse an ordered relation into an unordered set.
+Supply order is not preserved everywhere, and a writer that emitted every
+collection in the order it was handed would not produce canonical bytes.
+Collections whose order carries no graph meaning are sorted first: namespaces by
+namespace URI, relation and attribute declarations by qualified name, attribute
+values by name, seals, layers and the facts within each layer, sparse boundary
+values by tier and index, and a relation side's endpoint kinds and allowed
+tiers. Two graphs that differ only in the order those were supplied compare
+equal and serialize to the same bytes.
+
+The orders that remain are data. Tier order, tier item order, relation instance
+order, polyadic endpoint order, qualified names, and boundary indexes all carry
+graph meaning and are written as supplied; two graphs whose tiers arrive in
+different orders are unequal and serialize differently. A reader must not infer
+a relation's meaning from its name or collapse an ordered relation into an
+unordered set.
 
 ## The DOT view
 
