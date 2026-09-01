@@ -182,15 +182,19 @@ def dump_bytes(graph: Graph) -> bytes:
     return dumps(graph).encode("utf-8")
 
 
-def loads(document: str | bytes) -> Graph:
-    """Parse the current format without implicitly migrating older documents.
+def _parsed_json(document: str | bytes) -> object:
+    """Parse one JSON text, ranking every condition the text itself can meet.
 
-    Migration is refused because choosing a loss-aware conversion belongs in an
-    explicit version-to-version tool, not in the primitive codec.
+    These are the envelope, encoding, and syntax conditions: they apply to any
+    reader handed a JSON text, whatever declaration it is about to read that
+    text against.  They live in one function so that every such reader answers
+    them at the same stage and in the same wording, rather than each reader
+    deciding for itself whether a parse failure is a staged refusal or the JSON
+    library's own exception.
     """
     try:
         text = _checked_document(document)
-        value = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+        return json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
     except json.JSONDecodeError as error:
         raise Refusal(RefusalStage.SYNTAX, f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
@@ -205,7 +209,15 @@ def loads(document: str | bytes) -> Graph:
         raise Refusal(
             RefusalStage.SYNTAX, "parse JSON failed: document nesting is too deep"
         ) from error
-    root = _object(value, "document")
+
+
+def loads(document: str | bytes) -> Graph:
+    """Parse the current format without implicitly migrating older documents.
+
+    Migration is refused because choosing a loss-aware conversion belongs in an
+    explicit version-to-version tool, not in the primitive codec.
+    """
+    root = _object(_parsed_json(document), "document")
     if "format_version" not in root:
         raise Refusal(
             RefusalStage.DISCRIMINATOR,

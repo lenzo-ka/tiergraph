@@ -176,6 +176,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `grammar_loads` and `selection_loads` now read their text
+  through the same staged reader `loads` uses, so every reader in this package
+  ranks the conditions its input can meet by one numbered order. Text that is
+  not JSON, bytes that are not UTF-8, nesting past the depth limit, and input
+  past the size limit now raise a `Refusal` carrying `RefusalStage.SYNTAX`,
+  `RefusalStage.ENCODING`, or `RefusalStage.ENVELOPE`, where each previously
+  let `json.JSONDecodeError` escape unstaged or accepted the input outright. A
+  repeated object key, which those two readers previously resolved to its last
+  occurrence, is now refused at `RefusalStage.SYNTAX` as it already was for a
+  graph document. A caller catching `json.JSONDecodeError` from either reader
+  has to catch `Refusal` or `ValueError` instead; `Refusal` is a `ValueError`,
+  so a caller already catching that one is unaffected. Command-line exit
+  statuses do not change, and `tiergraph grammar` and `tiergraph select` now
+  report the staged wording their diagnostics already carried elsewhere. The
+  document format is unchanged.
 - `GraphValidationError` now carries a `stage`, so both channels this package
   refuses through report one vocabulary rather than two shapes. The stage
   defaults to `RefusalStage.SEMANTICS`, which is what a declaration or
