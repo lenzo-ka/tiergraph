@@ -146,7 +146,7 @@ consumers that require every inferred root can call `is_exhaustive()`.
 
 ## Asking which profiles a graph satisfies
 
-Constructing a profile checks one role you already had in mind. `PROFILES` is
+Constructing a profile names one role you already had in mind. `PROFILES` is
 the registry that turns that into a question you can ask without naming a
 profile first: bind the roles you have, and it reports every registered profile
 against your graph.

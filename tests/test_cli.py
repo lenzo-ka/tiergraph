@@ -809,7 +809,7 @@ def test_fold_json_shape_does_not_vary_with_cardinality(
     assert "dependency graph has no root" in capsys.readouterr().err
 
 
-def test_semirings_lists_exactly_the_algebras_a_fold_can_name(
+def test_semirings_lists_exactly_the_algebras_this_shell_can_name(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The listing is one array whose names are the `--semiring` vocabulary."""
