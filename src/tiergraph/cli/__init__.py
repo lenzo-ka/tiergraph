@@ -317,16 +317,14 @@ def _handle_discharge(args: argparse.Namespace) -> int:
     """
     try:
         certificate = _DISCHARGES[args.discharge_command](args)
-    except (tiergraph.GraphValidationError, Refusal) as error:
+    except Refusal as error:
         _refusal_diagnostic(args.command, error)
         return 1
     _write_output(args.file, args.output, _json_bytes(certificate))
     return 0
 
 
-def _refusal_diagnostic(
-    command: str, error: tiergraph.GraphValidationError | Refusal
-) -> None:
+def _refusal_diagnostic(command: str, error: Refusal) -> None:
     """Report one staged refusal as a diagnostic line and as data beside it.
 
     The line keeps this command's stderr readable the way every other command's
@@ -339,7 +337,7 @@ def _refusal_diagnostic(
     sys.stderr.write(_json_text({"refusal": _refusal_data(error)}))
 
 
-def _refusal_data(error: tiergraph.GraphValidationError | Refusal) -> dict[str, object]:
+def _refusal_data(error: Refusal) -> dict[str, object]:
     """Encode one refusal's declared stage, its rank, and any further condition.
 
     The stage is carried twice because either half alone forces the reader to
@@ -349,13 +347,15 @@ def _refusal_data(error: tiergraph.GraphValidationError | Refusal) -> dict[str, 
     conditions that stay applicable once this one is known, each with its own
     stage, so a document that meets two conditions is read as two rather than as
     one sentence mentioning both.
+
+    Both channels are read through the one base, so this reaches ``stage`` and
+    ``also`` on whatever it caught rather than asking which channel raised it.
     """
-    also = error.also if isinstance(error, Refusal) else ()
     return {
         "stage": _stage_name(error.stage),
         "rank": int(error.stage),
         "message": str(error),
-        "also": [_refusal_data(entry) for entry in also],
+        "also": [_refusal_data(entry) for entry in error.also],
     }
 
 

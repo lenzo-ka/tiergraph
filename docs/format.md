@@ -135,6 +135,12 @@ one attempt. Conditions at two different nodes are two reads, and a caller
 repairs them one at a time.
 
 The stage is the stable part of a refusal and the wording is diagnostic.
-`tiergraph.schema.Refusal` carries the stage as `stage` and any further
-applicable conditions as `also`, each a refusal in its own right. A `Refusal` is
-a `ValueError`, so callers that already catch one still do.
+`tiergraph.Refusal` carries the stage as `stage` and any further applicable
+conditions as `also`, each a refusal in its own right.
+
+`Refusal` is the one base every stage of this order arrives under, so `except
+Refusal` catches the whole order rather than a prefix of it. The last rank is
+raised by the graph constructor as `GraphValidationError`, which is a `Refusal`
+and reports its stage through the same two fields; a subclass says which channel
+refused, never which ranks a caller has to expect. A `Refusal` is a
+`ValueError`, so callers that already catch one still do.

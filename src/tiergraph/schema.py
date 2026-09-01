@@ -5,38 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
 
-# RefusalStage is declared in the base module, the one place both refusal
-# channels can reach without a cycle.  It stays named here, and in __all__, so
-# that this remains the module a reader of refusals imports the stage from.
-from tiergraph.core import JsonValue, RefusalStage
-
-
-class Refusal(ValueError):
-    """Refuse one read, naming its stage and every further applicable condition.
-
-    ``stage`` places the refusal in the declared total order, and ``also``
-    carries the conditions that remain applicable once this one is known, each a
-    refusal in its own right.  Both are data rather than prose, so a caller acts
-    on the order without matching message text.  A ``Refusal`` is a
-    ``ValueError``, so every caller that already catches one still does.
-    """
-
-    def __init__(
-        self,
-        stage: RefusalStage,
-        message: str,
-        also: Iterable[Refusal] = (),
-    ) -> None:
-        """Record the stage and the further conditions that still apply."""
-        super().__init__(message)
-        self.stage = stage
-        self.also = tuple(also)
+# Refusal and RefusalStage are declared in the base module, the one place both
+# refusal channels can reach without a cycle.  They stay named here, and in
+# __all__, so that every caller who already imports a refusal from this module
+# keeps working; the promised import is `tiergraph` itself.
+from tiergraph.core import JsonValue, Refusal, RefusalStage
 
 
 class ShapeKind(StrEnum):
