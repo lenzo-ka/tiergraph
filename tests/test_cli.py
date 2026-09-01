@@ -2318,20 +2318,24 @@ def test_surrogate_reports_are_refused_with_field_paths(
         assert "UnicodeEncodeError" not in error, (arguments, error)
 
 
-def test_invalid_utf8_profile_remains_an_exit_three_decode_failure(
+def test_invalid_utf8_profile_is_a_staged_encoding_refusal(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A real input decoding failure still exercises the UnicodeError arm.
+    """A side-car document decodes under the stages the graph beside it does.
 
-    Output encoding no longer reaches that arm, so this pins the witness that
-    keeps it honest: a side-car document whose bytes are not UTF-8 at all.
+    This once pinned the ``UnicodeError`` arm of ``main``, because the profile
+    reader handed raw bytes to the JSON library and so raised the decoder's own
+    exception. Reading the profile as a document answers the condition at
+    ``ENCODING`` instead, exactly as the graph does; the remaining live path to
+    that arm is an output stream that cannot encode, pinned in
+    ``tests/test_cli_envelope.py``.
     """
     graph = tmp_path / "graph.json"
     graph.write_bytes(tiergraph.dump_bytes(reference_shape()))
     profile = tmp_path / "profile.json"
     profile.write_bytes(b'{"clock_tier":"\xff\xfe"}')
-    assert main(["clock", "coordinates", str(graph), "--profile", str(profile)]) == 3
-    assert "UnicodeDecodeError" in capsys.readouterr().err
+    assert main(["clock", "coordinates", str(graph), "--profile", str(profile)]) == 1
+    assert "ValueError: parse UTF-8 failed:" in capsys.readouterr().err
 
 
 def test_validate_and_convert_agree_about_the_escaped_surrogate(

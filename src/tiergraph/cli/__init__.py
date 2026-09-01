@@ -456,9 +456,7 @@ def _handle_grammar(args: argparse.Namespace) -> None:
 
 def _handle_clock(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    profile = tiergraph.ClockProfile.from_data(
-        graph, json.loads(_read_bytes(args.profile))
-    )
+    profile = tiergraph.ClockProfile.from_data(graph, _profile_json(args.profile))
     _check_distinct(args.profile, args.output)
     _write_output(
         args.file, args.output, _json_bytes(_clock_query(graph, profile, args))
@@ -471,7 +469,7 @@ def _handle_span(args: argparse.Namespace) -> None:
     if args.include_empty_tiers and args.format != "dot":
         raise ValueError("--include-empty-tiers requires --format dot")
     graph = tiergraph.loads(_read_bytes(args.file))
-    profile = tiergraph.SpanViewProfile.from_data(json.loads(_read_bytes(args.profile)))
+    profile = tiergraph.SpanViewProfile.from_data(_profile_json(args.profile))
     _check_distinct(args.profile, args.output)
     rendered = _span_render(graph, profile, args)
     _write_output(args.file, args.output, _graph_report_bytes(graph, rendered))
@@ -851,6 +849,21 @@ def _read_bytes(filename: str) -> bytes:
     if filename == "-":
         return sys.stdin.buffer.read()
     return Path(filename).read_bytes()
+
+
+def _profile_json(filename: str) -> object:
+    """Read one declarative profile under the document envelope, encoding, and
+    syntax stages.
+
+    A profile is not a graph document, but it arrives the same way: as bytes the
+    caller supplies, read against a declaration. Handing those bytes straight to
+    ``json.loads`` would let the standard library sniff a byte-order mark and
+    accept UTF-16 or UTF-32 text that the same reader refuses at ``ENCODING``
+    when it arrives as a graph, and would leave the size and nesting bounds
+    unenforced. Routing through the reader every other document takes makes the
+    profile answer those conditions at the same rank and in the same wording.
+    """
+    return _wire._parsed_json(_read_bytes(filename))
 
 
 def _stdout_text(value: str) -> None:

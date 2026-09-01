@@ -438,6 +438,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly. This refuses input that was previously accepted, including
   programs that previously loaded successfully.
 
+- Closed the same soundness hole in the command line's two declarative profile
+  readers, the last documents it read outside the shared envelope. `clock` and
+  `span render` handed the profile's raw bytes to `json.loads`, which sniffs an
+  encoding from the leading bytes, so a clock or span profile written in UTF-16
+  or UTF-32 with a byte-order mark was not refused but read and queried, while
+  the very same bytes arriving as the graph beside it were refused at
+  `ENCODING`. `MAX_DOCUMENT_BYTES` and `MAX_JSON_DEPTH` did not reach a profile
+  either: an oversized one was read whole, a deeply nested one was parsed past
+  the declared bound and, past the interpreter's own limit, surfaced a
+  `RecursionError` reported as a bare `ValueError` where the same text as a
+  graph refuses at `SYNTAX`, and a repeated object key was accepted under the
+  JSON library's last-wins rule. Both profiles now read through the reader every
+  other document takes, so the envelope, encoding, and syntax conditions are
+  answered at the same rank and in the same wording whether a text arrives as a
+  profile or as a graph. A profile whose bytes are not UTF-8 at all therefore
+  exits 1 carrying the staged refusal rather than 3 carrying the decoder's own
+  exception, which is the status the graph beside it already used; the shell's
+  `UnicodeError` arm now answers only an output stream that cannot encode what
+  it is given. `--tokens-json` is unaffected: it takes an argument string, which
+  no encoding is sniffed from. This refuses input that was previously accepted,
+  including profiles that previously queried successfully.
+
 - Closed four gate checks whose enumeration was narrower than the population
   each claimed, every one of them found by constructing a case that passed and
   should not have. `make gate` derives its import path from the makefile's own
