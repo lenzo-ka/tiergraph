@@ -153,6 +153,7 @@ ALLOWED_IMPORTS = _STDLIB_IMPORTS | _PROJECT_IMPORTS | _TOOL_IMPORTS
 
 # Runtime and development distributions declared in pyproject.toml.
 ALLOWED_DISTRIBUTIONS = {
+    "build",
     "hatchling",
     "hypothesis",
     "jsonschema",
