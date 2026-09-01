@@ -49,11 +49,40 @@ job references it; the OIDC identity is scoped to it).
    (`pyproject.toml` reads it via `[tool.hatch.version]`; do not edit a version
    there.)
 
-2. **Verify locally** (all must be clean):
+2. **Verify locally.** Run these from the development virtualenv that
+   [CONTRIBUTING.md](CONTRIBUTING.md#set-up-a-development-environment) builds —
+   `make venv` creates `.venv` and installs the `build` frontend along with the
+   rest of the development dependencies. Three of these steps are **read**, not
+   merely run: they exit 0 whichever answer they found, so an exit status does
+   not stand in for looking at the output.
+
    ```bash
-   make check          # lint, strict types, suite, three hash seeds, docs currency
-   python -m build
-   PYTHONPATH=src python -c "import tiergraph; print(tiergraph.__version__)"
+   make check
+   .venv/bin/python -m build
+   .venv/bin/python -m zipfile -l dist/*.whl | grep -E 'tiergraph(_dot)?/'
+   PYTHONPATH=src .venv/bin/python -c "import tiergraph; print(tiergraph.__version__)"
+   ```
+
+   - **`make check` must exit 0, and its `format-growth` step must be read.**
+     The gate's step list lives in the makefile's `gate` target rather than
+     here. Between a version step that opens a new release line and the tag
+     that releases it, `format-growth` prints every wire-format break it found
+     and still exits 0 — a green gate is compatible with a break, deliberately,
+     so that the break is stated instead of refused. Read what it printed and
+     confirm every line is a break you meant to take; printing nothing is the
+     ordinary case. See
+     [Grow the wire format, or say that you did not](CONTRIBUTING.md#grow-the-wire-format-or-say-that-you-did-not).
+   - **The wheel listing must show both packages.** The grep exits 0 when
+     either package is present, so the exit status decides nothing: read the
+     output and confirm entries under `tiergraph/` *and* under `tiergraph_dot/`.
+   - **The printed version must equal the `X.Y.Z` set in step 1**, and so must
+     the tag cut in step 3 and the `dist/` filenames just built. Nothing
+     compares them until the publish workflow does, and by then a mismatch has
+     already cost the release.
+
+   Then clear the build artifacts, once the wheel has been read:
+
+   ```bash
    rm -rf dist build
    ```
 
@@ -98,8 +127,10 @@ ascending sort order.
   `tiergraph.__version__`. A mismatch fails the build — bump the version *and*
   tag together.
 - **Two packages, one distribution**: `[tool.hatch.build.targets.wheel]` ships
-  both `src/tiergraph` and `src/tiergraph_dot`. Confirm both are in the wheel:
-  `python -m zipfile -l dist/*.whl | grep -E 'tiergraph(_dot)?/'`.
+  both `src/tiergraph` and `src/tiergraph_dot`. Step 2 lists the wheel while it
+  still exists, before `rm -rf dist build` removes it. That listing is read, not
+  scored: the pattern matches either package, so *both* is a fact about the
+  output rather than about the exit status.
 - **CI must be green first**: `ci.yml` runs on the push; only cut the release
   once it passes.
 - **Re-releases**: PyPI is immutable — you cannot overwrite `X.Y.Z`. If a build
