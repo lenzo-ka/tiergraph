@@ -9,11 +9,28 @@ It recognizes only three closed lexical shapes:
   tracked path -- and refused outright when it names none of them, because a
   phrase that matches and then resolves to nothing is checked by no one while
   reading as checked; and
-* ``the wire is untouched`` or ``the document format is unchanged``.
+* ``the`` (``wire`` | ``wire format`` | ``document format``) ``is``
+  (``unchanged`` | ``untouched``) -- one closed cross product, because all six
+  spellings name the same tree observable, the released ``FORMAT_VERSION``
+  against the current one.
 
 The first shape is checked only under ``[Unreleased]``.  The other two compare
 the current tree with the newest release tag.  More claim kinds belong here only
 when their wording and their tree observable can both be closed as narrowly.
+
+Matching runs over an entry with its whitespace flattened.  A changelog entry is
+wrapped prose, so a claim spelled across a line break is the same claim, and a
+matcher that reads a raw line decides its own scope by where an editor happened
+to wrap -- which nothing in this repository controls or reviews.
+
+Two bounds stand, and both are the closed vocabulary rather than defects in it.
+A stability claim spelled any other way passes unread, because nothing looked at
+it; only a spelling that names the released-versus-current format comparison
+belongs in the list, and never a spelling added so that some sentence already
+written goes quiet.  And a recognized phrase is matched wherever it appears, so
+an entry quoting one reads as an entry making one -- use and mention are a
+distinction no lexical matcher draws, and an entry about this gate has to
+describe the vocabulary instead of listing it.
 """
 
 from __future__ import annotations
@@ -41,7 +58,7 @@ VERSION_CLAIM = re.compile(
     re.IGNORECASE,
 )
 UNCHANGED_WIRE = re.compile(
-    r"\b(?:the wire is untouched|the document format is unchanged)\b",
+    r"\bthe (?:wire|wire format|document format) is (?:unchanged|untouched)\b",
     re.IGNORECASE,
 )
 BYTE_IDENTICAL = re.compile(r"\bbyte-identical\b", re.IGNORECASE)
@@ -83,6 +100,17 @@ def entries(text: str) -> list[Entry]:
             lines.append(line)
     finish()
     return found
+
+
+def flattened(text: str) -> str:
+    """Return one entry's prose with every run of whitespace as a single space.
+
+    The entry keeps its raw text so diagnostics can name the line it starts on;
+    only the matching sees this. Without it a claim reads as absent whenever the
+    wrap falls inside the phrase, so the check's reach is decided by an editor's
+    column width rather than by the vocabulary this file writes down.
+    """
+    return " ".join(text.split())
 
 
 def git_output(arguments: Sequence[str], cwd: Path) -> bytes | None:
@@ -146,21 +174,22 @@ def findings(
     for entry in entries(text):
         if entry.section not in {"Unreleased", __version__}:
             continue
+        prose = flattened(entry.text)
         reasons: list[str] = []
         if entry.section == "Unreleased":
-            claim = VERSION_CLAIM.search(entry.text)
+            claim = VERSION_CLAIM.search(prose)
             if claim is not None and claim.group(1) != current_format:
                 reasons.append(
                     f"claims FORMAT_VERSION {claim.group(1)!r}; the tree declares {current_format!r}"
                 )
 
-        if old_format != current_format and UNCHANGED_WIRE.search(entry.text):
+        if old_format != current_format and UNCHANGED_WIRE.search(prose):
             reasons.append(
                 f"claims the wire did not move; {tag} used {old_format!r} and the tree uses {current_format!r}"
             )
 
-        if BYTE_IDENTICAL.search(entry.text):
-            named = named_artifacts(entry.text)
+        if BYTE_IDENTICAL.search(prose):
+            named = named_artifacts(prose)
             if not named:
                 # A claim that matches the phrase and then resolves to no
                 # artifact compared nothing, and the old code reported that as

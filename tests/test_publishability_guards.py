@@ -780,14 +780,31 @@ def test_nothing_under_the_local_agent_directory_can_reach_the_distribution(
         "schema/tiergraph.schema.json",
     ),
 )
-def test_main_refuses_an_external_reference_in_each_shipped_file(
+def test_main_refuses_an_external_reference_in_each_shipped_file_named_here(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
 ) -> None:
-    """REGRESSION: no shipped file is outside the reference check.
+    """REGRESSION: the reference check fires in each file named above.
 
     Each of these ships and each once sat outside the gate, so an unapproved
     reference in any of them passed. The release checklist carried exactly that
     class of reference and had to be corrected by hand.
+
+    The names are the claim's whole extent, which is why this says "named here"
+    rather than naming shipped files in general. The population claim -- that
+    nothing ships unread -- belongs to
+    `test_every_file_in_the_built_distribution_is_gated`, which derives its set
+    from a built distribution and so cannot go stale as packaging moves. What
+    these add is the other direction: that the checks actually fire on a leak
+    written into a Markdown file, a build recipe, a workflow, an ignore file, a
+    digest list, a JSON artifact, and an example source, rather than only
+    selecting them.
+
+    Deriving this list from `_scanned_files()` was weighed and rejected. That
+    helper selects with `is_shipped_surface`, which answers about a name and
+    nothing else, so a parametrize drawn from it would assert that the files the
+    predicate selects are the files the predicate selects -- 138 cases when this
+    was written, none of which can fail, standing in for a short list that
+    records where this gate has actually been blind.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)

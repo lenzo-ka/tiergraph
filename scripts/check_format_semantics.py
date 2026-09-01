@@ -122,20 +122,41 @@ def refusal_of(entry: Entry, loader: object) -> str:
     return ""
 
 
-def findings(entries: tuple[Entry, ...], loader: object) -> list[str]:
-    """Return one message per refusal the entry's disposition does not cover."""
-    reported = []
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    """What one pass of the current decoder over the corpus established.
+
+    The three fields partition the corpus: a document loaded, or it was refused
+    where a disposition already accounts for the refusal, or it was refused
+    where nothing does. Only the third is a failure, but the gate reports the
+    partition rather than the failing part, because "the corpus loads" and "the
+    corpus loads except where somebody already ruled it never should" are
+    different statements and this gate can only make the second one.
+    """
+
+    loaded: int
+    adjudicated: int
+    findings: tuple[str, ...]
+
+
+def review(entries: tuple[Entry, ...], loader: object) -> Outcome:
+    """Run the decoder once over every entry and partition what it did."""
+    loaded = 0
+    adjudicated = 0
+    found: list[str] = []
     for index, entry in enumerate(entries):
         why = refusal_of(entry, loader)
         if not why:
+            loaded += 1
             continue
         if entry.disposition is Disposition.NEVER_LEGAL:
+            adjudicated += 1
             continue
-        reported.append(
+        found.append(
             f"corpus entry {index} (captured at {entry.captured_at}, "
             f"{entry.disposition}) no longer loads: {why}"
         )
-    return reported
+    return Outcome(loaded=loaded, adjudicated=adjudicated, findings=tuple(found))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,19 +178,29 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    reported = findings(entries, loads)
-    for message in reported:
+    outcome = review(entries, loads)
+    for message in outcome.findings:
         print(message, file=sys.stderr)
-    if reported:
+    if outcome.findings:
         print(
-            f"{len(reported)} of {len(entries)} captured documents stopped "
-            "loading. Each is a question with two answers: the spec allowed it, "
-            "so this is a break and owes a version position; or the spec never "
-            "did, so this is a fix and the entry should be marked never-legal "
-            "with the reason. This gate does not decide which.",
+            f"{len(outcome.findings)} of {len(entries)} captured documents "
+            "stopped loading with nothing accounting for it. Each is a question "
+            "with two answers: the spec allowed it, so this is a break and owes "
+            "a version position; or the spec never did, so this is a fix and "
+            "the entry should be marked never-legal with the reason. This gate "
+            "does not decide which.",
             file=sys.stderr,
         )
         return 1
+    if outcome.adjudicated:
+        print(
+            f"{outcome.loaded} of {len(entries)} captured documents still load; "
+            f"the remaining {outcome.adjudicated} do not, each already "
+            "adjudicated never-legal in the corpus. This gate establishes that "
+            "no refusal is unaccounted for, not that those adjudications are "
+            "right."
+        )
+        return 0
     print(f"every one of the {len(entries)} captured documents still loads")
     return 0
 
