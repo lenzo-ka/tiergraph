@@ -144,6 +144,20 @@ def test_missing_generated_directive_is_rejected() -> None:
         generate_docs._replace_directive("plain text", "copy-example", "body")
 
 
+def test_gate_step_without_a_gloss_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A step added to `gate` stops the render, naming the step and the fix.
+
+    The contributor-facing gate list takes its order and membership from the
+    makefile; only the one-line gloss is written by hand. Adding a step to
+    `gate` and forgetting the gloss is therefore the one way to reach this
+    render with nothing to say about a step, and the person who did it is
+    holding a makefile, not this module.
+    """
+    monkeypatch.setattr(generate_docs, "gate_steps", lambda: ("lint", "unglossed"))
+    with pytest.raises(ValueError, match="gate step 'unglossed' has no gloss"):
+        generate_docs.contributing_bytes()
+
+
 @pytest.mark.parametrize(
     ("stderr", "stdout", "message"),
     [(b"bad", b"", "wrote to stderr"), (b"", b"bad", "output bytes")],
