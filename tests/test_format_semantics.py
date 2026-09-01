@@ -107,13 +107,17 @@ def test_read_corpus_skips_blank_lines(tmp_path: Path) -> None:
 # --------------------------------------------------------------- the gate
 
 
-def test_the_gate_passes_when_every_document_still_loads(tmp_path: Path) -> None:
+def test_the_gate_passes_when_every_document_still_loads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """CHARACTERIZATION: green against the release that captured it.
 
     A one-row corpus cannot tell "every document loads" from "the first one
     does": a gate reading only its first entry passes that fixture exactly as a
     correct one would.  Two distinct documents are written and the entry count
     is asserted, so the quantifier has something to range over.
+
+    The universal wording is claimed only here, where every entry did load.
     """
     path = tmp_path / "corpus.jsonl"
     documents = (a_document(), another_document())
@@ -124,6 +128,42 @@ def test_the_gate_passes_when_every_document_still_loads(tmp_path: Path) -> None
     )
     assert len(check_format_semantics.read_corpus(path)) == len(documents)
     assert check_format_semantics.main(["--corpus", str(path)]) == 0
+    assert capsys.readouterr().out == (
+        "every one of the 2 captured documents still loads\n"
+    )
+
+
+def test_a_pass_over_a_refused_entry_does_not_claim_every_document_loads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """REGRESSION: the success line said something the committed corpus disproves.
+
+    Seven of the 186 committed entries carry an unpaired surrogate, the reader
+    refuses them, and their never-legal dispositions make that a pass. The gate
+    printed "every one of the 186 captured documents still loads" through all of
+    it -- a true verdict under a false sentence, which is the worse of the two
+    failures because the verdict is what gets trusted and the sentence is what
+    gets quoted. What a pass establishes is narrower: everything loaded except
+    where a disposition already said it should not, and this gate never rechecks
+    the disposition.
+    """
+    path = tmp_path / "corpus.jsonl"
+    path.write_text(
+        corpus_line(a_document())
+        + "\n"
+        + corpus_line(
+            '{"never": "loadable"}',
+            disposition="never-legal",
+            reason="the spec forbade it",
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert check_format_semantics.main(["--corpus", str(path)]) == 0
+    printed = capsys.readouterr().out
+    assert "every one of" not in printed
+    assert "1 of 2 captured documents still load; the remaining 1 do not" in printed
+    assert "not that those adjudications are right" in printed
 
 
 def test_the_gate_FAILS_on_a_narrowing_the_schema_cannot_see(tmp_path: Path) -> None:
@@ -141,10 +181,11 @@ def test_the_gate_FAILS_on_a_narrowing_the_schema_cannot_see(tmp_path: Path) -> 
     def narrowed(document: str) -> Graph:
         raise Refusal(RefusalStage.SEMANTICS, "narrowed after capture")
 
-    reported = check_format_semantics.findings(entries, narrowed)
-    assert len(reported) == 1
-    assert "no longer loads" in reported[0]
-    assert "narrowed after capture" in reported[0]
+    outcome = check_format_semantics.review(entries, narrowed)
+    assert outcome.loaded == 0
+    assert len(outcome.findings) == 1
+    assert "no longer loads" in outcome.findings[0]
+    assert "narrowed after capture" in outcome.findings[0]
 
 
 def test_the_gate_catches_the_graph_validation_channel_too(tmp_path: Path) -> None:
@@ -161,9 +202,9 @@ def test_the_gate_catches_the_graph_validation_channel_too(tmp_path: Path) -> No
     def narrowed(document: str) -> Graph:
         raise GraphValidationError("a semantic constraint tightened")
 
-    reported = check_format_semantics.findings(entries, narrowed)
-    assert len(reported) == 1
-    assert "GraphValidationError" in reported[0]
+    outcome = check_format_semantics.review(entries, narrowed)
+    assert len(outcome.findings) == 1
+    assert "GraphValidationError" in outcome.findings[0]
 
 
 def test_a_never_legal_entry_may_stop_loading_without_failing(tmp_path: Path) -> None:
@@ -181,7 +222,9 @@ def test_a_never_legal_entry_may_stop_loading_without_failing(tmp_path: Path) ->
     def narrowed(document: str) -> Graph:
         raise Refusal(RefusalStage.SEMANTICS, "now refused, correctly")
 
-    assert check_format_semantics.findings(entries, narrowed) == []
+    outcome = check_format_semantics.review(entries, narrowed)
+    assert outcome.findings == ()
+    assert (outcome.loaded, outcome.adjudicated) == (0, 1)
 
 
 def test_main_refuses_an_empty_corpus_rather_than_reporting_success(

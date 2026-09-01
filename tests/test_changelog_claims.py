@@ -54,6 +54,22 @@ def repository(tmp_path: Path, *, wire: bool = True) -> Path:
             "claims the wire did not move",
         ),
         (
+            "- The wire is unchanged.",
+            "claims the wire did not move",
+        ),
+        (
+            "- The wire format is untouched.",
+            "claims the wire did not move",
+        ),
+        (
+            "- The wire format is unchanged.",
+            "claims the wire did not move",
+        ),
+        (
+            "- The document format is untouched.",
+            "claims the wire did not move",
+        ),
+        (
             "- The document format is unchanged.",
             "claims the wire did not move",
         ),
@@ -68,6 +84,78 @@ def test_each_false_claim_shape_is_refused_by_name(
     refused = claims.findings(text, root, "0.2.0")
     assert len(refused) == 1
     assert message in refused[0]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "- The\n  document format is unchanged.",
+        "- The document\n  format is unchanged.",
+        "- The document format\n  is unchanged.",
+        "- The document format is\n  unchanged.",
+        '- `FORMAT_VERSION`\n  stays `"9"` here.',
+        "- The schema\n  artifact is byte-identical.",
+    ],
+)
+def test_a_claim_split_across_a_wrap_is_still_read(tmp_path: Path, entry: str) -> None:
+    """REGRESSION: where a line broke decided how far this gate could see.
+
+    A changelog entry is wrapped prose and the matchers ran over the raw text, so
+    a claim whose phrase straddled a newline read as absent. The live changelog
+    carried one: an entry whose closing sentence began with `The` at the end of
+    one line passed for no reason but the wrap, and reflowing that paragraph
+    would have turned the gate red without a line of code changing. Every break
+    point inside a recognized phrase is exercised here, because the defect is
+    the whole matched span rather than any one word boundary in it.
+    """
+    root = repository(tmp_path)
+    refused = claims.findings(f"## [Unreleased]\n\n{entry}\n", root, "0.2.0")
+    assert len(refused) == 1
+
+
+def test_a_stability_claim_outside_the_vocabulary_is_still_unread(
+    tmp_path: Path,
+) -> None:
+    """CHARACTERIZATION: the closed vocabulary's remaining bound, written down.
+
+    These say what the recognized shapes say, in words this gate does not hold.
+    They pass because nothing looked, not because anything was checked, and that
+    is the standing cost of a closed vocabulary. Recording it here keeps the
+    boundary a decision rather than an accident: a spelling joins the vocabulary
+    when it names the released-versus-current format comparison, which is the
+    only observable behind that comparison, and not when adding it would make
+    some existing sentence go quiet.
+    """
+    root = repository(tmp_path)
+    for entry in (
+        "- The JSON dialect is unchanged.",
+        "- No document is read or written differently.",
+        "- The wire format did not move.",
+        "- Documents written before this change still load.",
+    ):
+        assert claims.findings(f"## [Unreleased]\n\n{entry}\n", root, "0.2.0") == []
+
+
+def test_an_entry_quoting_a_claim_reads_as_an_entry_making_one(
+    tmp_path: Path,
+) -> None:
+    """CHARACTERIZATION: use and mention are a distinction no matcher draws.
+
+    Found by writing the changelog entry for this gate's own change, which
+    quoted the recognized spellings and was refused for saying them. The
+    behavior is kept rather than patched around: an exemption for quoting is an
+    exemption an author can reach for, and a changelog is not a place where a
+    stability claim needs to be quoted often enough to earn one.
+    """
+    root = repository(tmp_path)
+    text = (
+        "## [Unreleased]\n\n"
+        "- Widened the recognized wording, which had been `the wire is "
+        "untouched` and nothing near it.\n"
+    )
+    refused = claims.findings(text, root, "0.2.0")
+    assert len(refused) == 1
+    assert "claims the wire did not move" in refused[0]
 
 
 def test_a_byte_identity_claim_naming_no_artifact_is_refused(tmp_path: Path) -> None:

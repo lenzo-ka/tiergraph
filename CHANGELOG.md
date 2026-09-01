@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with their items and refuse an edit that would leave a stored
   coordinate boundary value without one boundary to hold it. This settles the
   rule for removing a durable boundary's anchor: the removal is refused rather
-  than reinterpreted. The wire format is untouched.
+  than reinterpreted. This change itself did not alter the document shape; the
+  later format break in this release moved `FORMAT_VERSION` from `"6"` to
+  `"0.2.0"`.
 - Added total displacement accounting for edits. The new public `Displacement`
   maps every source item, boundary, binary relation, and polyadic relation to
   its resulting coordinate or records its departure; `GraphEditor.displacement()`
@@ -127,8 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case that shows why the claim belongs to a pair of graphs rather than to an
   operation: `AddItem` does not decorate a graph that carries a value at the
   boundary anchored to its tier's last edge, because growing the tier moves
-  that edge and leaves the value's old coordinate empty. The document format is
-  untouched.
+  that edge and leaves the value's old coordinate empty. This change itself did
+  not alter the document shape; the later format break in this release moved
+  `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 - Made profile satisfaction an enumerable question instead of a convention. A
   profile was a class that happened to validate in its own constructor, with no
   base type, no registry, and no way to ask which roles a graph supports without
@@ -152,7 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check it never had, because `SpanViewProfile` names declarations without
   holding a graph. The clock profile is adapted separately, and the path
   profiles are outside this mechanism: a path vocabulary asserts nothing about a
-  graph. The wire format is untouched.
+  graph. This change itself did not alter the document shape; the later format
+  break in this release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 - Added `scripts/check_format_growth.py` and the `make format-growth` gate,
   which compares the committed JSON Schema against the schema recovered from the
   newest release tag in the current release line and refuses a change that
@@ -172,7 +176,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that step, and between the step and the tag that releases it the gate prints
   each break rather than refusing it. The baseline is read from a release tag
   rather than a second committed copy, so a checkout without tags refuses
-  instead of reporting a comparison it never made. The wire format is untouched.
+  instead of reporting a comparison it never made. This change itself did not
+  alter the document shape; the later format break in this release moved
+  `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 
 ### Changed
 
@@ -194,8 +200,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has to catch `Refusal` or `ValueError` instead; `Refusal` is a `ValueError`,
   so a caller already catching that one is unaffected. Command-line exit
   statuses do not change, and `tiergraph grammar` and `tiergraph select` now
-  report the staged wording their diagnostics already carried elsewhere. The
-  document format is unchanged.
+  report the staged wording their diagnostics already carried elsewhere. This
+  change itself did not alter the document shape; the later format break in
+  this release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 - `GraphValidationError` now carries a `stage`, so both channels this package
   refuses through report one vocabulary rather than two shapes. The stage
   defaults to `RefusalStage.SEMANTICS`, which is what a declaration or
@@ -231,8 +238,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PathKind.BOUNDARY`, and `PathRefusalCode.BOUNDARY_NOT_IN_PARENT`; their
   values become `"boundary"` and `"boundary_not_in_parent"` respectively.
   Boundary-node JSON from `tiergraph path resolve` now reports
-  `"kind": "boundary"` instead of `"kind": "position"`. The wire format is
-  unchanged.
+  `"kind": "boundary"` instead of `"kind": "position"`. This change itself did
+  not alter the document shape; the later format break in this release moved
+  `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 - **BREAKING:** relation endpoints now admit `DurableItemRef` directly, encoded
   as the disjoint tagged wire arm
   `{"kind": "durable-item", "durable_id": "..."}`, so an item endpoint can
@@ -415,6 +423,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Corrected a gate that reported a sentence its own corpus disproves.
+  `make format-semantics` printed `every one of the 186 captured documents still
+  loads` while seven of them no longer load: they carry an unpaired surrogate in
+  a namespace URI, the reader now refuses them, and their `never-legal`
+  dispositions are what make that refusal a pass rather than a break. The
+  verdict was right and the sentence was false, which is the worse arrangement
+  of the two, because the verdict is what a run turns on and the sentence is
+  what gets quoted. A pass over a corpus holding an adjudicated refusal now
+  reports how many documents loaded, how many did not, and that what is
+  established is the absence of an unaccounted-for refusal rather than the
+  correctness of any disposition.
+- Widened the changelog gate's reach in the two places where it was decided by
+  something nobody reviews. Its matchers ran over an entry's raw text, so a
+  claim spelled across a line break read as absent -- the live changelog held
+  one, an entry passing for no reason but where its closing sentence wrapped, so
+  reflowing that paragraph would have turned the gate red with no code changing.
+  Matching now runs over the entry with its whitespace flattened. Separately,
+  the recognized stability wording was two exact spellings, while seven entries
+  used a third and a fourth and so were never read at all. Those name the same
+  tree observable, the released `FORMAT_VERSION` against the current one, so the
+  vocabulary is now a closed cross product: the article, one of three subject
+  phrases naming the wire or the document format, and one of two adjectives
+  denying that it moved. The script's own docstring holds the spellings, which
+  is where they can be written down without an entry that quotes a claim reading
+  as an entry that makes one -- a distinction a closed lexical vocabulary cannot
+  draw, and the reason this paragraph describes its terms instead of listing
+  them. Reading those seven entries for the first time showed each to be making
+  a release-scope claim this release contradicts, and each is reworded to the
+  per-change claim it meant, beside the format break that moved
+  `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 - Closed a soundness hole in the JSON Lines program reader, found while
   reconciling that reader with the one refusal order `docs/format.md` declares
   over every document reader this package exposes. `load_program` handed each
@@ -472,7 +510,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assumed. The docstring gate requires a docstring that says something, so
   `def f(x): ""` no longer passes as documented. The changelog gate refuses a
   byte-identity claim that names no artifact it can resolve, instead of
-  comparing nothing and reporting agreement. The wire format is untouched.
+  comparing nothing and reporting agreement. This change itself did not alter
+  the document shape; the later format break in this release moved
+  `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
 
 - Closed a file that could ship without being read. The publishability gate
   reads the git index while a source distribution is built from the working
