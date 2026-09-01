@@ -149,8 +149,10 @@ dot = tiergraph_dot.dumps(graph)
 ## Stability
 
 The current development version and every published pre-1.0 release are alpha
-software. The public Python API may change before 1.0; where possible, changes
-will be additive, but compatibility is not yet promised.
+software. Before 1.0, a 0.X.0 release is in effect a major release and carries
+no compatibility guarantee for the public Python API: names may be removed or
+renamed in one, with no migration path. A consumer is expected to track the
+current version rather than pin an older one and wait.
 The JSON wire format, construction machine format, and span-view JSON format
 carry explicit version stamps so a reader can identify the format it receives.
 A format stamp identifies a contract; it does not imply that every version can
