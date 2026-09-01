@@ -27,22 +27,32 @@ def _synthetic_denylist() -> check_tracked_clean.Denylist:
     )
 
 
-@pytest.mark.parametrize(
-    ("content", "reason"),
-    (
-        ("/" + "Users/contributor/project", "macOS home-directory"),
-        ("/" + "home/contributor/project", "Linux home-directory"),
-        ("." + "ssh/config", "SSH configuration"),
-        ("file:" + "///tmp/report", "absolute local file URL"),
-        ("Generated " + "by AI", "AI/tool attribution"),
-        ("As " + "an AI", "AI/tool attribution"),
-        ("Generated " + "on 2026-08-23", "generated timestamp"),
-    ),
+FORBIDDEN_WITNESSES: tuple[tuple[str, str], ...] = (
+    ("/" + "Users/contributor/project", "a macOS home-directory path"),
+    ("/" + "home/contributor/project", "a Linux home-directory path"),
+    ("." + "ssh/config", "a path into an SSH configuration directory"),
+    ("file:" + "///tmp/report", "an absolute local file URL"),
+    ("Generated " + "by AI", "AI/tool attribution"),
+    ("As " + "an AI", "AI/tool attribution"),
+    ("Generated " + "on 2026-08-23", "a generated timestamp"),
 )
+
+
+@pytest.mark.parametrize(("content", "reason"), FORBIDDEN_WITNESSES)
 def test_tracked_clean_leaks_detects_each_forbidden_surface(
     tmp_path: Path, content: str, reason: str
 ) -> None:
-    """Every forbidden pattern produces its specific publishability reason."""
+    """Every forbidden pattern produces its specific publishability reason.
+
+    The witnesses are matched against the gate's own `FORBIDDEN` table rather
+    than counted by eye, so an eighth pattern shipped without a witness fails
+    here instead of shipping untested.  The reasons are the shipped wording in
+    full: a substring stops distinguishing two reasons the moment one is
+    rephrased into the other's prefix.
+    """
+    assert sorted(reason for _, reason in FORBIDDEN_WITNESSES) == sorted(
+        declared for _, declared in check_tracked_clean.FORBIDDEN
+    )
     path = tmp_path / "tracked.txt"
     path.write_text(content, encoding="utf-8")
     assert reason in check_tracked_clean.leaks(path)[0]

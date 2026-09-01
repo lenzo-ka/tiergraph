@@ -101,8 +101,8 @@ accumulation by hand, separately, for each question. See
 
 **Interchange that does not rot.** Canonical JSON, explicit format and machine
 version stamps, a SHA-pinned schema. Documents round-trip, and two graphs differing
-only in input order serialize identically — see
-[serialization](docs/guide/serialization.md).
+only in the order their declarations were supplied serialize identically, while tier
+and item order stay data — see [serialization](docs/guide/serialization.md).
 
 Timing and projection build on those: attach a clock profile to resolve physical
 timing ([timing](docs/guide/timing.md)), or project segmentation graphs into

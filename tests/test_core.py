@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import fields, is_dataclass
 
 import pytest
 from hypothesis import given
@@ -35,6 +36,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
+    core,
 )
 from tiergraph.core import _resolve_relation_endpoint
 
@@ -89,8 +91,40 @@ def test_kernel_law(law: object) -> None:
     law()
 
 
+def attribute_carriers() -> frozenset[str]:
+    """Return the public kernel types that store an attribute tuple of their own.
+
+    The carriers are read off the module rather than remembered, so a type
+    given an `attributes` field reaches this test as a missing name instead of
+    inheriting the claim without being held to it.
+    """
+    return frozenset(
+        carrier
+        for carrier, value in vars(core).items()
+        if not carrier.startswith("_")
+        and isinstance(value, type)
+        and is_dataclass(value)
+        and any(field.name == "attributes" for field in fields(value))
+    )
+
+
 def test_every_attribute_carrier_canonicalizes_by_qualified_name() -> None:
-    """Nested constructors remove presentation order from all attribute tuples."""
+    """Nested constructors remove presentation order from all attribute tuples.
+
+    The document is a carrier too: `Graph` stores its own attribute tuple and
+    sat outside this list while the name claimed every carrier.
+    """
+    assert {
+        "BipartiteRelationDeclaration",
+        "Boundary",
+        "Graph",
+        "Item",
+        "PolyadicRelationDeclaration",
+        "PolyadicRelationInstance",
+        "RelationInstance",
+        "SimpleRelationDeclaration",
+        "Tier",
+    } == attribute_carriers()
     first = AttributeValue(name("a"), XsdType.STRING, "first")
     second = AttributeValue(name("z"), XsdType.STRING, "second")
     supplied = (second, first)
@@ -132,6 +166,23 @@ def test_every_attribute_carrier_canonicalizes_by_qualified_name() -> None:
     assert (
         PolyadicRelationInstance(
             name("polyadic"), (item_ref,), (item_ref,), attributes=supplied
+        ).attributes
+        == expected
+    )
+    assert (
+        Graph(
+            NAMESPACES,
+            (Tier(TierDeclaration(tier_name, "Tier")),),
+            (),
+            (),
+            tuple(
+                AttributeDeclaration(
+                    value.name, AttributeDomain.DOCUMENT, XsdType.STRING
+                )
+                for value in expected
+            ),
+            (),
+            supplied,
         ).attributes
         == expected
     )

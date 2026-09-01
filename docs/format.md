@@ -27,10 +27,17 @@ the document's namespace table. That trade-off is accepted because namespace
 bindings are mandatory for qualified names and the complete graph is validated
 after decode.
 
-Implementers should treat qualified names, declaration order, tier order, item
-order, relation endpoint order, and boundary indexes as data. Validate all
-references after decoding. Do not infer relation meaning from a name or compact
-ordered relations into unordered sets.
+Order is significant in some collections and discarded in others, so an
+implementation that preserves supply order throughout will not write canonical
+bytes. Namespaces are sorted by namespace URI, relation and attribute
+declarations by qualified name, attribute values by name, and sparse boundary
+values by tier and index; seals, layers, the facts within each layer, and a
+relation side's endpoint kinds and allowed tiers are sorted as well. Tier order,
+tier item order, relation instance order, and polyadic endpoint order are
+retained as supplied. Implementers should treat those retained orders, along
+with qualified names and boundary indexes, as data. Validate all references
+after decoding. Do not infer relation meaning from a name or compact ordered
+relations into unordered sets.
 
 The generated schema in `schema/tiergraph.schema.json` describes structural
 shape. The Python decoder remains the authority for semantic constraints such

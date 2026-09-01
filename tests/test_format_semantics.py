@@ -26,6 +26,17 @@ def a_document() -> str:
     return dumps(Graph((NamespaceDeclaration("c", NS),), (), ()))
 
 
+def another_document() -> str:
+    """Return a second valid graph, distinct from the minimal one."""
+    return dumps(
+        Graph(
+            (NamespaceDeclaration("c", NS), NamespaceDeclaration("d", NS + ":other")),
+            (),
+            (),
+        )
+    )
+
+
 def corpus_line(document: str, disposition: str = "unadjudicated", **extra: str) -> str:
     """Return one corpus row as it is written to disk."""
     row = {"document": document, "captured_at": "0.2.0", "disposition": disposition}
@@ -97,9 +108,21 @@ def test_read_corpus_skips_blank_lines(tmp_path: Path) -> None:
 
 
 def test_the_gate_passes_when_every_document_still_loads(tmp_path: Path) -> None:
-    """CHARACTERIZATION: green against the release that captured it."""
+    """CHARACTERIZATION: green against the release that captured it.
+
+    A one-row corpus cannot tell "every document loads" from "the first one
+    does": a gate reading only its first entry passes that fixture exactly as a
+    correct one would.  Two distinct documents are written and the entry count
+    is asserted, so the quantifier has something to range over.
+    """
     path = tmp_path / "corpus.jsonl"
-    path.write_text(corpus_line(a_document()) + "\n", encoding="utf-8")
+    documents = (a_document(), another_document())
+    assert len(set(documents)) == len(documents)
+    path.write_text(
+        "".join(corpus_line(document) + "\n" for document in documents),
+        encoding="utf-8",
+    )
+    assert len(check_format_semantics.read_corpus(path)) == len(documents)
     assert check_format_semantics.main(["--corpus", str(path)]) == 0
 
 
@@ -307,3 +330,33 @@ def test_a_json_escaped_url_is_read_by_its_real_prefix() -> None:
         check_tracked_clean._url_prefix("https://example.com/score")
         == "example.com/score"
     )
+
+
+def test_the_committed_corpus_splits_exactly_where_its_dispositions_say() -> None:
+    """The reader refuses every never-legal entry and still reads the rest.
+
+    The seven never-legal entries were dispositioned ahead of the refusal that
+    now meets them: each names the unpaired surrogate in a namespace URI as
+    something the format never had a canonical byte form for. This pins both
+    halves of that claim against the committed file, so a reader that stopped
+    refusing them and a reader that started refusing anything else each fail
+    here, rather than only in the gate's aggregate count.
+    """
+    entries = check_format_semantics.read_corpus(check_format_semantics.CORPUS_PATH)
+    assert len(entries) == 186
+    never_legal = check_format_semantics.Disposition.NEVER_LEGAL
+
+    refused = [entry for entry in entries if entry.disposition is never_legal]
+    assert len(refused) == 7
+    for entry in refused:
+        with pytest.raises(ValueError) as refusal:
+            loads(entry.document)
+        assert type(refusal.value) is Refusal
+        assert refusal.value.stage is RefusalStage.ENCODING
+        assert "namespace value " in str(refusal.value)
+        assert "has unsupported character U+D800" in str(refusal.value)
+
+    accepted = [entry for entry in entries if entry.disposition is not never_legal]
+    assert len(accepted) == 179
+    for entry in accepted:
+        loads(entry.document)

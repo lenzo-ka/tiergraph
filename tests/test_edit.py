@@ -418,20 +418,32 @@ def test_a_target_of_the_wrong_form_is_refused(
         base().set_attribute(target, value)
 
 
-@pytest.mark.parametrize(
-    ("target", "attribute"),
-    [
-        (None, TITLE),
-        (WORD, LABEL),
-        (ItemRef(PHRASE, 0), SCORE),
-        (WORDS, KIND),
-        (0, CONFIDENCE),
-    ],
+DOMAIN_OF: dict[QualifiedName, AttributeDomain] = {
+    declaration.name: declaration.domain for declaration in DECLARATIONS
+}
+
+ABSENT_REMOVALS: tuple[tuple[EditTarget, QualifiedName], ...] = (
+    (None, TITLE),
+    (WORD, LABEL),
+    (ItemRef(PHRASE, 0), SCORE),
+    (BoundaryRef(PHRASE, 1), MARK),
+    (WORDS, KIND),
+    (0, CONFIDENCE),
 )
+
+
+@pytest.mark.parametrize(("target", "attribute"), ABSENT_REMOVALS)
 def test_removing_an_absent_value_is_refused_on_every_carrier(
     target: EditTarget, attribute: QualifiedName
 ) -> None:
-    """Absence is a distinct case, so removal names what it could not find."""
+    """Absence is a distinct case, so removal names what it could not find.
+
+    "Every carrier" is `AttributeDomain` itself rather than the cases someone
+    remembered to write down, so a domain admitted by the declaration and
+    reached by no removal fails here instead of joining quietly.  The boundary
+    domain is the one this list was missing while claiming to be complete.
+    """
+    assert {DOMAIN_OF[name] for _, name in ABSENT_REMOVALS} == set(AttributeDomain)
     with pytest.raises(GraphValidationError, match="carries no attribute"):
         base().remove_attribute(target, attribute)
 
