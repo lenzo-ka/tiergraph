@@ -17,8 +17,8 @@ def _module(path: Path, source: str) -> Path:
     return path
 
 
-def test_every_registered_reservation_is_still_live() -> None:
-    """No reservation in the register has been overtaken by the tree."""
+def test_every_enforceable_reservation_is_still_live() -> None:
+    """No reservation a predicate can decide has been overtaken by the tree."""
     overtaken = {
         reservation.name: reservation.overtaken()
         for reservation in check_reservations.RESERVATIONS
