@@ -83,7 +83,11 @@ def to_data(graph: Graph) -> dict[str, JsonValue]:
     """Return the versioned primitive document as strict JSON data.
 
     A string the UTF-8 encoder refuses is refused here, named by its field path,
-    so no writer built on this function emits text `loads` would then refuse.
+    so no writer built on this function emits text `loads` would refuse for its
+    encoding.  That is the one condition this function answers, and it is not a
+    round trip over the whole refusal order: the reader ranks conditions this
+    writer never asks, so `dumps` returning is not on its own a promise that
+    `loads` accepts what it wrote.
     """
     prefixes: dict[str, str] = {}
     for binding in graph.namespaces:

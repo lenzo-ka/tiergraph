@@ -87,10 +87,11 @@ round-trip equal: True
 The keys are sorted; empty collections and null fields are omitted, except that
 an explicit empty relation-side `tiers` restriction is preserved. Qualified
 names use the document's namespace prefixes. The same graph always produces
-these exact bytes. Whenever `dumps(graph)` returns, `loads(dumps(graph))`
-reconstructs a graph equal to the original. A graph carrying a string that
-UTF-8 cannot encode is refused by the writer instead of being emitted as an
-unreadable document.
+these exact bytes. A graph carrying a string that UTF-8 cannot encode is
+refused by the writer instead of being emitted as an unreadable document. That
+is the one condition the writer answers, so `dumps` returning is not on its own
+a promise that `loads` accepts what it wrote: the reader ranks conditions the
+writer never asks, and refuses a document that meets one of them.
 
 Supply order is not preserved everywhere, and a writer that emitted every
 collection in the order it was handed would not produce canonical bytes.

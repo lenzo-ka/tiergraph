@@ -123,12 +123,15 @@ and members in their declared order, so an enclosing node's condition precedes
 its members' whatever their stages; the pair of a node and a stage totally
 orders every condition a read can meet.
 
-The command line decodes some of its own inputs outside those readers. `clock
---profile` and `span render --profile` read a profile file with the JSON module
-directly, and `grammar --tokens-json` decodes an inline argument the same way. A
-malformed value at any of the three is refused with the underlying decoder's
-message and no stage, so this order governs the document readers rather than
-every JSON this package parses.
+The command line reads its own declarative profiles through this order too:
+`clock --profile` and `span render --profile` take the envelope, encoding, and
+syntax conditions from the same reader a graph takes them from, so the same
+bytes are answered at the same rank and in the same wording whichever of the
+two they arrive as. One input is left outside: `grammar --tokens-json` decodes
+an inline argument with the JSON module directly, and a malformed value there
+is refused with the underlying decoder's message and no stage. This order
+therefore governs the documents this package reads rather than every JSON it
+parses.
 
 A further condition is reported beside the primary one only while it stays
 applicable once the primary is known. A document announcing a format this

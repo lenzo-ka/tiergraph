@@ -67,8 +67,10 @@ class DotPresentation:
     ``item_label(item, tier)`` with the :class:`tiergraph.Item` and its owning
     :class:`tiergraph.Tier`, so a consumer can fall back to a tier-derived
     label. When ``item_label`` is absent or returns ``None`` the default label
-    is built from the item's durable id and attributes without querying clock
-    timing, so the default holds under a structural clock as well.
+    is built from the item's durable id and attributes, and appends the item's
+    physical timing when a clock is rendering one. On the occupied-spine path
+    no clock reaches that default, so it holds under a structural clock as
+    well.
 
     Two further hooks shape relation rendering on the occupied-spine path.
     ``relation_style`` is called as ``relation_style(relation)`` with the
