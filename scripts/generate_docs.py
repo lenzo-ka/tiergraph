@@ -41,9 +41,9 @@ GATE_TARGET = re.compile(r"^gate:(?P<steps>.*)$", re.MULTILINE)
 
 # What each gate step is for, keyed by the makefile target that runs it. The
 # order and the membership of the list are the makefile's; only the gloss is
-# written here. A step added to `gate` with no entry here stops the render with
-# a KeyError naming it, which is the point: a contributor-facing list of the
-# gate had fallen behind the gate twice while it was prose someone retyped.
+# written here. A step added to `gate` with no entry here stops the render and
+# says what to add and where, which is the point: a contributor-facing list of
+# the gate had fallen behind the gate twice while it was prose someone retyped.
 GATE_STEP_PROSE: Mapping[str, str] = {
     "lint": "Ruff linting",
     "format-check": "Ruff formatting checks",
@@ -405,10 +405,23 @@ def gate_steps() -> tuple[str, ...]:
     return tuple(" ".join(GATE_TARGET.findall(text)).split())
 
 
+def _gate_step_gloss(step: str) -> str:
+    """Return one gate step's gloss, refusing by name when none is written."""
+    try:
+        return GATE_STEP_PROSE[step]
+    except KeyError as error:
+        raise ValueError(
+            f"gate step {step!r} has no gloss: the makefile's `gate` target runs "
+            f"it and CONTRIBUTING.md is rendered from that target, so add an "
+            f"entry for {step!r} to GATE_STEP_PROSE in scripts/generate_docs.py "
+            f"and rerun `make docs`"
+        ) from error
+
+
 def contributing_bytes() -> bytes:
     """Render the contributor note's gate-step list from the makefile itself."""
     text = CONTRIBUTING_PATH.read_text(encoding="utf-8")
-    body = "\n".join(f"- `{step}` — {GATE_STEP_PROSE[step]}" for step in gate_steps())
+    body = "\n".join(f"- `{step}` — {_gate_step_gloss(step)}" for step in gate_steps())
     result = _replace_directive(text, "gate-steps", body)
     return (result.rstrip() + "\n").encode()
 
