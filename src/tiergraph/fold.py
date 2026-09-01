@@ -1,4 +1,4 @@
-"""Declared valuations and semiring folds over finite dependency DAGs."""
+"""Declared valuations and semiring folds over finite dependency relations."""
 
 from __future__ import annotations
 
@@ -611,7 +611,7 @@ class FoldDeclaration[Value]:
             reference for reference in references if incoming[reference] == 0
         )
         if not roots:
-            raise ValueError(f"fold {self.name!r} dependency DAG has no root")
+            raise ValueError(f"fold {self.name!r} dependency graph has no root")
         return outgoing, roots
 
     def _dependency_graph(self) -> _DependencyGraph:

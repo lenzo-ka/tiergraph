@@ -176,9 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A fold that finds no root now reports `dependency graph has no root` rather
+  than `dependency DAG has no root`. The dependency relation a fold runs over
+  need not be acyclic, so the old wording named a structure the operation does
+  not require. Only the wording changes.
 - **BREAKING:** `grammar_loads` and `selection_loads` now read their text
-  through the same staged reader `loads` uses, so every reader in this package
-  ranks the conditions its input can meet by one numbered order. Text that is
+  through the same staged reader `loads` uses, so every document reader this
+  package exposes ranks the conditions its input can meet by one numbered
+  order. Text that is
   not JSON, bytes that are not UTF-8, nesting past the depth limit, and input
   past the size limit now raise a `Refusal` carrying `RefusalStage.SYNTAX`,
   `RefusalStage.ENCODING`, or `RefusalStage.ENVELOPE`, where each previously

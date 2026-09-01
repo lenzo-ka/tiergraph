@@ -241,7 +241,7 @@
     {
       "name": "build-results",
       "page": "docs/guide/construction.md",
-      "text": "`Program.unroll()` returns `AsBuilt`, including promoted references; `execute()`\nis the convenience operation that returns its `Graph`."
+      "text": "`Program.unroll()` returns `AsBuilt`, including promoted references; the\nmodule-level `execute(opcodes)` is the convenience operation that returns the\n`Graph` alone."
     }
   ],
   "fences": {
