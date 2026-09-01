@@ -31,10 +31,39 @@ MANIFEST_PATH = ROOT / "docs" / "manifest.json"
 API_PATH = ROOT / "docs" / "reference" / "api.md"
 CLI_PATH = ROOT / "docs" / "reference" / "cli.md"
 MIXING_PATH = ROOT / "docs" / "guide" / "recognize-and-act.md"
+CONTRIBUTING_PATH = ROOT / "CONTRIBUTING.md"
+MAKEFILE_PATH = ROOT / "Makefile"
 DIRECTIVE = re.compile(
     r"<!-- tiergraph:(?P<kind>[a-z-]+) -->(?P<body>.*?)<!-- /tiergraph:\1 -->",
     re.DOTALL,
 )
+GATE_TARGET = re.compile(r"^gate:(?P<steps>.*)$", re.MULTILINE)
+
+# What each gate step is for, keyed by the makefile target that runs it. The
+# order and the membership of the list are the makefile's; only the gloss is
+# written here. A step added to `gate` with no entry here stops the render with
+# a KeyError naming it, which is the point: a contributor-facing list of the
+# gate had fallen behind the gate twice while it was prose someone retyped.
+GATE_STEP_PROSE: Mapping[str, str] = {
+    "lint": "Ruff linting",
+    "format-check": "Ruff formatting checks",
+    "types": "strict mypy checks",
+    "test": "the test suite under branch coverage",
+    "determinism": (
+        "the suite again in separate processes, with hash seeds 0, 12345, and 999"
+    ),
+    "schema-check": "the committed JSON Schema still matches a fresh render",
+    "format-growth": "the wire format may only grow within a release line",
+    "format-semantics": (
+        "the current decoder still accepts the documents the frozen corpus "
+        "recorded as accepted when it was captured"
+    ),
+    "docs-check": "generated documentation matches a fresh deterministic render",
+    "tracked-clean": "tracked-file hygiene, over every tracked file",
+    "documented": "the public-docstring check",
+    "reservations": "the reservation register is pinned and undischarged",
+    "changelog-claims": "the changelog-claim check",
+}
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
@@ -270,7 +299,13 @@ def cli_bytes() -> bytes:
         "`tiergraph.cli.build_parser()` is importable and usable, but carries no "
         f"API-stability promise at version {tiergraph.__version__}.\n\n"
         "## Contracts\n\n"
-        "Every command accepts `-` as stdin. Document-producing commands write to "
+        "Every command that reads an input document accepts `-` in place of that "
+        "document's filename and reads it from standard input, including the "
+        "inputs named by `--result`, `--profile`, and `--selector`; `step "
+        "--interactive` is the one exception, below. `schema` and `semirings` "
+        "read no document, and `discharge`, `path`, `grammar`, `clock`, and "
+        "`span` take only a subcommand, so `-` is a command-line usage error for "
+        "those and exits 2. Document-producing commands write to "
         "stdout by default or to `-o/--output`; diagnostics go only to stderr. "
         "Exit status 0 means success, 1 means invalid input or a refused operation, "
         "2 means command-line usage error, and 3 means an I/O failure or an input "
@@ -364,12 +399,27 @@ def mixing_bytes() -> bytes:
     return (result.rstrip() + "\n").encode()
 
 
+def gate_steps() -> tuple[str, ...]:
+    """Return the gate's steps, in the order the makefile's `gate` target runs them."""
+    text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    return tuple(" ".join(GATE_TARGET.findall(text)).split())
+
+
+def contributing_bytes() -> bytes:
+    """Render the contributor note's gate-step list from the makefile itself."""
+    text = CONTRIBUTING_PATH.read_text(encoding="utf-8")
+    body = "\n".join(f"- `{step}` — {GATE_STEP_PROSE[step]}" for step in gate_steps())
+    result = _replace_directive(text, "gate-steps", body)
+    return (result.rstrip() + "\n").encode()
+
+
 def generated(manifest: Mapping[str, Any]) -> dict[Path, bytes]:
     """Return every generated artifact without reading git metadata or time."""
     return {
         API_PATH: api_bytes(manifest),
         CLI_PATH: cli_bytes(),
         MIXING_PATH: mixing_bytes(),
+        CONTRIBUTING_PATH: contributing_bytes(),
     }
 
 

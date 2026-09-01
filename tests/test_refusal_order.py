@@ -15,6 +15,7 @@ from tiergraph import (
     GraphValidationError,
     core,
     execute,
+    grammar_loads,
     loads,
     program_loads,
     schema,
@@ -217,6 +218,59 @@ def test_a_document_over_the_size_limit_outranks_its_own_bad_bytes(
     """
     monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
     refusal = refuse(loads, b"\xff\xfe")
+    assert refusal.stage is RefusalStage.ENVELOPE
+    assert str(refusal) == "document size 2 bytes exceeds limit 1"
+
+
+@pytest.mark.parametrize("reader", [grammar_loads, selection_loads])
+@pytest.mark.parametrize(
+    ("source", "stage", "message"),
+    [
+        (b"\xff\xfe", RefusalStage.ENCODING, "parse UTF-8 failed: invalid start byte"),
+        ("not json", RefusalStage.SYNTAX, "parse JSON failed: Expecting value"),
+        (
+            '{"a":1,"a":2}',
+            RefusalStage.SYNTAX,
+            "parse JSON failed: duplicate object key 'a'",
+        ),
+        (
+            "[" * (wire.MAX_JSON_DEPTH + 1) + "]" * (wire.MAX_JSON_DEPTH + 1),
+            RefusalStage.SYNTAX,
+            f"JSON nesting depth exceeds limit {wire.MAX_JSON_DEPTH}",
+        ),
+    ],
+)
+def test_every_reader_stages_the_text_before_reading_it(
+    reader: object, source: str | bytes, stage: RefusalStage, message: str
+) -> None:
+    """REGRESSION: the grammar and selector readers stage their own text.
+
+    The declared order governs every reader in the package, so a reader that
+    let the JSON parser's own exception escape would leave a caller matching
+    wording for a condition the order already names.  These are the conditions
+    the document reader answers before it looks at any member, and the stage
+    and the wording are asserted together because a refusal at the right stage
+    carrying a different account of it is a different contract.
+    """
+    refusal = refuse(reader, source)
+    assert refusal.stage is stage
+    assert str(refusal) == message
+    assert refuse(loads, source).stage is stage
+    assert str(refuse(loads, source)) == message
+
+
+@pytest.mark.parametrize("reader", [grammar_loads, selection_loads])
+def test_every_reader_holds_the_same_envelope_before_decoding(
+    reader: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION: the shared envelope limit is the first condition each meets.
+
+    An oversized input that is also not text meets two conditions at once, and
+    only a reader enforcing the envelope first reports the lower stage; a
+    reader that decoded before measuring would report the encoding one.
+    """
+    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", 1)
+    refusal = refuse(reader, b"\xff\xfe")
     assert refusal.stage is RefusalStage.ENVELOPE
     assert str(refusal) == "document size 2 bytes exceeds limit 1"
 

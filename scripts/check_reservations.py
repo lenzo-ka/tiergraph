@@ -31,9 +31,9 @@ Scope, stated so a green run is not read for more than it earns:
   and ``CHANGELOG.md``. The vocabulary below is ordinary English on those pages
   and no lexical rule separates the senses. The changelog's "``loads`` also
   defers materializing omitted members" describes shipped behavior, and
-  ``README.md``'s "compatibility is not yet promised" is a stability policy that
-  discharges only at 1.0; neither is a reservation of the kind registered here,
-  and a scan of that prose would flag both.
+  ``docs/concepts.md``'s "For now, the sanctioned pattern is" introduces a
+  recommendation; neither is a reservation of the kind registered here, and a
+  scan of that prose would flag both.
 * Not covered: ``tests/`` and ``scripts/``. A test or a gate describes behavior
   rather than promising it, and this file necessarily writes down the whole
   vocabulary it searches for, exactly as the tracked-file gate must write down

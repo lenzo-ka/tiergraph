@@ -1603,6 +1603,10 @@ grammar_loads(source: 'str | bytes') -> 'GrammarDeclaration'
 
 Decode a strict grammar declaration from UTF-8 JSON text or bytes.
 
+The text is read under the same envelope, encoding, and syntax stages the
+graph document reader applies, so a caller routes on a declared stage here
+as well as there.
+
 ### `lower_grammar`
 
 ```text
@@ -3878,6 +3882,10 @@ selection_loads(source: 'str | bytes') -> 'Selector'
 ```
 
 Decode one strict declarative selector from JSON.
+
+The text is read under the same envelope, encoding, and syntax stages the
+graph document reader applies, so a caller routes on a declared stage here
+as well as there.
 
 ## Semirings
 

@@ -26,18 +26,42 @@ Run the same full gate used by CI:
 make check
 ```
 
-The gate runs Ruff linting and formatting checks, strict mypy checks, pytest,
-the test suite in separate processes with hash seeds 0, 12345, and 999, JSON
-Schema currency checks, the format-growth check, documentation currency checks,
-the tracked-file hygiene check, the public-docstring check, the reservation
-check, and the changelog-claim check.
+The gate runs these steps, in this order:
+
+<!-- tiergraph:gate-steps -->
+- `lint` — Ruff linting
+- `format-check` — Ruff formatting checks
+- `types` — strict mypy checks
+- `test` — the test suite under branch coverage
+- `determinism` — the suite again in separate processes, with hash seeds 0, 12345, and 999
+- `schema-check` — the committed JSON Schema still matches a fresh render
+- `format-growth` — the wire format may only grow within a release line
+- `format-semantics` — the current decoder still accepts the documents the frozen corpus recorded as accepted when it was captured
+- `docs-check` — generated documentation matches a fresh deterministic render
+- `tracked-clean` — tracked-file hygiene, over every tracked file
+- `documented` — the public-docstring check
+- `reservations` — the reservation register is pinned and undischarged
+- `changelog-claims` — the changelog-claim check
+<!-- /tiergraph:gate-steps -->
+
+That list is not transcribed. `make docs` renders it from the makefile's own
+`gate` prerequisites, and `make docs-check` — itself one of the steps — fails
+when the rendered list and the committed one disagree, so a step added to the
+gate cannot quietly go unmentioned here. It is generated because the hand-copied
+version this section used to carry fell a step behind twice: a copied list is a
+claim about the gate that nothing checks.
 
 `make check` builds the virtualenv and then runs `make gate`, which is the same
 steps against an environment that already exists. Run `gate` where an index
-cannot be reached, rather than copying its steps out by hand: a copied list is a
-claim about the gate that nothing checks, and the one this note carried had
-already fallen a step behind. Coverage is measured for the `tiergraph` and `tiergraph_dot` packages and
-for the `scripts` gates, and must remain at 100% branch coverage.
+cannot be reached, rather than copying its steps out by hand. Coverage is
+measured for the `tiergraph` and `tiergraph_dot` packages and for the `scripts`
+gates, and must remain at 100% branch coverage.
+
+One of those steps reports by printing rather than only by exiting. Where a
+version step has opened a new release line and no tag has released it yet,
+`format-growth` prints each wire-format break and exits 0, because a break is
+permitted there and stating it is the point. Read its output, not its status;
+[RELEASING.md](RELEASING.md) says the same for the checks run before a release.
 
 The tracked-file hygiene check reads **every tracked file**, not a listed set of
 directories. That is not a convenience: the source distribution ships the whole
@@ -104,14 +128,16 @@ does not, and no other check disagrees. `make reservations` fails on the second
 case by name, and it fails on a docstring that announces a reservation without
 registering one.
 
-Entries come in two kinds. Most carry a predicate that reads the tree and
+Entries come in two kinds. One kind carries a predicate that reads the tree and
 reports evidence when the reservation has been overtaken; each predicate states
-in its own docstring which spelling of an arrival it watches. A few conditions
-no observable in this repository can decide -- machinery that has no reserved
-name to watch for -- and those are registered as unenforceable, with the reason
-written down. For them the check pins the prose and claims nothing further,
-which is the honest position: an unenforceable entry that says so is worth more
-than a predicate that can never fire.
+in its own docstring which spelling of an arrival it watches. The other kind
+covers a condition no observable in this repository can decide -- machinery that
+has no reserved name to watch for -- and is registered as unenforceable, with
+the reason written down. For those the check pins the prose and claims nothing
+further, which is the honest position: an unenforceable entry that says so is
+worth more than a predicate that can never fire. How many entries of each kind
+the register holds is a fact about `scripts/check_reservations.py`, left there
+to be counted rather than restated here, where nothing would notice it drifting.
 
 The check reads docstrings under `src/tiergraph`, `src/tiergraph_dot`, and
 `examples/`. It does not read hand-written Markdown, because its vocabulary is

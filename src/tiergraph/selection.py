@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
@@ -28,7 +27,7 @@ from tiergraph.path import (
     resolve_path,
 )
 from tiergraph.schema import Refusal, RefusalStage, _refuse_field_set
-from tiergraph.wire import _object, _string
+from tiergraph.wire import _object, _parsed_json, _string
 
 
 class NodeKind(StrEnum):
@@ -508,8 +507,13 @@ def evaluate_selection(
 
 
 def selection_loads(source: str | bytes) -> Selector:
-    """Decode one strict declarative selector from JSON."""
-    return _decode_selector(cast(JsonValue, json.loads(source)), "$")
+    """Decode one strict declarative selector from JSON.
+
+    The text is read under the same envelope, encoding, and syntax stages the
+    graph document reader applies, so a caller routes on a declared stage here
+    as well as there.
+    """
+    return _decode_selector(cast(JsonValue, _parsed_json(source)), "$")
 
 
 def _decode_selector(value: JsonValue, path: str) -> Selector:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -61,6 +60,7 @@ from tiergraph.path import (
     PathRefusalCode,
 )
 from tiergraph.semiring import BOOLEAN, COUNTING, PATH, PathValue
+from tiergraph.wire import _parsed_json
 
 GRAMMAR_NAMESPACE = "urn:tiergraph:grammar"
 CHART_NAMESPACE = "urn:tiergraph:grammar:chart"
@@ -350,8 +350,13 @@ class GrammarDeclaration:
 
 
 def grammar_loads(source: str | bytes) -> GrammarDeclaration:
-    """Decode a strict grammar declaration from UTF-8 JSON text or bytes."""
-    return GrammarDeclaration.from_data(json.loads(source))
+    """Decode a strict grammar declaration from UTF-8 JSON text or bytes.
+
+    The text is read under the same envelope, encoding, and syntax stages the
+    graph document reader applies, so a caller routes on a declared stage here
+    as well as there.
+    """
+    return GrammarDeclaration.from_data(_parsed_json(source))
 
 
 @dataclass(frozen=True, slots=True)
