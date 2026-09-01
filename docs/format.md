@@ -92,10 +92,12 @@ check happened to run first:
 3. `SYNTAX` — the text is JSON, nested no deeper than the limit, with no
    repeated object key.
 4. `CONSTRUCTION` — this node is the JSON construction its declaration names.
-5. `DISCRIMINATOR` — the member that selects which declaration applies is
-   present, readable, and names one this release implements. `format_version`
-   and a program's `machine_version` are discriminators, and so are a relation's
-   `kind`, an opcode's name, and a selector's `op` or `select`.
+5. `DISCRIMINATOR` — the member that selects which declaration applies names one
+   this release implements. `format_version` and a program's `machine_version`
+   are discriminators, and so are a relation's `kind`, an opcode's name, and a
+   selector's `op` or `select`. A discriminator that is absent or not a string
+   never reaches this rank: it is a construction condition, reported at rank 4,
+   because there is no spelling yet to judge against the implemented set.
 6. `SHAPE` — this node's field set is the selected declaration's, naming every
    missing and every unknown member at once.
 7. `VALUE` — this node's own value lies in the declared language: an enumerated
@@ -111,10 +113,13 @@ orders every condition a read can meet.
 A further condition is reported beside the primary one only while it stays
 applicable once the primary is known. A document announcing a format this
 release does not implement is refused for its version alone, because the field
-set of a declaration the document never selected cannot honestly be judged. A
-document whose version this release does implement reports every structural
-condition it meets, so a caller repairs it in one pass rather than once per
-problem.
+set of a declaration the document never selected cannot honestly be judged. The
+one condition currently carried beside another is the field set of a single
+node: a node both missing required fields and carrying unknown ones has the two
+named in one message and the unknown-field half repeated on `also` as a refusal
+in its own right, so a consumer learns the whole difference at that node from
+one attempt. Conditions at two different nodes are two reads, and a caller
+repairs them one at a time.
 
 The stage is the stable part of a refusal and the wording is diagnostic.
 `tiergraph.schema.Refusal` carries the stage as `stage` and any further

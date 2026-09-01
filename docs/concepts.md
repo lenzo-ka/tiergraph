@@ -37,8 +37,9 @@ of the same graph.
 - **Relations** come in three shapes. A simple relation gives every member of
   one tier a single item type. A bipartite relation links two typed endpoints,
   each an item or a boundary, and can promise acyclicity or a single parent. A
-  polyadic relation links two explicitly ordered endpoint sequences and can
-  promise source uniqueness, distinct targets, and subset membership.
+  polyadic relation links two explicitly ordered endpoint sequences; it can
+  promise acyclicity or a single parent as a bipartite one does, and adds source
+  uniqueness, distinct targets, and subset membership.
 - **References** address items and boundaries at two identity levels. A
   structural reference is a coordinate (`tier`, `index`); a durable reference
   names an item by its promoted id, or a boundary by its anchor and side.
@@ -51,9 +52,11 @@ because the graph cannot validate its target. A hypothetical reference-valued
 than the referent typing and promises relations already provide.
 
 Durable item and boundary ids are genuine as-built graph content, not metadata
-about that content. Promotion therefore changes canonical bytes and their
-SHA-256 fingerprint. This is expected: durable ids address items across graphs,
-and a fingerprint that ignored identity would hash away the identifier.
+about that content. Promoting an item or an interior boundary therefore changes
+canonical bytes and their SHA-256 fingerprint. This is expected: durable ids
+address items across graphs, and a fingerprint that ignored identity would hash
+away the identifier. A tier's leading and trailing boundaries are already
+addressable by side, so promoting one adds nothing and returns the same graph.
 
 ```python
 from tiergraph import (
@@ -245,11 +248,13 @@ references outside their tier, relation endpoints of the wrong kind, and
 violations of declared constraints such as acyclicity or single-parent
 incidence.
 
-Collections whose supply order carries no meaning are canonicalized:
-namespaces, relation and attribute declarations, and every attribute-value set
-are sorted, so two graphs that differ only in input order compare equal and
-serialize identically. Tiers, tier items, relation instances, and polyadic
-endpoint sequences keep their order, because for those the sequence is data.
+Collections whose supply order carries no meaning are canonicalized: namespaces,
+relation and attribute declarations, every attribute-value set, seals, layers and
+the facts within each layer, the sparse boundary values, and a relation side's
+endpoint kinds and tiers are all sorted, so two graphs that differ only in input
+order compare equal and serialize identically. Tiers, tier items, relation
+instances, and polyadic endpoint sequences keep their order, because for those
+the sequence is data.
 
 Profiles add their own checks without adding kernel node kinds. Constructing a
 `ClockProfile`, an `OrderedRootsProfile`, or a `JsonValueProfile` validates the

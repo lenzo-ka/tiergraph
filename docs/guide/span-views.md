@@ -3,8 +3,10 @@
 A span view projects a resolved segmentation without changing the graph wire
 format. The graph contains one ordered base tier whose item surfaces reconstruct
 the input text, one or more span tiers, and a declared bipartite coverage
-relation. Each coverage instance points from a base-tier `ItemRef` on the left
-to a span-tier `ItemRef` on the right. Span items may carry value and score
+relation. Each coverage instance points to a span-tier `ItemRef` on the right; on
+the left it carries either a base-tier `ItemRef` or a base-tier boundary. A span
+covered only by a boundary projects as a zero-width span at that position, which
+is how an anchor with no extent is stored. Span items may carry value and score
 attributes as canonical lexical strings.
 
 Construct a `tiergraph.spanview.SpanViewProfile` with the qualified names of

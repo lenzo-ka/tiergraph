@@ -113,21 +113,32 @@ The difference `from_a - from_b` is the set algebra: everything `a` reaches that
 
 An unbounded walk is admitted only when the relation was declared acyclic, so it
 cannot loop forever. To walk a relation without that promise, pass a step `cap`.
-The result then reports whether the cap stopped it early.
+The result's `truncated` reports whether the walk stopped with new nodes still in
+hand.
 
 ```python
-bounded = Walk(
-    evaluate_selection(graph, ItemSelector(a)), links, WalkDirection.FORWARD, cap=1
-).evaluate()
-print("one hop from a:", names(bounded.nodes), "truncated:", bounded.truncated)
+for cap in (1, 2, 3):
+    bounded = Walk(
+        evaluate_selection(graph, ItemSelector(a)),
+        links,
+        WalkDirection.FORWARD,
+        cap=cap,
+    ).evaluate()
+    print(f"cap {cap}:", names(bounded.nodes), "truncated:", bounded.truncated)
 ```
 
 ```text
-one hop from a: ['b', 'd'] truncated: True
+cap 1: ['b', 'd'] truncated: True
+cap 2: ['b', 'c', 'd'] truncated: True
+cap 3: ['b', 'c', 'd'] truncated: False
 ```
 
-One step from `a` reaches `b` and `d`; `c` is a second step away, so the walk
-reports `truncated: True`.
+`truncated` is one-sided. `False` is a guarantee: the walk ran out of new nodes
+before it ran out of steps, so the set it returns is the whole reachable set.
+`True` says only that the cap ended a step that was still finding nodes, which is
+why `cap=2` reports it here even though that second step had already reached
+everything. Deciding between the two costs another step, so raise the cap and
+walk again where the answer matters.
 
 ## Ordered polyadic traversal
 
@@ -234,6 +245,8 @@ leaves of root: ['leaf-1', 'leaf-2', 'twig']
 ancestors of leaf-1: ['root', 'branch']
 ```
 
-Descendants come back in depth-first pre-order; leaves are the descendants with
-no children of their own. The ascending `ancestors` result is a set, so `root`
-and `branch` appear once regardless of how many paths reach `leaf-1`.
+Descendants come back in depth-first pre-order. `leaves` returns the descendants
+with no children of their own, or the source itself when the source has no
+children -- so `tree.leaves(refs["twig"])` is `['twig']`, which is not a
+descendant of `twig`. The ascending `ancestors` result is a set, so `root` and
+`branch` appear once regardless of how many paths reach `leaf-1`.

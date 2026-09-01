@@ -3,8 +3,11 @@
 A profile reads a checked role out of ordinary graph declarations. It adds no
 new kind of node and changes nothing in the store; it validates that specific
 declarations and instances support one interpretation, then answers questions
-against them. Constructing a profile is the check: an invalid arrangement raises
-instead of returning a profile that would give wrong answers later.
+against them. For a profile that holds the graph it reads, constructing it is
+the check: an invalid arrangement raises instead of returning a profile that
+would give wrong answers later. A profile that holds no graph settles nothing at
+construction, and its check runs where the graph is finally read;
+[`SpanViewProfile`](#registering-a-profile-of-your-own) is that case.
 
 Three profiles read common stored roles:
 
@@ -123,9 +126,12 @@ candidates: ['light', 'dark', 'high-contrast']
 default: dark
 ```
 
-The `default` relation declares `targets_subset_of=alternatives`, so the profile
-refuses a stored default that is not one of the source's candidates. A source
-with no stored default returns `None` rather than an arbitrary choice.
+The `default` relation declares `targets_subset_of=alternatives`, and a stored
+default that is not one of the source's candidates violates it, so the graph
+carrying it cannot be constructed at all. The profile's own check is over the
+declarations, and one of the things it insists on is that `targets_subset_of` be
+declared; the instance-level guard is `Graph` validation, one layer down. A
+source with no stored default returns `None` rather than an arbitrary choice.
 
 ## Ordered roots
 
@@ -224,8 +230,10 @@ required role was left unbound and no check ran, so a profile you bound no roles
 for is reported as unanswered rather than quietly counted as a pass.
 
 `PROFILES.satisfied(graph, bindings)` returns the reports of the profiles whose
-check refused nothing. It returns reports rather than names because a bare name
-would read as a whole guarantee.
+check ran and accepted -- the `satisfied` and `satisfied_as_checked` ones. A
+profile reported `not_applicable` refused nothing and is still absent, because
+an unanswered question is not an accepted one. It returns reports rather than
+names because a bare name would read as a whole guarantee.
 
 ## Registering a profile of your own
 

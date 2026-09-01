@@ -7,10 +7,13 @@ document whose `format_version` it does not implement rather than migrating it
 silently.
 
 Graph-contract validation performed while `loads()` reconstructs an immutable
-graph raises `GraphValidationError`, a `ValueError` subclass. This construction
-boundary is intentionally narrower than all graph operations: invalid lookup,
-resolution, profile, or mutation arguments against an already-valid `Graph`
-remain plain `ValueError`, and wrong Python argument kinds may raise `TypeError`.
+graph raises `GraphValidationError`, a `ValueError` subclass. Decoding is one
+construction boundary among several rather than the only one: the editing
+operations on `Graph` and `GraphEditor` build a graph as well, and refuse with
+the same error. Invalid lookup, resolution, and profile arguments against an
+already-valid `Graph` remain plain `ValueError`, and wrong Python argument kinds
+may raise `TypeError`. See [Construction](construction.md#error-boundary) for
+the whole boundary.
 
 ## JSON round-trip
 
