@@ -31,12 +31,29 @@ allowlisted by hand or covered by an inflected word list larger than the
 distribution shipping it.
 
 Both checks run over the git index rather than the working tree: untracked
-scratch is exactly where local material is allowed to live. The index is also
-the shipped set: the build backend's default source-distribution include is the
-project tree minus what version control ignores, so every tracked file reaches
-the distribution and every file that ships is checked. That equality is derived,
-not assumed -- tests/test_publishability_guards.py builds the distribution and
-fails if a file inside it falls outside what this gate reads.
+scratch is exactly where local material is allowed to live. One direction of
+the shipped-set claim follows from that and holds: the build backend's default
+source-distribution include is the project tree minus what version control
+ignores, so every tracked file reaches the distribution, and gating the index
+gates every committed file.
+
+The converse does not hold, and this docstring used to assert it. The backend
+selects from the working tree and never asks git what is tracked, so a file
+that is neither tracked nor ignored ships in both the wheel and the source
+distribution without this script ever opening it. Reading the working tree here
+would not fix that so much as trade it: it would refuse the scratch the
+paragraph above deliberately permits, on every commit, until the author either
+ignores the file -- which removes it from the distribution anyway, by accident
+rather than by decision -- or deletes it. And it would still be a guess, because
+what ships is decided by the backend's include, exclude, force-include, and
+package rules, not by what is on disk; restating those rules here is the
+hand-kept list this repository has already watched go wrong.
+
+So the claim is split where each half can be measured. This script gates what
+is committed. `tests/test_publishability_guards.py` gates what ships: it builds
+the distribution, reads the members back, and fails naming any member that
+falls outside what this gate reads -- which catches the untracked-and-unignored
+case, and catches it with the file's own name.
 """
 
 from __future__ import annotations
@@ -158,7 +175,6 @@ ALLOWED_DISTRIBUTIONS = {
     "hypothesis",
     "jsonschema",
     "mypy",
-    "pydantic",
     "pytest",
     "pytest-cov",
     "ruff",
@@ -179,16 +195,44 @@ ALLOWED_DOMAINS = {
 # No shipped surface currently has a legitimate email address.
 ALLOWED_EMAILS: set[str] = set()
 
+# Third-party code the continuous-integration workflows run. A GitHub Actions
+# reference is a dependency by every measure that matters -- it is fetched from
+# somebody else's repository and executed with this repository's checkout in
+# scope -- but it carries no scheme and no dotted host, so `URL` and `DOMAIN`
+# both looked straight past `dorny/paths-filter@v3`. The pre-commit hook
+# repositories are written as full URLs, were seen, and were allowlisted with
+# the reasoning that the point of reading a file is that a repository added to
+# it is seen; the same reasoning applies here and the syntax was the only thing
+# standing in its way.
+ALLOWED_ACTIONS: dict[str, str] = {
+    "actions/checkout": "the workflow's checkout of this repository",
+    "actions/download-artifact": "the built distribution, moved between jobs",
+    "actions/setup-python": "the interpreter the jobs run under",
+    "actions/upload-artifact": "the built distribution, moved between jobs",
+    "dorny/paths-filter": "the path filter deciding which expensive steps run",
+    "pypa/gh-action-pypi-publish": "the Trusted Publishing upload to PyPI",
+}
+
 URL = re.compile(r"(?:git\+)?(?:https?|ssh)://[^\s<>`\"'{}()[\]]+")
 EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b")
 DOMAIN = re.compile(
     r"(?i)(?<![A-Z0-9@.-])(?:[A-Z0-9-]+\.)+(?:com|dev|edu|gov|io|net|org)\b"
 )
 PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
+# A workflow step's `uses:` value: owner and repository, an optional path to a
+# subdirectory action, then the ref. Only the owner and repository are matched
+# against the allowlist; the ref is answered separately, and only in a file the
+# runner executes.
+ACTION = re.compile(
+    r"(?m)^[ \t-]*uses:[ \t]*['\"]?"
+    r"([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+)(?:/[^@'\"\s]+)?@([^\s'\"]+)"
+)
+COMMIT_REF = re.compile(r"[0-9a-f]{40}")
+WORKFLOW_DIRECTORY = ".github/workflows"
 
 # This file lists the patterns it forbids and the references it allows, so it
 # necessarily contains both and is exempt from its own checks. It is the only
-# exemption. Nothing else is excluded by name, not the license text and not the
+# exemption. Nothing else is excluded, not the license text and not the
 # machine-readable files: a home-directory path is exactly as much of a leak in
 # a version-control ignore file as it is in a guide, and a repository added to
 # the hook configuration is exactly the kind of reference the ruling is about.
@@ -204,6 +248,20 @@ PYTHON_FENCE = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 SELF = Path(__file__).name
 EXEMPT_NAMES: frozenset[str] = frozenset({SELF})
 ROOT = Path(__file__).resolve().parent.parent
+# The exemption is a path, and it was written as a basename. `path.name not in
+# EXEMPT_NAMES` answers a question about a name when it was asked one about a
+# path, so every file anywhere in the tree that happens to share an exempt
+# basename inherited the exemption: a `src/tiergraph/check_tracked_clean.py`
+# carrying a home-directory path was selected out of the run, exited zero, and
+# shipped in the wheel. Anchoring each exempt name to the directory it actually
+# occupies is what makes the predicate answer the question it is asked. The
+# anchor is derived from this file's own location rather than spelled out, so
+# moving the script cannot leave an exemption behind at the path it left --
+# which also means a future exemption outside this directory has to be written
+# as its own path here rather than added to the names above.
+EXEMPT_PATHS: frozenset[Path] = frozenset(
+    Path(__file__).resolve().parent.relative_to(ROOT) / name for name in EXEMPT_NAMES
+)
 CANDIDATE = re.compile(r"[A-Za-z0-9]+")
 # A run shorter than two characters is not a repository name, and one longer
 # than sixty-four is not either; both bounds exist to keep the affix sweep flat.
@@ -441,10 +499,40 @@ def _distribution_name(requirement: str) -> str:
     return re.sub(r"[-_.]+", "-", match.group(0)).lower()
 
 
+def _action_leaks(path: Path, text: str) -> list[str]:
+    """Return unallowlisted or unpinned GitHub Actions references in one file.
+
+    Two conditions, because an action reference answers two questions and the
+    allowlist only covers the first. Whose code is this, and which revision of
+    it. A floating ref -- a major tag, or the branch the publishing action was
+    read from -- answers the second with "whatever is there when the job runs",
+    and the job holding `id-token: write` is the last place to accept that
+    answer. Pinning to a commit is the only ref an upstream cannot repoint.
+
+    The two conditions are scoped differently, and deliberately. Whose code runs
+    is worth reading wherever a reference is written, the same way a URL is; but
+    only a file the runner executes is a place where the revision is a decision
+    at all. A `uses:` line quoted in documentation is a mention rather than a
+    use, and requiring it to carry forty hex characters would trade a legible
+    example for nothing anyone runs.
+    """
+    workflow = path.parent.match(WORKFLOW_DIRECTORY)
+    messages: list[str] = []
+    for action, ref in ACTION.findall(text):
+        if action not in ALLOWED_ACTIONS:
+            messages.append(f"{path}: an unallowlisted action reference ({action!r})")
+        elif workflow and COMMIT_REF.fullmatch(ref) is None:
+            messages.append(
+                f"{path}: {action} is not pinned to a commit ({ref!r}); a tag or "
+                "branch is repointable by whoever owns it"
+            )
+    return messages
+
+
 def reference_leaks(path: Path) -> list[str]:
     """Return unallowlisted external references extracted from one shipped file."""
     text = shipped_text(path)
-    messages: list[str] = []
+    messages: list[str] = _action_leaks(path, text)
     for value in URL.findall(text):
         prefix = _url_prefix(value)
         if not any(
@@ -499,8 +587,13 @@ def reference_leaks(path: Path) -> list[str]:
 
 
 def is_shipped_surface(path: Path) -> bool:
-    """Return whether the ruling covers this tracked path."""
-    return path.name not in EXEMPT_NAMES
+    """Return whether the ruling covers this tracked path.
+
+    The comparison is against the whole repository-relative path. An exemption
+    is granted to one file, not to a spelling of a file name that any directory
+    in the tree can adopt.
+    """
+    return path not in EXEMPT_PATHS
 
 
 def main() -> int:
