@@ -711,6 +711,60 @@ def test_the_certificate_reports_how_much_the_claim_was_held_to() -> None:
     assert rich.subjects > certificate.subjects
 
 
+def test_rewrite_certificate_serialization_separates_what_counts_cannot() -> None:
+    """The effect reaches the wire, because the counts do not imply it.
+
+    A revision and a collapse can leave the same number of disturbances over the
+    same number of subjects. A wire form carrying counts alone would report the
+    two identically, which is exactly the distinction this certificate exists to
+    keep, so the discharged effect is carried beside them.
+    """
+    source = graph((labeled("a"),), ())
+    revised = RewriteDeclaration(
+        "revise", source, graph((labeled("x"),), ()), RewriteEffect.REVISE
+    ).check_effect()
+    collapsed = RewriteDeclaration(
+        "collapse", source, graph((Item(),), ()), RewriteEffect.COLLAPSE
+    ).check_effect()
+
+    assert (revised.subjects, revised.disturbances) == (
+        collapsed.subjects,
+        collapsed.disturbances,
+    )
+    assert revised.to_data() == {
+        "effect": "revise",
+        "subjects": revised.subjects,
+        "disturbances": 1,
+    }
+    assert collapsed.to_data() == {
+        "effect": "collapse",
+        "subjects": collapsed.subjects,
+        "disturbances": 1,
+    }
+
+
+def test_the_serialized_disturbance_count_is_ways_and_not_structures() -> None:
+    """One structure disturbed twice contributes two, and the wire says so.
+
+    ``subjects`` and ``disturbances`` are both integers and would invite reading
+    as a ratio, which they are not. An item that lost both its durable identity
+    and an attribute it carried is one structure and two ways, and the count of
+    ways is what was measured, so that is what is written.
+    """
+    carried = AttributeValue(LABEL, XsdType.STRING, "a")
+    source = graph((Item("w0", (carried,)),), ())
+    declaration = RewriteDeclaration(
+        "strip", source, graph((Item(),), ()), RewriteEffect.COLLAPSE
+    )
+    found = declaration.disturbances()
+
+    assert len({item.subject for item in found}) == 1
+    data = declaration.check_effect().to_data()
+    assert data["disturbances"] == 2
+    assert data["effect"] == "collapse"
+    assert data["subjects"] == 11
+
+
 def test_seal_certificate_serialization_carries_both_counts() -> None:
     """REGRESSION: a vacuous pass stays visible on the wire.
 

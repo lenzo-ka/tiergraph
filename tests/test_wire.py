@@ -61,7 +61,14 @@ from tiergraph import (
     to_data,
     wire,
 )
-from tiergraph.schema import Refusal, RefusalStage, validation_errors
+from tiergraph.schema import (
+    DECLARATIONS,
+    Refusal,
+    RefusalStage,
+    declared_minimum,
+    field_shape,
+    validation_errors,
+)
 
 NS = "urn:wire-test"
 META_NS = "urn:wire-meta"
@@ -1863,6 +1870,135 @@ def test_layer_subject_index_is_held_to_its_declared_minimum() -> None:
     assert str(refusal.value) == (
         f"layers[0].facts[{position}].subject.index must be at least 0"
     )
+
+
+# REGRESSION: the constructor admitted a coordinate the reader had begun refusing.
+def test_a_graph_refuses_an_orphaned_coordinate_below_the_declared_minimum() -> None:
+    """Each way an orphan spells a coordinate meets the declared bound.
+
+    Holding the reader to the declared minimum while leaving the constructor
+    alone left `dumps` able to write a document `loads` refuses: a graph like
+    the ones below serialized to nine thousand bytes of canonical text that
+    came back refused at its own coordinate.  Both the bound and the population
+    of spellings are read from the declaration rather than restated, so neither
+    the constructor nor this test can drift from what the reader applies, and
+    the refusal names the reader's stage because the condition is the reader's,
+    not a graph contract the format never mentions.
+    """
+    below = (
+        declared_minimum(field_shape(DECLARATIONS["layer_orphan_index"], "index")) - 1
+    )
+    subjects = (
+        (
+            "layer_orphan_index",
+            OrphanedSubject(GraphCarrier.RELATIONS, below),
+            AttributeDomain.RELATION_INSTANCE,
+            "orphaned from '-1' on 'relations'",
+        ),
+        (
+            "layer_orphan_index",
+            OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, below),
+            AttributeDomain.RELATION_INSTANCE,
+            "orphaned from '-1' on 'polyadic_relations'",
+        ),
+        (
+            "layer_item",
+            OrphanedSubject(WORDS, ItemRef(WORDS, below)),
+            AttributeDomain.ITEM,
+            "orphaned from '{urn:layer-test}words[-1]' on '{urn:layer-test}words'",
+        ),
+        (
+            "layer_boundary",
+            OrphanedSubject(WORDS, BoundaryRef(WORDS, below)),
+            AttributeDomain.BOUNDARY,
+            "orphaned from '{urn:layer-test}words[-1]' on '{urn:layer-test}words'",
+        ),
+    )
+    assert {variant for variant, *_ in subjects} == set(
+        field_shape(DECLARATIONS["layer_orphan"], "was").variants
+    )
+    for _variant, subject, domain, retained in subjects:
+        with pytest.raises(GraphValidationError) as refusal:
+            graph_with_layers(
+                Layer(SOURCE_A, (LayerFact(subject, value(domain, "old")),))
+            )
+        assert str(refusal.value) == (
+            f"layer 'urn:layer-gloss'/'reader-a' holds a fact {retained}; an orphan "
+            "keeps the coordinate its subject stood at, and no subject stood at "
+            "index -1"
+        ), retained
+        assert refusal.value.stage is RefusalStage.VALUE
+
+
+# CHARACTERIZATION: what the constructor now refuses, it refuses before writing.
+def test_an_orphan_at_the_declared_minimum_still_round_trips() -> None:
+    """The bound refuses below it and admits at it, and what it admits comes back.
+
+    Tightening a constructor can close a refusal by closing the graphs that
+    reach it, so the boundary is witnessed on the accepting side too: each
+    spelling of an orphan coordinate at the declared minimum is written and
+    read back equal, while the same spelling one below is refused before there
+    are bytes to hand to `loads` at all.
+    """
+    minimum = declared_minimum(field_shape(DECLARATIONS["layer_orphan_index"], "index"))
+    admitted = (
+        (
+            "layer_orphan_index",
+            OrphanedSubject(GraphCarrier.RELATIONS, minimum),
+            AttributeDomain.RELATION_INSTANCE,
+        ),
+        (
+            "layer_orphan_index",
+            OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, minimum),
+            AttributeDomain.RELATION_INSTANCE,
+        ),
+        (
+            "layer_item",
+            OrphanedSubject(WORDS, ItemRef(WORDS, minimum)),
+            AttributeDomain.ITEM,
+        ),
+        (
+            "layer_boundary",
+            OrphanedSubject(WORDS, BoundaryRef(WORDS, minimum)),
+            AttributeDomain.BOUNDARY,
+        ),
+    )
+    assert {variant for variant, *_ in admitted} == set(
+        field_shape(DECLARATIONS["layer_orphan"], "was").variants
+    )
+    for _variant, subject, domain in admitted:
+        graph = graph_with_layers(
+            Layer(SOURCE_A, (LayerFact(subject, value(domain, "old")),))
+        )
+        document = dumps(graph)
+        assert validation_errors(json.loads(document), FORMAT_VERSION) == []
+        assert loads(document) == graph
+
+
+# CHARACTERIZATION: the size policy is a reader condition the writer never asks.
+def test_the_writer_emits_a_document_the_size_policy_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`dumps` measures nothing it writes, so its output can exceed the budget.
+
+    This is the condition the coordinate fix cannot reach: a graph whose
+    canonical text runs past `MAX_DOCUMENT_BYTES` is written in full and
+    refused at ENVELOPE on the way back, and no constructor bound prevents it
+    because the offending size belongs to the text rather than to any one
+    member.  It is why `dumps` returning is not on its own a promise that
+    `loads` accepts what it wrote.  The budget is lowered here rather than the
+    graph grown past sixteen mebibytes: the condition is the comparison, not
+    the magnitude, and the shipped magnitude was confirmed to behave the same.
+    """
+    graph = graph_with_layers(six_domain_layer())
+    document = dumps(graph)
+    encoded = len(document.encode("utf-8"))
+    monkeypatch.setattr(wire, "MAX_DOCUMENT_BYTES", encoded - 1)
+
+    with pytest.raises(Refusal) as refusal:
+        loads(document)
+    assert refusal.value.stage is RefusalStage.ENVELOPE
+    assert str(refusal.value) == f"document size exceeds limit {encoded - 1} bytes"
 
 
 # REGRESSION: orphan boundary wire and discriminator paths are explicit.

@@ -55,16 +55,24 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         "seals", help="discharge a source graph's seals against a result graph"
     )
     seals.set_defaults(handler=_handle_discharge)
-    seals.add_argument(
-        "file", metavar="SOURCE", help="source graph file, or - for stdin"
-    )
-    seals.add_argument(
-        "--result", required=True, metavar="FILE", help="result graph file"
-    )
-    seals.add_argument(
-        "--name", default="rewrite", metavar="NAME", help="name used in refusals"
-    )
+    _graph_pair_arguments(seals)
     _output_argument(seals)
+
+    discharge_rewrite = discharge_subparsers.add_parser(
+        "rewrite", help="discharge a rewrite's effect claim against the pair it read"
+    )
+    discharge_rewrite.set_defaults(handler=_handle_discharge)
+    _graph_pair_arguments(discharge_rewrite)
+    discharge_rewrite.add_argument(
+        "--effect",
+        choices=tuple(
+            member.value
+            for member in tiergraph.RewriteEffect
+            if member is not tiergraph.RewriteEffect.UNDECLARED
+        ),
+        help="the claim to discharge; omitted, the library refuses UNDECLARED",
+    )
+    _output_argument(discharge_rewrite)
 
     discharge_fold = discharge_subparsers.add_parser(
         "fold", help="discharge a fold's exactness claim against its graph"
@@ -246,6 +254,26 @@ def _output_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _graph_pair_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the inputs a declaration over two graph values is assembled from.
+
+    ``discharge seals`` and ``discharge rewrite`` read the same pair -- a source
+    document, the result claiming something about it, and a name that exists so
+    a refusal can say whose claim failed -- so they name those inputs once here
+    and cannot drift into spelling one pair two ways. What separates them is the
+    claim laid over the pair, which each parser adds for itself.
+    """
+    parser.add_argument(
+        "file", metavar="SOURCE", help="source graph file, or - for stdin"
+    )
+    parser.add_argument(
+        "--result", required=True, metavar="FILE", help="result graph file"
+    )
+    parser.add_argument(
+        "--name", default="rewrite", metavar="NAME", help="name used in refusals"
+    )
+
+
 def _fold_arguments(parser: argparse.ArgumentParser) -> None:
     """Add the flags one fold declaration is assembled from.
 
@@ -321,6 +349,28 @@ def _discharge_seals(args: argparse.Namespace) -> object:
     return tiergraph.SealDeclaration(args.name, source, result).check_seals().to_data()
 
 
+def _discharge_rewrite(args: argparse.Namespace) -> object:
+    """Demand a rewrite's effect claim against the pair of graphs it read.
+
+    The pair is the one ``seals`` reads and the flags are the same, because both
+    declarations are about two graph values and neither asks how the second was
+    produced. What this adds is ``--effect``, and it is optional for the reason
+    ``--exactness`` is: leaving it off is not a usage error but reaches the
+    library's own refusal, which hands back the declaration to be made rather
+    than standing in the weaker claim on the caller's behalf.
+    """
+    _check_distinct(args.result, args.output)
+    source = tiergraph.loads(_read_bytes(args.file))
+    result = tiergraph.loads(_read_bytes(args.result))
+    effect = (
+        tiergraph.RewriteEffect.UNDECLARED
+        if args.effect is None
+        else tiergraph.RewriteEffect(args.effect)
+    )
+    declaration = tiergraph.RewriteDeclaration(args.name, source, result, effect)
+    return declaration.check_effect().to_data()
+
+
 def _discharge_fold(args: argparse.Namespace) -> object:
     """Demand a fold's exactness claim against the graph and valuation it reads.
 
@@ -336,22 +386,21 @@ def _discharge_fold(args: argparse.Namespace) -> object:
 
 # One entry per capability this verb carries. The four declaration kinds this
 # package publishes take genuinely different inputs -- a pair of graphs for
-# seals, a whole valuation for a fold, a graph and a role binding for a profile
-# -- so the dispatch is a table of handlers rather than one shared shape they
-# would all have to be bent into. Another capability is one subparser naming its
-# inputs and one entry here returning its certificate's ``to_data()``.
+# seals and for a rewrite effect, a whole valuation for a fold, a graph and a
+# role binding for a profile -- so the dispatch is a table of handlers rather
+# than one shared shape they would all have to be bent into. Another capability
+# is one subparser naming its inputs and one entry here returning its
+# certificate's ``to_data()``.
 #
-# Two kinds are absent because that last clause is what they cannot supply, and
-# both absences are the library's shape rather than an omission here. A rewrite
-# effect takes the same pair of graphs seals does and refuses the same way, but
-# ``RewriteCertificate`` publishes no ``to_data()``, and encoding it in this
-# shell would put a public type's serialization somewhere no reader of that type
-# would look for it. A profile is further off: its check returns nothing to
-# certify, and ``ProfileRegistry.report`` answers a failing check with an
-# accepting report, which is precisely the artifact ``discharge`` promises never
-# to write under the name of a certificate.
+# One kind is absent because that last clause is what it cannot supply, and the
+# absence is the library's shape rather than an omission here. A profile's check
+# returns nothing to certify, and ``ProfileRegistry.report`` answers a failing
+# check with an accepting report carrying a refused outcome, which is precisely
+# the artifact ``discharge`` promises never to write under the name of a
+# certificate.
 _DISCHARGES: dict[str, Callable[[argparse.Namespace], object]] = {
     "fold": _discharge_fold,
+    "rewrite": _discharge_rewrite,
     "seals": _discharge_seals,
 }
 
