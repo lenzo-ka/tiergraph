@@ -261,6 +261,51 @@ def test_the_program_reader_refuses_the_line_no_writer_can_encode() -> None:
     )
 
 
+def test_no_program_writer_returns_text_this_reader_would_refuse() -> None:
+    """REGRESSION: the writer refuses the program its own reader refuses.
+
+    `program_dumps` writes with `ensure_ascii=False`, so a lone surrogate in a
+    record stood in the returned text as the character: the `str` had no UTF-8
+    encoding at all, `.encode("utf-8")` raised on it, and this module's own
+    reader refused it at `ENCODING` when it came back.  The graph writers have
+    answered that condition since `wire.to_data` had one, and this writer had
+    no counterpart, so any `Program` built in memory rather than read could be
+    written to text no caller could use.
+
+    The claim is the one `test_no_writer_returns_text_this_reader_would_refuse`
+    makes on the other side of the package, held here to the same stage and the
+    same field path, with the line saying which record to look at.
+    """
+    program = Program((DeclareNamespace(NamespaceDeclaration("p", "urn:\ud800")),))
+    with pytest.raises(ValueError) as refusal:
+        program_dumps(program)
+    assert type(refusal.value) is Refusal
+    assert refusal.value.stage is RefusalStage.ENCODING
+    assert refusal.value.also == ()
+    assert str(refusal.value) == (
+        "JSONL line 2: declaration.namespace value 'urn:\\ud800' "
+        "has unsupported character U+D800"
+    )
+    assert str(refusal.value) == str(
+        pytest.raises(Refusal, program_loads, SURROGATE_PROGRAM).value
+    )
+
+
+def test_every_program_this_writer_returns_is_one_the_reader_takes_back() -> None:
+    """The two halves of this codec agree on what a program is.
+
+    A writer that refuses more than its reader would leave a value the library
+    can hold and cannot serialize; one that refuses less leaves text the reader
+    will not take back.  Writing the representative program and reading it
+    again is the accepting direction, and encoding the result is what says the
+    text is bytes rather than a `str` that only looks like them.
+    """
+    program = _representative_program()
+    text = program_dumps(program)
+    assert text.encode("utf-8").decode("utf-8") == text
+    assert program_loads(text) == program
+
+
 def test_a_text_program_is_measured_before_it_is_encoded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

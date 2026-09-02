@@ -6,6 +6,7 @@ import json
 from io import BytesIO
 from typing import BinaryIO
 
+from tiergraph.core import JsonValue
 from tiergraph.machine import (
     MACHINE_VERSION,
     Program,
@@ -189,22 +190,42 @@ def load_program(stream: BinaryIO) -> Program:
 
 
 def program_dumps(program: Program) -> str:
-    """Return canonical JSONL for a machine program, including a final newline."""
-    records: tuple[object, ...] = (
+    """Return canonical JSONL for a machine program, including a final newline.
+
+    A record carrying text the UTF-8 encoder refuses is refused here, named by
+    its path inside that record and by the line it would have stood on, because
+    what this used to return for such a program was not a program: written with
+    `ensure_ascii=False`, the character stood in the text itself, so the `str`
+    had no UTF-8 encoding at all and `load_program` refused it at `ENCODING` on
+    the way back.  `wire.to_data` has answered that condition for the graph
+    writers through the same check, imported rather than restated; this writer
+    answered nothing, and the asymmetry was reachable from any `Program` built
+    in memory rather than read.  What is refused is what the reader already
+    refuses, so no program that round-trips today stops doing so.
+    """
+    records: tuple[JsonValue, ...] = (
         {"machine_version": MACHINE_VERSION},
         *(opcode.to_data() for opcode in program.opcodes),
     )
-    return "".join(
-        json.dumps(
-            record,
-            allow_nan=False,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+    lines: list[str] = []
+    for number, record in enumerate(records, 1):
+        try:
+            _refuse_unencodable_strings(record, "")
+        except Refusal as error:
+            raise Refusal(
+                error.stage, f"JSONL line {number}: {error}", error.also
+            ) from error
+        lines.append(
+            json.dumps(
+                record,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
         )
-        + "\n"
-        for record in records
-    )
+    return "".join(lines)
 
 
 def _check_jsonl_depth(line: bytes, number: int) -> None:

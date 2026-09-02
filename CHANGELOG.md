@@ -473,6 +473,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed the program writer's half of the encoding condition its reader
+  already answers. `program_dumps` writes with `ensure_ascii=False`, so a lone
+  surrogate in a record stood in the returned text as the character itself:
+  the `str` it handed back had no UTF-8 encoding at all, `.encode("utf-8")`
+  raised on it, and `load_program` refused that very text at `ENCODING` on the
+  way back. `wire.to_data` has answered that condition for the graph writers
+  since the format had one, and this writer answered nothing, so the asymmetry
+  was reachable from any `Program` built in memory rather than read. It now
+  refuses through the same check, imported rather than restated, naming the
+  field path inside the record and the line the record would have stood on, so
+  both halves of the codec say one sentence about one program. What is refused
+  is what the reader already refuses, so no program that round-trips today
+  stops doing so; a caller holding a `Program` this package could never have
+  read now meets a staged refusal where it used to be handed unusable text.
 - Bounded the read the program reader's envelopes were only ever measuring.
   `load_program` iterated whole lines, so both the running `MAX_DOCUMENT_BYTES`
   total and the per-line bound were checked against bytes already held: an
