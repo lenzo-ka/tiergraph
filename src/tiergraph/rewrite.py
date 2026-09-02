@@ -36,9 +36,13 @@ from enum import Enum
 
 from tiergraph.core import (
     AttributeValue,
+    BoundaryRef,
     Graph,
+    ItemRef,
     JsonValue,
+    LayerSubject,
     QualifiedName,
+    TierRef,
 )
 
 
@@ -184,9 +188,10 @@ class RewriteDeclaration:
         The order is the source graph's own reading order -- namespaces, then
         each tier and its items, then relation declarations, attribute
         declarations, relation instances, polyadic relation instances, boundary
-        values, and the document. It is total and reproducible, so the first
-        disturbance is the first in a fixed order rather than a minimized or a
-        most-severe one, and the refusals report it as such.
+        values, each layer and the facts it holds, and the document. It is
+        total and reproducible, so the first disturbance is the first in a
+        fixed order rather than a minimized or a most-severe one, and the
+        refusals report it as such.
         """
         after = {fact.key: fact for fact in _facts(self.result)}
         return tuple(
@@ -448,6 +453,34 @@ def _facts(graph: Graph) -> Iterator[_Fact]:
             (),
             attributes=_attributes(boundary.attributes),
         )
+    for layer in graph.layers:
+        vocabulary, layer_source = layer.name.vocabulary, layer.name.source
+        yield _Fact(
+            ("layer", vocabulary, layer_source),
+            f"layer {vocabulary!r}/{layer_source!r}",
+            None,
+            (),
+        )
+        for fact in layer.facts:
+            subject = str(fact.subject)
+            yield _Fact(
+                (
+                    "layer-fact",
+                    vocabulary,
+                    layer_source,
+                    subject,
+                    str(fact.value.name),
+                ),
+                f"layer {vocabulary!r}/{layer_source!r} statement "
+                f"{str(fact.value.name)!r} at {subject}",
+                _layer_fact_tier(fact.subject),
+                (
+                    (
+                        "statement",
+                        f"{fact.value.value_type.value}:{fact.value.lexical}",
+                    ),
+                ),
+            )
     yield _Fact(
         ("document",),
         "the document",
@@ -455,6 +488,13 @@ def _facts(graph: Graph) -> Iterator[_Fact]:
         (),
         attributes=_attributes(graph.attributes),
     )
+
+
+def _layer_fact_tier(subject: LayerSubject) -> QualifiedName | None:
+    """Name the tier a layer statement stands over, where it stands over one."""
+    if isinstance(subject, ItemRef | BoundaryRef | TierRef):
+        return subject.tier
+    return None
 
 
 __all__ = [

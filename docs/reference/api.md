@@ -3595,9 +3595,10 @@ Return every way the rewrite disturbed a structure, in source order.
 The order is the source graph's own reading order -- namespaces, then
 each tier and its items, then relation declarations, attribute
 declarations, relation instances, polyadic relation instances, boundary
-values, and the document. It is total and reproducible, so the first
-disturbance is the first in a fixed order rather than a minimized or a
-most-severe one, and the refusals report it as such.
+values, each layer and the facts it holds, and the document. It is
+total and reproducible, so the first disturbance is the first in a
+fixed order rather than a minimized or a most-severe one, and the
+refusals report it as such.
 
 #### `RewriteDeclaration.check_effect`
 

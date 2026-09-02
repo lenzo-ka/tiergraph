@@ -487,6 +487,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Held a rewrite's effect claim to the layers it was measured over. What a
+  discharged `DECORATE` licenses is that every reading taken over the source is
+  still a correct reading of the result, and a rewrite that deleted every layer
+  discharged it: the reading in question stopped answering and started raising
+  `GraphValidationError`, while the certificate reported `disturbances=0`. The
+  facts a claim is held to enumerated nine of the graph's collections and not
+  this one, so nothing a layer asserted was ever a subject. Each layer and each
+  statement it holds is now a subject in the source's own reading order, placed
+  after the boundary values and before the document, so dropping a layer is the
+  collapse it is, replacing a statement's value is a revision, and the
+  certificate's `subjects` count says how much the claim was actually held to.
+  A rewrite over a graph carrying no layers is measured exactly as before.
+  Seals are still not enumerated, and that omission is not the same one: a
+  seal is answered by `SealDeclaration.check_seals` over the same pair of
+  graphs, and a graph cannot hold a seal over a tier it does not declare, so
+  what a seal asserts is decided either way. A layer had neither, which is why
+  the same skip was a defect there.
 - Closed the program writer's half of the encoding condition its reader
   already answers. `program_dumps` writes with `ensure_ascii=False`, so a lone
   surrogate in a record stood in the returned text as the character itself:
