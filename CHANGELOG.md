@@ -487,6 +487,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Held an orphan's retained coordinate to the namespace rule every other
+  qualified name already met. `Graph.__post_init__` requires every qualified
+  name a graph spells to use a namespace that graph declares, and it enumerated
+  nine collections without reaching layer subjects. An orphan is the one layer
+  subject nothing resolves -- every live subject goes to
+  `_resolve_layer_subject`, which refuses an undeclared name, and the orphan is
+  skipped precisely because there is nothing to resolve it against -- so its
+  coordinate was the one name in the graph that met no check at all. Such a
+  graph validated, and `dumps` then reached the encoder's `prefixes[namespace]`
+  with no prefix to find and raised a bare `KeyError`, which is neither the
+  encoding condition `to_data` says is the one it answers nor the `Refusal` it
+  says it raises. Every spelling is now covered, the carrier and the retained
+  reference alike, and the refusal is the wording the other nine collections
+  already produce rather than a second account of one rule. It is decided in
+  validation and not in the encoder because that is where the contract already
+  lives: a layer's own vocabulary and a seal's carrier are refused at
+  construction too, each by its own check, so an orphan's coordinate was an
+  omission from a settled rule rather than a condition the writer had been
+  left to answer. Nothing in this package ever built such a coordinate, the
+  declared shape did not move, and a document already written is read as
+  before.
 - Reported an algebra leaving its carrier as the refused operation it is.
   `DoubleExtremumSemiring.multiply` refuses a sum that leaves the finite
   IEEE-double carrier, and it refuses with `OverflowError`, which is an
