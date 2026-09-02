@@ -28,6 +28,7 @@ from tiergraph.core import (
     QualifiedName,
     RelationDeclaration,
     RelationEndpointKind,
+    RelationEndpointRef,
     RelationInstance,
     RelationSideDeclaration,
     SimpleRelationDeclaration,
@@ -43,7 +44,22 @@ from tiergraph.core import (
     _validate_polyadic_instance,
 )
 from tiergraph.schema import Refusal, RefusalStage
-from tiergraph.wire import MAX_JSON_DEPTH
+
+# The checked primitives are imported rather than restated. A machine program
+# and a graph document are two spellings of one format, so a field the document
+# reader holds to a type has to be held to that type here as well, at the same
+# stage and in the same words. `typing.cast` cannot do that: it is erased before
+# the program runs, so a decoder that casts a field admits every JSON type at
+# it, constructs a graph out of whatever arrived, and leaves the disagreement to
+# be discovered by `loads` -- after `run` has already written the document and
+# `fingerprint` has already hashed it.
+from tiergraph.wire import (
+    MAX_JSON_DEPTH,
+    _boolean,
+    _enum,
+    _integer,
+    _string,
+)
 
 MACHINE_VERSION = "1"
 MAX_REPEAT_COUNT = 10_000
@@ -420,14 +436,14 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
             {"opcode", "reference", "durable_id"},
             lambda v: PromoteItem(
                 _decode_item_ref(v["reference"], f"{path}.reference"),
-                cast(str, v["durable_id"]),
+                _string(v["durable_id"], f"{path}.durable_id"),
             ),
         ),
         "promote_position": (
             {"opcode", "reference", "durable_id"},
             lambda v: PromoteBoundary(
                 _decode_boundary_ref(v["reference"], f"{path}.reference"),
-                cast(str, v["durable_id"]),
+                _string(v["durable_id"], f"{path}.durable_id"),
             ),
         ),
         "relate": (
@@ -501,38 +517,40 @@ class _QNameFields:
 
 def _decode_namespace(value: object, path: str) -> NamespaceDeclaration:
     obj = _decode_object(value, path, {"prefix", "namespace"})
-    return NamespaceDeclaration(cast(str, obj["prefix"]), cast(str, obj["namespace"]))
+    return NamespaceDeclaration(
+        _string(obj["prefix"], f"{path}.prefix"),
+        _string(obj["namespace"], f"{path}.namespace"),
+    )
 
 
 def _decode_tier(value: object, path: str) -> TierDeclaration:
     obj = _decode_object(value, path, {"name", "long_name"})
     return TierDeclaration(
-        _decode_qname(obj["name"], f"{path}.name"), cast(str, obj["long_name"])
+        _decode_qname(obj["name"], f"{path}.name"),
+        _string(obj["long_name"], f"{path}.long_name"),
     )
+
+
+def _decode_nullable_string(value: object, path: str) -> str | None:
+    """Decode a field the format declares as a string or an explicit null."""
+    return None if value is None else _string(value, path)
 
 
 def _decode_attribute_declaration(value: object, path: str) -> AttributeDeclaration:
     obj = _decode_object(value, path, {"name", "domain", "value_type"})
     return AttributeDeclaration(
         _decode_qname(obj["name"], f"{path}.name"),
-        AttributeDomain(cast(str, obj["domain"])),
-        XsdType(cast(str, obj["value_type"])),
+        _enum(AttributeDomain, obj["domain"], f"{path}.domain"),
+        _enum(XsdType, obj["value_type"], f"{path}.value_type"),
     )
 
 
 def _decode_attribute_value(value: object, path: str) -> AttributeValue:
     obj = _decode_object(value, path, {"name", "value_type", "lexical"})
-    name = _decode_qname(obj["name"], f"{path}.name")
-    value_type = obj["value_type"]
-    lexical = obj["lexical"]
-    if not isinstance(value_type, str):
-        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.value_type must be a string")
-    if not isinstance(lexical, str):
-        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.lexical must be a string")
     return AttributeValue(
-        name,
-        XsdType(value_type),
-        lexical,
+        _decode_qname(obj["name"], f"{path}.name"),
+        _enum(XsdType, obj["value_type"], f"{path}.value_type"),
+        _string(obj["lexical"], f"{path}.lexical"),
     )
 
 
@@ -548,7 +566,7 @@ def _decode_attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
 def _decode_item(value: object, path: str) -> Item:
     obj = _decode_object(value, path, {"durable_id", "attributes"})
     return Item(
-        cast(str | None, obj["durable_id"]),
+        _decode_nullable_string(obj["durable_id"], f"{path}.durable_id"),
         _decode_attributes(obj["attributes"], f"{path}.attributes"),
     )
 
@@ -565,23 +583,26 @@ def _decode_boundary_ref(value: object, path: str) -> BoundaryRef:
     )
 
 
-def _decode_endpoint(value: object, path: str) -> object:
+def _decode_endpoint(value: object, path: str) -> RelationEndpointRef:
     if not isinstance(value, dict):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an endpoint object")
     if set(value) == {"tier", "index"}:
         return _decode_item_ref(value, path)
+    # A relation instance tags its durable item endpoints so the arm carrying
+    # them stays disjoint from the untagged one an attachment target writes;
+    # both spellings are what this package emits, so both are read here.
     if set(value) == {"durable_id"}:
-        return DurableItemRef(value["durable_id"])
+        return DurableItemRef(_string(value["durable_id"], f"{path}.durable_id"))
+    if set(value) == {"kind", "durable_id"} and value["kind"] == "durable-item":
+        return DurableItemRef(_string(value["durable_id"], f"{path}.durable_id"))
     if set(value) == {"anchor", "side"}:
         anchor_value = value["anchor"]
-        anchor = _decode_object(
-            anchor_value,
-            f"{path}.anchor",
-            set(cast(dict[str, object], anchor_value)),
-        )
+        if not isinstance(anchor_value, dict):
+            raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.anchor must be an object")
+        anchor = _decode_object(anchor_value, f"{path}.anchor", set(anchor_value))
         if set(anchor) == {"kind", "durable_id"} and anchor["kind"] == "item":
             decoded_anchor: DurableItemRef | QualifiedName = DurableItemRef(
-                cast(str, anchor["durable_id"])
+                _string(anchor["durable_id"], f"{path}.anchor.durable_id")
             )
         elif set(anchor) == {"kind", "tier"} and anchor["kind"] == "tier":
             decoded_anchor = _decode_qname(anchor["tier"], f"{path}.anchor.tier")
@@ -591,7 +612,7 @@ def _decode_endpoint(value: object, path: str) -> object:
                 f"{path}.anchor has an unknown shape",
             )
         return DurableBoundaryRef(
-            decoded_anchor, BoundarySide(cast(str, value["side"]))
+            decoded_anchor, _enum(BoundarySide, value["side"], f"{path}.side")
         )
     raise Refusal(RefusalStage.DISCRIMINATOR, f"{path} has an unknown reference shape")
 
@@ -614,20 +635,14 @@ def _decode_relation_instance(
         return PolyadicRelationInstance(
             _decode_qname(obj["declaration"], f"{path}.declaration"),
             tuple(
-                cast(
-                    ItemRef | DurableBoundaryRef,
-                    _decode_endpoint(endpoint, f"{path}.sources[{index}]"),
-                )
+                _decode_endpoint(endpoint, f"{path}.sources[{index}]")
                 for index, endpoint in enumerate(sources)
             ),
             tuple(
-                cast(
-                    ItemRef | DurableBoundaryRef,
-                    _decode_endpoint(endpoint, f"{path}.targets[{index}]"),
-                )
+                _decode_endpoint(endpoint, f"{path}.targets[{index}]")
                 for index, endpoint in enumerate(targets)
             ),
-            cast(str | None, obj["durable_id"]),
+            _decode_nullable_string(obj["durable_id"], f"{path}.durable_id"),
             _decode_attributes(obj["attributes"], f"{path}.attributes"),
         )
     obj = _decode_object(
@@ -635,15 +650,9 @@ def _decode_relation_instance(
     )
     return RelationInstance(
         _decode_qname(obj["declaration"], f"{path}.declaration"),
-        cast(
-            ItemRef | DurableBoundaryRef,
-            _decode_endpoint(obj["left"], f"{path}.left"),
-        ),
-        cast(
-            ItemRef | DurableBoundaryRef,
-            _decode_endpoint(obj["right"], f"{path}.right"),
-        ),
-        cast(str | None, obj["durable_id"]),
+        _decode_endpoint(obj["left"], f"{path}.left"),
+        _decode_endpoint(obj["right"], f"{path}.right"),
+        _decode_nullable_string(obj["durable_id"], f"{path}.durable_id"),
         _decode_attributes(obj["attributes"], f"{path}.attributes"),
     )
 
@@ -653,20 +662,31 @@ def _decode_side(value: object, path: str) -> RelationSideDeclaration:
         value, path, {"endpoint_kinds", "tiers", "minimum", "maximum", "allow_empty"}
     )
     kinds, tiers = obj["endpoint_kinds"], obj["tiers"]
-    if not isinstance(kinds, list) or not isinstance(tiers, list):
+    # A side that names no tiers is written as an explicit null, which is what
+    # an unconstrained side means; the empty array says the same thing and is
+    # kept because documents written before this reader read it that way.
+    if not isinstance(kinds, list) or (
+        tiers is not None and not isinstance(tiers, list)
+    ):
         raise Refusal(
             RefusalStage.CONSTRUCTION,
             f"{path} endpoint_kinds and tiers must be arrays",
         )
-    maximum = obj["maximum"]
+    maximum = _integer(obj["maximum"], f"{path}.maximum")
     return RelationSideDeclaration(
-        tuple(RelationEndpointKind(cast(str, item)) for item in kinds),
+        tuple(
+            _enum(RelationEndpointKind, item, f"{path}.endpoint_kinds[{index}]")
+            for index, item in enumerate(kinds)
+        ),
         None
         if not tiers
-        else tuple(_decode_qname(item, f"{path}.tiers") for item in tiers),
-        cast(int, obj["minimum"]),
-        None if maximum == -1 else cast(int, maximum),
-        cast(bool, obj["allow_empty"]),
+        else tuple(
+            _decode_qname(item, f"{path}.tiers[{index}]")
+            for index, item in enumerate(tiers)
+        ),
+        _integer(obj["minimum"], f"{path}.minimum"),
+        None if maximum == -1 else maximum,
+        _boolean(obj["allow_empty"], f"{path}.allow_empty"),
     )
 
 
@@ -704,10 +724,12 @@ def _decode_relation_declaration(value: object, path: str) -> RelationDeclaratio
             _decode_qname(obj["name"], f"{path}.name"),
             _decode_qname(obj["left_type"], f"{path}.left_type"),
             _decode_qname(obj["right_type"], f"{path}.right_type"),
-            RelationEndpointKind(cast(str, obj["left_endpoint"])),
-            RelationEndpointKind(cast(str, obj["right_endpoint"])),
-            cast(bool, obj["single_parent"]),
-            cast(bool, obj["acyclic"]),
+            _enum(RelationEndpointKind, obj["left_endpoint"], f"{path}.left_endpoint"),
+            _enum(
+                RelationEndpointKind, obj["right_endpoint"], f"{path}.right_endpoint"
+            ),
+            _boolean(obj["single_parent"], f"{path}.single_parent"),
+            _boolean(obj["acyclic"], f"{path}.acyclic"),
             _decode_attributes(obj["attributes"], f"{path}.attributes"),
         )
     if kind == "polyadic":
@@ -737,10 +759,10 @@ def _decode_relation_declaration(value: object, path: str) -> RelationDeclaratio
             _decode_qname(obj["name"], f"{path}.name"),
             _decode_side(obj["sources"], f"{path}.sources"),
             _decode_side(obj["targets"], f"{path}.targets"),
-            cast(bool, obj["unique_sources"]),
-            cast(bool, obj["distinct_targets"]),
-            cast(bool, obj["single_parent"]),
-            cast(bool, obj["acyclic"]),
+            _boolean(obj["unique_sources"], f"{path}.unique_sources"),
+            _boolean(obj["distinct_targets"], f"{path}.distinct_targets"),
+            _boolean(obj["single_parent"], f"{path}.single_parent"),
+            _boolean(obj["acyclic"], f"{path}.acyclic"),
             None
             if not subset
             else _decode_qname(subset[0], f"{path}.targets_subset_of[0]"),
@@ -750,18 +772,26 @@ def _decode_relation_declaration(value: object, path: str) -> RelationDeclaratio
 
 
 def _decode_attach(value: dict[str, object], path: str) -> AttachValue:
-    domain = AttributeDomain(cast(str, value["domain"]))
-    target: object = value["target"]
-    if isinstance(target, dict):
+    domain = _enum(AttributeDomain, value["domain"], f"{path}.domain")
+    raw: object = value["target"]
+    target: AttributeTarget
+    if isinstance(raw, dict):
         if domain in {AttributeDomain.TIER, AttributeDomain.RELATION_DECLARATION}:
-            target = _decode_qname(target, f"{path}.target")
-        elif domain is AttributeDomain.BOUNDARY and set(target) == {"tier", "index"}:
-            target = _decode_boundary_ref(target, f"{path}.target")
+            target = _decode_qname(raw, f"{path}.target")
+        elif domain is AttributeDomain.BOUNDARY and set(raw) == {"tier", "index"}:
+            target = _decode_boundary_ref(raw, f"{path}.target")
         else:
-            target = _decode_endpoint(target, f"{path}.target")
+            target = _decode_endpoint(raw, f"{path}.target")
+    elif raw is None:
+        target = None
+    else:
+        # The only owner named by a bare scalar is a relation instance, named
+        # by its index. Left unchecked, a JSON `true` reaches the kernel as the
+        # integer 1 and silently attaches the value to the wrong relation.
+        target = _integer(raw, f"{path}.target")
     return AttachValue(
         domain,
-        cast(AttributeTarget, target),
+        target,
         _decode_attribute_value(value["value"], f"{path}.value"),
     )
 

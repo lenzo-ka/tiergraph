@@ -247,7 +247,7 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
         GrammarRule.from_data({**rule_data, "weight": "1"})
     with refuses("weight.*xsd:decimal", reached):
         GrammarRule.from_data({**rule_data, "weight": string("weight", "1").to_data()})
-    with refuses("not a valid XsdType", reached):
+    with refuses("value_type has unsupported value 'wat'", reached):
         GrammarTerminal.from_data(
             {
                 **terminal_data,

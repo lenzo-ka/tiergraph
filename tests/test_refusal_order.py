@@ -278,81 +278,6 @@ def tier(name: str) -> str:
     )
 
 
-DOCUMENT_STAGES: tuple[tuple[str | bytes, RefusalStage], ...] = (
-    ("x" * (wire.MAX_DOCUMENT_BYTES + 1), RefusalStage.ENVELOPE),
-    (b"\xff\xfe", RefusalStage.ENCODING),
-    ("{", RefusalStage.SYNTAX),
-    ("[]", RefusalStage.CONSTRUCTION),
-    ('{"graph":{}}', RefusalStage.DISCRIMINATOR),
-    ('{"format_version":"0.2.0","graph":{},"zz":1}', RefusalStage.SHAPE),
-    (tier("unqualified"), RefusalStage.VALUE),
-    (tier("p:words"), RefusalStage.REFERENCE),
-    (
-        json.dumps(
-            {
-                "format_version": FORMAT_VERSION,
-                "graph": {
-                    "namespaces": [
-                        {"prefix": "p", "namespace": "urn:a"},
-                        {"prefix": "p", "namespace": "urn:b"},
-                    ]
-                },
-            }
-        ),
-        RefusalStage.SEMANTICS,
-    ),
-)
-
-
-@pytest.mark.parametrize(("source", "stage"), DOCUMENT_STAGES)
-def test_each_document_reading_stage_is_reachable(
-    source: str | bytes, stage: RefusalStage
-) -> None:
-    """CHARACTERIZATION: the document reader can refuse at every declared stage.
-
-    The census is only a claim about the tree until each named class is shown
-    to be produced by some input the reader actually meets, and the claim is
-    about the whole order rather than a remembered prefix of it, so the
-    population is taken from `RefusalStage` itself: a stage added to the
-    declaration and reachable by nothing fails here rather than joining
-    quietly.
-
-    The refusals are read as `ValueError`s here because that is the guarantee
-    every reader in this package made before the stage existed, and this test
-    is what says the census did not narrow it.
-    """
-    assert {declared for _, declared in DOCUMENT_STAGES} == set(RefusalStage)
-    with pytest.raises(ValueError) as caught:
-        loads(source)
-    assert getattr(caught.value, "stage", None) is stage
-
-
-@pytest.mark.parametrize(("source", "stage"), DOCUMENT_STAGES)
-def test_one_except_catches_every_stage_of_the_declared_order(
-    source: str | bytes, stage: RefusalStage
-) -> None:
-    """REGRESSION: `except Refusal` catches the whole order, not a prefix of it.
-
-    The format document publishes one numbered order and names `Refusal` as
-    what carries a stage, so a caller who reads it writes `except Refusal` and
-    believes it covers every rank.  While the last rank arrived through a class
-    that shared no base with `Refusal` but `ValueError`, that caller caught
-    eight of nine and let the ninth escape as an unhandled exception.  The
-    population is `RefusalStage` itself rather than a written-out list, so a
-    stage added to the order and left outside the base fails here.
-
-    The stage and the further conditions are read as attributes rather than
-    through `getattr` or an `isinstance` narrowing, because a caller having to
-    guess whether the exception it caught carries them is the same defect one
-    level down.
-    """
-    assert {declared for _, declared in DOCUMENT_STAGES} == set(RefusalStage)
-    with pytest.raises(Refusal) as caught:
-        loads(source)
-    assert caught.value.stage is stage
-    assert isinstance(caught.value.also, tuple)
-
-
 def document_readers() -> frozenset[str]:
     """Return the exported name of every document reader the package publishes.
 
@@ -376,6 +301,290 @@ READER_ENVELOPES: dict[str, tuple[object, str]] = {
     "selection_loads": (wire, "document size 2 bytes exceeds limit 1"),
     "program_loads": (machine_codec, "JSONL program exceeds 1 bytes"),
 }
+
+
+def duplicate_prefix_document() -> str:
+    """Return a document whose two bindings claim one prefix."""
+    return json.dumps(
+        {
+            "format_version": FORMAT_VERSION,
+            "graph": {
+                "namespaces": [
+                    {"prefix": "p", "namespace": "urn:a"},
+                    {"prefix": "p", "namespace": "urn:b"},
+                ]
+            },
+        }
+    )
+
+
+PROGRAM_HEADER = b'{"machine_version":"1"}\n'
+
+# Each reader's own input for each rank it can refuse at.  The graph document
+# reader is the only one that answers all nine, and the three others answer
+# fewer for a reason that is theirs rather than the order's: a rank absent here
+# is recorded in READER_UNREACHED below with what stands in its place, so the
+# two together are a total account of every reader against every rank.
+READER_STAGES: dict[str, dict[RefusalStage, str | bytes]] = {
+    "loads": {
+        RefusalStage.ENVELOPE: "x" * (wire.MAX_DOCUMENT_BYTES + 1),
+        RefusalStage.ENCODING: b"\xff\xfe",
+        RefusalStage.SYNTAX: "{",
+        RefusalStage.CONSTRUCTION: "[]",
+        RefusalStage.DISCRIMINATOR: '{"graph":{}}',
+        RefusalStage.SHAPE: '{"format_version":"0.2.0","graph":{},"zz":1}',
+        RefusalStage.VALUE: tier("unqualified"),
+        RefusalStage.REFERENCE: tier("p:words"),
+        RefusalStage.SEMANTICS: duplicate_prefix_document(),
+    },
+    "grammar_loads": {
+        RefusalStage.ENVELOPE: "x" * (wire.MAX_DOCUMENT_BYTES + 1),
+        RefusalStage.ENCODING: b"\xff\xfe",
+        RefusalStage.SYNTAX: "{",
+        RefusalStage.CONSTRUCTION: "[]",
+        RefusalStage.SHAPE: "{}",
+    },
+    "selection_loads": {
+        RefusalStage.ENVELOPE: "x" * (wire.MAX_DOCUMENT_BYTES + 1),
+        RefusalStage.ENCODING: b"\xff\xfe",
+        RefusalStage.SYNTAX: "{",
+        RefusalStage.CONSTRUCTION: "[]",
+        RefusalStage.DISCRIMINATOR: '{"op":1}',
+        RefusalStage.SHAPE: json.dumps(
+            {
+                "select": "attribute",
+                "attribute": {"namespace": "urn:x", "local_name": "a"},
+                "domain": "item",
+                "zz": 1,
+            }
+        ),
+        RefusalStage.VALUE: '{"op":"union","args":[]}',
+    },
+    "program_loads": {
+        RefusalStage.ENVELOPE: b"x" * (wire.MAX_DOCUMENT_BYTES + 1),
+        RefusalStage.ENCODING: b"\xff\xfe",
+        RefusalStage.SYNTAX: "{",
+        RefusalStage.CONSTRUCTION: b"[]\n",
+        RefusalStage.DISCRIMINATOR: b"{}\n",
+        RefusalStage.SHAPE: b'{"machine_version":"1","extra":true}\n',
+        RefusalStage.VALUE: PROGRAM_HEADER
+        + b'{"opcode":"repeat","count":-1,"body":[]}\n',
+        RefusalStage.SEMANTICS: PROGRAM_HEADER + b'{"opcode":"declare_namespace",'
+        b'"declaration":{"prefix":"p:q","namespace":"urn:x"}}\n',
+    },
+}
+
+# What stands where a reader has no fixture above.  Ranks 8 and 9 resolve a
+# name against a graph, and a reader handed no graph has nothing to resolve
+# against: the selection and program readers decode an artifact and leave every
+# such condition to the evaluator and the machine.  The grammar reader is the
+# one whose absences are its own: it meets these conditions and answers them
+# with an unstaged `ValueError`, so a caller routing on the declared order
+# never sees them.  Recording the reason is what keeps this a census rather
+# than a shorter list: a reader that starts answering one of these fails the
+# exactness assertion below instead of joining quietly.
+READER_UNREACHED: dict[str, dict[RefusalStage, str]] = {
+    "loads": {},
+    "grammar_loads": {
+        RefusalStage.DISCRIMINATOR: "unstaged ValueError from the pattern decoder",
+        RefusalStage.VALUE: "unstaged ValueError from the element decoders",
+        RefusalStage.REFERENCE: "unstaged ValueError for an undeclared nonterminal",
+        RefusalStage.SEMANTICS: "unstaged ValueError from the declaration contract",
+    },
+    "selection_loads": {
+        RefusalStage.REFERENCE: "resolved by the evaluator against a graph",
+        RefusalStage.SEMANTICS: "resolved by the evaluator against a graph",
+    },
+    "program_loads": {
+        RefusalStage.REFERENCE: "resolved when the program is executed",
+    },
+}
+
+
+def reader_stage_cases() -> list[object]:
+    """Return every reader-and-rank pair that has an input to reach it.
+
+    The case is named by the reader and the rank rather than by the input,
+    because one of these inputs is sixteen megabytes wide.
+    """
+    return [
+        pytest.param(reader, stage, source, id=f"{reader}-{stage.name}")
+        for reader in sorted(READER_STAGES)
+        for stage, source in sorted(
+            READER_STAGES[reader].items(), key=lambda pair: pair[0].value
+        )
+    ]
+
+
+def test_the_reader_census_accounts_for_every_reader_at_every_rank() -> None:
+    """CHARACTERIZATION: no rank of any reader is left unstated.
+
+    Two tables below carry the census, and a rank that appears in neither, or
+    in both, would leave a reader-and-rank pair nobody has looked at.  The
+    population of readers is the package's own `loads`-suffixed surface, so a
+    fifth reader exported without being staged arrives here rather than being
+    omitted, and the ranks each table names are read from `RefusalStage` itself
+    rather than written out.
+    """
+    assert set(READER_STAGES) == document_readers()
+    assert set(READER_UNREACHED) == document_readers()
+    for reader in document_readers():
+        reached = set(READER_STAGES[reader])
+        unreached = set(READER_UNREACHED[reader])
+        assert reached | unreached == set(RefusalStage), reader
+        assert not reached & unreached, reader
+    reached_by_someone = set[RefusalStage]().union(
+        *(set(stages) for stages in READER_STAGES.values())
+    )
+    assert reached_by_someone == set(RefusalStage)
+
+
+@pytest.mark.parametrize(
+    ("reader_name", "stage", "source"),
+    reader_stage_cases(),
+)
+def test_each_document_reading_stage_is_reachable(
+    reader_name: str, stage: RefusalStage, source: str | bytes
+) -> None:
+    """CHARACTERIZATION: each reader refuses at every rank it can reach.
+
+    The census is only a claim about the tree until each named class is shown
+    to be produced by some input a reader actually meets, and the claim is
+    about every reader rather than the graph document one alone: it ran over
+    `loads` by itself, so ranks four through nine had never been asserted on
+    the other three at all, and every defect below rank three in those readers
+    was outside anything this file measured.
+
+    The refusals are read as `ValueError`s here because that is the guarantee
+    every reader in this package made before the stage existed, and this test
+    is what says the census did not narrow it.
+    """
+    with pytest.raises(ValueError) as caught:
+        getattr(tiergraph, reader_name)(source)
+    assert getattr(caught.value, "stage", None) is stage
+
+
+@pytest.mark.parametrize(
+    ("reader_name", "stage", "source"),
+    reader_stage_cases(),
+)
+def test_one_except_catches_every_stage_of_the_declared_order(
+    reader_name: str, stage: RefusalStage, source: str | bytes
+) -> None:
+    """REGRESSION: `except Refusal` catches the whole order, not a prefix of it.
+
+    The format document publishes one numbered order and names `Refusal` as
+    what carries a stage, so a caller who reads it writes `except Refusal` and
+    believes it covers every rank of every reader named there.  While the last
+    rank arrived through a class that shared no base with `Refusal` but
+    `ValueError`, that caller caught eight of nine and let the ninth escape as
+    an unhandled exception.  The population is every reader against every rank
+    it reaches rather than one reader's written-out list, so a stage added to
+    the order and left outside the base fails here.
+
+    The stage and the further conditions are read as attributes rather than
+    through `getattr` or an `isinstance` narrowing, because a caller having to
+    guess whether the exception it caught carries them is the same defect one
+    level down.
+    """
+    with pytest.raises(Refusal) as caught:
+        getattr(tiergraph, reader_name)(source)
+    assert caught.value.stage is stage
+    assert isinstance(caught.value.also, tuple)
+
+
+def grammar_document(**changes: object) -> str:
+    """Return the smallest grammar this reader accepts, with members replaced."""
+    name = {"namespace": "urn:refusal", "local_name": "S"}
+    other = {"namespace": "urn:refusal", "local_name": "T"}
+    text = {"name": name, "value_type": "string", "lexical": "a"}
+    value: dict[str, object] = {
+        "nonterminals": [name],
+        "start": name,
+        "rules": [
+            {
+                "left": name,
+                "source": [{"kind": "terminal", "text": text}],
+                "target": [{"kind": "terminal", "text": text}],
+                "boundary": text,
+                "awaited_variables": [],
+                "weight": None,
+            }
+        ],
+    }
+    replacements: dict[str, object] = {
+        "nonterminals": 1 if changes.get("nonterminals") == "scalar" else [name, name],
+        "start": other,
+        "rules": [
+            {
+                "left": other,
+                "source": [{"kind": "terminal", "text": text}],
+                "target": [{"kind": "terminal", "text": text}],
+                "boundary": text,
+                "awaited_variables": [],
+                "weight": None,
+            }
+        ],
+    }
+    for member in changes:
+        value[member] = replacements[member]
+    return json.dumps(value)
+
+
+@pytest.mark.parametrize(
+    ("source", "fragment"),
+    [
+        (grammar_document(nonterminals="scalar"), "grammar.nonterminals must be an"),
+        (grammar_document(start=True), "is not a declared nonterminal"),
+        (grammar_document(nonterminals=True), "duplicate nonterminal declarations"),
+        (grammar_document(rules=True), "left-hand nonterminal is not declared"),
+    ],
+)
+def test_the_grammar_reader_leaves_its_own_conditions_unstaged(
+    source: str, fragment: str
+) -> None:
+    """CHARACTERIZATION: this reader answers past rank three off the order.
+
+    `grammar_loads` promises the envelope, encoding, and syntax stages and
+    delivers them, and every condition of its own -- an undeclared start
+    symbol, a duplicated nonterminal, a rule whose left-hand side names
+    nothing -- reaches the caller as a bare `ValueError` carrying no stage.
+    A caller who read the published order and wrote `except Refusal` around
+    this reader catches its first three ranks and nothing else.
+
+    This is recorded rather than corrected because staging those sites is a
+    change to what this reader refuses with, which is not this file's to make.
+    It is asserted rather than written down so it cannot drift: the moment a
+    site is staged, this test goes red and `READER_UNREACHED` above has to be
+    brought back into agreement with the tree.
+    """
+    with pytest.raises(ValueError) as caught:
+        tiergraph.grammar_loads(source)
+    assert type(caught.value) is ValueError
+    assert not isinstance(caught.value, Refusal)
+    assert fragment in str(caught.value)
+
+
+def test_the_program_reader_leaves_an_unknown_value_type_unstaged() -> None:
+    """CHARACTERIZATION: one decoder site escapes the order the rest observes.
+
+    Every other member of an attached value is answered at a declared stage,
+    and the value type is answered by the enumeration's own constructor, so an
+    opcode naming a type this release does not implement leaves `program_loads`
+    as a bare `ValueError` where the neighbouring members leave it as a staged
+    refusal.  Recorded here for the same reason as the grammar reader's sites:
+    correcting it is a change to what this reader refuses with.
+    """
+    source = PROGRAM_HEADER + (
+        b'{"opcode":"attach_value","domain":"item","target":null,'
+        b'"value":{"name":{"namespace":"urn:x","local_name":"a"},'
+        b'"value_type":"nope","lexical":"1"}}\n'
+    )
+    with pytest.raises(ValueError) as caught:
+        tiergraph.program_loads(source)
+    assert type(caught.value) is ValueError
+    assert not isinstance(caught.value, Refusal)
+    assert str(caught.value) == "'nope' is not a valid XsdType"
 
 
 @pytest.mark.parametrize("reader_name", sorted(document_readers()))

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Walk` now follows a polyadic relation as well as a bipartite one, so the
+  library and the `walk` command reach the same relations the rest of traversal
+  does. One step from any endpoint of the near side reaches every endpoint of
+  the far side of that incidence, which is the step `OrderedPolyadicTraversal`
+  already takes and the `k * m` edges the graph itself ranged over when it
+  validated the declaration's `acyclic` promise; pairing the two sides off index
+  by index is not a reading the declaration supports, because each side declares
+  its own arity bounds and its own emptiness. `WalkDirection` keeps its meaning,
+  forward being the declared `sources`-to-`targets` direction and inverse its
+  fiber, and both directions still return a deduplicated `NodeSet`. An unbounded
+  walk over a polyadic relation is admitted only for a declaration that promised
+  acyclicity, and refused by the same message as before otherwise. `truncated`
+  is unchanged and still one-sided. A relation of neither shape now refuses by
+  naming both admitted shapes rather than only the bipartite one.
 - Added `discharge`, the command-line verb for declarations. It sits beside
   `validate` rather than inside it: `validate` asks whether one document is
   well formed, and `discharge` asks whether a declaration holds against its
@@ -520,6 +534,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the design permits, on every commit, and would still be guessing at what the
   backend includes -- and the shipped-set half of the claim is carried by the
   test that builds the distribution and reads its members back.
+- Closed the program writer's half of the encoding condition its reader
+  already answers. `program_dumps` writes with `ensure_ascii=False`, so a lone
+  surrogate in a record stood in the returned text as the character itself:
+  the `str` it handed back had no UTF-8 encoding at all, `.encode("utf-8")`
+  raised on it, and `load_program` refused that very text at `ENCODING` on the
+  way back. `wire.to_data` has answered that condition for the graph writers
+  since the format had one, and this writer answered nothing, so the asymmetry
+  was reachable from any `Program` built in memory rather than read. It now
+  refuses through the same check, imported rather than restated, naming the
+  field path inside the record and the line the record would have stood on, so
+  both halves of the codec say one sentence about one program. What is refused
+  is what the reader already refuses, so no program that round-trips today
+  stops doing so; a caller holding a `Program` this package could never have
+  read now meets a staged refusal where it used to be handed unusable text.
+- Bounded the read the program reader's envelopes were only ever measuring.
+  `load_program` iterated whole lines, so both the running `MAX_DOCUMENT_BYTES`
+  total and the per-line bound were checked against bytes already held: an
+  input carrying no newline was materialized entire in order to be told it was
+  too large, sixteen times the document envelope and two hundred and fifty-six
+  times the line one, which is the cost reading incrementally exists to avoid
+  and is reachable from `tiergraph run -` on standard input. The reader now
+  asks the stream for one byte past the tighter of the two bounds, so a
+  delivery long enough to cross a bound is refused on what was read rather than
+  on what the rest of the line would have been. The bounds, their order, and
+  every diagnostic are unchanged for input the reader accepts or refuses today;
+  what changes is that a newline-free input over the line bound is reported
+  against the line rather than against the program, because the line bound is
+  the one it crosses first. A stream is read through `readline` rather than by
+  iteration, which is the only visible difference to a caller passing an object
+  of its own to `load_program`.
 - Closed a writer that emitted what the reader refuses. Holding the reader to
   the declared minimum for a layer subject's coordinate left the graph
   constructor as the one authority out of step: an orphaned subject retaining a
@@ -650,6 +694,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the build backend selects the working tree minus what version control
   ignores. The gate scripts also join the strict type-checking bar they were
   already outside of, having been inside every other bar this project keeps.
+
+- Held machine-program members to the types the format declares for them. The
+  opcode decoders announced a member's type with `typing.cast`, which is erased
+  before the program runs and therefore checks nothing, so `tiergraph run`
+  accepted a tier long name of `7`, built a graph around it, exited zero, and
+  wrote a document `tiergraph validate` then refused -- contradicting the
+  published rule that `validate` settles the same question every conversion
+  settles before emitting anything, and letting `Program.fingerprint()` publish
+  a digest of a graph no reader can take back. Every such member is now read
+  through the checked helpers the document reader uses, so the two readers
+  refuse the same value at the same stage in the same words. Enumerated
+  spellings were escaping as unstaged `ValueError`s from the enumeration
+  constructor rather than as refusals, leaving `except Refusal` to miss a
+  condition the declared order governs for every reader this package exposes;
+  they are staged at `VALUE` now, where `loads` already staged them. An
+  attachment target given as a JSON boolean reached the kernel as the integer
+  one and attached its value to the wrong relation instance; a bare target must
+  now be an integer.
+- Made the canonical machine-program writer's own output readable. A polyadic
+  side that constrains no tiers is written as an explicit null, and a relation
+  instance tags its durable item endpoints; the reader admitted neither, so
+  `program_loads(program_dumps(program))` refused programs this package had
+  just written. Both spellings are read now, and no emitted byte changed.
+- Derived the machine-program conformance sweep from the writer instead of a
+  list. Seed programs realizing every opcode, attachment domain, relation
+  carrier, and endpoint shape are encoded, and the JSON type the writer emits at
+  each position is taken as the type declared there; substituting any other type
+  must be refused, and every refusal must carry its stage. A member added to an
+  opcode is probed as soon as the writer emits it, and the seeds are held
+  against the opcode and enumeration members read from the code, so a new one
+  fails the gate rather than falling outside it.
 
 ## [0.1.0] - 2026-08-23
 
