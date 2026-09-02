@@ -18,11 +18,18 @@ from tiergraph import (
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    Delivery,
+    DocumentRef,
     DurableBoundaryRef,
     EffectRefusal,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
+    Layer,
+    LayerFact,
+    LayerName,
+    LayerRead,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
@@ -41,6 +48,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
     machine,
+    rewrite,
 )
 
 NS = "urn:rewrite"
@@ -778,3 +786,180 @@ def test_seal_certificate_serialization_carries_both_counts() -> None:
 
     real = SealCertificate(carriers=2, sealed_members=5)
     assert real.to_data() == {"carriers": 2, "sealed_members": 5}
+
+
+# --- layers ------------------------------------------------------------------
+
+LAYER_NOTE = name("annotation")
+LAYER_PROVENANCE = name("provenance")
+LAYER_NAME = LayerName(NS, "annotator")
+# Both subjects a layer statement can have as far as this measurement is
+# concerned: one standing over a tier and one standing over nothing.  A fixture
+# carrying only the first could not tell a tier reported from a tier invented.
+LAYER_DECLARATIONS = (
+    *ATTRIBUTES,
+    AttributeDeclaration(LAYER_NOTE, AttributeDomain.ITEM, XsdType.STRING),
+    AttributeDeclaration(LAYER_PROVENANCE, AttributeDomain.DOCUMENT, XsdType.STRING),
+)
+
+
+def layered(lexical: str = "one") -> Graph:
+    """Return the base graph carrying one layer with two statements."""
+    return Graph(
+        NAMESPACES,
+        (
+            Tier(TierDeclaration(WORD, "Word"), (labeled("a"), labeled("b"))),
+            Tier(TierDeclaration(PHRASE, "Phrase"), (Item(),)),
+        ),
+        DECLARATIONS,
+        (),
+        LAYER_DECLARATIONS,
+        (),
+        layers=(
+            Layer(
+                LAYER_NAME,
+                (
+                    LayerFact(
+                        ItemRef(WORD, 0),
+                        AttributeValue(LAYER_NOTE, XsdType.STRING, lexical),
+                    ),
+                    LayerFact(
+                        DocumentRef(),
+                        AttributeValue(LAYER_PROVENANCE, XsdType.STRING, "hand"),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def layerless() -> Graph:
+    """Return the same graph with the layer and nothing else removed."""
+    return Graph(
+        NAMESPACES,
+        (
+            Tier(TierDeclaration(WORD, "Word"), (labeled("a"), labeled("b"))),
+            Tier(TierDeclaration(PHRASE, "Phrase"), (Item(),)),
+        ),
+        DECLARATIONS,
+        (),
+        LAYER_DECLARATIONS,
+        (),
+    )
+
+
+# REGRESSION: a rewrite that deleted every layer discharged DECORATE.
+def test_deleting_every_layer_is_not_decoration() -> None:
+    """A reading the result cannot answer is not a reading the source's held.
+
+    What a discharged `DECORATE` licenses is that every reading taken over the
+    source is still a correct reading of the result.  A rewrite that dropped
+    every layer discharged it while the reading in question -- delivering that
+    layer and reading its statement -- stopped answering and started raising,
+    and the certificate reported `disturbances=0` over nine subjects.  The
+    facts enumerated nine collections and not this one, so nothing the layer
+    asserted was ever a subject the claim was held to.
+
+    The two assertions are one claim from both ends: the reading the license
+    promises is exhibited failing on the result, and the same pair is exhibited
+    being refused.
+    """
+    source, result = layered(), layerless()
+    delivery = Delivery((LAYER_NAME,), LayerRead.LAST)
+    assert source.layer_values(ItemRef(WORD, 0), LAYER_NOTE, delivery) == (
+        AttributeValue(LAYER_NOTE, XsdType.STRING, "one"),
+    )
+    with pytest.raises(GraphValidationError):
+        result.layer_values(ItemRef(WORD, 0), LAYER_NOTE, delivery)
+
+    with pytest.raises(EffectRefusal) as refusal:
+        RewriteDeclaration(
+            "strip-layers", source, result, RewriteEffect.DECORATE
+        ).check_effect()
+    assert "layer 'urn:rewrite'/'annotator' has no counterpart" in str(refusal.value)
+
+    certificate = RewriteDeclaration(
+        "strip-layers", source, result, RewriteEffect.COLLAPSE
+    ).check_effect()
+    assert certificate.effect is RewriteEffect.COLLAPSE
+    assert certificate.disturbances == 3
+
+    # A statement standing over a tier reports it and one standing over the
+    # document reports none, so the tier a disturbance names is read off the
+    # subject rather than assumed from the layer.
+    found = RewriteDeclaration("strip-layers", source, result).disturbances()
+    assert [item.tier for item in found] == [None, None, WORD]
+
+
+def test_a_layer_statement_replaced_is_a_revision() -> None:
+    """A layer carries values, so replacing one is measured as replacing one.
+
+    The layer and its subject both still stand, which is what separates this
+    from the collapse above: only the value the statement carries moved.
+    """
+    declaration = RewriteDeclaration(
+        "restate", layered("one"), layered("two"), RewriteEffect.REVISE
+    )
+    found = declaration.disturbances()
+    assert [item.effect for item in found] == [RewriteEffect.REVISE]
+    assert found[0].tier == WORD
+    assert found[0].detail == (
+        "carries statement 'string:two' where the source carried 'string:one'"
+    )
+    assert declaration.check_effect().effect is RewriteEffect.REVISE
+
+
+def test_adding_a_layer_decorates_and_is_counted() -> None:
+    """Annotating in a layer adds, and the count says how much was held.
+
+    A layer's statements are subjects of the claim like any other structure, so
+    a source carrying one is held to more than a source carrying none.
+    """
+    bare = RewriteDeclaration(
+        "none", layerless(), layerless(), RewriteEffect.DECORATE
+    ).check_effect()
+    added = RewriteDeclaration(
+        "annotate", layerless(), layered(), RewriteEffect.DECORATE
+    ).check_effect()
+    held = RewriteDeclaration(
+        "keep", layered(), layered(), RewriteEffect.DECORATE
+    ).check_effect()
+
+    assert added.disturbances == 0
+    assert added.subjects == bare.subjects
+    assert held.subjects == bare.subjects + 3
+
+
+def test_the_facts_cover_every_collection_a_graph_carries_but_seals() -> None:
+    """CHARACTERIZATION: seals are the one collection left out, and why.
+
+    `_facts` reads a graph's own collections, and it skipped two: layers, fixed
+    here, and seals, which are deliberately still skipped.  The two look like
+    one omission and are not.  A seal has a second gate -- `SealDeclaration`
+    compares the same pair of graphs and reports every breach -- and a graph
+    cannot even hold a seal over a tier it does not declare, so what a seal
+    asserts is decided elsewhere either way.  A layer had neither, which is
+    why the same skip was a defect there.
+
+    The population is the kernel's own field list rather than a written-out
+    one, so a collection added to `Graph` arrives here as a failure.
+    """
+    carried = {
+        field
+        for field in Graph.__dataclass_fields__
+        if not field.startswith("_") and field not in {"attributes"}
+    }
+    covered = {key[0] for key in (fact.key for fact in rewrite._facts(layered()))}
+    assert carried == {
+        "namespaces",
+        "tiers",
+        "relation_declarations",
+        "relations",
+        "attribute_declarations",
+        "boundary_values",
+        "polyadic_relations",
+        "seals",
+        "layers",
+    }
+    assert "layer" in covered
+    assert "seals" not in covered

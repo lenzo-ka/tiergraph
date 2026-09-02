@@ -59,6 +59,7 @@ from tiergraph import (
     wire,
 )
 from tiergraph.machine import AttributeTarget, Opcode, PrimitiveOpcode, _flatten
+from tiergraph.schema import Refusal, RefusalStage
 
 
 def build_program(opcodes: tuple[Opcode, ...]) -> Program:
@@ -1103,3 +1104,117 @@ def test_unroll_constructs_one_full_graph_independent_of_trace_size(
     constructions = 0
     execute((*prefix, *(AddItem(LAWS.name("events")) for _ in range(10))))
     assert constructions > 10
+
+
+SURROGATE = "\ud800"
+FINGERPRINT_NAMESPACE = "urn:test:fingerprint"
+
+
+def _surrogate_programs() -> tuple[tuple[str, Program, str], ...]:
+    """Spell one lone surrogate at each as-built location an opcode can reach."""
+    declared = DeclareNamespace(NamespaceDeclaration("f", FINGERPRINT_NAMESPACE))
+    tier = QualifiedName(FINGERPRINT_NAMESPACE, "tier")
+    label = QualifiedName(FINGERPRINT_NAMESPACE, "label")
+    return (
+        (
+            "namespaces[0].namespace",
+            Program((DeclareNamespace(NamespaceDeclaration("f", SURROGATE)),)),
+            "a namespace URI",
+        ),
+        (
+            "namespaces[0].prefix",
+            Program((DeclareNamespace(NamespaceDeclaration(SURROGATE, "urn:p")),)),
+            "a namespace prefix",
+        ),
+        (
+            "tiers[0].declaration.long_name",
+            Program((declared, DeclareTier(TierDeclaration(tier, SURROGATE)))),
+            "a tier long name",
+        ),
+        (
+            "tiers[0].items[0].durable_id",
+            Program(
+                (
+                    declared,
+                    DeclareTier(TierDeclaration(tier, "Tier")),
+                    AddItem(tier, Item(SURROGATE)),
+                )
+            ),
+            "a durable id",
+        ),
+        (
+            "tiers[0].items[0].attributes[0].lexical",
+            Program(
+                (
+                    declared,
+                    DeclareTier(TierDeclaration(tier, "Tier")),
+                    DeclareAttribute(
+                        AttributeDeclaration(
+                            label, AttributeDomain.ITEM, XsdType.STRING
+                        )
+                    ),
+                    AddItem(tier),
+                    AttachValue(
+                        AttributeDomain.ITEM,
+                        ItemRef(tier, 0),
+                        AttributeValue(label, XsdType.STRING, SURROGATE),
+                    ),
+                )
+            ),
+            "an attribute lexical",
+        ),
+    )
+
+
+# REGRESSION: the fingerprint encoded before asking whether the text was encodable.
+@pytest.mark.parametrize(
+    ("path", "program", "location"),
+    _surrogate_programs(),
+    ids=[location for _, _, location in _surrogate_programs()],
+)
+def test_a_fingerprint_refuses_the_text_it_cannot_encode(
+    path: str, program: Program, location: str
+) -> None:
+    """The as-built fingerprint answers the encoding condition its writers answer.
+
+    `fingerprint` hashes UTF-8 bytes of the as-built graph, so a string the
+    encoder cannot write has no fingerprint to return.  It reached `str.encode`
+    with no check in front of it and raised the encoder's own
+    `UnicodeEncodeError`, which names a position in a rendered document and not
+    a field of the graph, while `wire.to_data` and `program_dumps` answered the
+    same string at `ENCODING` naming the field.  One condition now keeps one
+    stage and one wording whichever writer a caller met it from, and
+    `Program.fingerprint` inherits it because it delegates to the as-built one.
+    """
+    del location
+    with pytest.raises(ValueError) as refusal:
+        program.fingerprint()
+    assert type(refusal.value) is Refusal
+    assert refusal.value.stage is RefusalStage.ENCODING
+    assert str(refusal.value) == (
+        f"{path} value {SURROGATE!r} has unsupported character U+D800"
+    )
+
+
+def test_a_fingerprint_and_the_wire_writer_name_the_same_field() -> None:
+    """Both writers report one string at one path, so neither invents its own.
+
+    The graph is the one the fingerprint refuses; handing it to the wire writer
+    has to produce the same sentence, because a caller who cannot fingerprint a
+    graph and then serializes it is entitled to be told the same thing twice.
+    """
+    program = Program(
+        (
+            DeclareNamespace(NamespaceDeclaration("f", FINGERPRINT_NAMESPACE)),
+            DeclareTier(
+                TierDeclaration(QualifiedName(FINGERPRINT_NAMESPACE, "tier"), SURROGATE)
+            ),
+        )
+    )
+    graph = program.unroll().graph
+    with pytest.raises(Refusal) as from_fingerprint:
+        program.fingerprint()
+    with pytest.raises(Refusal) as from_writer:
+        wire.dumps(graph)
+    assert str(from_fingerprint.value) == str(from_writer.value)
+    assert from_fingerprint.value.stage is from_writer.value.stage

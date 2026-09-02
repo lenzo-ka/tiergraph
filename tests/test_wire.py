@@ -1975,6 +1975,81 @@ def test_an_orphan_at_the_declared_minimum_still_round_trips() -> None:
         assert loads(document) == graph
 
 
+# REGRESSION: `dumps` raised a bare KeyError on a graph this constructor accepted.
+def test_a_graph_refuses_an_orphaned_coordinate_in_an_undeclared_namespace() -> None:
+    """An orphan's coordinate is held to the namespace rule every name is held to.
+
+    `Graph.__post_init__` requires every qualified name a graph spells to use a
+    namespace that graph declares, and it enumerated nine collections without
+    reaching layer subjects.  An orphan is the one layer subject nothing
+    resolves -- `_validate_layer_fact` sends every live subject to
+    `_resolve_layer_subject`, which refuses an undeclared name, and skips the
+    orphan precisely because there is nothing to resolve it against -- so its
+    coordinate was the one name that met no check at all.  Such a graph
+    validated, and `dumps` then reached `_encode_value`'s `prefixes[namespace]`
+    with no prefix to find and raised `KeyError('urn:undeclared')`, which is
+    neither the encoding condition `to_data` says is the one it answers nor the
+    `Refusal` it says it raises.
+
+    Every spelling an orphan has is exercised, because the coordinate reaches
+    the encoder from two independent places -- the carrier and the retained
+    reference -- and a fixture carrying one could not tell a fix that covered
+    both from one that covered either.  The refusal is the wording the nine
+    collections already produce rather than a second account of one rule.
+    """
+    undeclared = QualifiedName("urn:undeclared", "gone")
+    subjects = (
+        (OrphanedSubject(undeclared, 0), AttributeDomain.RELATION_INSTANCE),
+        (
+            OrphanedSubject(GraphCarrier.RELATIONS, ItemRef(undeclared, 0)),
+            AttributeDomain.ITEM,
+        ),
+        (
+            OrphanedSubject(GraphCarrier.RELATIONS, BoundaryRef(undeclared, 0)),
+            AttributeDomain.BOUNDARY,
+        ),
+        (
+            OrphanedSubject(undeclared, ItemRef(undeclared, 0)),
+            AttributeDomain.ITEM,
+        ),
+    )
+    for subject, domain in subjects:
+        with pytest.raises(GraphValidationError) as refusal:
+            graph_with_layers(
+                Layer(SOURCE_A, (LayerFact(subject, value(domain, "old")),))
+            )
+        assert str(refusal.value) == (
+            "qualified name '{urn:undeclared}gone' uses undeclared namespace "
+            "'urn:undeclared'"
+        ), subject
+
+
+# CHARACTERIZATION: an orphan is the only such name; its neighbours were covered.
+def test_a_layer_and_a_seal_name_only_namespaces_the_graph_declares() -> None:
+    """The coordinate was the one hole, and the adjacent cases were already shut.
+
+    "Only" is a claim about a population, so it is measured rather than
+    asserted: the other two places a layer or a seal spells a name that reaches
+    the encoder are a layer's own vocabulary and a seal's carrier, and both are
+    refused at construction already, each by its own check and its own wording.
+    That is what makes the fix above the existing contract applied to the one
+    collection its enumeration missed rather than a new condition.
+    """
+    undeclared = QualifiedName("urn:undeclared", "gone")
+    with pytest.raises(GraphValidationError) as vocabulary:
+        graph_with_layers(
+            Layer(
+                LayerName("urn:undeclared", "reader-a"),
+                (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "old")),),
+            )
+        )
+    assert "a layer writes in its named vocabulary" in str(vocabulary.value)
+
+    with pytest.raises(GraphValidationError) as seal:
+        graph_with_layers(six_domain_layer()).seal(undeclared, 0)
+    assert "seal names undeclared tier" in str(seal.value)
+
+
 # CHARACTERIZATION: the size policy is a reader condition the writer never asks.
 def test_the_writer_emits_a_document_the_size_policy_refuses(
     monkeypatch: pytest.MonkeyPatch,

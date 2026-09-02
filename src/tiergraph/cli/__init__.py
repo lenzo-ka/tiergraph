@@ -647,6 +647,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RecursionError as error:
         _diagnostic(args.command, "ValueError", error)
         return 1
+    except ArithmeticError as error:
+        # An algebra refuses a combination that leaves its carrier, and it does
+        # so with the interpreter's class for that condition rather than this
+        # package's: `DoubleExtremumSemiring.multiply` raises `OverflowError`,
+        # which is an `ArithmeticError` and so no kind of `ValueError`. A
+        # well-formed graph and a valid command line therefore reached a stack
+        # trace where `docs/reference/cli.md` promises a diagnostic on stderr
+        # and status 1 for a refused operation.
+        #
+        # It is reported as the house refusal for the same reason `_fold_lift`
+        # converts a carrier mismatch into one rather than letting a `TypeError`
+        # escape from inside the fold: what the caller met is their valuation
+        # leaving the algebra's carrier, which is a refused operation, and a
+        # caller routing on the class should not have to know which of the two
+        # the arithmetic happened to raise. Catching the base class covers the
+        # whole family rather than the one member reached today, and it sits
+        # after `RecursionError` so no earlier clause is displaced.
+        _diagnostic(args.command, "ValueError", error)
+        return 1
     except tiergraph.PathRefusal as error:
         _diagnostic(args.command, "PathRefusal", error)
         return 1
