@@ -91,7 +91,11 @@ these exact bytes. A graph carrying a string that UTF-8 cannot encode is
 refused by the writer instead of being emitted as an unreadable document. That
 is the one condition the writer answers, so `dumps` returning is not on its own
 a promise that `loads` accepts what it wrote: the reader ranks conditions the
-writer never asks, and refuses a document that meets one of them.
+writer never asks, and refuses a document that meets one of them. The size
+budget is one such condition, and it is reachable from a graph the constructor
+accepts: canonical text running past `MAX_DOCUMENT_BYTES` is written in full
+and refused at `ENVELOPE` on the way back, because the offending size belongs
+to the text rather than to any member a constructor could have bounded.
 
 Supply order is not preserved everywhere, and a writer that emitted every
 collection in the order it was handed would not produce canonical bytes.

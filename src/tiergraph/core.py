@@ -1423,7 +1423,9 @@ class Graph:
                 f"is declared for the {declaration.domain.value} domain; a value is "
                 "carried where its declaration says it is carried"
             )
-        if not isinstance(fact.subject, OrphanedSubject):
+        if isinstance(fact.subject, OrphanedSubject):
+            _validate_orphaned_subject(layer, fact.subject)
+        else:
             _resolve_layer_subject(self, fact.subject)
 
     def layer_values(
@@ -3454,6 +3456,31 @@ def _layer_subject_domain(subject: LayerSubject) -> AttributeDomain:
 
 def _domain_article(domain: AttributeDomain) -> str:
     return f"a {domain.value.replace('_', ' ')}"
+
+
+def _validate_orphaned_subject(layer: Layer, subject: OrphanedSubject) -> None:
+    """Hold a retained coordinate to the bound every live coordinate met.
+
+    An orphan is the one layer subject nothing resolves, so this is the only
+    place its coordinate is judged.  What it retains is where a live subject
+    stood, and a live subject stands at a nonnegative index, so a negative one
+    names a position the graph never had.  The declared wire shape states the
+    same bound and the reader applies it, which is why this refuses at the
+    reader's stage rather than as a graph contract: a graph carrying such a
+    coordinate is written out in full and refused on the way back.  The bound
+    is spelled here because the declaration module reads this one and cannot be
+    read from it; a test binds this spelling to the declared minimum, so the
+    two cannot drift apart unnoticed.
+    """
+    index = subject.was if isinstance(subject.was, int) else subject.was.index
+    if index < 0:
+        raise GraphValidationError(
+            f"layer {layer.name.vocabulary!r}/{layer.name.source!r} holds a fact "
+            f"orphaned from {str(subject.was)!r} on {str(subject.carrier)!r}; an "
+            "orphan keeps the coordinate its subject stood at, and no subject "
+            f"stood at index {index}",
+            RefusalStage.VALUE,
+        )
 
 
 def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
