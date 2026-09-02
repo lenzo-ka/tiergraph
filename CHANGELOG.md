@@ -26,8 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--exactness` added, and `fold` itself gains no such flag, because it runs the
   declaration and never consults the claim. Omitting `--exactness` is not a
   usage error: it reaches the refusal that hands back the declaration to be
-  made. `discharge` still covers two of the four published declaration kinds; a
-  rewrite effect and a graph profile remain reachable only through the library.
+  made.
+- Added `RewriteCertificate.to_data()` and `discharge rewrite`. The method is
+  the wire form of a discharged effect claim, carrying the effect beside the two
+  counts: a revision and a collapse can leave the same number of disturbances
+  over the same number of subjects, so counts alone would report the two
+  identically. `disturbances` is written as the count of ways the result failed
+  to leave a structure standing, which is what the certificate holds, so one
+  structure disturbed twice contributes two and the two counts are not a ratio.
+  The command reads the same pair of graphs `discharge seals` reads, under the
+  same flags, with `--effect` added; omitting it is not a usage error but
+  reaches the refusal that hands back the declaration to be made rather than
+  standing in COLLAPSE. This is an addition to a public type and a new
+  subcommand: no graph document is written or read differently, and the schema
+  artifact and its stamp are unaffected. `discharge` now covers three of the
+  four published declaration kinds; a graph profile stays reachable only through
+  the library, because its check returns nothing to certify.
 - Added enum-member emission and made `NodeSet` ordering an explicit contract (#71).
 - Added a public editing API: one operation set over two carriers. A frozen
   `Graph` answers `declare`, `set_attribute`, `remove_attribute`, `insert_item`,
