@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import IntEnum, StrEnum
@@ -1143,6 +1143,25 @@ class Graph:
                 and declaration.targets_subset_of is not None
             ),
             *(declaration.name for declaration in self.attribute_declarations),
+            # An orphan is the one layer subject nothing resolves, so its
+            # coordinate is the one qualified name in this graph that no other
+            # check reaches: `_validate_layer_fact` sends every live subject to
+            # `_resolve_layer_subject`, which refuses a name the graph does not
+            # declare, and skips the orphan exactly because there is nothing
+            # left to resolve it against. Its spelling is still a qualified
+            # name, and the contract above is a contract about every one of
+            # them, so leaving it out of this list was an omission rather than
+            # an exemption: the graph validated and `dumps` then reached the
+            # encoder's bare `prefixes[namespace]` with no prefix to find,
+            # raising `KeyError` where `to_data` says the one condition it
+            # answers is the encoding one and that it raises `Refusal`.
+            *(
+                name
+                for layer in self.layers
+                for fact in layer.facts
+                if isinstance(fact.subject, OrphanedSubject)
+                for name in _orphan_names(fact.subject)
+            ),
         ]
         for name in qualified_names:
             if name.namespace not in declared_namespaces:
@@ -3459,6 +3478,21 @@ def _layer_subject_domain(subject: LayerSubject) -> AttributeDomain:
 
 def _domain_article(domain: AttributeDomain) -> str:
     return f"a {domain.value.replace('_', ' ')}"
+
+
+def _orphan_names(subject: OrphanedSubject) -> Iterator[QualifiedName]:
+    """Yield every qualified name one retained coordinate spells.
+
+    An orphan spells at most two: the carrier it stood under, which is a tier
+    name unless it is one of the graph's own ordered carriers, and the tier of
+    the coordinate it retained, which a bare index does not have.  Both are
+    yielded rather than one, because a subject can spell a name in each place
+    and the two are independent.
+    """
+    if isinstance(subject.carrier, QualifiedName):
+        yield subject.carrier
+    if isinstance(subject.was, ItemRef | BoundaryRef):
+        yield subject.was.tier
 
 
 def _validate_orphaned_subject(layer: Layer, subject: OrphanedSubject) -> None:

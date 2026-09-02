@@ -948,6 +948,97 @@ def _fold_args(path: Path, semiring: str, lift: str, *extra: str) -> list[str]:
     ]
 
 
+DOUBLE_COST = QualifiedName(FOLD_NAMESPACE, "double-cost")
+
+
+def _double_fold_graph(path: Path, *costs: tuple[str, str]) -> tiergraph.Graph:
+    """Write a dependency chain valued in the IEEE-double carrier.
+
+    The diamond above is valued in decimals, whose arithmetic is exact and
+    unbounded; the algebras this exercises carry finite doubles instead, and
+    only a double carrier has a bound for a sum to leave.
+    """
+    task_type = QualifiedName(FOLD_NAMESPACE, "task")
+    items = tuple(
+        Item(identifier, (AttributeValue(DOUBLE_COST, XsdType.DOUBLE, weight),))
+        for identifier, weight in costs
+    )
+    references = tuple(ItemRef(FOLD_TASKS, index) for index in range(len(items)))
+    graph = tiergraph.Graph(
+        (NamespaceDeclaration("t", FOLD_NAMESPACE),),
+        (Tier(TierDeclaration(FOLD_TASKS, "Tasks"), items),),
+        (
+            SimpleRelationDeclaration(
+                QualifiedName(FOLD_NAMESPACE, "membership"), FOLD_TASKS, task_type
+            ),
+            BipartiteRelationDeclaration(
+                FOLD_DEPENDS, task_type, task_type, acyclic=True
+            ),
+        ),
+        tuple(
+            RelationInstance(FOLD_DEPENDS, references[left], references[right])
+            for left, right in ((0, 1), (1, 2))
+            if right < len(items)
+        ),
+        (AttributeDeclaration(DOUBLE_COST, AttributeDomain.ITEM, XsdType.DOUBLE),),
+    )
+    path.write_bytes(tiergraph.dump_bytes(graph))
+    return graph
+
+
+# REGRESSION: an algebra's overflow escaped `main` as an unhandled exception.
+@pytest.mark.parametrize("semiring", ["arctic", "tropical"])
+def test_fold_reports_an_algebra_leaving_its_carrier(
+    semiring: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A combination off the carrier is a refused operation, not a crash.
+
+    `DoubleExtremumSemiring.multiply` refuses a sum that leaves the finite
+    IEEE-double carrier, and it refuses with `OverflowError`, which is an
+    `ArithmeticError` and so no kind of `ValueError`.  `main` caught six
+    classes and none of them was that one, so a well-formed graph and a valid
+    command line -- the three items below, each carrying the largest finite
+    double the format can spell -- produced a stack trace where
+    `docs/reference/cli.md` promises a diagnostic on stderr and exit status 1.
+
+    Both algebras that carry doubles are exercised rather than one, because the
+    condition belongs to the carrier and not to which extremum is preferred.
+    Nothing reaches stdout, since a refused operation writes no document.
+    """
+    source = tmp_path / "overflow.json"
+    huge = "1.0E308"
+    _double_fold_graph(source, ("a", huge), ("b", huge), ("c", huge))
+
+    status = main(
+        [
+            "fold",
+            str(source),
+            "--attribute-namespace",
+            FOLD_NAMESPACE,
+            "--attribute-local",
+            "double-cost",
+            "--tier",
+            FOLD_NAMESPACE,
+            "tasks",
+            "--semiring",
+            semiring,
+            "--lift",
+            "value",
+            "--transition",
+            FOLD_NAMESPACE,
+            "depends",
+            "or",
+        ]
+    )
+
+    assert status == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "tiergraph: fold: ValueError: result leaves the finite IEEE-double carrier\n"
+    )
+
+
 def test_fold_reproduces_the_guide_least_cost_and_path_count(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

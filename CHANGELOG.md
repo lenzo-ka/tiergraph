@@ -535,6 +535,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed the last writer that reached the UTF-8 encoder without asking it
+  anything. `AsBuilt.fingerprint` hashes the encoded bytes of the as-built
+  graph, and there are no bytes to hash for a graph the encoder cannot write,
+  so `Program.fingerprint` raised the encoder's own `UnicodeEncodeError` --
+  which names a position in a rendering nobody holds rather than a field of the
+  graph -- where `wire.to_data` and `program_dumps` both answer the same string
+  at `ENCODING` naming the field. It now asks through the same check, imported
+  rather than restated, so one string meets one stage and one wording whichever
+  writer a caller reached it from, and `Program.fingerprint` inherits it by
+  delegating to the as-built one. Only a graph no writer in this package could
+  ever have serialized is affected; every fingerprint this release computed
+  before is unchanged.
+- Held an orphan's retained coordinate to the namespace rule every other
+  qualified name already met. `Graph.__post_init__` requires every qualified
+  name a graph spells to use a namespace that graph declares, and it enumerated
+  nine collections without reaching layer subjects. An orphan is the one layer
+  subject nothing resolves -- every live subject goes to
+  `_resolve_layer_subject`, which refuses an undeclared name, and the orphan is
+  skipped precisely because there is nothing to resolve it against -- so its
+  coordinate was the one name in the graph that met no check at all. Such a
+  graph validated, and `dumps` then reached the encoder's `prefixes[namespace]`
+  with no prefix to find and raised a bare `KeyError`, which is neither the
+  encoding condition `to_data` says is the one it answers nor the `Refusal` it
+  says it raises. Every spelling is now covered, the carrier and the retained
+  reference alike, and the refusal is the wording the other nine collections
+  already produce rather than a second account of one rule. It is decided in
+  validation and not in the encoder because that is where the contract already
+  lives: a layer's own vocabulary and a seal's carrier are refused at
+  construction too, each by its own check, so an orphan's coordinate was an
+  omission from a settled rule rather than a condition the writer had been
+  left to answer. Nothing in this package ever built such a coordinate, the
+  declared shape did not move, and a document already written is read as
+  before.
+- Reported an algebra leaving its carrier as the refused operation it is.
+  `DoubleExtremumSemiring.multiply` refuses a sum that leaves the finite
+  IEEE-double carrier, and it refuses with `OverflowError`, which is an
+  `ArithmeticError` and so no kind of the `ValueError` the shell catches. A
+  well-formed graph and a valid command line therefore produced a stack trace
+  from `fold` and from `discharge fold`, where `docs/reference/cli.md` promises
+  a diagnostic on stderr and exit status 1. The shell now answers the whole
+  `ArithmeticError` family with the house refusal, for the reason `_fold_lift`
+  already converts a carrier mismatch into one rather than letting a
+  `TypeError` escape from inside the fold: what the caller met is their
+  valuation leaving the algebra's carrier, and a caller routing on the class
+  should not have to know which exception the arithmetic happened to raise.
+  Nothing that succeeded before changes, and no earlier clause of the order is
+  displaced.
+- Held a rewrite's effect claim to the layers it was measured over. What a
+  discharged `DECORATE` licenses is that every reading taken over the source is
+  still a correct reading of the result, and a rewrite that deleted every layer
+  discharged it: the reading in question stopped answering and started raising
+  `GraphValidationError`, while the certificate reported `disturbances=0`. The
+  facts a claim is held to enumerated nine of the graph's collections and not
+  this one, so nothing a layer asserted was ever a subject. Each layer and each
+  statement it holds is now a subject in the source's own reading order, placed
+  after the boundary values and before the document, so dropping a layer is the
+  collapse it is, replacing a statement's value is a revision, and the
+  certificate's `subjects` count says how much the claim was actually held to.
+  A rewrite over a graph carrying no layers is measured exactly as before.
+  Seals are still not enumerated, and that omission is not the same one: a
+  seal is answered by `SealDeclaration.check_seals` over the same pair of
+  graphs, and a graph cannot hold a seal over a tier it does not declare, so
+  what a seal asserts is decided either way. A layer had neither, which is why
+  the same skip was a defect there.
 - Corrected the publishability gate's exemption, which was written as a file
   name and read as a path. The one exempt file is `scripts/check_tracked_clean.py`,
   but the predicate asked only whether a path's basename was exempt, so any

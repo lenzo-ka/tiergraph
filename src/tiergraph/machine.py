@@ -58,6 +58,7 @@ from tiergraph.wire import (
     _boolean,
     _enum,
     _integer,
+    _refuse_unencodable_strings,
     _string,
 )
 
@@ -891,9 +892,20 @@ class AsBuilt:
         fingerprint.  A tier's leading and trailing boundaries are already
         addressable by side, so promoting one returns the same graph and leaves
         this fingerprint alone.
+
+        There are no bytes to hash for a graph the UTF-8 encoder cannot write,
+        and this is a writer of those bytes like any other.  It therefore asks
+        the encoding question through the same check `wire.to_data` and
+        `program_dumps` ask it with, imported rather than restated, so one
+        string meets one stage and one wording whichever writer a caller
+        reached it from.  Unasked, the encoder's own `UnicodeEncodeError`
+        escaped instead, naming a position in a rendering nobody holds rather
+        than a field of the graph.
         """
+        data = self.graph.to_data()
+        _refuse_unencodable_strings(data, "")
         encoded = json.dumps(
-            self.graph.to_data(),
+            data,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
