@@ -15,6 +15,8 @@ from tiergraph import (
     NamespaceDeclaration,
     Program,
     QualifiedName,
+    Refusal,
+    RefusalStage,
     Repeat,
     TierDeclaration,
     load_program,
@@ -161,6 +163,70 @@ def test_load_program_rejects_without_consuming_the_remaining_stream() -> None:
     ):
         load_program(stream)  # type: ignore[arg-type]
     assert stream.reads == 1
+
+
+SURROGATE_PROGRAM = (
+    '{"machine_version":"1"}\n'
+    '{"opcode":"declare_namespace",'
+    '"declaration":{"namespace":"urn:\\ud800","prefix":"p"}}\n'
+)
+
+
+def test_the_program_reader_refuses_the_line_no_writer_can_encode() -> None:
+    """REGRESSION: the escaped surrogate is refused where the character is.
+
+    Every byte of this program is ASCII, so the unpaired surrogate survives the
+    envelope, the decode, and the depth scan; it becomes a character only when
+    the parser builds the record, and the reader used to hand back a `Program`
+    for it.  The stage is the one `docs/format.md` gives the condition rather
+    than the one the check happens to run at: the canonical text of this
+    program -- what `program_dumps` writes, without ASCII escaping -- carries
+    the character itself and is a text the encoder cannot write.
+
+    Line orientation shows up only in the scope.  The field path is the one
+    inside the record, as the whole-document readers name the one inside the
+    document, and the line number says which record to look at.
+    """
+    assert len(SURROGATE_PROGRAM.encode("ascii")) == len(SURROGATE_PROGRAM)
+    with pytest.raises(ValueError) as refusal:
+        program_loads(SURROGATE_PROGRAM)
+    assert type(refusal.value) is Refusal
+    assert refusal.value.stage is RefusalStage.ENCODING
+    assert refusal.value.also == ()
+    assert str(refusal.value) == (
+        "JSONL line 2: declaration.namespace value 'urn:\\ud800' "
+        "has unsupported character U+D800"
+    )
+
+
+def test_a_text_program_is_measured_before_it_is_encoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION: a text program's size outranks its encodability.
+
+    The other spelling of the same condition is the character standing in the
+    text, and it used to meet no staged condition at all: the encoder's own
+    `UnicodeEncodeError` escaped `program_loads` while the three whole-document
+    readers answered that very input at `ENCODING`.
+
+    Staging it puts a rank-2 condition where a rank-1 one can also hold, so the
+    size is measured first, in code points, each of which is at least one
+    encoded byte.  A reader that encoded before measuring would report the
+    encoding condition on an input that meets both.
+    """
+    monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 1)
+    with pytest.raises(Refusal) as sized:
+        program_loads('{"machine_version":"1"}\n"\ud800"\n')
+    assert sized.value.stage is RefusalStage.ENVELOPE
+    assert str(sized.value) == "JSONL program exceeds 1 bytes"
+
+    monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 1024)
+    with pytest.raises(Refusal) as encoded:
+        program_loads('{"machine_version":"1"}\n"\ud800"\n')
+    assert encoded.value.stage is RefusalStage.ENCODING
+    assert str(encoded.value) == (
+        "JSONL line 2: encode UTF-8 failed: surrogates not allowed"
+    )
 
 
 def test_program_dumps_has_one_canonical_object_per_line() -> None:
