@@ -217,9 +217,21 @@ class SelectionLawSuite:
         )
         assert json.loads(encoded) == result
 
-    def check_every_attribute_domain(self) -> None:
-        """Each attribute axis returns its value owners and no unvalued peers."""
-        names = {domain: self.name(domain.value) for domain in AttributeDomain}
+    def valued_domain_names(self) -> dict[AttributeDomain, QualifiedName]:
+        """Return the attribute name this suite values on each declared domain."""
+        return {domain: self.name(domain.value) for domain in AttributeDomain}
+
+    def valued_graph(self) -> Graph:
+        """Return one graph carrying a value on every declared attribute domain.
+
+        The suite's main fixture declares one attribute on one domain, which is
+        enough for the ordering and set-algebra laws but leaves any claim
+        quantified over attribute domains resting on a single member. This is
+        the fixture that can tell such a claim from the weaker one: it names an
+        attribute per domain and values each, with one unvalued document
+        attribute besides, so an axis that answered with everything would show.
+        """
+        names = self.valued_domain_names()
 
         def value(domain: AttributeDomain) -> AttributeValue:
             return AttributeValue(names[domain], XsdType.STRING, "yes")
@@ -271,7 +283,7 @@ class SelectionLawSuite:
                 XsdType.STRING,
             ),
         )
-        graph = Graph(
+        return Graph(
             (NamespaceDeclaration("s", self.namespace),),
             (tier,),
             (members, link, correspondence),
@@ -281,6 +293,12 @@ class SelectionLawSuite:
             (value(AttributeDomain.DOCUMENT),),
             (polyadic,),
         )
+
+    def check_every_attribute_domain(self) -> None:
+        """Each attribute axis returns its value owners and no unvalued peers."""
+        names = self.valued_domain_names()
+        graph = self.valued_graph()
+        tier_name = self.name("valued")
         expected = {
             AttributeDomain.DOCUMENT: Node(NodeKind.DOCUMENT, None),
             AttributeDomain.TIER: Node(NodeKind.TIER, tier_name),
@@ -289,7 +307,7 @@ class SelectionLawSuite:
                 NodeKind.BOUNDARY, BoundaryRef(tier_name, 0)
             ),
             AttributeDomain.RELATION_DECLARATION: Node(
-                NodeKind.RELATION_DECLARATION, members.name
+                NodeKind.RELATION_DECLARATION, self.name("valued-members")
             ),
         }
         for domain, node in expected.items():

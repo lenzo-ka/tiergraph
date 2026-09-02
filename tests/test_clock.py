@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import decimal
 from dataclasses import replace
-from decimal import ROUND_DOWN, ROUND_UP, Decimal, Inexact, localcontext
+from decimal import ROUND_DOWN, Decimal, Inexact, localcontext
 from typing import cast
 
 import pytest
@@ -32,6 +33,25 @@ from tiergraph import (
     XsdType,
     anchored_boundary,
 )
+
+# A Decimal context is more than its precision. The sweeps below name the three
+# settings that can change the outcome of an arithmetic decision: how many
+# digits are kept, which way a dropped digit moves the ones that are kept, and
+# whether dropping a digit at all raises instead of returning. Precision alone
+# would have left every claim about "the Decimal context" in this file resting
+# on a single rounding mode and a single trap setting, which is the much weaker
+# claim that these decisions survive rounding away from zero with Inexact
+# trapped. The rounding modes are read out of the module rather than
+# transcribed, so a mode added to a future Python is swept without this file
+# being edited.
+ROUNDING_MODES = tuple(
+    sorted(member for member in dir(decimal) if member.startswith("ROUND_"))
+)
+# Precision 1 is included deliberately. It is the harshest setting the decimal
+# module accepts and it is narrower than every lexeme these tests store, so a
+# decision that had quietly run through the ambient context would diverge here
+# before it diverged anywhere else.
+PRECISIONS = (1, 2, 3, 12, 28, 40)
 
 
 def test_clock_coordinate_to_data() -> None:
@@ -139,13 +159,18 @@ def test_rate_changes_the_derived_measure_without_moving_structure() -> None:
     assert after.duration(SEGMENT, 0) == (1, Decimal("20"))
 
 
-def test_nonterminating_duration_is_exact_and_ignores_decimal_context() -> None:
+@pytest.mark.parametrize("trap_inexact", (True, False), ids=("trapped", "untrapped"))
+@pytest.mark.parametrize("rounding", ROUNDING_MODES)
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_nonterminating_duration_is_exact_and_ignores_decimal_context(
+    precision: int, rounding: str, trap_inexact: bool
+) -> None:
     """The profile returns a ratio without performing context-sensitive division."""
     profile = ClockProfile(fixture("3"), CLOCK, BINDING, RATE, UNIT)
     with localcontext() as context:
-        context.prec = 5
-        context.rounding = ROUND_UP
-        context.traps[Inexact] = True
+        context.prec = precision
+        context.rounding = getattr(decimal, rounding)
+        context.traps[Inexact] = trap_inexact
         duration = profile.duration(SEGMENT, 0)
     assert duration == (1, Decimal("3"))
 
@@ -760,16 +785,20 @@ def test_stored_timing_value_refusals_and_exact_agreement() -> None:
     assert advanced_profile(graph).timing(SEGMENT, 0) is None
 
 
-@pytest.mark.parametrize("precision", (3, 12, 28, 40))
-def test_timing_and_exact_agreement_ignore_decimal_context(precision: int) -> None:
+@pytest.mark.parametrize("trap_inexact", (True, False), ids=("trapped", "untrapped"))
+@pytest.mark.parametrize("rounding", ROUNDING_MODES)
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_timing_and_exact_agreement_ignore_decimal_context(
+    precision: int, rounding: str, trap_inexact: bool
+) -> None:
     """Every stored and derived timing decision is independent of Decimal context."""
     graph = reference_shape(rate="8")
     graph = with_stored_timing(graph, SEGMENT, 1, "0.125", "0.125")
     graph = with_stored_timing(graph, ALTERNATE, 0, "0.125", "0.125")
     with localcontext() as context:
         context.prec = precision
-        context.rounding = ROUND_UP
-        context.traps[Inexact] = True
+        context.rounding = getattr(decimal, rounding)
+        context.traps[Inexact] = trap_inexact
         profile = advanced_profile(graph, RATE)
         derived = profile.timing(SEGMENT, 0)
         stored = profile.timing(SEGMENT, 1)
@@ -777,9 +806,11 @@ def test_timing_and_exact_agreement_ignore_decimal_context(precision: int) -> No
     assert stored == PhysicalTiming(Decimal("0.125"), Decimal("0.125"), "s")
 
 
-@pytest.mark.parametrize("precision", (3, 12, 28, 40))
+@pytest.mark.parametrize("trap_inexact", (True, False), ids=("trapped", "untrapped"))
+@pytest.mark.parametrize("rounding", ROUNDING_MODES)
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_inexact_stored_and_derived_timing_refuse_in_every_context(
-    precision: int,
+    precision: int, rounding: str, trap_inexact: bool
 ) -> None:
     """A finite approximation cannot masquerade as the exact ratio one seventh."""
     rounded = "0.1428571428571428571428571429"
@@ -788,8 +819,8 @@ def test_inexact_stored_and_derived_timing_refuse_in_every_context(
     graph = with_stored_timing(graph, ALTERNATE, 0, rounded, rounded)
     with localcontext() as context:
         context.prec = precision
-        context.rounding = ROUND_UP
-        context.traps[Inexact] = False
+        context.rounding = getattr(decimal, rounding)
+        context.traps[Inexact] = trap_inexact
         with pytest.raises(ValueError, match="stored timing contradicts clock"):
             advanced_profile(graph, RATE)
 

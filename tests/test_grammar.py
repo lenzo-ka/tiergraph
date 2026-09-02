@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -26,6 +30,7 @@ from tiergraph import (
     lower_grammar,
     recognize,
 )
+from tiergraph import grammar as grammar_module
 from tiergraph.fold import ChildCombination, FoldTransition, TiePolicy
 from tiergraph.grammar import _best_fold
 from tiergraph.semiring import COUNTING, PATH, PathValue, Semiring
@@ -147,29 +152,102 @@ def test_declaration_decoder_refuses_bad_shapes(data: object, message: str) -> N
         GrammarDeclaration.from_data(data)
 
 
+# The component decoders refuse through if-chains, so "every branch" is a claim
+# nothing at runtime can settle: a list of cases written by hand says only that
+# the cases in it pass. The population is derived instead, from the source the
+# claim is about -- every ``raise`` statement inside the decoders named here --
+# and each refusal below reports which of those statements it actually reached,
+# read off the traceback rather than inferred from the message it matched. A
+# branch added to any of these decoders is then unreached until a case is
+# written for it, and the test says which line is missing.
+#
+# The set is the decoding surface and stops there. ``_string_value`` and the
+# ``__post_init__`` validators refuse a constructed component rather than a
+# malformed document, and they are covered where construction is tested.
+COMPONENT_DECODERS = frozenset(
+    {
+        "_decode_qname",
+        "_decode_attribute_value",
+        "_decode_pattern",
+        "GrammarTerminal.from_data",
+        "GrammarHole.from_data",
+        "GrammarRule.from_data",
+    }
+)
+GRAMMAR_SOURCE = Path(grammar_module.__file__).resolve()
+
+
+def component_refusal_lines() -> frozenset[int]:
+    """Return the line of every ``raise`` the component decoders can reach."""
+    found: set[int] = set()
+
+    def visit(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                visit(child, f"{prefix}{child.name}.")
+            elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                if f"{prefix}{child.name}" in COMPONENT_DECODERS:
+                    found.update(
+                        raised.lineno
+                        for raised in ast.walk(child)
+                        if isinstance(raised, ast.Raise)
+                    )
+            else:
+                visit(child, prefix)
+
+    visit(ast.parse(GRAMMAR_SOURCE.read_text(encoding="utf-8")), "")
+    assert found, "no component decoder was found in the grammar source"
+    return frozenset(found)
+
+
+def grammar_refusal_line(error: BaseException) -> int | None:
+    """Return the deepest grammar-module line that raised, if any did."""
+    reached: int | None = None
+    frame = error.__traceback__
+    while frame is not None:
+        if Path(frame.tb_frame.f_code.co_filename).resolve() == GRAMMAR_SOURCE:
+            reached = frame.tb_lineno
+        frame = frame.tb_next
+    return reached
+
+
+@contextmanager
+def refuses(message: str, reached: set[int]) -> Iterator[None]:
+    """Assert one refusal and record the source line that produced it."""
+    with pytest.raises(ValueError, match=message) as caught:
+        yield
+    line = grammar_refusal_line(caught.value)
+    if line is not None:
+        reached.add(line)
+
+
 def test_component_decoders_refuse_every_malformed_branch() -> None:
     """Component errors identify discriminators, arrays, values, and weights."""
+    reached: set[int] = set()
     terminal_data = terminal("x").to_data()
     hole_data = hole("x", name("S")).to_data()
-    with pytest.raises(ValueError, match="terminal.kind"):
+    with refuses("terminal.kind", reached):
         GrammarTerminal.from_data({**terminal_data, "kind": "hole"})
-    with pytest.raises(ValueError, match="hole.kind"):
+    with refuses("hole.kind", reached):
         GrammarHole.from_data({**hole_data, "kind": "terminal"})
+    numeric_namespace: dict[str, object] = {"namespace": 1, "local_name": "S"}
+    with refuses("hole.nonterminal has invalid field types", reached):
+        GrammarHole.from_data({**hole_data, "nonterminal": numeric_namespace})
 
     rule_data = GrammarRule(name("S"), (terminal("x"),), (terminal("x"),)).to_data()
     for field in ("source", "target"):
-        with pytest.raises(ValueError, match=f"{field} must be an array"):
+        with refuses(f"{field} must be an array", reached):
             GrammarRule.from_data({**rule_data, field: None})
     for value, message in ((None, "must be an object"), ({}, "kind None.*unknown")):
-        with pytest.raises(ValueError, match=message):
+        with refuses(message, reached):
             GrammarRule.from_data({**rule_data, "source": [value]})
-    with pytest.raises(ValueError, match="awaited_variables must be an array"):
+    with refuses("awaited_variables must be an array", reached):
         GrammarRule.from_data({**rule_data, "awaited_variables": None})
-    with pytest.raises(ValueError, match="weight must be an attribute value or null"):
+    with refuses("weight must be an attribute value or null", reached):
         GrammarRule.from_data({**rule_data, "weight": "1"})
-    with pytest.raises(ValueError, match="weight.*xsd:decimal"):
+    with refuses("weight.*xsd:decimal", reached):
         GrammarRule.from_data({**rule_data, "weight": string("weight", "1").to_data()})
-    with pytest.raises(ValueError, match="value_type has unsupported value 'wat'"):
+    with refuses("value_type has unsupported value 'wat'", reached):
         GrammarTerminal.from_data(
             {
                 **terminal_data,
@@ -179,7 +257,7 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
                 },
             }
         )
-    with pytest.raises(ValueError, match=r"nonterminals\[0\].*invalid field types"):
+    with refuses(r"nonterminals\[0\].*invalid field types", reached):
         GrammarDeclaration.from_data(
             {
                 "nonterminals": [{"namespace": 1, "local_name": "S"}],
@@ -187,7 +265,7 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
                 "rules": [],
             }
         )
-    with pytest.raises(ValueError, match="terminal.text has invalid field types"):
+    with refuses("terminal.text has invalid field types", reached):
         GrammarTerminal.from_data(
             {
                 **terminal_data,
@@ -197,7 +275,7 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
                 },
             }
         )
-    with pytest.raises(ValueError, match="terminal.text has invalid field types"):
+    with refuses("terminal.text has invalid field types", reached):
         GrammarTerminal.from_data(
             {
                 **terminal_data,
@@ -207,6 +285,11 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
                 },
             }
         )
+    unreached = component_refusal_lines() - reached
+    assert not unreached, (
+        f"component decoder refusals at {GRAMMAR_SOURCE.name} lines "
+        f"{sorted(unreached)} are declared but never provoked"
+    )
 
 
 def test_declaration_refuses_undeclared_nonterminals() -> None:
