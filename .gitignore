@@ -32,3 +32,23 @@ uv.lock
 # a worktree here would silently ship everything this file excludes. The leading
 # slash names the one directory meant, at the root where it lives.
 /.claude/
+# What `examples/mix_paths.py` writes when it is run with no arguments. An
+# example earns its keep by being runnable as it stands, so that one names a
+# default destination rather than demanding a path -- and the directory it
+# writes into is whichever one it was run from, which for someone reading the
+# example in a checkout is the repository root.
+#
+# Unignored, the result is not merely untidy. The build backend selects the
+# working tree minus what version control excludes, while the publishability
+# gate reads the git index, so a file that is neither tracked nor ignored is
+# invisible to the gate and present in the distribution: running the example
+# would ship a MIDI file to everyone who installs the library. The suite does
+# catch it, in the test comparing the built distribution against the set the
+# gate actually reads -- so without this entry, running the example is enough
+# to turn the tree red.
+#
+# Unanchored, unlike the directory above. The example writes into the working
+# directory, so the same file appears at whatever depth it was run from, and a
+# name carrying no separator cannot match a leading path component the way an
+# unanchored directory name can.
+mix.mid
