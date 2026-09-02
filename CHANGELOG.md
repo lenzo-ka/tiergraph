@@ -433,6 +433,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed a writer that emitted what the reader refuses. Holding the reader to
+  the declared minimum for a layer subject's coordinate left the graph
+  constructor as the one authority out of step: an orphaned subject retaining a
+  negative index still constructed, `dumps` wrote its nine thousand bytes of
+  canonical text, and `loads` refused that text at the very coordinate the
+  graph had been allowed to hold. `Graph` now refuses the coordinate in each
+  spelling an orphan has -- a bare index under either graph carrier, an item
+  coordinate, and a boundary coordinate -- and names the reader's `VALUE` stage,
+  because the condition is the format's rather than a contract the format never
+  mentions. The declaration module reads the kernel and not the other way
+  round, so the kernel spells the bound and a test reads it back from the
+  declaration; the two cannot drift without that test going red. An orphan is
+  the one layer subject nothing resolves, which is why no other check caught
+  it. Nothing in this package ever built such a coordinate: every orphan it
+  makes retains where a live subject stood. The declared shape did not move,
+  and a document already written is read as before.
+- Narrowed the serialization guide to name the refusal that survives that fix.
+  A graph the constructor accepts can still be written past
+  `MAX_DOCUMENT_BYTES` and refused at `ENVELOPE` on the way back, because the
+  offending size belongs to the canonical text rather than to any member a
+  constructor could bound, and the guide said only that such conditions exist
+  without naming the one that is reachable. The suite now witnesses it from the
+  writer's side rather than by handing the reader fabricated text.
 - Corrected a gate that reported a sentence its own corpus disproves.
   `make format-semantics` printed `every one of the 186 captured documents still
   loads` while seven of them no longer load: they carry an unpaired surrogate in
