@@ -487,6 +487,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed the last writer that reached the UTF-8 encoder without asking it
+  anything. `AsBuilt.fingerprint` hashes the encoded bytes of the as-built
+  graph, and there are no bytes to hash for a graph the encoder cannot write,
+  so `Program.fingerprint` raised the encoder's own `UnicodeEncodeError` --
+  which names a position in a rendering nobody holds rather than a field of the
+  graph -- where `wire.to_data` and `program_dumps` both answer the same string
+  at `ENCODING` naming the field. It now asks through the same check, imported
+  rather than restated, so one string meets one stage and one wording whichever
+  writer a caller reached it from, and `Program.fingerprint` inherits it by
+  delegating to the as-built one. Only a graph no writer in this package could
+  ever have serialized is affected; every fingerprint this release computed
+  before is unchanged.
 - Held an orphan's retained coordinate to the namespace rule every other
   qualified name already met. `Graph.__post_init__` requires every qualified
   name a graph spells to use a namespace that graph declares, and it enumerated
