@@ -402,10 +402,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance probes kept their outcomes. The later format break in this
   release moved `FORMAT_VERSION` from `"6"` to `"0.2.0"` and changed both the
   schema artifact and its stamp.
-- **BREAKING:** the three whole-document readers now refuse a string the UTF-8
-  encoder cannot write, whichever way the text spells it. This is a soundness
-  fix, not a change to the refusal order: `docs/format.md` already ranked this
-  condition at `RefusalStage.ENCODING`, and the reader simply never asked. A
+- **BREAKING:** all four document readers now refuse a string the UTF-8 encoder
+  cannot write, whichever way the text spells it. This is a soundness fix, not a
+  change to the refusal order: `docs/format.md` already ranked this
+  condition at `RefusalStage.ENCODING`, and the readers simply never asked. A
   character standing in the text was already refused there, but one written as
   an escape is not in the text at all -- `\ud800` is six ASCII bytes -- so it
   passed every check that reads bytes and became a character only once the
@@ -415,9 +415,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same graph at `RefusalStage.ENCODING`, so the format admitted documents with
   no canonical byte form -- the byte API `docs/format.md` names for `convert --to
   bytes` -- and a round trip through this package could not reproduce them.
-  `loads`, `grammar_loads`, and `selection_loads` now run the writer's own check
-  on the parsed value and report the writer's own stage and wording, named by the
-  path in the document that was read. Running the check after parsing does not
+  `loads`, `grammar_loads`, `selection_loads`, and the JSON Lines program reader
+  now run the writer's own check on the parsed value and report the writer's own
+  stage and wording, named by the path in the document that was read. Running
+  the check after parsing does not
   make it a later condition: the order ranks conditions rather than the checks
   that find them, and the canonical text of such a document, which `dumps` writes
   without ASCII escaping, carries the character itself. One consequence is that
@@ -430,6 +431,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse rather than load. No narrowing is priced here and `FORMAT_VERSION` stays
   `"0.2.0"`: what shrinks is the set the reader admitted past what the format ever
   allowed, and nothing this package could write is refused.
+- **BREAKING:** the fourth of those readers is the JSON Lines program reader, and
+  it met both spellings of the condition. It reads a line at a time and so cannot
+  share the staging the other three took, which measures one complete text; the
+  condition is one it meets all the same, so it now runs that same imported check
+  on each parsed record and reports it at `ENCODING`, scoped by the line number
+  its other diagnostics already carry: `JSONL line 2: declaration.namespace value
+  '\ud800' has unsupported character U+D800`. It answered the other spelling with
+  the encoder's own exception rather than a staged refusal, because `program_loads`
+  encoded its text argument outside every check, so a caller handing it a `str`
+  holding the character got a `UnicodeEncodeError` the declared order does not
+  name where the other three answered `encode UTF-8 failed: surrogates not
+  allowed` at `ENCODING`. That text is now measured before it is encoded, in code
+  points, each of which is at least one encoded byte, so an input meeting both the
+  size and the encoding condition is still reported for the lower rank. Line
+  orientation changes the scope a condition is reported in and not its rank: the
+  canonical program holding such a record, which `program_dumps` writes without
+  ASCII escaping, carries the character rather than the escape. The same
+  incompleteness the other three leave holds of a line -- one both unparseable and
+  unencodable is reported at `SYNTAX` -- while a condition on an earlier line
+  preceding a higher-ranked one on a later line is the declared node ordering
+  rather than that gap. `tiergraph step` and `tiergraph run` now refuse such a
+  program at the reader, naming the record's own path and its line, where they
+  previously read it and reached a writer; the corpus is unaffected, because its
+  captured documents are graphs rather than programs. No narrowing is priced here
+  and `FORMAT_VERSION` stays `"0.2.0"`.
 
 ### Removed
 
