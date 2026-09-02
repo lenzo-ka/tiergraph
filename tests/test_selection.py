@@ -97,6 +97,35 @@ def test_selection_query_decodes_and_evaluates_every_leaf() -> None:
         assert evaluate_selection(graph, query).nodes
 
 
+def test_selection_query_decodes_and_evaluates_every_attribute_domain() -> None:
+    """The attribute leaf carries a domain, and every declared domain arrives.
+
+    The leaf sweep above evaluates one attribute query, on one of the six
+    declared domains, against a fixture that values only that one. That is
+    enough to show the leaf decodes; it is not enough to show the decoded
+    domain reaches evaluation, because a decoder that ignored the field and
+    always produced ``relation_instance`` would pass it. The suite's
+    every-domain fixture is what tells those apart: each domain names a
+    different attribute here, so a query decoded onto the wrong domain refuses
+    rather than answering.
+    """
+    graph = LAWS.valued_graph()
+    names = LAWS.valued_domain_names()
+    assert set(names) == set(AttributeDomain)
+    for domain, attribute in names.items():
+        source = {
+            "select": "attribute",
+            "attribute": {
+                "namespace": attribute.namespace,
+                "local_name": attribute.local_name,
+            },
+            "domain": domain.value,
+        }
+        query = selection_loads(json.dumps(source))
+        assert query == AttributeSelector(attribute, domain)
+        assert evaluate_selection(graph, query).nodes
+
+
 def test_selection_query_set_algebra_and_nesting() -> None:
     """Union, intersection, difference, and nested compounds retain set semantics."""
     graph = LAWS.graph()
