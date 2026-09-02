@@ -394,6 +394,16 @@ READER_ENVELOPES: dict[str, tuple[object, str]] = {
             RefusalStage.SYNTAX,
             f"JSON nesting depth exceeds limit {wire.MAX_JSON_DEPTH}",
         ),
+        (
+            "\ud800",
+            RefusalStage.ENCODING,
+            "encode UTF-8 failed: surrogates not allowed",
+        ),
+        (
+            '{"a":"\\ud800"}',
+            RefusalStage.ENCODING,
+            "a value '\\ud800' has unsupported character U+D800",
+        ),
     ],
 )
 def test_every_reader_stages_the_text_before_reading_it(
@@ -413,8 +423,10 @@ def test_every_reader_stages_the_text_before_reading_it(
 
     The population is read off the package's public surface rather than written
     out here, because a universal claim tested on a subset is how the program
-    reader came to answer two of these conditions differently from the other
-    three.  Line orientation shows up only as the scope each condition is
+    reader came to answer four of these conditions differently from the other
+    three -- two of them the two spellings of one encoding condition, which it
+    met by raising the encoder's own exception and by accepting the escape
+    outright.  Line orientation shows up only as the scope each condition is
     reported in: the program reader says which line the text it could not read
     was on, and says nothing else differently.
     """
