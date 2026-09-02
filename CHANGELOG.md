@@ -487,6 +487,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closed the program writer's half of the encoding condition its reader
+  already answers. `program_dumps` writes with `ensure_ascii=False`, so a lone
+  surrogate in a record stood in the returned text as the character itself:
+  the `str` it handed back had no UTF-8 encoding at all, `.encode("utf-8")`
+  raised on it, and `load_program` refused that very text at `ENCODING` on the
+  way back. `wire.to_data` has answered that condition for the graph writers
+  since the format had one, and this writer answered nothing, so the asymmetry
+  was reachable from any `Program` built in memory rather than read. It now
+  refuses through the same check, imported rather than restated, naming the
+  field path inside the record and the line the record would have stood on, so
+  both halves of the codec say one sentence about one program. What is refused
+  is what the reader already refuses, so no program that round-trips today
+  stops doing so; a caller holding a `Program` this package could never have
+  read now meets a staged refusal where it used to be handed unusable text.
+- Bounded the read the program reader's envelopes were only ever measuring.
+  `load_program` iterated whole lines, so both the running `MAX_DOCUMENT_BYTES`
+  total and the per-line bound were checked against bytes already held: an
+  input carrying no newline was materialized entire in order to be told it was
+  too large, sixteen times the document envelope and two hundred and fifty-six
+  times the line one, which is the cost reading incrementally exists to avoid
+  and is reachable from `tiergraph run -` on standard input. The reader now
+  asks the stream for one byte past the tighter of the two bounds, so a
+  delivery long enough to cross a bound is refused on what was read rather than
+  on what the rest of the line would have been. The bounds, their order, and
+  every diagnostic are unchanged for input the reader accepts or refuses today;
+  what changes is that a newline-free input over the line bound is reported
+  against the line rather than against the program, because the line bound is
+  the one it crosses first. A stream is read through `readline` rather than by
+  iteration, which is the only visible difference to a caller passing an object
+  of its own to `load_program`.
 - Closed a writer that emitted what the reader refuses. Holding the reader to
   the declared minimum for a layer subject's coordinate left the graph
   constructor as the one authority out of step: an orphaned subject retaining a

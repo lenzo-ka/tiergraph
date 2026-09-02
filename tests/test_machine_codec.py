@@ -142,27 +142,89 @@ def test_program_loads_preserves_all_limit_diagnostics(
         program_loads(b"[[[]]]")
 
 
-def test_load_program_rejects_without_consuming_the_remaining_stream() -> None:
+def test_load_program_rejects_without_consuming_the_remaining_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused line ends the read; nothing after it is asked for.
+
+    The reader asks for a bounded read rather than iterating whole lines, so
+    the sentinel answers `readline` and the claim is unchanged: the delivery
+    that trips the envelope is the last thing taken from the stream.  The
+    document bound is lowered so one bounded delivery crosses it, which is what
+    a whole-line read used to reach only by handing over sixteen megabytes.
+    """
+    monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 4)
+
     class SentinelStream:
         def __init__(self) -> None:
             self.reads = 0
 
-        def __iter__(self) -> SentinelStream:
-            return self
-
-        def __next__(self) -> bytes:
+        def readline(self, limit: int = -1) -> bytes:
             self.reads += 1
             if self.reads == 1:
-                return b"x" * (tiergraph.MAX_DOCUMENT_BYTES + 1)
+                assert limit == 5
+                return b"x" * limit
             raise AssertionError("load_program consumed beyond the rejecting line")
 
     stream = SentinelStream()
-    with pytest.raises(
-        ValueError,
-        match=rf"^JSONL program exceeds {tiergraph.MAX_DOCUMENT_BYTES} bytes$",
-    ):
+    with pytest.raises(ValueError, match=r"^JSONL program exceeds 4 bytes$"):
         load_program(stream)  # type: ignore[arg-type]
     assert stream.reads == 1
+
+
+def test_load_program_never_holds_a_line_longer_than_its_own_bound() -> None:
+    """REGRESSION: the envelopes bound the read, not just the refusal.
+
+    Both bounds used to be measured after a whole line had been materialized,
+    which left the input carrying no newline at all bounded by neither: the
+    reader held it entire in order to say it was too big, sixteen times the
+    document envelope and two hundred and fifty-six times the line one, and
+    that is exactly what reading incrementally is written to prevent.  The
+    refusal was never the defect and does not move; what moves is how much had
+    to be delivered to reach it.
+
+    The stream below answers whichever way it is read and records the largest
+    single delivery, so the discrimination is that number rather than the
+    exception: iterating whole lines hands over the entire four-megabyte line,
+    and asking for a bounded read hands over one byte past the line envelope.
+    """
+    hostile = b"x" * (4 * machine_codec._JSONL_LINE_BYTES)
+
+    class CountingStream:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+            self.position = 0
+            self.largest = 0
+
+        def __iter__(self) -> CountingStream:
+            return self
+
+        def __next__(self) -> bytes:
+            chunk = self.readline()
+            if not chunk:
+                raise StopIteration
+            return chunk
+
+        def readline(self, limit: int = -1) -> bytes:
+            end = len(self.data) if limit < 0 else min(len(self.data), limit)
+            newline = self.data.find(b"\n", self.position, self.position + end)
+            stop = (
+                min(self.position + end, len(self.data)) if newline < 0 else newline + 1
+            )
+            chunk = self.data[self.position : stop]
+            self.position = stop
+            self.largest = max(self.largest, len(chunk))
+            return chunk
+
+    stream = CountingStream(hostile)
+    with pytest.raises(Refusal) as refusal:
+        load_program(stream)  # type: ignore[arg-type]
+    assert refusal.value.stage is RefusalStage.ENVELOPE
+    assert str(refusal.value) == (
+        f"JSONL line 1 exceeds {machine_codec._JSONL_LINE_BYTES} bytes"
+    )
+    assert stream.largest <= machine_codec._JSONL_LINE_BYTES + 1
+    assert len(hostile) > machine_codec._JSONL_LINE_BYTES + 1
 
 
 SURROGATE_PROGRAM = (
@@ -197,6 +259,51 @@ def test_the_program_reader_refuses_the_line_no_writer_can_encode() -> None:
         "JSONL line 2: declaration.namespace value 'urn:\\ud800' "
         "has unsupported character U+D800"
     )
+
+
+def test_no_program_writer_returns_text_this_reader_would_refuse() -> None:
+    """REGRESSION: the writer refuses the program its own reader refuses.
+
+    `program_dumps` writes with `ensure_ascii=False`, so a lone surrogate in a
+    record stood in the returned text as the character: the `str` had no UTF-8
+    encoding at all, `.encode("utf-8")` raised on it, and this module's own
+    reader refused it at `ENCODING` when it came back.  The graph writers have
+    answered that condition since `wire.to_data` had one, and this writer had
+    no counterpart, so any `Program` built in memory rather than read could be
+    written to text no caller could use.
+
+    The claim is the one `test_no_writer_returns_text_this_reader_would_refuse`
+    makes on the other side of the package, held here to the same stage and the
+    same field path, with the line saying which record to look at.
+    """
+    program = Program((DeclareNamespace(NamespaceDeclaration("p", "urn:\ud800")),))
+    with pytest.raises(ValueError) as refusal:
+        program_dumps(program)
+    assert type(refusal.value) is Refusal
+    assert refusal.value.stage is RefusalStage.ENCODING
+    assert refusal.value.also == ()
+    assert str(refusal.value) == (
+        "JSONL line 2: declaration.namespace value 'urn:\\ud800' "
+        "has unsupported character U+D800"
+    )
+    assert str(refusal.value) == str(
+        pytest.raises(Refusal, program_loads, SURROGATE_PROGRAM).value
+    )
+
+
+def test_every_program_this_writer_returns_is_one_the_reader_takes_back() -> None:
+    """The two halves of this codec agree on what a program is.
+
+    A writer that refuses more than its reader would leave a value the library
+    can hold and cannot serialize; one that refuses less leaves text the reader
+    will not take back.  Writing the representative program and reading it
+    again is the accepting direction, and encoding the result is what says the
+    text is bytes rather than a `str` that only looks like them.
+    """
+    program = _representative_program()
+    text = program_dumps(program)
+    assert text.encode("utf-8").decode("utf-8") == text
+    assert program_loads(text) == program
 
 
 def test_a_text_program_is_measured_before_it_is_encoded(

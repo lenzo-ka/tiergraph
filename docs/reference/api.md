@@ -4163,6 +4163,17 @@ program_dumps(program: 'Program') -> 'str'
 
 Return canonical JSONL for a machine program, including a final newline.
 
+A record carrying text the UTF-8 encoder refuses is refused here, named by
+its path inside that record and by the line it would have stood on, because
+what this used to return for such a program was not a program: written with
+`ensure_ascii=False`, the character stood in the text itself, so the `str`
+had no UTF-8 encoding at all and `load_program` refused it at `ENCODING` on
+the way back.  `wire.to_data` has answered that condition for the graph
+writers through the same check, imported rather than restated; this writer
+answered nothing, and the asymmetry was reachable from any `Program` built
+in memory rather than read.  What is refused is what the reader already
+refuses, so no program that round-trips today stops doing so.
+
 ### `program_loads`
 
 ```text
