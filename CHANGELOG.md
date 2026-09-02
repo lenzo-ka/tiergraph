@@ -541,6 +541,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores. The gate scripts also join the strict type-checking bar they were
   already outside of, having been inside every other bar this project keeps.
 
+- Held machine-program members to the types the format declares for them. The
+  opcode decoders announced a member's type with `typing.cast`, which is erased
+  before the program runs and therefore checks nothing, so `tiergraph run`
+  accepted a tier long name of `7`, built a graph around it, exited zero, and
+  wrote a document `tiergraph validate` then refused -- contradicting the
+  published rule that `validate` settles the same question every conversion
+  settles before emitting anything, and letting `Program.fingerprint()` publish
+  a digest of a graph no reader can take back. Every such member is now read
+  through the checked helpers the document reader uses, so the two readers
+  refuse the same value at the same stage in the same words. Enumerated
+  spellings were escaping as unstaged `ValueError`s from the enumeration
+  constructor rather than as refusals, leaving `except Refusal` to miss a
+  condition the declared order governs for every reader this package exposes;
+  they are staged at `VALUE` now, where `loads` already staged them. An
+  attachment target given as a JSON boolean reached the kernel as the integer
+  one and attached its value to the wrong relation instance; a bare target must
+  now be an integer.
+- Made the canonical machine-program writer's own output readable. A polyadic
+  side that constrains no tiers is written as an explicit null, and a relation
+  instance tags its durable item endpoints; the reader admitted neither, so
+  `program_loads(program_dumps(program))` refused programs this package had
+  just written. Both spellings are read now, and no emitted byte changed.
+- Derived the machine-program conformance sweep from the writer instead of a
+  list. Seed programs realizing every opcode, attachment domain, relation
+  carrier, and endpoint shape are encoded, and the JSON type the writer emits at
+  each position is taken as the type declared there; substituting any other type
+  must be refused, and every refusal must carry its stage. A member added to an
+  opcode is probed as soon as the writer emits it, and the seeds are held
+  against the opcode and enumeration members read from the code, so a new one
+  fails the gate rather than falling outside it.
+
 ## [0.1.0] - 2026-08-23
 
 ### Added
