@@ -459,6 +459,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bounded the read the program reader's envelopes were only ever measuring.
+  `load_program` iterated whole lines, so both the running `MAX_DOCUMENT_BYTES`
+  total and the per-line bound were checked against bytes already held: an
+  input carrying no newline was materialized entire in order to be told it was
+  too large, sixteen times the document envelope and two hundred and fifty-six
+  times the line one, which is the cost reading incrementally exists to avoid
+  and is reachable from `tiergraph run -` on standard input. The reader now
+  asks the stream for one byte past the tighter of the two bounds, so a
+  delivery long enough to cross a bound is refused on what was read rather than
+  on what the rest of the line would have been. The bounds, their order, and
+  every diagnostic are unchanged for input the reader accepts or refuses today;
+  what changes is that a newline-free input over the line bound is reported
+  against the line rather than against the program, because the line bound is
+  the one it crosses first. A stream is read through `readline` rather than by
+  iteration, which is the only visible difference to a caller passing an object
+  of its own to `load_program`.
 - Corrected a gate that reported a sentence its own corpus disproves.
   `make format-semantics` printed `every one of the 186 captured documents still
   loads` while seven of them no longer load: they carry an unpaired surrogate in

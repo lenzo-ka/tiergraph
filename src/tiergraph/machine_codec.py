@@ -101,19 +101,33 @@ def load_program(stream: BinaryIO) -> Program:
     # diagnostic is scoped by the line number that says where to look. Calling
     # `_parsed_json` here would mean holding the whole stream in memory to
     # decode it at once, which is what reading incrementally exists to avoid.
+    #
+    # Both envelopes are measured against a line the stream was never asked to
+    # deliver whole. Iterating the stream reads to the next newline before any
+    # check runs, so an input carrying none of them was held entire to be told
+    # it was too large -- the very cost this reader is written to avoid, and
+    # unbounded by either envelope, because a bound checked after the bytes
+    # arrive bounds nothing. Asking for one byte past the tighter of the two
+    # bounds is what makes the check arrive first: a delivery that reaches that
+    # length has already crossed a bound, so it is refused on what was read
+    # rather than on what the rest of the line might have been.
+    line_bytes = _JSONL_LINE_BYTES
+    request = min(line_bytes, MAX_DOCUMENT_BYTES) + 1
     records: list[object] = []
     total = 0
-    for number, line in enumerate(stream, 1):
+    number = 0
+    while line := stream.readline(request):
+        number += 1
         total += len(line)
         if total > MAX_DOCUMENT_BYTES:
             raise Refusal(
                 RefusalStage.ENVELOPE,
                 f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes",
             )
-        if len(line) > _JSONL_LINE_BYTES:
+        if len(line) > line_bytes:
             raise Refusal(
                 RefusalStage.ENVELOPE,
-                f"JSONL line {number} exceeds {_JSONL_LINE_BYTES} bytes",
+                f"JSONL line {number} exceeds {line_bytes} bytes",
             )
         try:
             text = line.decode("utf-8")
