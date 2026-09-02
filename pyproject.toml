@@ -34,13 +34,14 @@ test = [
     "hatchling>=1.27",
 ]
 lint = ["ruff>=0.16", "mypy>=1.11"]
-# Development only, never a runtime dependency: pydantic's core is compiled, and
-# the shipped package stays pure Python. `build` is here because the release
-# checklist runs `python -m build` from this environment; left out, that step
-# works only where the ambient interpreter happens to carry the frontend, and a
-# maintainer who set up the environment as documented meets a hard failure part
-# way through cutting a release.
-dev = ["tiergraph[test,lint]", "build>=1.2", "pydantic>=2.9"]
+# `build` is here because the release checklist runs `python -m build` from this
+# environment; left out, that step works only where the ambient interpreter
+# happens to carry the frontend, and a maintainer who set up the environment as
+# documented meets a hard failure part way through cutting a release. Nothing
+# else belongs here that nothing imports: an AST sweep over every tracked module
+# is what removed the last such entry, and the allowlist that let it through is
+# not evidence of use.
+dev = ["tiergraph[test,lint]", "build>=1.2"]
 
 [project.scripts]
 tiergraph = "tiergraph.cli:main"
