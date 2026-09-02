@@ -566,7 +566,7 @@ class OrderedContainment:
 
 @dataclass(frozen=True, slots=True)
 class Walk:
-    """Declare a transitive walk along one bipartite relation.
+    """Declare a transitive walk along one bipartite or polyadic relation.
 
     A bounded walk stops after ``cap`` relation steps.  An unbounded walk is
     admitted only when graph construction has validated the declaration's
@@ -574,13 +574,49 @@ class Walk:
     access computes its fiber over each selected item.  That fiber is a set:
     deduplication is a consequence of relational inversion, not an accommodation
     for any particular domain whose morphs happen to cross-cut.
+
+    **What one polyadic step is.** A bipartite incidence names one endpoint on
+    each side, so a step from one of them is the other. A polyadic incidence
+    names an ordered sequence on each side, and the two sides declare their
+    arities independently, so a step has to say how much of the far side it
+    reaches. It reaches all of it: a step from any endpoint of the near side
+    reaches every endpoint of the far side of that incidence. A ``k``-source,
+    ``m``-target incidence therefore contributes exactly the ``k * m`` edges the
+    graph itself ranged over when it validated the declaration's ``acyclic``
+    promise, which is what lets the unbounded branch keep resting on that
+    promise here: the promise is about the edges this walk follows, not about
+    some smaller relation it is merely phrased near. It is also the step
+    :class:`OrderedPolyadicTraversal` already takes, so a walk is the
+    set-valued image of that traversal rather than a second reading of one
+    graph's bytes.
+
+    Pairing the two sides off index by index was the alternative, and it is not
+    available: each side declares its own arity bounds and its own emptiness, so
+    ``k`` and ``m`` are unrelated and a positional reading is undefined wherever
+    they differ. It would also walk a strictly smaller relation than the one the
+    acyclicity promise was validated over -- still terminating, since a subgraph
+    of an acyclic graph is acyclic, but reaching less than the graph's own
+    reading of its own incidence.
+
+    ``WalkDirection`` keeps its meaning across both shapes. ``FORWARD`` reads
+    the declared descending direction, which for a polyadic declaration is its
+    ``sources`` side to its ``targets`` side, the direction its
+    ``single_parent`` and ``targets_subset_of`` promises are phrased over.
+    ``INVERSE`` computes the fiber, targets back to sources. Both directions
+    deduplicate, because a reachable set is a set; that is not new in the
+    polyadic case, only more visible, since one wide incidence can offer the
+    same node along many of its edges. Where stored order and repetition are the
+    question, :class:`OrderedPolyadicTraversal` answers with a
+    :class:`NodeSequence`, and this class deliberately does not.
     """
 
     source: NodeSet
     relation: QualifiedName
     direction: WalkDirection
     cap: int | None = None
-    _declaration: BipartiteRelationDeclaration = field(init=False, repr=False)
+    _declaration: BipartiteRelationDeclaration | PolyadicRelationDeclaration = field(
+        init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         """Refuse undeclared relations, invalid caps, and unsafe unbounded walks."""
@@ -597,9 +633,12 @@ class Walk:
             ),
             None,
         )
-        if not isinstance(declaration, BipartiteRelationDeclaration):
+        if not isinstance(
+            declaration, BipartiteRelationDeclaration | PolyadicRelationDeclaration
+        ):
             raise ValueError(
-                f"walk relation {str(self.relation)!r} is not a declared bipartite relation"
+                f"walk relation {str(self.relation)!r} is not a declared bipartite "
+                "or polyadic relation"
             )
         if self.cap is not None and (
             isinstance(self.cap, bool) or not isinstance(self.cap, int) or self.cap < 0
@@ -628,7 +667,35 @@ class Walk:
         return WalkResult(reached, bool(frontier.nodes), self.cap)
 
     def _step(self, source: NodeSet) -> NodeSet:
-        """Follow stored incidence forward or compute its inverse fiber."""
+        """Follow one step of the declared shape, forward or as an inverse fiber."""
+        if isinstance(self._declaration, PolyadicRelationDeclaration):
+            return self._polyadic_step(source)
+        return self._bipartite_step(source)
+
+    def _polyadic_step(self, source: NodeSet) -> NodeSet:
+        """Reach the whole far side of every incidence the near side is selected in.
+
+        Set-valued, so an incidence offering one node along several of its edges
+        contributes it once, and a step that reaches nothing new is what ends an
+        unbounded walk. Both are the same behavior the bipartite step has.
+        """
+        graph = source.graph
+        admitted = set(source.nodes)
+        targets: list[Node] = []
+        for instance in graph.polyadic_relations:
+            if instance.declaration != self.relation:
+                continue
+            near, far = (
+                (instance.sources, instance.targets)
+                if self.direction is WalkDirection.FORWARD
+                else (instance.targets, instance.sources)
+            )
+            if any(_endpoint_node(graph, endpoint) in admitted for endpoint in near):
+                targets.extend(_endpoint_node(graph, endpoint) for endpoint in far)
+        return NodeSet(graph, tuple(targets))
+
+    def _bipartite_step(self, source: NodeSet) -> NodeSet:
+        """Follow stored pair incidence forward or compute its inverse fiber."""
         graph = source.graph
         admitted = set(source.nodes)
         targets: list[Node] = []

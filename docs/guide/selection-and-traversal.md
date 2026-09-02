@@ -81,11 +81,13 @@ def names(nodes: NodeSet) -> list[str]:
 
 ## Walking a relation
 
-A `Walk` follows one bipartite relation transitively from a source `NodeSet` and
-returns the reachable set, not counting the source itself. `WalkDirection.FORWARD`
-reads the stored incidence; `WalkDirection.INVERSE` computes the fiber, which
-gives ancestors. Because inverse reachability is set-valued, both directions
-return a `NodeSet`.
+A `Walk` follows one relation transitively from a source `NodeSet` and returns
+the reachable set, not counting the source itself. The relation may be bipartite
+or polyadic; the example below is bipartite, and [walking a polyadic
+relation](#walking-a-polyadic-relation) describes what one step means when both
+sides are sequences. `WalkDirection.FORWARD` reads the stored incidence;
+`WalkDirection.INVERSE` computes the fiber, which gives ancestors. Because
+inverse reachability is set-valued, both directions return a `NodeSet`.
 
 ```python
 def reach(start: ItemRef, direction: WalkDirection) -> NodeSet:
@@ -198,6 +200,7 @@ from tiergraph import (
 ns = "https://example.com/tree"
 nodes = QualifiedName(ns, "nodes")
 contains = QualifiedName(ns, "contains")
+carries = QualifiedName(ns, "carries")
 
 labels = ("root", "branch", "leaf-1", "leaf-2", "twig")
 refs = {name: ItemRef(nodes, index) for index, name in enumerate(labels)}
@@ -210,6 +213,7 @@ tree_graph = Graph(
         PolyadicRelationDeclaration(
             contains, one, many, unique_sources=True, acyclic=True
         ),
+        PolyadicRelationDeclaration(carries, many, many, acyclic=True),
     ),
     polyadic_relations=(
         PolyadicRelationInstance(
@@ -217,6 +221,11 @@ tree_graph = Graph(
         ),
         PolyadicRelationInstance(
             contains, (refs["branch"],), (refs["leaf-1"], refs["leaf-2"])
+        ),
+        PolyadicRelationInstance(
+            carries,
+            (refs["root"], refs["branch"]),
+            (refs["leaf-1"], refs["twig"]),
         ),
     ),
 )
@@ -236,6 +245,16 @@ print("children of root:", show(tree.direct_children(refs["root"])))
 print("descendants of root:", show(tree.descendants(refs["root"])))
 print("leaves of root:", show(tree.leaves(refs["root"])))
 print("ancestors of leaf-1:", show(tree.ancestors(refs["leaf-1"])))
+
+
+def carried(start: ItemRef, direction: WalkDirection) -> NodeSet:
+    selection = evaluate_selection(tree_graph, ItemSelector(start))
+    return Walk(selection, carries, direction).evaluate().nodes
+
+
+print("branch carries:", show(carried(refs["branch"], WalkDirection.FORWARD)))
+print("root carries:", show(carried(refs["root"], WalkDirection.FORWARD)))
+print("leaf-1 is carried by:", show(carried(refs["leaf-1"], WalkDirection.INVERSE)))
 ```
 
 ```text
@@ -243,6 +262,9 @@ children of root: ['branch', 'twig']
 descendants of root: ['branch', 'leaf-1', 'leaf-2', 'twig']
 leaves of root: ['leaf-1', 'leaf-2', 'twig']
 ancestors of leaf-1: ['root', 'branch']
+branch carries: ['leaf-1', 'twig']
+root carries: ['leaf-1', 'twig']
+leaf-1 is carried by: ['root', 'branch']
 ```
 
 Descendants come back in depth-first pre-order. `leaves` returns the descendants
@@ -250,3 +272,36 @@ with no children of their own, or the source itself when the source has no
 children -- so `tree.leaves(refs["twig"])` is `['twig']`, which is not a
 descendant of `twig`. The ascending `ancestors` result is a set, so `root` and
 `branch` appear once regardless of how many paths reach `leaf-1`.
+
+## Walking a polyadic relation
+
+The graph above also declares `carries`, whose single instance is wide on both
+sides: sources `root, branch` against targets `leaf-1, twig`. A `Walk` follows
+it, and the last three printed lines say what one step over it means.
+
+A step from any endpoint of the near side reaches every endpoint of the far
+side of that incidence. `branch` is the second source and still carries both
+targets, exactly as `root` does; neither is paired with the target sitting at
+its own index. Pairing the sides off index by index is not available as a
+reading, because each side declares its own arity bounds and its own emptiness,
+so the two arities are unrelated and the pairing is undefined wherever they
+differ. Reaching the whole far side is also the step `OrderedPolyadicTraversal`
+takes, so a walk is the set-valued image of that traversal rather than a second
+reading of one graph's incidence.
+
+That is what keeps an unbounded polyadic walk safe. A `k`-source, `m`-target
+incidence contributes the `k * m` edges the graph itself ranged over when it
+validated the declaration's `acyclic` promise, so the promise covers the edges
+the walk follows: as with a bipartite relation, a walk with no `cap` is admitted
+only for a declaration that made it, and every other polyadic relation has to be
+given one.
+
+`WalkDirection` keeps its meaning. `FORWARD` reads the declared descending
+direction, which for a polyadic declaration is its `sources` side to its
+`targets` side -- the direction its `single_parent` and `targets_subset_of`
+promises are phrased over. `INVERSE` computes the fiber, targets back to
+sources, which is why `leaf-1` reports both of the sources that carry it. Both
+directions deduplicate, because a reachable set is a set; one wide incidence can
+offer the same node along several of its edges and it is returned once. Where
+stored order and repetition are the question, `OrderedPolyadicTraversal` answers
+with a `NodeSequence` and a `Walk` deliberately does not.
