@@ -549,6 +549,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The semantic-corpus gate now consults a document's disposition on both
+  outcomes rather than only on a refusal. It counted any accepted document as
+  loaded before asking what the corpus said about it, so an entry adjudicated
+  `never-legal` that a reader began to ACCEPT fell into the success count and
+  produced no finding -- the gate printed that every captured document still
+  loads, and returned 0, over a corpus saying one of them never may. The reverse
+  direction was already guarded, but by the test suite rather than by the gate,
+  so `make format-semantics` and `pytest` disagreed about what the gate
+  established. The two now agree. A re-acceptance is reported apart from a
+  refusal and with its own reason: it is not a version question, because the
+  corpus says the format never had a canonical byte form for such a document, so
+  a reader that takes one has widened past what was ruled rather than past what
+  was released. Either the reader regressed or the adjudication was wrong; the
+  gate does not decide which, and says so. The real corpus is unaffected -- 179
+  of 186 still load and the same 7 are still refused.
+
 - Closed the last writer that reached the UTF-8 encoder without asking it
   anything. `AsBuilt.fingerprint` hashes the encoded bytes of the as-built
   graph, and there are no bytes to hash for a graph the encoder cannot write,
