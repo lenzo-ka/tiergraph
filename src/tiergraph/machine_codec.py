@@ -17,6 +17,7 @@ from tiergraph.wire import (
     MAX_DOCUMENT_BYTES,
     MAX_JSON_DEPTH,
     _object_without_duplicate_keys,
+    _refuse_unencodable_strings,
 )
 
 # Owner-tunable policy: keep an individual JSONL record bounded independently
@@ -26,8 +27,42 @@ _JSONL_LINE_BYTES = 1024 * 1024
 
 def program_loads(source: str | bytes) -> Program:
     """Parse a versioned JSONL machine program under the public wire limits."""
-    encoded = source.encode("utf-8") if isinstance(source, str) else source
-    return load_program(BytesIO(encoded))
+    return load_program(BytesIO(_program_bytes(source)))
+
+
+def _program_bytes(source: str | bytes) -> bytes:
+    """Encode a text program, ranking its size before its encodability.
+
+    Text this reader cannot encode is the encoding condition met before any
+    line is read, and it used to leave `program_loads` as the encoder's own
+    `UnicodeEncodeError` while the three whole-document readers answered the
+    same input at `ENCODING`.  The size is measured first, in code points,
+    because every code point is at least one encoded byte: that keeps the
+    envelope ahead of the encoding condition on an input that meets both,
+    which is the order `_checked_document` reads a text document in.  What is
+    left unmeasured is the same residue that reader leaves -- text too large
+    and also unencodable has no byte length to compare -- rather than a new
+    gap this one opens.
+
+    The line the encoder stopped on scopes the refusal, counted by the `\\n`
+    the reader itself splits on, so the diagnostic says where to look exactly
+    as every other one this reader raises does.
+    """
+    if isinstance(source, bytes):
+        return source
+    if len(source) > MAX_DOCUMENT_BYTES:
+        raise Refusal(
+            RefusalStage.ENVELOPE,
+            f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes",
+        )
+    try:
+        return source.encode("utf-8")
+    except UnicodeEncodeError as error:
+        number = source.count("\n", 0, error.start) + 1
+        raise Refusal(
+            RefusalStage.ENCODING,
+            f"JSONL line {number}: encode UTF-8 failed: {error.reason}",
+        ) from error
 
 
 def load_program(stream: BinaryIO) -> Program:
@@ -39,6 +74,24 @@ def load_program(stream: BinaryIO) -> Program:
     # parse failure, and a repeated object key is refused through the very hook
     # that reader passes, imported rather than restated, so the two cannot
     # drift into two accounts of one rule.
+    #
+    # The encoding condition has two spellings and both are answered. A
+    # character standing in a line is met when that line is decoded. One
+    # written as an escape is not in the line at all -- `\ud800` is six ASCII
+    # bytes -- so it survives every check that reads bytes and becomes a
+    # character only when the parser builds the record; the same
+    # `_refuse_unencodable_strings` the writers use therefore runs on each
+    # parsed record, so one condition keeps one wording and one stage whichever
+    # direction a caller met it from.
+    #
+    # Running that check after parsing does not make it a later condition. The
+    # order in `docs/format.md` ranks conditions, not the checks that find
+    # them, and rank 2 is the text being one the encoder can write. The
+    # canonical text of such a program -- what `program_dumps` writes, with
+    # `ensure_ascii=False` -- holds the character rather than the escape, and
+    # is a text the encoder cannot write. Line orientation changes the scope
+    # the condition is reported in, not its rank: the escape changes when the
+    # condition becomes visible, and the line says where to look.
     #
     # What cannot be shared is the frame those conditions are measured
     # against. `_parsed_json` measures one text: it takes the complete input,
@@ -75,9 +128,8 @@ def load_program(stream: BinaryIO) -> Program:
             )
         _check_jsonl_depth(line, number)
         try:
-            records.append(
-                json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
-            )
+            record = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+            _refuse_unencodable_strings(record, "")
         except json.JSONDecodeError as error:
             raise Refusal(
                 RefusalStage.SYNTAX,
@@ -93,6 +145,7 @@ def load_program(stream: BinaryIO) -> Program:
                 f"JSONL line {number}: JSON nesting depth exceeds limit "
                 f"{MAX_JSON_DEPTH}",
             ) from error
+        records.append(record)
     if not records:
         raise Refusal(
             RefusalStage.DISCRIMINATOR, "JSONL program is missing its header line"
