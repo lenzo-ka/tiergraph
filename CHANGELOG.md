@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Walk` now follows a polyadic relation as well as a bipartite one, so the
+  library and the `walk` command reach the same relations the rest of traversal
+  does. One step from any endpoint of the near side reaches every endpoint of
+  the far side of that incidence, which is the step `OrderedPolyadicTraversal`
+  already takes and the `k * m` edges the graph itself ranged over when it
+  validated the declaration's `acyclic` promise; pairing the two sides off index
+  by index is not a reading the declaration supports, because each side declares
+  its own arity bounds and its own emptiness. `WalkDirection` keeps its meaning,
+  forward being the declared `sources`-to-`targets` direction and inverse its
+  fiber, and both directions still return a deduplicated `NodeSet`. An unbounded
+  walk over a polyadic relation is admitted only for a declaration that promised
+  acyclicity, and refused by the same message as before otherwise. `truncated`
+  is unchanged and still one-sided. A relation of neither shape now refuses by
+  naming both admitted shapes rather than only the bipartite one.
 - Added `discharge`, the command-line verb for declarations. It sits beside
   `validate` rather than inside it: `validate` asks whether one document is
   well formed, and `discharge` asks whether a declaration holds against its
