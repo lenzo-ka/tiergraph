@@ -370,6 +370,179 @@ def test_discharge_reports_a_stage_only_where_the_refusal_declares_one(
     assert '"stage"' not in capsys.readouterr().err
 
 
+REWRITE_TIER = QualifiedName("urn:rewrite", "word")
+
+
+def _rewrite_source(tmp_path: Path) -> tuple[Path, tiergraph.Graph]:
+    """Write a source graph asserting six structures, three of them items."""
+    graph = tiergraph.Graph(
+        (NamespaceDeclaration("r", "urn:rewrite"),),
+        (
+            Tier(
+                TierDeclaration(REWRITE_TIER, "Words"),
+                (Item("w0"), Item("w1"), Item("w2")),
+            ),
+        ),
+        (),
+    )
+    source = tmp_path / "source.json"
+    source.write_bytes(tiergraph.dump_bytes(graph))
+    return source, graph
+
+
+def test_discharge_rewrite_certifies_an_effect_the_pair_bears_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both a decoration and a collapse are discharged over the same source.
+
+    The pair is the one `seals` reads, so the flags are the same; what the
+    certificate adds is the claim it discharged and how much it was held to.
+    The effect is on the wire because the counts do not imply it: a revision and
+    a collapse can leave the same disturbance count over the same subjects.
+    """
+    source, graph = _rewrite_source(tmp_path)
+    decorated = tmp_path / "decorated.json"
+    decorated.write_bytes(
+        tiergraph.dump_bytes(graph.insert_item(REWRITE_TIER, 3, Item("w3")))
+    )
+    collapsed = tmp_path / "collapsed.json"
+    collapsed.write_bytes(
+        tiergraph.dump_bytes(graph.remove_item(ItemRef(REWRITE_TIER, 2)))
+    )
+
+    assert (
+        main(
+            [
+                "discharge",
+                "rewrite",
+                str(source),
+                "--result",
+                str(decorated),
+                "--effect",
+                "decorate",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "effect": "decorate",
+        "subjects": 6,
+        "disturbances": 0,
+    }
+
+    assert (
+        main(
+            [
+                "discharge",
+                "rewrite",
+                str(source),
+                "--result",
+                str(collapsed),
+                "--effect",
+                "collapse",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "effect": "collapse",
+        "subjects": 6,
+        "disturbances": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("claim", "shrink", "fragment"),
+    (
+        ((), False, "effect is UNDECLARED: say what this rewrite did"),
+        (
+            ("--effect", "collapse"),
+            False,
+            "A collapse you cannot exhibit is a declaration that is hiding",
+        ),
+        (
+            ("--effect", "decorate"),
+            True,
+            "item '{urn:rewrite}word'[2] has no counterpart in the result",
+        ),
+    ),
+)
+def test_discharge_rewrite_refuses_a_claim_the_pair_does_not_make_good(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    claim: tuple[str, ...],
+    shrink: bool,
+    fragment: str,
+) -> None:
+    """Each unmet claim is one exit-one refusal that writes no certificate.
+
+    Omitting `--effect` is not a usage error: it reaches the library's own
+    refusal, which hands back the declaration to be made rather than standing in
+    COLLAPSE, the weaker claim. A claim that is false the other way is answered
+    with a counterexample instead. An effect refusal declares no stage, so the
+    diagnostic line stands alone with no staged object after it, which is the
+    rule `seals` and `fold` already follow.
+    """
+    source, graph = _rewrite_source(tmp_path)
+    result = tmp_path / "result.json"
+    edited = graph.remove_item(ItemRef(REWRITE_TIER, 2)) if shrink else graph
+    result.write_bytes(tiergraph.dump_bytes(edited))
+    output = tmp_path / "certificate.json"
+
+    assert (
+        main(
+            [
+                "discharge",
+                "rewrite",
+                str(source),
+                "--result",
+                str(result),
+                "--name",
+                "trim",
+                *claim,
+                "-o",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tiergraph: discharge: ValueError: rewrite 'trim' ")
+    assert fragment in captured.err
+    assert '"stage"' not in captured.err
+    assert not output.exists()
+
+
+def test_discharge_rewrite_reports_an_input_stage_before_it_weighs_a_claim(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A malformed result reaches the staged reporter the other discharges use."""
+    source, _ = _rewrite_source(tmp_path)
+    document = json.loads(source.read_bytes())
+    document["zz"] = 1
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(json.dumps(document), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "discharge",
+                "rewrite",
+                str(source),
+                "--result",
+                str(malformed),
+                "--effect",
+                "decorate",
+            ]
+        )
+        == 1
+    )
+    report = _refusal_report(capsys.readouterr().err)["refusal"]
+    assert (report["stage"], report["rank"]) == ("shape", 6)
+    assert "unknown fields ['zz']" in report["message"]
+
+
 def test_discharge_fold_certifies_a_claim_the_derivations_bear_out(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

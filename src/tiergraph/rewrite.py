@@ -125,6 +125,33 @@ class RewriteCertificate:
     subjects: int
     disturbances: int
 
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return deterministic strict-JSON data.
+
+        All three fields are carried because no two of them recover the third.
+        ``effect`` is what was discharged, and it is the only one that separates
+        a ``REVISE`` from a ``COLLAPSE``: both leave disturbances behind, so a
+        certificate reporting counts alone would read identically for either.
+        ``subjects`` is how much the claim was held to, without which a nearly
+        vacuous discharge reads as a strong one. ``disturbances`` is what the
+        check found, which is zero exactly when the rewrite decorated.
+
+        ``disturbances`` is written as the count this type holds, under the name
+        it holds it by, because a count of ways is what was measured: one
+        structure that lost two attributes contributes two. It is therefore not
+        a count of structures, it does not sit on the same scale as
+        ``subjects``, and the two together are not a proportion of anything. A
+        reader wanting the structures themselves calls
+        ``RewriteDeclaration.disturbances()``, whose entries serialize through
+        ``RewriteDisturbance.to_data``; this certificate says how far the check
+        reached rather than what it saw.
+        """
+        return {
+            "effect": self.effect.value,
+            "subjects": self.subjects,
+            "disturbances": self.disturbances,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RewriteDeclaration:
