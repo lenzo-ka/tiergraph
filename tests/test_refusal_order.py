@@ -565,26 +565,29 @@ def test_the_grammar_reader_leaves_its_own_conditions_unstaged(
     assert fragment in str(caught.value)
 
 
-def test_the_program_reader_leaves_an_unknown_value_type_unstaged() -> None:
-    """CHARACTERIZATION: one decoder site escapes the order the rest observes.
+def test_the_program_reader_stages_an_unknown_value_type() -> None:
+    """REGRESSION: the value type is answered at a declared stage, like its neighbours.
 
-    Every other member of an attached value is answered at a declared stage,
-    and the value type is answered by the enumeration's own constructor, so an
-    opcode naming a type this release does not implement leaves `program_loads`
-    as a bare `ValueError` where the neighbouring members leave it as a staged
-    refusal.  Recorded here for the same reason as the grammar reader's sites:
-    correcting it is a change to what this reader refuses with.
+    Every other member of an attached value is answered at a declared stage.
+    The value type once escaped that order -- the enumeration's own constructor
+    answered it, so an opcode naming a type this release does not implement left
+    `program_loads` raising a bare `ValueError` where the neighbouring members
+    left a staged refusal.  It is staged now, and this pins the stage and the
+    wording so the site cannot quietly return to leaking.
+
+    This test was written as a CHARACTERIZATION of the leak and is a REGRESSION
+    because the leak was closed.  That is the mechanism working: a characterization
+    of a known gap is built to go red the day someone closes it, and it did.
     """
     source = PROGRAM_HEADER + (
         b'{"opcode":"attach_value","domain":"item","target":null,'
         b'"value":{"name":{"namespace":"urn:x","local_name":"a"},'
         b'"value_type":"nope","lexical":"1"}}\n'
     )
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(Refusal) as caught:
         tiergraph.program_loads(source)
-    assert type(caught.value) is ValueError
-    assert not isinstance(caught.value, Refusal)
-    assert str(caught.value) == "'nope' is not a valid XsdType"
+    assert caught.value.stage is RefusalStage.VALUE
+    assert str(caught.value) == ("line 2.value.value_type has unsupported value 'nope'")
 
 
 @pytest.mark.parametrize("reader_name", sorted(document_readers()))
