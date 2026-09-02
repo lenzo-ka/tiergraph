@@ -2269,13 +2269,15 @@ def test_surrogate_reports_are_refused_with_field_paths(
 ) -> None:
     """Every CLI entry refuses surrogate data by field path, never by traceback.
 
-    Which side names the path depends on where the surrogate enters. A graph
-    read from a file is refused by the reader, which names the path in the
-    document it read, so every subcommand taking a graph file reports the same
-    ``graph.namespaces[...]`` path however far past decoding its own report
-    would have gone. Only ``step`` and ``run``, which build their graph from a
-    JSONL program rather than a document, still reach a writer, and those name
-    the writer's own path.
+    Every path here is the reader's, because every one of these inputs is a
+    document some reader in this package staged. A graph file names the path in
+    the document it read, so every subcommand taking one reports the same
+    ``graph.namespaces[...]`` binding however far past decoding its own report
+    would have gone. ``step`` and ``run`` build their graph from a JSONL
+    program rather than a document, and the program reader names the path
+    inside the record it read, scoped by the line that record was on; they used
+    to reach a writer instead, because that reader accepted the escape its own
+    canonical text cannot spell.
 
     What every case shares is the part worth pinning: exit 1, this package's
     field-path wording, and no ``UnicodeEncodeError`` reaching a user.
@@ -2439,9 +2441,9 @@ def test_surrogate_reports_are_refused_with_field_paths(
             )
             for name in ("text", "json", "jsonl", "html")
         ],
-        (["step", str(program)], "opcode.declaration.namespace"),
+        (["step", str(program)], "JSONL line 2: declaration.namespace"),
         (["render", str(span_graph)], graph_one),
-        (["run", str(program), "--to", "dot"], "namespaces[0].namespace"),
+        (["run", str(program), "--to", "dot"], "JSONL line 2: declaration.namespace"),
     ]
     for arguments, field_path in cases:
         assert main(arguments) == 1, arguments
