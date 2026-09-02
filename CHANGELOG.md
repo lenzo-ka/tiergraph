@@ -487,6 +487,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reported an algebra leaving its carrier as the refused operation it is.
+  `DoubleExtremumSemiring.multiply` refuses a sum that leaves the finite
+  IEEE-double carrier, and it refuses with `OverflowError`, which is an
+  `ArithmeticError` and so no kind of the `ValueError` the shell catches. A
+  well-formed graph and a valid command line therefore produced a stack trace
+  from `fold` and from `discharge fold`, where `docs/reference/cli.md` promises
+  a diagnostic on stderr and exit status 1. The shell now answers the whole
+  `ArithmeticError` family with the house refusal, for the reason `_fold_lift`
+  already converts a carrier mismatch into one rather than letting a
+  `TypeError` escape from inside the fold: what the caller met is their
+  valuation leaving the algebra's carrier, and a caller routing on the class
+  should not have to know which exception the arithmetic happened to raise.
+  Nothing that succeeded before changes, and no earlier clause of the order is
+  displaced.
 - Held a rewrite's effect claim to the layers it was measured over. What a
   discharged `DECORATE` licenses is that every reading taken over the source is
   still a correct reading of the result, and a rewrite that deleted every layer
