@@ -126,27 +126,52 @@ def refusal_of(entry: Entry, loader: object) -> str:
 class Outcome:
     """What one pass of the current decoder over the corpus established.
 
-    The three fields partition the corpus: a document loaded, or it was refused
-    where a disposition already accounts for the refusal, or it was refused
-    where nothing does. Only the third is a failure, but the gate reports the
-    partition rather than the failing part, because "the corpus loads" and "the
-    corpus loads except where somebody already ruled it never should" are
-    different statements and this gate can only make the second one.
+    The four fields partition the corpus along two axes at once -- what the
+    decoder did, and what the disposition says it should have done -- because
+    either can disagree with the other and they fail in opposite directions.
+    A document loaded and was permitted to; or it was refused where a
+    disposition accounts for the refusal; or it was refused where nothing does;
+    or it loaded where a disposition says it never may.
+
+    The last is the reverse of the third and was once invisible here: counting
+    an accepted document as ``loaded`` before consulting its disposition passes
+    a re-acceptance green, so a change that stops refusing what the corpus says
+    it must refuse produced no finding. The suite caught it
+    (``tests/test_format_semantics.py``) and this gate did not, which meant the
+    two disagreed about what the gate established.
+
+    They are reported apart rather than summed. "Stopped loading" and "started
+    loading" are different questions with different answers, and one sentence
+    covering both would be false of half its subjects.
     """
 
     loaded: int
     adjudicated: int
     findings: tuple[str, ...]
+    readmitted: tuple[str, ...] = ()
 
 
 def review(entries: tuple[Entry, ...], loader: object) -> Outcome:
-    """Run the decoder once over every entry and partition what it did."""
+    """Run the decoder once over every entry and partition what it did.
+
+    The disposition is consulted on BOTH outcomes, not only on a refusal: an
+    accepted document that the corpus adjudicated never-legal is a finding in
+    its own right, and reading it as a plain success is how a re-acceptance
+    used to pass this gate.
+    """
     loaded = 0
     adjudicated = 0
     found: list[str] = []
+    readmitted: list[str] = []
     for index, entry in enumerate(entries):
         why = refusal_of(entry, loader)
         if not why:
+            if entry.disposition is Disposition.NEVER_LEGAL:
+                readmitted.append(
+                    f"corpus entry {index} (captured at {entry.captured_at}) is "
+                    "adjudicated never-legal and now loads"
+                )
+                continue
             loaded += 1
             continue
         if entry.disposition is Disposition.NEVER_LEGAL:
@@ -156,7 +181,12 @@ def review(entries: tuple[Entry, ...], loader: object) -> Outcome:
             f"corpus entry {index} (captured at {entry.captured_at}, "
             f"{entry.disposition}) no longer loads: {why}"
         )
-    return Outcome(loaded=loaded, adjudicated=adjudicated, findings=tuple(found))
+    return Outcome(
+        loaded=loaded,
+        adjudicated=adjudicated,
+        findings=tuple(found),
+        readmitted=tuple(readmitted),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,6 +209,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     outcome = review(entries, loads)
+    for message in outcome.readmitted:
+        print(message, file=sys.stderr)
+    if outcome.readmitted:
+        print(
+            f"{len(outcome.readmitted)} of {len(entries)} captured documents are "
+            "adjudicated never-legal and the reader accepted them. This is the "
+            "reverse of the condition below and it is not a version question: "
+            "the corpus says the format never had a canonical byte form for "
+            "these, so a reader that takes them has widened past what was ruled "
+            "rather than past what was released. Either the reader regressed, or "
+            "the adjudication was wrong and owes a rewritten reason. This gate "
+            "does not decide which.",
+            file=sys.stderr,
+        )
+        return 1
     for message in outcome.findings:
         print(message, file=sys.stderr)
     if outcome.findings:

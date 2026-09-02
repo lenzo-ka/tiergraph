@@ -403,3 +403,41 @@ def test_the_committed_corpus_splits_exactly_where_its_dispositions_say() -> Non
     assert len(accepted) == 179
     for entry in accepted:
         loads(entry.document)
+
+
+def test_the_gate_FAILS_when_a_never_legal_entry_is_read_again(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """REGRESSION: a re-acceptance is a finding, not a success.
+
+    The gate counted any accepted document as loaded before it consulted the
+    disposition, so an entry adjudicated never-legal that a later reader ACCEPTS
+    fell into the success count and produced nothing. The suite caught that
+    direction and the gate did not, which meant a consumer running only
+    `make format-semantics` got a different answer from one running pytest.
+
+    The construction is a valid document carrying a never-legal disposition:
+    nothing refuses it, and the corpus says nothing may accept it. Both halves
+    are needed -- an invalid document would be refused and take the adjudicated
+    path instead, which is the case that already passed.
+    """
+    path = tmp_path / "corpus.jsonl"
+    path.write_text(
+        corpus_line(a_document())
+        + "\n"
+        + corpus_line(
+            a_document(),
+            disposition="never-legal",
+            reason="ruled to have no canonical byte form",
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert check_format_semantics.main(["--corpus", str(path)]) == 1
+    errors = capsys.readouterr().err
+    assert "adjudicated never-legal and now loads" in errors
+    assert "widened past what was ruled" in errors
+    # The reverse condition is reported apart from the forward one: the sentence
+    # about documents that STOPPED loading must not be printed for a document
+    # that STARTED loading.
+    assert "stopped loading" not in errors
