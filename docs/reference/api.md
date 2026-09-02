@@ -2208,11 +2208,14 @@ on the order without matching message text.  Both are declared on the class
 as well as assigned, so a caller reads them as fields of what it caught
 rather than recovering them with ``getattr``.
 
-This is the one base every staged refusal has.  The order is published as
-governing every document reader this package exposes, so ``except Refusal``
-has to catch all of it: a base that covered a prefix of the order would send
-a caller who read the declaration past the ranks it left out.  Subclasses
-say which channel refused, never which ranks a caller has to expect.
+This is the one base every staged refusal has.  Wherever the order is
+observed it is observed whole, so ``except Refusal`` has to catch all of it:
+a base that covered a prefix of the order would send a caller who read the
+declaration past the ranks it left out.  Which readers observe the order,
+and where one of them answers unstaged instead, is stated in the format
+document rather than here -- this base is about the ranks a caller must be
+able to catch, not about which readers produce them.  Subclasses say which
+channel refused, never which ranks a caller has to expect.
 
 A ``Refusal`` is a ``ValueError``, so every caller that already catches one
 still does.
@@ -5740,11 +5743,14 @@ on the order without matching message text.  Both are declared on the class
 as well as assigned, so a caller reads them as fields of what it caught
 rather than recovering them with ``getattr``.
 
-This is the one base every staged refusal has.  The order is published as
-governing every document reader this package exposes, so ``except Refusal``
-has to catch all of it: a base that covered a prefix of the order would send
-a caller who read the declaration past the ranks it left out.  Subclasses
-say which channel refused, never which ranks a caller has to expect.
+This is the one base every staged refusal has.  Wherever the order is
+observed it is observed whole, so ``except Refusal`` has to catch all of it:
+a base that covered a prefix of the order would send a caller who read the
+declaration past the ranks it left out.  Which readers observe the order,
+and where one of them answers unstaged instead, is stated in the format
+document rather than here -- this base is about the ranks a caller must be
+able to catch, not about which readers produce them.  Subclasses say which
+channel refused, never which ranks a caller has to expect.
 
 A ``Refusal`` is a ``ValueError``, so every caller that already catches one
 still does.
