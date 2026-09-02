@@ -79,15 +79,18 @@ options:
 ### `tiergraph discharge`
 
 ```text
-usage: tiergraph discharge [-h] {seals,fold} ...
+usage: tiergraph discharge [-h] {seals,rewrite,fold} ...
 
 positional arguments:
-  {seals,fold}
-    seals       discharge a source graph's seals against a result graph
-    fold        discharge a fold's exactness claim against its graph
+  {seals,rewrite,fold}
+    seals               discharge a source graph's seals against a result
+                        graph
+    rewrite             discharge a rewrite's effect claim against the pair it
+                        read
+    fold                discharge a fold's exactness claim against its graph
 
 options:
-  -h, --help    show this help message and exit
+  -h, --help            show this help message and exit
 ```
 
 ### `tiergraph discharge seals`
@@ -103,6 +106,28 @@ options:
   -h, --help            show this help message and exit
   --result FILE         result graph file
   --name NAME           name used in refusals
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph discharge rewrite`
+
+```text
+usage: tiergraph discharge rewrite [-h] --result FILE [--name NAME]
+                                   [--effect {decorate,revise,collapse}]
+                                   [-o FILE]
+                                   SOURCE
+
+positional arguments:
+  SOURCE                source graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --result FILE         result graph file
+  --name NAME           name used in refusals
+  --effect {decorate,revise,collapse}
+                        the claim to discharge; omitted, the library refuses
+                        UNDECLARED
   -o FILE, --output FILE
                         output file (default: -)
 ```
