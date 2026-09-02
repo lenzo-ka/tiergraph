@@ -510,7 +510,6 @@ class OrderedContainment:
     def descendants(self, parent: ItemRef) -> NodeSequence:
         """Return descendants in depth-first pre-order, preserving repetition."""
         self._node(parent)
-
         self._incidence()
         return self._traversal.transitive(parent)
 
