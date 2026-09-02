@@ -146,18 +146,25 @@ def test_role_refusals_name_each_offending_relation_beside_valid_neighbour() -> 
     with pytest.raises(ValueError, match=r"contains.*polyadic"):
         OrderedContainment(graph(bipartite), CONTAINS)
 
-    boundary = replace(
+    with pytest.raises(ValueError, match=r"absent.*polyadic"):
+        OrderedContainment(graph(), name("absent"))
+
+    # The item-only check reads both sides, so a fixture that only ever spoils
+    # the target side leaves the source half of that condition standing on
+    # nothing: a check written against targets alone would pass it. Both sides
+    # are spoiled here, separately, and each names the same relation.
+    mixed_kinds = (RelationEndpointKind.ITEM, RelationEndpointKind.BOUNDARY)
+    spoiled_sources = replace(
         declaration(),
-        targets=RelationSideDeclaration(
-            endpoint_kinds=(
-                RelationEndpointKind.ITEM,
-                RelationEndpointKind.BOUNDARY,
-            ),
-            tiers=(PARENTS, CHILDREN),
-        ),
+        sources=replace(declaration().sources, endpoint_kinds=mixed_kinds),
     )
-    with pytest.raises(ValueError, match=r"contains.*item-only"):
-        OrderedContainment(graph(boundary), CONTAINS)
+    spoiled_targets = replace(
+        declaration(),
+        targets=replace(declaration().targets, endpoint_kinds=mixed_kinds),
+    )
+    for spoiled in (spoiled_sources, spoiled_targets):
+        with pytest.raises(ValueError, match=r"contains.*item-only"):
+            OrderedContainment(graph(spoiled), CONTAINS)
 
     with pytest.raises(ValueError, match=r"contains.*source uniqueness"):
         OrderedContainment(
