@@ -189,9 +189,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of reporting a comparison it never made. This change itself did not
   alter the document shape; the later format break in this release moved
   `FORMAT_VERSION` from `"6"` to `"0.2.0"`.
+- Added a license statement to the README. The package metadata already
+  declares BSD-2-Clause and the full text already ships, but the README is the
+  distribution's page on the index and it said nothing about the terms.
 
 ### Changed
 
+- The publishability gate now reads GitHub Actions references. A workflow step's
+  `uses:` value carries no scheme and no dotted host, so the URL and bare-domain
+  matchers looked straight past it and the one check meant to notice an added
+  dependency could not see the kind this repository adds most easily: somebody
+  else's code, fetched at run time and executed with the checkout in scope. Each
+  referenced action must now appear in an allowlist with its reason, in the same
+  way the pre-commit hook repositories already did, and must name a commit
+  rather than a tag or a branch.
+- Every action in both workflows is now pinned to a commit, with the release it
+  was resolved from beside it. `pypa/gh-action-pypi-publish` was read from a
+  release branch in the job that holds `id-token: write` and can upload under
+  this project's name on PyPI; the rest floated on major tags, and the two
+  workflows had drifted onto different majors of `actions/checkout` and
+  `actions/setup-python`. Each pin is the commit the previous floating ref
+  pointed at when it was resolved, so this changes who decides when the code
+  changes rather than which code runs today.
+- Continuous integration now parses the YAML it ships. The path filter named
+  `ci.yml` and meant "a workflow changed", leaving `publish.yml` outside every
+  filter in the repository, and `check-yaml` was configured for pre-commit
+  which no job ever invoked -- so a malformed publishing workflow landed green
+  and would have been met at the release, with the tag already cut. The filters
+  now name the workflow directory, and a YAML change runs that hook.
+- Removed `pydantic` from the `dev` extra and from the gate's distribution
+  allowlist. An abstract-syntax-tree sweep over every tracked module found no
+  import of it; the allowlist entry existed only so that the unused declaration
+  would pass the gate, which is not evidence of use. Every development install
+  was fetching a compiled wheel nothing opened.
 - A fold that finds no root now reports `dependency graph has no root` rather
   than `dependency DAG has no root`. The dependency relation a fold runs over
   need not be acyclic, so the old wording named a structure the operation does
@@ -433,6 +463,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Corrected the publishability gate's exemption, which was written as a file
+  name and read as a path. The one exempt file is `scripts/check_tracked_clean.py`,
+  but the predicate asked only whether a path's basename was exempt, so any
+  file anywhere in the tree that adopted that name was selected out of the run.
+  A `src/tiergraph/check_tracked_clean.py` carrying a home-directory path was
+  measured passing the gate at exit zero and shipping in the wheel. The
+  comparison is now against the whole repository-relative path.
+- Corrected the same gate's own docstring, which claimed the index and the
+  shipped set are equal. One direction holds and is verified: every tracked
+  file reaches the distribution. The converse does not. The build backend
+  selects from the working tree and never asks git what is tracked, so a file
+  that is neither tracked nor ignored ships in both the wheel and the source
+  distribution without the script opening it. The script still reads the index
+  deliberately -- reading the working tree would refuse the untracked scratch
+  the design permits, on every commit, and would still be guessing at what the
+  backend includes -- and the shipped-set half of the claim is carried by the
+  test that builds the distribution and reads its members back.
 - Corrected a gate that reported a sentence its own corpus disproves.
   `make format-semantics` printed `every one of the 186 captured documents still
   loads` while seven of them no longer load: they carry an unpaired surrogate in

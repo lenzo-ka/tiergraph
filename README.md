@@ -201,3 +201,7 @@ semantic half of *only grows* is partly enforced as well — over the documents 
 corpus holds, which are the ones this repository's own test suite happened to
 construct rather than a survey of the format. A reader deciding whether an
 existing document still loads should read the changelog, not the version alone.
+
+## License
+
+BSD 2-Clause. The full text is in [LICENSE](LICENSE).
