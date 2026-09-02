@@ -223,6 +223,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Narrowed the published claim about which readers observe the refusal order.
+  `docs/format.md` said every document reader this package exposes ranks the
+  conditions it can meet by the one numbered order, and named all four. That
+  holds for `loads`, and for `selection_loads` and `load_program` it holds for
+  every condition their inputs can raise -- neither is handed a graph, so
+  `REFERENCE`, and `SEMANTICS` for the selector, are settled at evaluation or
+  execution rather than at read. It does not hold for `grammar_loads`, which
+  answers four conditions of its own -- an unimplemented discriminator, a value
+  outside the declared language, an undeclared nonterminal, and the declaration
+  contract -- with a bare `ValueError` carrying no stage. The document now says
+  which readers observe the order and where one of them does not, so a caller
+  routing on `RefusalStage` learns from the declaration rather than from a
+  refusal that lacks one. The `Refusal` docstring no longer rests its argument on
+  the wider claim; its conclusion is unchanged, and `except Refusal` still
+  catches every staged refusal. No behavior changes. Staging those four sites
+  changes what that reader refuses with and is deferred; they are pinned by tests
+  that fail the day someone stages them.
+
 - The publishability gate now reads GitHub Actions references. A workflow step's
   `uses:` value carries no scheme and no dotted host, so the URL and bare-domain
   matchers looked straight past it and the one check meant to notice an added

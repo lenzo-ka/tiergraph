@@ -88,11 +88,10 @@ later release is not supported.
 
 ## Refusal order
 
-An input routinely breaks several rules at once. Every document reader this
-package exposes — `loads`, `grammar_loads`, `selection_loads`, and
-`load_program` — ranks the conditions it can meet by one numbered order,
-`RefusalStage`, so the condition reported first is the one that explains the
-rest rather than whichever check happened to run first:
+An input routinely breaks several rules at once. A document reader ranks the
+conditions it can meet by one numbered order, `RefusalStage`, so the condition
+reported first is the one that explains the rest rather than whichever check
+happened to run first:
 
 1. `ENVELOPE` — a byte or line limit the reader enforces before interpreting the
    input at all.
@@ -117,6 +116,22 @@ rest rather than whichever check happened to run first:
    spelling, a lexical pattern, a bound.
 8. `REFERENCE` — a name this node carries resolves inside the document.
 9. `SEMANTICS` — a promise spanning more than one node holds.
+
+Which readers observe this order. `loads` observes it in full. `selection_loads`
+and `load_program` observe it for every condition their inputs can raise: neither
+is handed a graph, so `REFERENCE` — and for `selection_loads` `SEMANTICS` as well
+— is settled when the selector is evaluated or the program is executed rather
+than when the document is read, and no rank the read could have reported is
+skipped. `grammar_loads` observes it only for the conditions it shares with the
+other readers: its envelope, encoding and syntax conditions come from the common
+parse, and its construction and shape conditions are staged. Its four
+grammar-specific conditions are not — an unimplemented discriminator, a value
+outside the declared language, an undeclared nonterminal, and the declaration
+contract, ranks 5, 7, 8 and 9, are answered with a bare `ValueError` carrying no
+stage. A caller routing on `RefusalStage` should not expect one from
+`grammar_loads` for those four. Staging them changes what that reader refuses
+with and is deliberately not done here; the four sites are pinned by tests that
+fail the day someone does it.
 
 The stages rank the conditions of one node. Nodes are read from the outside in
 and members in their declared order, so an enclosing node's condition precedes
