@@ -137,8 +137,9 @@ started](docs/getting-started.md) for a worked walkthrough. The [API
 reference](docs/reference/api.md) covers every top-level export; the [CLI
 reference](docs/reference/cli.md) is generated from the parser.
 
-The companion `tiergraph_dot` package renders a graph as deterministic Graphviz
-DOT and ships in the same distribution:
+The companion `tiergraph_dot` package renders any `Graph` as deterministic
+Graphviz DOT and ships in the same distribution. Continuing from the example
+above, where `graph` was built:
 
 ```python
 import tiergraph_dot

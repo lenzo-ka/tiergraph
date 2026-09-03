@@ -223,6 +223,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Refusal`'s docstring now states where staging stops. The class says it is the
+  one base every staged refusal has, which is true and was silent about the
+  refusals that are not staged: a declaration object refuses its own
+  construction with a plain `ValueError`, so `except Refusal` catches nothing
+  there. `SealDeclaration`, `FoldDeclaration`, `AttributeValuation`,
+  `ActionDeclaration` and `ReactDeclaration` all refuse an empty name that way,
+  and `DistributionWitness` refuses its own the same way. The distinction is
+  real rather than an oversight -- those refusals are about the description a
+  caller wrote, not about a document or a graph, so there is no read for a stage
+  to rank them within -- but nothing said so, and a caller wrapping declaration
+  construction in `except Refusal` would have been surprised. What carries a
+  stage is the refusal of content. A caller that wants both catches
+  `ValueError`. No behavior changes.
+
 - Narrowed the published claim about which readers observe the refusal order.
   `docs/format.md` said every document reader this package exposes ranks the
   conditions it can meet by the one numbered order, and named all four. That

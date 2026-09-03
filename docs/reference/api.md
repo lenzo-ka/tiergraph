@@ -2229,6 +2229,18 @@ channel refused, never which ranks a caller has to expect.
 A ``Refusal`` is a ``ValueError``, so every caller that already catches one
 still does.
 
+Not every refusal this package raises is staged, and the boundary is worth
+stating because ``except Refusal`` is silent on the other side of it.  A
+*declaration* refuses its own construction with a plain ``ValueError`` --
+``SealDeclaration``, ``FoldDeclaration``, ``AttributeValuation``,
+``ActionDeclaration`` and ``ReactDeclaration`` all refuse an empty name that
+way, and ``DistributionWitness`` refuses its own the same way.
+Those are refusals about the description a caller wrote, not about a
+document or a graph, so there is no read for a stage to rank them within.
+What carries a stage is the refusal of *content*: a document a reader
+refuses, and a graph ``GraphValidationError`` refuses at construction or
+validation.  A caller that wants both catches ``ValueError``.
+
 It is declared here, beside ``RefusalStage`` and for the same reason: this
 module is the base every other imports, so the channel that refuses from
 here can share the base without the cycle that reaching upward would create.
@@ -5764,6 +5776,18 @@ channel refused, never which ranks a caller has to expect.
 
 A ``Refusal`` is a ``ValueError``, so every caller that already catches one
 still does.
+
+Not every refusal this package raises is staged, and the boundary is worth
+stating because ``except Refusal`` is silent on the other side of it.  A
+*declaration* refuses its own construction with a plain ``ValueError`` --
+``SealDeclaration``, ``FoldDeclaration``, ``AttributeValuation``,
+``ActionDeclaration`` and ``ReactDeclaration`` all refuse an empty name that
+way, and ``DistributionWitness`` refuses its own the same way.
+Those are refusals about the description a caller wrote, not about a
+document or a graph, so there is no read for a stage to rank them within.
+What carries a stage is the refusal of *content*: a document a reader
+refuses, and a graph ``GraphValidationError`` refuses at construction or
+validation.  A caller that wants both catches ``ValueError``.
 
 It is declared here, beside ``RefusalStage`` and for the same reason: this
 module is the base every other imports, so the channel that refuses from
