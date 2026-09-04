@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
 from math import gcd
@@ -390,6 +391,17 @@ class ClockProfile:
             coordinates
         ):
             raise ValueError("clock refinement coordinates are not strictly ordered")
+        boundary_counts = Counter(coordinate.tick for coordinate in coordinates)
+        # A tick's first boundary is gap zero.
+        # Every further boundary is one refinement.
+        first_boundary_count = 1
+        for coordinate in coordinates:
+            refinement_count = boundary_counts[coordinate.tick] - first_boundary_count
+            if coordinate.gap > refinement_count:
+                raise ValueError(
+                    f"clock gap {coordinate.gap} for tick {coordinate.tick} exceeds "
+                    f"refinement count {refinement_count}"
+                )
         return tuple(coordinates)
 
     def _read_untimed_tiers(self) -> set[QualifiedName]:
