@@ -804,10 +804,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this tree was then known to acquire in that condition, are now ignored: this
   project publishes libraries, which declare ranges and pin nothing for the
   programs that install them, so a lock belongs to whoever resolved it. A
-  third was found later in the same release and is ignored too: this project's
-  git worktrees live under `.claude/`, one whole copy of the repository each,
-  and the build backend selects the working tree minus what version control
-  ignores. The gate scripts also join the strict type-checking bar they were
+  third was found later in the same release and is ignored too: each ignored
+  worktree directory contains a whole copy of the repository, and the build
+  backend selects the working tree minus what version control ignores. The gate
+  scripts also join the strict type-checking bar they were
   already outside of, having been inside every other bar this project keeps.
 
 - Held machine-program members to the types the format declares for them. The
