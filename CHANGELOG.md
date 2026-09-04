@@ -28,10 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well formed, and `discharge` asks whether a declaration holds against its
   inputs. `discharge seals` binds a source graph's seals to the result graph
   claiming to honor them and emits the public `SealCertificate.to_data()`
-  counts. A refused discharge writes no certificate and reports the refusal's
-  declared stage, its rank in the refusal order, and any further applicable
-  condition as JSON on stderr, so a caller routes on the stage instead of
-  matching wording. No graph document is written or read differently.
+  counts. A refused discharge writes no certificate. A staged refusal reports
+  its declared stage, rank in the refusal order, and any further applicable
+  condition; a claim refusal reports the message naming the offender. Both are
+  JSON on stderr. No graph document is written or read differently.
 - Added `discharge fold`, which demands a fold's exactness claim against the
   graph, valuation, algebra, and dependency relation it reads and emits the
   public `FoldCertificate.to_data()` reach: the claim, the fold's own result,
@@ -550,6 +550,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `discharge rewrite` and `discharge fold` now report false effect or exactness claims as JSON on the staged-refusal stderr channel, with a message naming the offender.
 - The semantic-corpus gate now consults a document's disposition on both
   outcomes rather than only on a refusal. It counted any accepted document as
   loaded before asking what the corpus said about it, so an entry adjudicated

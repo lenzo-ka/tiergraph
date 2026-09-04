@@ -479,9 +479,8 @@ def test_discharge_rewrite_refuses_a_claim_the_pair_does_not_make_good(
     Omitting `--effect` is not a usage error: it reaches the library's own
     refusal, which hands back the declaration to be made rather than standing in
     COLLAPSE, the weaker claim. A claim that is false the other way is answered
-    with a counterexample instead. An effect refusal declares no stage, so the
-    diagnostic line stands alone with no staged object after it, which is the
-    rule `seals` and `fold` already follow.
+    with a counterexample instead. An effect refusal declares no stage, so its
+    report carries the offender-bearing message without inventing one.
     """
     source, graph = _rewrite_source(tmp_path)
     result = tmp_path / "result.json"
@@ -508,9 +507,14 @@ def test_discharge_rewrite_refuses_a_claim_the_pair_does_not_make_good(
     )
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("tiergraph: discharge: ValueError: rewrite 'trim' ")
-    assert fragment in captured.err
-    assert '"stage"' not in captured.err
+    assert captured.err.startswith(
+        "tiergraph: discharge: EffectRefusal: rewrite 'trim' "
+    )
+    assert '"refusal":' in captured.err
+    report = _refusal_report(captured.err)["refusal"]
+    assert fragment in report["message"]
+    assert "rewrite 'trim'" in report["message"]
+    assert "stage" not in report
     assert not output.exists()
 
 
@@ -594,9 +598,8 @@ def test_discharge_fold_refuses_a_claim_the_fold_does_not_make_good(
 
     Omitting `--exactness` is not a usage error: it reaches the library's own
     refusal, which hands back the declaration to be made. An exactness refusal
-    declares no stage, so the diagnostic line stands alone with no staged object
-    after it, which is the rule the seal path already follows -- the object
-    appears where the refusal carries a stage and nowhere else.
+    declares no stage, so its report carries the offender-bearing message
+    without inventing one.
     """
     source = tmp_path / "plan.json"
     _fold_graph(source, *DIAMOND)
@@ -615,9 +618,13 @@ def test_discharge_fold_refuses_a_claim_the_fold_does_not_make_good(
     )
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("tiergraph: discharge: ValueError: fold 'fold' ")
-    assert fragment in captured.err
-    assert '"stage"' not in captured.err
+    assert captured.err.startswith(
+        "tiergraph: discharge: ExactnessRefusal: fold 'fold' "
+    )
+    report = _refusal_report(captured.err)["refusal"]
+    assert fragment in report["message"]
+    assert "fold 'fold'" in report["message"]
+    assert "stage" not in report
     assert not output.exists()
 
 
