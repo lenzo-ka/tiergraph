@@ -422,21 +422,34 @@ def _handle_discharge(args: argparse.Namespace) -> int:
     except Refusal as error:
         _refusal_diagnostic(args.command, error)
         return 1
+    except (tiergraph.EffectRefusal, tiergraph.ExactnessRefusal) as error:
+        _refusal_diagnostic(args.command, error)
+        return 1
     _write_output(args.file, args.output, _json_bytes(certificate))
     return 0
 
 
-def _refusal_diagnostic(command: str, error: Refusal) -> None:
-    """Report one staged refusal as a diagnostic line and as data beside it.
+def _refusal_diagnostic(
+    command: str,
+    error: Refusal | tiergraph.EffectRefusal | tiergraph.ExactnessRefusal,
+) -> None:
+    """Report one discharge refusal as a diagnostic line and as data beside it.
 
     The line keeps this command's stderr readable the way every other command's
     is; the object after it carries the stage, which a caller acts on and must
     not have to recover by matching the wording. ``step`` already writes its
     extra refusal detail to stderr after the same diagnostic line, so this is
     the shape a reader of this CLI's failures already meets.
+
+    Effect and exactness refusals carry their subsystem's offender in the
+    message but declare no document-reader stage. Their object therefore carries
+    the message without inventing a stage or rank the API does not expose.
     """
     _diagnostic(command, type(error).__name__, error)
-    sys.stderr.write(_json_text({"refusal": _refusal_data(error)}))
+    data = (
+        _refusal_data(error) if isinstance(error, Refusal) else {"message": str(error)}
+    )
+    sys.stderr.write(_json_text({"refusal": data}))
 
 
 def _refusal_data(error: Refusal) -> dict[str, object]:

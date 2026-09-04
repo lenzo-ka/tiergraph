@@ -85,29 +85,29 @@ model and a versioned interchange format.
 
 **Hold aligned layers without drift.** One store, computed views. This is the base
 case and covers most use. Build a graph directly, or record an ordered edit stream
-as a `Program` and run it — see [construction](docs/guide/construction.md).
+as a `Program` and run it — see [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md).
 
 **Answer structural questions by traversal.** Selection with set algebra, `Walk`
 over declared relation incidence, ordered containment. Replaces hand-written index
-arithmetic — see [selection and traversal](docs/guide/selection-and-traversal.md).
+arithmetic — see [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md).
 
 **Measure and recognize by fold.** A fold evaluates a finite dependency relation
 with a semiring you supply: min-plus for least cost, counting for path counts,
 boolean for recognition, path semirings for witnesses. This is the capability with
 no common substitute — most alternatives make you write the traversal and the
 accumulation by hand, separately, for each question. See
-[folding](docs/guide/folding.md) and
-[recognize and act](docs/guide/recognize-and-act.md).
+[folding](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/folding.md) and
+[recognize and act](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/recognize-and-act.md).
 
 **Interchange that does not rot.** Canonical JSON, explicit format and machine
 version stamps, a SHA-pinned schema. Documents round-trip, and two graphs differing
 only in the order their declarations were supplied serialize identically, while tier
-and item order stay data — see [serialization](docs/guide/serialization.md).
+and item order stay data — see [serialization](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/serialization.md).
 
 Timing and projection build on those: attach a clock profile to resolve physical
-timing ([timing](docs/guide/timing.md)), or project segmentation graphs into
+timing ([timing](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/timing.md)), or project segmentation graphs into
 deterministic span views for JSON, JSON Lines, text, HTML, or DOT
-([span views](docs/guide/span-views.md)).
+([span views](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/span-views.md)).
 
 It is not good for unordered graphs, for mutable working stores with high edit
 rates, or for anything whose layer structure is not known in advance. `Graph` is a
@@ -126,16 +126,16 @@ tiergraph span render graph.json --profile span-profile.json --format text
 tiergraph semirings
 ```
 
-See the generated [CLI reference](docs/reference/cli.md) for every command and
+See the generated [CLI reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) for every command and
 its options.
 
 ## Documentation
 
-Start with the [documentation map](docs/README.md), then
-[concepts](docs/concepts.md) for the data model and [getting
-started](docs/getting-started.md) for a worked walkthrough. The [API
-reference](docs/reference/api.md) covers every top-level export; the [CLI
-reference](docs/reference/cli.md) is generated from the parser.
+Start with the [documentation map](https://github.com/lenzo-ka/tiergraph/blob/main/docs/README.md), then
+[concepts](https://github.com/lenzo-ka/tiergraph/blob/main/docs/concepts.md) for the data model and [getting
+started](https://github.com/lenzo-ka/tiergraph/blob/main/docs/getting-started.md) for a worked walkthrough. The [API
+reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/api.md) covers every top-level export; the [CLI
+reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) is generated from the parser.
 
 The companion `tiergraph_dot` package renders any `Graph` as deterministic
 Graphviz DOT and ships in the same distribution. Continuing from the example

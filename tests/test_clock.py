@@ -721,6 +721,27 @@ def test_new_clock_role_declarations_and_values_are_checked() -> None:
         advanced_profile(graph)
 
 
+def test_gap_past_its_ticks_refinement_is_refused() -> None:
+    """A near-valid clock cannot name a gap outside its tick's refinement."""
+    graph = reference_shape()
+    boundary_values = list(graph.boundary_values)
+    boundary_values[2] = replace(
+        boundary_values[2],
+        attributes=(
+            AttributeValue(TICK, XsdType.INTEGER, "1"),
+            AttributeValue(GAP, XsdType.INTEGER, "9"),
+        ),
+    )
+    malformed = replace(graph, boundary_values=tuple(boundary_values))
+
+    message = None
+    try:
+        advanced_profile(malformed)
+    except ValueError as error:
+        message = str(error)
+    assert message == "clock gap 9 for tick 1 exceeds refinement count 1"
+
+
 def test_stored_timing_value_refusals_and_exact_agreement() -> None:
     """Untimed and negative values fail while exact stored/derived values reconcile."""
     graph = reference_shape()

@@ -28,10 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well formed, and `discharge` asks whether a declaration holds against its
   inputs. `discharge seals` binds a source graph's seals to the result graph
   claiming to honor them and emits the public `SealCertificate.to_data()`
-  counts. A refused discharge writes no certificate and reports the refusal's
-  declared stage, its rank in the refusal order, and any further applicable
-  condition as JSON on stderr, so a caller routes on the stage instead of
-  matching wording. No graph document is written or read differently.
+  counts. A refused discharge writes no certificate. A staged refusal reports
+  its declared stage, rank in the refusal order, and any further applicable
+  condition; a claim refusal reports the message naming the offender. Both are
+  JSON on stderr. No graph document is written or read differently.
 - Added `discharge fold`, which demands a fold's exactness claim against the
   graph, valuation, algebra, and dependency relation it reads and emits the
   public `FoldCertificate.to_data()` reach: the claim, the fold's own result,
@@ -223,6 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PathRefusal` and `ProfileRegistrationRefusal` are now `ValueError` subclasses, so `except ValueError` catches every exported class ending in `Refusal`.
 - `Refusal`'s docstring now states where staging stops. The class says it is the
   one base every staged refusal has, which is true and was silent about the
   refusals that are not staged: a declaration object refuses its own
@@ -549,6 +550,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `discharge rewrite` and `discharge fold` now report false effect or exactness claims as JSON on the staged-refusal stderr channel, with a message naming the offender.
+- A clock profile now refuses a gap past its tick's refinement count at construction, naming the tick, gap, and count.
 - The semantic-corpus gate now consults a document's disposition on both
   outcomes rather than only on a refusal. It counted any accepted document as
   loaded before asking what the corpus said about it, so an entry adjudicated
@@ -801,10 +804,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this tree was then known to acquire in that condition, are now ignored: this
   project publishes libraries, which declare ranges and pin nothing for the
   programs that install them, so a lock belongs to whoever resolved it. A
-  third was found later in the same release and is ignored too: this project's
-  git worktrees live under `.claude/`, one whole copy of the repository each,
-  and the build backend selects the working tree minus what version control
-  ignores. The gate scripts also join the strict type-checking bar they were
+  third was found later in the same release and is ignored too: each ignored
+  worktree directory contains a whole copy of the repository, and the build
+  backend selects the working tree minus what version control ignores. The gate
+  scripts also join the strict type-checking bar they were
   already outside of, having been inside every other bar this project keeps.
 
 - Held machine-program members to the types the format declares for them. The

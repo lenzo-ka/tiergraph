@@ -155,7 +155,7 @@ class PathOffender:
     available_count: int | None = None
 
 
-class PathRefusal(Exception):
+class PathRefusal(ValueError):
     """Report a typed path failure with offender data and its original cause."""
 
     def __init__(

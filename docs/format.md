@@ -117,6 +117,8 @@ happened to run first:
 8. `REFERENCE` — a name this node carries resolves inside the document.
 9. `SEMANTICS` — a promise spanning more than one node holds.
 
+The order ranks applicable conditions. A condition that is inapplicable until a lower-ranked condition has passed is reported when it becomes applicable.
+
 Which readers observe this order. `loads` observes it in full. `selection_loads`
 and `load_program` observe it for every condition their inputs can raise: neither
 is handed a graph, so `REFERENCE` — and for `selection_loads` `SEMANTICS` as well

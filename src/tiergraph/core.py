@@ -64,14 +64,15 @@ class RefusalStage(IntEnum):
 
 
 class Refusal(ValueError):
-    """Refuse one read, naming its stage and every further applicable condition.
+    """Refuse one read, naming its stage and applicable conditions at its site.
 
     ``stage`` places the refusal in the declared total order, and ``also``
-    carries the conditions that remain applicable once this one is known, each a
-    refusal in its own right.  Both are data rather than prose, so a caller acts
-    on the order without matching message text.  Both are declared on the class
-    as well as assigned, so a caller reads them as fields of what it caught
-    rather than recovering them with ``getattr``.
+    carries the further conditions applicable at the refusing site, each a
+    refusal in its own right.  It is not a census of the document.  Both are
+    data rather than prose, so a caller acts on the order without matching
+    message text.  Both are declared on the class as well as assigned, so a
+    caller reads them as fields of what it caught rather than recovering them
+    with ``getattr``.
 
     This is the one base every staged refusal has.  Wherever the order is
     observed it is observed whole, so ``except Refusal`` has to catch all of it:
@@ -96,6 +97,12 @@ class Refusal(ValueError):
     What carries a stage is the refusal of *content*: a document a reader
     refuses, and a graph ``GraphValidationError`` refuses at construction or
     validation.  A caller that wants both catches ``ValueError``.
+
+    ``tiergraph.Refusal`` is the staged document-reader refusal.  The other
+    exported classes ending in ``Refusal`` -- ``StarRefusal``,
+    ``EffectRefusal``, ``ExactnessRefusal``, ``PathRefusal``, and
+    ``ProfileRegistrationRefusal`` -- are ``ValueError`` subclasses carrying
+    their own subsystem's data.  They have no document-reader stage.
 
     It is declared here, beside ``RefusalStage`` and for the same reason: this
     module is the base every other imports, so the channel that refuses from

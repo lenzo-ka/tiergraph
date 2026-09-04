@@ -35,6 +35,22 @@ from tiergraph import (
 from tiergraph.schema import Refusal, RefusalStage, json_schema, validation_errors
 
 
+def test_value_error_catches_every_exported_refusal() -> None:
+    """Every public refusal shares the general invalid-value catch boundary."""
+    missed: list[str] = []
+    for name in tiergraph.__all__:
+        if not name.endswith("Refusal"):
+            continue
+        refusal_type = getattr(tiergraph, name)
+        try:
+            raise refusal_type.__new__(refusal_type)
+        except ValueError:
+            pass
+        except Exception:
+            missed.append(name)
+    assert missed == []
+
+
 def document() -> dict[str, Any]:
     """Return independent JSON-shaped document data this reader accepts."""
     return cast(dict[str, Any], json.loads(json.dumps(to_data(rich_graph()))))
