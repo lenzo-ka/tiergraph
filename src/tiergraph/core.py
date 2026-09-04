@@ -64,14 +64,15 @@ class RefusalStage(IntEnum):
 
 
 class Refusal(ValueError):
-    """Refuse one read, naming its stage and every further applicable condition.
+    """Refuse one read, naming its stage and applicable conditions at its site.
 
     ``stage`` places the refusal in the declared total order, and ``also``
-    carries the conditions that remain applicable once this one is known, each a
-    refusal in its own right.  Both are data rather than prose, so a caller acts
-    on the order without matching message text.  Both are declared on the class
-    as well as assigned, so a caller reads them as fields of what it caught
-    rather than recovering them with ``getattr``.
+    carries the further conditions applicable at the refusing site, each a
+    refusal in its own right.  It is not a census of the document.  Both are
+    data rather than prose, so a caller acts on the order without matching
+    message text.  Both are declared on the class as well as assigned, so a
+    caller reads them as fields of what it caught rather than recovering them
+    with ``getattr``.
 
     This is the one base every staged refusal has.  Wherever the order is
     observed it is observed whole, so ``except Refusal`` has to catch all of it:
