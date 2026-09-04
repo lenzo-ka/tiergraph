@@ -73,7 +73,7 @@ type RoleBinding = Mapping[str, RoleValue]
 """Bind each role a profile reads to the declaration name that fills it."""
 
 
-class ProfileRegistrationRefusal(Exception):
+class ProfileRegistrationRefusal(ValueError):
     """Refuse a profile whose registration claims do not hold."""
 
 

@@ -98,6 +98,12 @@ class Refusal(ValueError):
     refuses, and a graph ``GraphValidationError`` refuses at construction or
     validation.  A caller that wants both catches ``ValueError``.
 
+    ``tiergraph.Refusal`` is the staged document-reader refusal.  The other
+    exported classes ending in ``Refusal`` -- ``StarRefusal``,
+    ``EffectRefusal``, ``ExactnessRefusal``, ``PathRefusal``, and
+    ``ProfileRegistrationRefusal`` -- are ``ValueError`` subclasses carrying
+    their own subsystem's data.  They have no document-reader stage.
+
     It is declared here, beside ``RefusalStage`` and for the same reason: this
     module is the base every other imports, so the channel that refuses from
     here can share the base without the cycle that reaching upward would create.

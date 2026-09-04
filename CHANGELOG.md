@@ -223,6 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PathRefusal` and `ProfileRegistrationRefusal` are now `ValueError` subclasses, so `except ValueError` catches every exported class ending in `Refusal`.
 - `Refusal`'s docstring now states where staging stops. The class says it is the
   one base every staged refusal has, which is true and was silent about the
   refusals that are not staged: a declaration object refuses its own
