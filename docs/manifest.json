@@ -394,6 +394,7 @@
       "PathValue",
       "PathWitnessSemiring",
       "ProductSemiring",
+      "SelectionSemiring",
       "Semiring",
       "StarRefusal",
       "StarSelector",

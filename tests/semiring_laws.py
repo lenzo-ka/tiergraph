@@ -35,7 +35,13 @@ def _approximately_equal(left: Any, right: Any, scale: float) -> bool:
 
 
 def _assert_required_equal(
-    check: LawCheck, left: Any, right: Any, operands: tuple[Any, ...]
+    check: LawCheck,
+    left: Any,
+    right: Any,
+    operands: tuple[Any, ...],
+    *,
+    law: str,
+    allow_not_held: bool = False,
 ) -> None:
     """Assert a required equality exactly or within its declared bound."""
     if check is LawCheck.EXACT:
@@ -47,6 +53,9 @@ def _assert_required_equal(
         ]
         assert _approximately_equal(left, right, max(magnitudes, default=0.0))
         return
+    if check is LawCheck.NOT_HELD:
+        assert allow_not_held, f"{law} cannot be declared NOT_HELD"
+        return
     raise AssertionError(f"invalid required-law check: {check!r}")
 
 
@@ -57,6 +66,7 @@ def assert_add_associative(semiring: LawSemiring, a: Any, b: Any, c: Any) -> Non
         semiring.add(semiring.add(a, b), c),
         semiring.add(a, semiring.add(b, c)),
         (a, b, c),
+        law="add_associativity",
     )
 
 
@@ -64,13 +74,24 @@ def assert_multiply_associative(semiring: LawSemiring, a: Any, b: Any, c: Any) -
     """Assert exact or explicitly approximate multiplication associativity."""
     left = semiring.multiply(semiring.multiply(a, b), c)
     right = semiring.multiply(a, semiring.multiply(b, c))
-    _assert_required_equal(semiring.multiply_associativity, left, right, (a, b, c))
+    _assert_required_equal(
+        semiring.multiply_associativity,
+        left,
+        right,
+        (a, b, c),
+        law="multiply_associativity",
+    )
 
 
 def assert_add_commutative(semiring: LawSemiring, a: Any, b: Any) -> None:
     """Assert addition commutativity with its mandatory check."""
     _assert_required_equal(
-        semiring.add_commutativity, semiring.add(a, b), semiring.add(b, a), (a, b)
+        semiring.add_commutativity,
+        semiring.add(a, b),
+        semiring.add(b, a),
+        (a, b),
+        law="add_commutativity",
+        allow_not_held=True,
     )
 
 
@@ -99,6 +120,7 @@ def assert_left_distributive(semiring: LawSemiring, a: Any, b: Any, c: Any) -> N
         semiring.multiply(a, semiring.add(b, c)),
         semiring.add(semiring.multiply(a, b), semiring.multiply(a, c)),
         (a, b, c),
+        law="left_distributivity",
     )
 
 
@@ -109,6 +131,7 @@ def assert_right_distributive(semiring: LawSemiring, a: Any, b: Any, c: Any) -> 
         semiring.multiply(semiring.add(a, b), c),
         semiring.add(semiring.multiply(a, c), semiring.multiply(b, c)),
         (a, b, c),
+        law="right_distributivity",
     )
 
 

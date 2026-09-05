@@ -5115,6 +5115,7 @@ The mandatory comparison used to check a semiring law.
 
 - `EXACT` = `exact`
 - `APPROXIMATE` = `approximate`
+- `NOT_HELD` = `not-held`
 
 ### `LexicographicSemiring`
 
@@ -5507,6 +5508,160 @@ ProductSemiring.decode(self, value: 'object', /) -> 'tuple[T, U]'
 ```
 
 Decode a two-component JSON array.
+
+### `SelectionSemiring`
+
+```text
+SelectionSemiring(cost: 'Semiring[T]', payload_identity: 'U', tie_invariant_payload: 'bool', payload_multiply: 'Callable[[U, U], U]' = _PayloadAddition(), payload_encode: 'Callable[[U], object] | None' = None, payload_decode: 'Callable[[object], U] | None' = None) -> None
+```
+
+Select a winning cost together with its payload.
+
+``tie_invariant_payload`` must be declared true because this construction
+cannot check it. Addition keeps the first operand on a cost tie, so a false
+declaration makes results depend on operand order when tied optimal paths
+carry different payloads. Such payloads require accumulation instead.
+
+``payload_identity`` supplies the payload at both cost identities. Payload
+multiplication defaults to addition, which concatenates tuple witnesses;
+callers can supply another operation for another payload. The caller
+declares that ``payload_identity`` is its two-sided identity and that
+``payload_multiply`` is associative; the law checks derived from ``cost``
+assume both conditions. Construction can test the identity against itself
+but cannot prove either condition over every payload. Float costs can create
+ties by rounding, so tie invariance covers arithmetic ties as well as exact
+ones. The default codec writes a tuple witness as a JSON array and restores
+that tuple; callers provide codecs for other compound payload shapes.
+
+#### `SelectionSemiring.star`
+
+Property.
+
+```text
+SelectionSemiring.star(self) -> 'StarSelector[tuple[T, U]] | None'
+```
+
+Declare no closure for an arbitrary payload combination.
+
+#### `SelectionSemiring.zero`
+
+Property.
+
+```text
+SelectionSemiring.zero(self) -> 'tuple[T, U]'
+```
+
+Pair the cost zero with the payload identity.
+
+#### `SelectionSemiring.one`
+
+Property.
+
+```text
+SelectionSemiring.one(self) -> 'tuple[T, U]'
+```
+
+Pair the cost one with the payload identity.
+
+#### `SelectionSemiring.add_associativity`
+
+Property.
+
+```text
+SelectionSemiring.add_associativity(self) -> 'LawCheck'
+```
+
+Derive the mandatory addition-associativity check from the cost.
+
+#### `SelectionSemiring.multiply_associativity`
+
+Property.
+
+```text
+SelectionSemiring.multiply_associativity(self) -> 'LawCheck'
+```
+
+Derive the mandatory multiplication-associativity check from the cost.
+
+#### `SelectionSemiring.add_commutativity`
+
+Property.
+
+```text
+SelectionSemiring.add_commutativity(self) -> 'LawCheck'
+```
+
+Declare that operand-ordered tie selection is not commutative.
+
+#### `SelectionSemiring.left_distributivity`
+
+Property.
+
+```text
+SelectionSemiring.left_distributivity(self) -> 'LawCheck'
+```
+
+Derive the mandatory left-distributivity check from the cost.
+
+#### `SelectionSemiring.right_distributivity`
+
+Property.
+
+```text
+SelectionSemiring.right_distributivity(self) -> 'LawCheck'
+```
+
+Derive the mandatory right-distributivity check from the cost.
+
+#### `SelectionSemiring.add_idempotent`
+
+Property.
+
+```text
+SelectionSemiring.add_idempotent(self) -> 'bool'
+```
+
+Derive addition idempotence from the cost semiring.
+
+#### `SelectionSemiring.add`
+
+Method.
+
+```text
+SelectionSemiring.add(self, left: 'tuple[T, U]', right: 'tuple[T, U]', /) -> 'tuple[T, U]'
+```
+
+Select the first cost winner and carry its payload.
+
+#### `SelectionSemiring.multiply`
+
+Method.
+
+```text
+SelectionSemiring.multiply(self, left: 'tuple[T, U]', right: 'tuple[T, U]', /) -> 'tuple[T, U]'
+```
+
+Multiply costs and combine payloads.
+
+#### `SelectionSemiring.encode`
+
+Method.
+
+```text
+SelectionSemiring.encode(self, value: 'tuple[T, U]', /) -> 'object'
+```
+
+Encode the cost and payload as a JSON array.
+
+#### `SelectionSemiring.decode`
+
+Method.
+
+```text
+SelectionSemiring.decode(self, value: 'object', /) -> 'tuple[T, U]'
+```
+
+Decode a cost and payload JSON array.
 
 ### `Semiring`
 
