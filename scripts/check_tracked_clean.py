@@ -142,6 +142,7 @@ _STDLIB_IMPORTS = {
     "random",
     "re",
     "shutil",
+    "signal",
     "subprocess",
     "sys",
     "tarfile",

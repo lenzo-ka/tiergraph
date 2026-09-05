@@ -5,7 +5,9 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 from copy import deepcopy
@@ -23,6 +25,10 @@ from scripts.generate_docs import main as docs_main
 import tiergraph.schema
 import tiergraph_dot
 from tiergraph.machine import MACHINE_VERSION
+
+# Local runs of the cli_bytes child take at most 0.18 seconds; 30 seconds leaves
+# ample margin for a slow CI worker while keeping an unbounded debugger wait finite.
+CLI_BYTES_TIMEOUT_SECONDS = 30
 
 
 def test_documentation_gate_is_current() -> None:
@@ -137,6 +143,35 @@ def test_cli_stepping_example_failures_are_rejected(
     )
     with pytest.raises(ValueError, match=message):
         generate_docs.cli_bytes()
+
+
+def test_cli_stepping_example_does_not_read_a_terminal() -> None:
+    """REGRESSION: documentation generation cannot enter the step debugger."""
+    root = Path(__file__).resolve().parent.parent
+    master, slave = os.openpty()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from scripts.generate_docs import cli_bytes; cli_bytes()",
+        ],
+        cwd=root,
+        stdin=slave,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    os.close(slave)
+    try:
+        stdout, stderr = process.communicate(timeout=CLI_BYTES_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        pytest.fail("cli_bytes() read from its terminal stdin")
+    finally:
+        os.close(master)
+    assert process.returncode == 0, (stdout, stderr)
 
 
 def test_missing_generated_directive_is_rejected() -> None:

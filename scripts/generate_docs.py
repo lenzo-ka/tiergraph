@@ -284,6 +284,7 @@ def cli_bytes() -> bytes:
             cwd=ROOT,
             check=True,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
     if execution.stderr:
@@ -398,6 +399,7 @@ def mixing_bytes() -> bytes:
         cwd=ROOT,
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     if execution.stderr:
         raise ValueError("mixing example wrote to stderr")
@@ -454,7 +456,12 @@ def check_cli() -> None:
     )
     for command in commands:
         result = subprocess.run(
-            command, cwd=ROOT, check=False, capture_output=True, text=True
+            command,
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
         )
         if result.returncode != 0 or result.stderr:
             raise ValueError(f"CLI contract failed for {command!r}")
@@ -463,6 +470,7 @@ def check_cli() -> None:
         cwd=ROOT,
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
     )
     if json.loads(version.stdout) != {"version": tiergraph.__version__}:
@@ -565,6 +573,7 @@ def execute_python_fences(pages: set[Path]) -> None:
             cwd=ROOT,
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         if result.returncode != 0:
