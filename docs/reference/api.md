@@ -5120,10 +5120,21 @@ The mandatory comparison used to check a semiring law.
 ### `LexicographicSemiring`
 
 ```text
-LexicographicSemiring(first: 'Semiring[T]', second: 'Semiring[U]') -> 'None'
+LexicographicSemiring(first: 'Semiring[T]', second: 'Semiring[U]', exact_workload: 'bool' = False, order_preserving_workload: 'bool' = False) -> 'None'
 ```
 
 A selective first semiring with second-component aggregation on ties.
+
+``exact_workload`` declares that the caller's values make approximate
+component laws exact. Without it, an approximate component is refused. A
+false declaration can make a fold non-associative on fractional float values
+and silently change its result with the evaluation order.
+
+``order_preserving_workload`` declares that multiplication preserves strict
+first-component order on the caller's values. Without it, a first component
+that cannot promise this property is refused. A false declaration lets a
+strictly worse cost tie or overtake after rounded multiplication, making the
+lexicographic choice wrong. Exact components need neither declaration.
 
 #### `LexicographicSemiring.star`
 

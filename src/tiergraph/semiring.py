@@ -687,25 +687,59 @@ class SelectionSemiring[T, U]:
 
 
 class LexicographicSemiring[T, U](ProductSemiring[T, U]):
-    """A selective first semiring with second-component aggregation on ties."""
+    """A selective first semiring with second-component aggregation on ties.
+
+    ``exact_workload`` declares that the caller's values make approximate
+    component laws exact. Without it, an approximate component is refused. A
+    false declaration can make a fold non-associative on fractional float values
+    and silently change its result with the evaluation order.
+
+    ``order_preserving_workload`` declares that multiplication preserves strict
+    first-component order on the caller's values. Without it, a first component
+    that cannot promise this property is refused. A false declaration lets a
+    strictly worse cost tie or overtake after rounded multiplication, making the
+    lexicographic choice wrong. Exact components need neither declaration.
+    """
+
+    exact_workload: bool
+    order_preserving_workload: bool
 
     @property
     def star(self) -> StarSelector[tuple[T, U]] | None:
         """Declare no closure for arbitrary lexicographic components."""
         return None
 
-    def __init__(self, first: Semiring[T], second: Semiring[U]) -> None:
+    def __init__(
+        self,
+        first: Semiring[T],
+        second: Semiring[U],
+        exact_workload: bool = False,
+        order_preserving_workload: bool = False,
+    ) -> None:
         for component in (first, second):
             unchecked = inexact_laws(component)
-            if unchecked:
-                raise ValueError(f"lexicographic component lacks exact {unchecked[0]}")
-        for name in ("add_selective", "multiply_strictly_order_preserving"):
-            if not getattr(first, name):
-                raise ValueError(f"lexicographic first component lacks {name}")
+            if unchecked and exact_workload is not True:
+                raise ValueError(
+                    f"lexicographic component lacks exact {unchecked[0]}; "
+                    "exact_workload must be declared true"
+                )
+        if not first.add_selective:
+            raise ValueError("lexicographic first component lacks add_selective")
+        if (
+            not first.multiply_strictly_order_preserving
+            and order_preserving_workload is not True
+        ):
+            raise ValueError(
+                "lexicographic first component lacks "
+                "multiply_strictly_order_preserving; "
+                "order_preserving_workload must be declared true"
+            )
         for name in ("zero_sum_free", "no_zero_divisors"):
             if not getattr(second, name):
                 raise ValueError(f"lexicographic second component lacks {name}")
         super().__init__(first, second)
+        self.exact_workload = exact_workload
+        self.order_preserving_workload = order_preserving_workload
 
     def _value(self, value: tuple[T, U], name: str) -> tuple[T, U]:
         if (value[0] == self.left.zero) != (value[1] == self.right.zero):

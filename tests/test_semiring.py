@@ -72,6 +72,15 @@ DECIMALS = st.decimals(
     places=8,
 )
 COUNTING_VALUES = st.integers(min_value=0, max_value=1_000_000)
+# These bounds keep every sampled sum within the exactly represented integer range.
+INTEGER_FLOAT_MIN = -1_000_000
+INTEGER_FLOAT_MAX = 1_000_000
+INTEGER_FLOATS = st.integers(
+    min_value=INTEGER_FLOAT_MIN, max_value=INTEGER_FLOAT_MAX
+).map(float)
+# Python's left- and right-grouped evaluation of 0.1 + 0.2 + 0.3 yields these.
+LEFT_GROUPED_FRACTIONAL_SUM = 0.6000000000000001
+RIGHT_GROUPED_FRACTIONAL_SUM = 0.6
 PATHS = st.lists(st.text(min_size=1, max_size=4), max_size=4).map(tuple)
 WITNESS_VALUES: SearchStrategy[tuple[tuple[str, ...], ...]] = st.sets(
     PATHS, max_size=4
@@ -210,6 +219,16 @@ CASES = (
         "selection",
         SELECTION,
         st.one_of(st.tuples(DECIMALS, COUNTING_VALUES), st.just(SELECTION.zero)),
+    ),
+    SemiringCase(
+        "declared-exact-workload-lexicographic-tropical",
+        LexicographicSemiring(
+            TROPICAL,
+            TROPICAL,
+            exact_workload=True,
+            order_preserving_workload=True,
+        ),
+        st.tuples(INTEGER_FLOATS, INTEGER_FLOATS),
     ),
 )
 
@@ -397,11 +416,144 @@ def test_lexicographic_side_conditions_are_refused() -> None:
         LexicographicSemiring(BOOLEAN, COUNTING)
 
 
+def test_lexicographic_approximate_components_require_exact_workload() -> None:
+    """The refusal names both the approximate law and its caller declaration."""
+    with pytest.raises(ValueError, match="multiply_associativity.*exact_workload"):
+        LexicographicSemiring(TROPICAL, TROPICAL)
+
+
+def test_lexicographic_strict_order_requires_its_workload_declaration() -> None:
+    """The strict-order refusal names its separate caller declaration."""
+    with pytest.raises(
+        ValueError,
+        match="multiply_strictly_order_preserving.*order_preserving_workload",
+    ):
+        LexicographicSemiring(TROPICAL, TROPICAL, exact_workload=True)
+
+
+def test_lexicographic_workload_declarations_construct_for_ieee_tropical() -> None:
+    """A caller can warrant scaled-integer values on the float carrier."""
+    algebra = LexicographicSemiring(
+        TROPICAL,
+        TROPICAL,
+        exact_workload=True,
+        order_preserving_workload=True,
+    )
+    assert algebra.exact_workload is True
+    assert algebra.order_preserving_workload is True
+    assert algebra.multiply_associativity is LawCheck.APPROXIMATE
+    assert algebra.multiply_strictly_order_preserving is False
+
+
+@given(
+    a=st.tuples(INTEGER_FLOATS, INTEGER_FLOATS),
+    b=st.tuples(INTEGER_FLOATS, INTEGER_FLOATS),
+    c=st.tuples(INTEGER_FLOATS, INTEGER_FLOATS),
+)
+def test_lexicographic_exact_workload_satisfies_laws_on_integer_floats(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+) -> None:
+    """The caller-warranted integer workload is exactly associative."""
+    algebra = LexicographicSemiring(
+        TROPICAL,
+        TROPICAL,
+        exact_workload=True,
+        order_preserving_workload=True,
+    )
+    assert algebra.add(algebra.add(a, b), c) == algebra.add(a, algebra.add(b, c))
+    assert algebra.multiply(algebra.multiply(a, b), c) == algebra.multiply(
+        a, algebra.multiply(b, c)
+    )
+
+
+def test_lexicographic_integer_chart_agrees_with_decimal_tropical() -> None:
+    """The declared float workload folds the same integer-cost chart as Decimal."""
+
+    def fold_chart[V](
+        algebra: LexicographicSemiring[V, V],
+        chart: tuple[tuple[tuple[V, V], ...], ...],
+    ) -> tuple[V, V]:
+        total = algebra.zero
+        for path in chart:
+            product = algebra.one
+            for value in path:
+                product = algebra.multiply(product, value)
+            total = algebra.add(total, product)
+        return total
+
+    integer_chart = (((2, 7), (3, 11)), ((4, 13), (1, 5)))
+    float_chart = tuple(
+        tuple((float(left), float(right)) for left, right in path)
+        for path in integer_chart
+    )
+    decimal_chart = tuple(
+        tuple((Decimal(left), Decimal(right)) for left, right in path)
+        for path in integer_chart
+    )
+    floats = fold_chart(
+        LexicographicSemiring(
+            TROPICAL,
+            TROPICAL,
+            exact_workload=True,
+            order_preserving_workload=True,
+        ),
+        float_chart,
+    )
+    decimals = fold_chart(
+        LexicographicSemiring(DECIMAL_TROPICAL, DECIMAL_TROPICAL), decimal_chart
+    )
+    assert tuple(Decimal.from_float(value) for value in floats) == decimals
+
+
+def test_lexicographic_exact_workload_exposes_fractional_float_hazard() -> None:
+    """A false workload declaration leaves multiplication order-dependent."""
+    algebra = LexicographicSemiring(
+        TROPICAL,
+        TROPICAL,
+        exact_workload=True,
+        order_preserving_workload=True,
+    )
+    first = (0.1, 0.1)
+    second = (0.2, 0.2)
+    third = (0.3, 0.3)
+    left_grouped = algebra.multiply(algebra.multiply(first, second), third)
+    right_grouped = algebra.multiply(first, algebra.multiply(second, third))
+    assert left_grouped == (
+        LEFT_GROUPED_FRACTIONAL_SUM,
+        LEFT_GROUPED_FRACTIONAL_SUM,
+    )
+    assert right_grouped == (
+        RIGHT_GROUPED_FRACTIONAL_SUM,
+        RIGHT_GROUPED_FRACTIONAL_SUM,
+    )
+    assert left_grouped != right_grouped
+
+
+def test_lexicographic_decimal_tropical_needs_no_workload_declarations() -> None:
+    """Exact components accept absent or harmless workload declarations."""
+    implicit = LexicographicSemiring(DECIMAL_TROPICAL, DECIMAL_TROPICAL)
+    explicit = LexicographicSemiring(
+        DECIMAL_TROPICAL,
+        DECIMAL_TROPICAL,
+        exact_workload=True,
+        order_preserving_workload=True,
+    )
+    assert implicit.exact_workload is False
+    assert implicit.order_preserving_workload is False
+    assert explicit.exact_workload is True
+    assert explicit.order_preserving_workload is True
+
+
 def test_lexicographic_refuses_ieee_tropical_strict_order() -> None:
     """IEEE tropical also lacks the strict order required for composition."""
     tropical = TropicalSemiring()
     tropical.multiply_associativity = LawCheck.EXACT
-    with pytest.raises(ValueError, match="multiply_strictly_order_preserving"):
+    with pytest.raises(
+        ValueError,
+        match="multiply_strictly_order_preserving.*order_preserving_workload",
+    ):
         LexicographicSemiring(tropical, PathWitnessSemiring())
 
 
