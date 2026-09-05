@@ -57,6 +57,7 @@ _SHORT_OBJECT_HEADER = '"TextGrid"'
 _LONG_VALUE = re.compile(r"^\s*[^=]+?=\s*(.*?)\s*$")
 _INTEGER = re.compile(r"[0-9]+\Z")
 _HEADER_LINE_COUNT = 2
+_CONTAINMENT_RULES = ("enclosure", "endpoint_coincidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,25 @@ class _Tier:
     xmin: Decimal
     xmax: Decimal
     entries: tuple[_Interval | _Point, ...]
+
+
+def _containment_rule(value: str) -> str:
+    if value not in _CONTAINMENT_RULES:
+        raise ValueError(
+            f"TextGrid containment_rule {value!r} must be "
+            "'enclosure' or 'endpoint_coincidence'"
+        )
+    return value
+
+
+def _contains(parent: _Interval, child: _Interval, rule: str) -> bool:
+    enclosed = parent.start <= child.start and child.end <= parent.end
+    if rule == "enclosure":
+        return enclosed
+    parent_boundaries = {parent.start, parent.end}
+    return (
+        enclosed and child.start in parent_boundaries and child.end in parent_boundaries
+    )
 
 
 class TextGridReadResult(NamedTuple):
@@ -305,10 +325,16 @@ def _clock_boundary(index: int, size: int) -> DurableBoundaryRef:
     )
 
 
-def from_textgrid(document: str | bytes, *, unit: str = "s") -> TextGridReadResult:
-    """Decode a long- or short-form TextGrid into a graph and its selection profile."""
+def from_textgrid(
+    document: str | bytes,
+    *,
+    unit: str = "s",
+    containment_rule: str = "enclosure",
+) -> TextGridReadResult:
+    """Decode a TextGrid using enclosure or endpoint-coincidence containment."""
     if not isinstance(unit, str) or not unit:
         raise ValueError(f"TextGrid unit {unit!r} must be a non-empty string")
+    containment_rule = _containment_rule(containment_rule)
     xmin, xmax, parsed_tiers = _parse(document)
     duplicate = next(
         (
@@ -446,10 +472,7 @@ def from_textgrid(document: str | bytes, *, unit: str = "s") -> TextGridReadResu
                 assert isinstance(parent_entry, _Interval)
                 for child_item, child_entry in enumerate(child.entries):
                     assert isinstance(child_entry, _Interval)
-                    if (
-                        parent_entry.start <= child_entry.start
-                        and child_entry.end <= parent_entry.end
-                    ):
+                    if _contains(parent_entry, child_entry, containment_rule):
                         relations.append(
                             RelationInstance(
                                 containment,

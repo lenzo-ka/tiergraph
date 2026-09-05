@@ -4274,10 +4274,10 @@ Construct the physical clock declared by the decoded graph.
 ### `from_textgrid`
 
 ```text
-from_textgrid(document: 'str | bytes', *, unit: 'str' = 's') -> 'TextGridReadResult'
+from_textgrid(document: 'str | bytes', *, unit: 'str' = 's', containment_rule: 'str' = 'enclosure') -> 'TextGridReadResult'
 ```
 
-Decode a long- or short-form TextGrid into a graph and its selection profile.
+Decode a TextGrid using enclosure or endpoint-coincidence containment.
 
 ### `to_textgrid`
 
@@ -6226,10 +6226,10 @@ Construct the physical clock declared by the decoded graph.
 ### `from_textgrid`
 
 ```text
-from_textgrid(document: 'str | bytes', *, unit: 'str' = 's') -> 'TextGridReadResult'
+from_textgrid(document: 'str | bytes', *, unit: 'str' = 's', containment_rule: 'str' = 'enclosure') -> 'TextGridReadResult'
 ```
 
-Decode a long- or short-form TextGrid into a graph and its selection profile.
+Decode a TextGrid using enclosure or endpoint-coincidence containment.
 
 ### `to_textgrid`
 
