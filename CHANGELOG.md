@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added explicit arithmetic and order-preservation workload declarations for lexicographic semirings over float components.
 - Added caller-selected TextGrid containment by enclosure or endpoint coincidence, with enclosure as the default.
 - Added `make gate-fast` for the full gate except cross-process hash-seed checks.
 - Added `SelectionSemiring`, which carries the winning cost's tie-invariant payload while declaring operand-ordered ties noncommutative.
