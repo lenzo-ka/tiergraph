@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Highlights
+
+- **BREAKING:** The boundary family is now `Boundary`, `BoundaryRef`, `DurableBoundaryRef`, `boundary_values`, `resolve_boundary`, and `from_boundary_values`, while `position_values`, `durable_position`, `promote_position`, and `/positions/…` retain their document spellings; `FORMAT_VERSION` is `"0.2.0"`.
+- Document, program, and selector readers apply the declared refusal order where their inputs can raise it; `Refusal` is the `ValueError` base for staged refusals, and `PathRefusal` and `ProfileRegistrationRefusal` are `ValueError` subclasses.
+- The Praat TextGrid codec reads long and short forms with exact-Decimal numbers and writes long form through `SpanViewProfile`.
+- The semiring `star` member resolves cyclic folds.
+- Graph-carried seals constrain ordered tier, binary-relation, and polyadic-relation carriers through `SealDeclaration`.
+- `SelectionSemiring` carries the winning cost's tie-invariant payload and declares operand-ordered ties noncommutative.
+- **BREAKING:** Selection is one graph-free surface; the published selection group contracts from 24 names to 18 and the former query classes are removed.
+- A clock profile refuses a gap past its tick's refinement count at construction.
+
 ### Added
 
+- Added caller-selected TextGrid containment by enclosure or endpoint coincidence, with enclosure as the default.
 - Added `make gate-fast` for the full gate except cross-process hash-seed checks.
 - Added `SelectionSemiring`, which carries the winning cost's tie-invariant payload while declaring operand-ordered ties noncommutative.
 - Registered the cone-model successor at `SealDeclaration` with the conditions that must hold before it can replace whole-document edits.

@@ -377,6 +377,14 @@ def test_reader_refuses_duplicate_names_trailing_values_and_bad_units() -> None:
         from_textgrid(trailing)
     with pytest.raises(ValueError, match="non-empty string"):
         from_textgrid(_fixture("reference-long.TextGrid"), unit="")
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"containment_rule 'overlap' must be 'enclosure' or "
+            r"'endpoint_coincidence'"
+        ),
+    ):
+        from_textgrid(_fixture("reference-long.TextGrid"), containment_rule="overlap")
 
 
 def test_undoubled_inner_quote_refuses() -> None:
@@ -411,6 +419,50 @@ def test_containment_uses_exact_interval_bounds() -> None:
         (ItemRef(words, 0), ItemRef(phones, 0)),
         (ItemRef(words, 1), ItemRef(phones, 2)),
     }
+
+
+def _strictly_enclosed_textgrid() -> str:
+    return (
+        _fixture("integer-long.TextGrid")
+        .decode()
+        .replace(
+            '    item [2]:\n        class = "TextTier" \n        name = "marks" \n'
+            "        xmin = 0 \n        xmax = 3 \n        points: size = 1 \n"
+            '        points [1]:\n            number = 2 \n            mark = "x" \n',
+            '    item [2]:\n        class = "IntervalTier" \n        name = "phones" \n'
+            "        xmin = 0 \n        xmax = 3 \n        intervals: size = 3 \n"
+            "        intervals [1]:\n            xmin = 0 \n            xmax = 0.25 \n"
+            '            text = "leading" \n'
+            "        intervals [2]:\n            xmin = 0.25 \n            xmax = 0.75 \n"
+            '            text = "strictly inside" \n'
+            "        intervals [3]:\n            xmin = 0.75 \n            xmax = 3 \n"
+            '            text = "trailing" \n',
+        )
+    )
+
+
+def _containment_edges(result: textgrid_module.TextGridReadResult) -> set[object]:
+    return {
+        (relation.left, relation.right)
+        for relation in result.graph.relations
+        if relation.declaration.local_name.startswith("containment-")
+    }
+
+
+def test_enclosure_containment_includes_a_strictly_enclosed_child() -> None:
+    result = from_textgrid(_strictly_enclosed_textgrid(), containment_rule="enclosure")
+    words, phones = result.profile.span_tiers
+    assert _containment_edges(result) == {
+        (ItemRef(words, 0), ItemRef(phones, 0)),
+        (ItemRef(words, 0), ItemRef(phones, 1)),
+    }
+
+
+def test_endpoint_coincidence_excludes_a_strictly_enclosed_child() -> None:
+    result = from_textgrid(
+        _strictly_enclosed_textgrid(), containment_rule="endpoint_coincidence"
+    )
+    assert _containment_edges(result) == set()
 
 
 def test_writer_fills_leading_and_trailing_uncovered_ranges() -> None:
