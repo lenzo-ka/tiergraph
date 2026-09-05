@@ -1062,5 +1062,5 @@ def test_fold_selects_the_winning_payload_through_semiring_addition() -> None:
         lift=cast(Lift[object], lift),
     ).run()
     cost, payload = cast(tuple[Decimal, tuple[str, ...]], folded.value)
+    assert payload == ("start", "sting", "out")
     assert cost == Decimal(4)
-    assert payload

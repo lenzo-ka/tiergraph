@@ -5512,7 +5512,7 @@ Decode a two-component JSON array.
 ### `SelectionSemiring`
 
 ```text
-SelectionSemiring(cost: 'Semiring[T]', payload_identity: 'U', tie_invariant_payload: 'bool', payload_multiply: 'Callable[[U, U], U]' = <built-in function add>, payload_encode: 'Callable[[U], object] | None' = None, payload_decode: 'Callable[[object], U] | None' = None) -> None
+SelectionSemiring(cost: 'Semiring[T]', payload_identity: 'U', tie_invariant_payload: 'bool', payload_multiply: 'Callable[[U, U], U]' = _PayloadAddition(), payload_encode: 'Callable[[U], object] | None' = None, payload_decode: 'Callable[[object], U] | None' = None) -> None
 ```
 
 Select a winning cost together with its payload.
@@ -5524,7 +5524,14 @@ carry different payloads. Such payloads require accumulation instead.
 
 ``payload_identity`` supplies the payload at both cost identities. Payload
 multiplication defaults to addition, which concatenates tuple witnesses;
-callers can supply another associative operation for another payload.
+callers can supply another operation for another payload. The caller
+declares that ``payload_identity`` is its two-sided identity and that
+``payload_multiply`` is associative; the law checks derived from ``cost``
+assume both conditions. Construction can test the identity against itself
+but cannot prove either condition over every payload. Float costs can create
+ties by rounding, so tie invariance covers arithmetic ties as well as exact
+ones. The default codec writes a tuple witness as a JSON array and restores
+that tuple; callers provide codecs for other compound payload shapes.
 
 #### `SelectionSemiring.star`
 

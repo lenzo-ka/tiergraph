@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import operator
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
@@ -511,6 +510,21 @@ class ProductSemiring[T, U]:
         return (self.left.decode(value[0]), self.right.decode(value[1]))
 
 
+class _Addable[U](Protocol):
+    def __add__(self, other: U, /) -> U: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _PayloadAddition:
+    """Give the default payload operation a stable documented representation."""
+
+    def __call__[U](self, left: U, right: U, /) -> U:
+        return cast(_Addable[U], left).__add__(right)
+
+
+_PAYLOAD_ADDITION = _PayloadAddition()
+
+
 @dataclass(frozen=True)
 class SelectionSemiring[T, U]:
     """Select a winning cost together with its payload.
@@ -522,13 +536,20 @@ class SelectionSemiring[T, U]:
 
     ``payload_identity`` supplies the payload at both cost identities. Payload
     multiplication defaults to addition, which concatenates tuple witnesses;
-    callers can supply another associative operation for another payload.
+    callers can supply another operation for another payload. The caller
+    declares that ``payload_identity`` is its two-sided identity and that
+    ``payload_multiply`` is associative; the law checks derived from ``cost``
+    assume both conditions. Construction can test the identity against itself
+    but cannot prove either condition over every payload. Float costs can create
+    ties by rounding, so tie invariance covers arithmetic ties as well as exact
+    ones. The default codec writes a tuple witness as a JSON array and restores
+    that tuple; callers provide codecs for other compound payload shapes.
     """
 
     cost: Semiring[T]
     payload_identity: U
     tie_invariant_payload: bool
-    payload_multiply: Callable[[U, U], U] = operator.add
+    payload_multiply: Callable[[U, U], U] = _PAYLOAD_ADDITION
     payload_encode: Callable[[U], object] | None = None
     payload_decode: Callable[[object], U] | None = None
 
@@ -537,6 +558,20 @@ class SelectionSemiring[T, U]:
         if self.tie_invariant_payload is not True:
             raise ValueError(
                 "tie_invariant_payload must be declared true for selection"
+            )
+        try:
+            identity_product = self.payload_multiply(
+                self.payload_identity, self.payload_identity
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"payload_identity {self.payload_identity!r} is not accepted by "
+                f"payload_multiply {self.payload_multiply!r}"
+            ) from error
+        if identity_product != self.payload_identity:
+            raise ValueError(
+                f"payload_identity {self.payload_identity!r} must be preserved by "
+                f"payload_multiply {self.payload_multiply!r}"
             )
 
     @property
@@ -617,16 +652,20 @@ class SelectionSemiring[T, U]:
         right = self._value(right, "right")
         if left[0] == self.cost.zero or right[0] == self.cost.zero:
             return self.zero
-        return (
-            self.cost.multiply(left[0], right[0]),
-            self.payload_multiply(left[1], right[1]),
-        )
+        cost = self.cost.multiply(left[0], right[0])
+        if cost == self.cost.zero:
+            return self.zero
+        return (cost, self.payload_multiply(left[1], right[1]))
 
     def encode(self, value: tuple[T, U], /) -> object:
         """Encode the cost and payload as a JSON array."""
         value = self._value(value, "value")
         payload = (
-            value[1] if self.payload_encode is None else self.payload_encode(value[1])
+            list(value[1])
+            if self.payload_encode is None and isinstance(value[1], tuple)
+            else value[1]
+            if self.payload_encode is None
+            else self.payload_encode(value[1])
         )
         return [self.cost.encode(value[0]), payload]
 
@@ -636,7 +675,11 @@ class SelectionSemiring[T, U]:
         if not isinstance(value, list) or len(value) != selection_component_count:
             raise ValueError("encoded selection must be a two-element array")
         payload = (
-            cast(U, value[1])
+            cast(U, tuple(value[1]))
+            if self.payload_decode is None
+            and isinstance(self.payload_identity, tuple)
+            and isinstance(value[1], list)
+            else cast(U, value[1])
             if self.payload_decode is None
             else self.payload_decode(value[1])
         )

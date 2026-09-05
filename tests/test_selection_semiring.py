@@ -1,5 +1,6 @@
 """Selection-semiring behavior and fold integration."""
 
+import json
 from dataclasses import replace
 from decimal import Decimal
 from functools import reduce
@@ -7,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from tests.semiring_laws import _assert_required_equal
 from tiergraph.semiring import (
     COUNTING,
     DECIMAL_TROPICAL,
@@ -83,3 +85,70 @@ def test_selection_carrier_boundary_and_codecs() -> None:
     invalid_cost = cast(Semiring[Decimal], cast(object, InvalidLawCost()))
     with pytest.raises(ValueError, match="selection cost.*add_associativity"):
         _ = replace(algebra, cost=invalid_cost).add_associativity
+
+
+def test_selection_refuses_a_payload_identity_the_operation_does_not_preserve() -> None:
+    """A near-valid payload identity is checked against its operation."""
+    with pytest.raises(ValueError, match="payload_identity.*payload_multiply"):
+        SelectionSemiring(DECIMAL_TROPICAL, 1, tie_invariant_payload=True)
+
+    def refusing_operation(left: int, right: int, /) -> int:
+        del left, right
+        raise TypeError("unsupported payload")
+
+    with pytest.raises(ValueError, match="payload_identity.*payload_multiply"):
+        SelectionSemiring(
+            DECIMAL_TROPICAL,
+            0,
+            tie_invariant_payload=True,
+            payload_multiply=refusing_operation,
+        )
+
+
+def test_not_held_is_only_valid_for_add_commutativity() -> None:
+    """No other mandatory law can opt out with NOT_HELD."""
+    with pytest.raises(AssertionError, match="multiply_associativity"):
+        _assert_required_equal(
+            LawCheck.NOT_HELD,
+            1,
+            2,
+            (1, 2),
+            law="multiply_associativity",
+        )
+
+
+def test_selection_not_held_commutativity_has_a_tie_witness() -> None:
+    """The declared failure of commutativity has concrete carrier operands."""
+    algebra = selection()
+    left = (Decimal(2), 5)
+    right = (Decimal(2), 9)
+    assert algebra.add_commutativity is LawCheck.NOT_HELD
+    assert algebra.add(left, right) != algebra.add(right, left)
+
+
+def test_selection_normalizes_a_zero_divisor_product() -> None:
+    """A cost-zero product carries the selection payload identity."""
+
+    class ZeroDivisorCost:
+        zero = 0
+
+        def multiply(self, left: int, right: int, /) -> int:
+            del left, right
+            return self.zero
+
+    cost = cast(Semiring[int], cast(object, ZeroDivisorCost()))
+    algebra: SelectionSemiring[int, tuple[str, ...]] = SelectionSemiring(
+        cost, (), tie_invariant_payload=True
+    )
+    assert algebra.multiply((2, ("left",)), (3, ("right",))) == algebra.zero
+
+
+def test_selection_default_codec_round_trips_tuple_witnesses() -> None:
+    """The default tuple-witness codec is strict JSON and round-trips."""
+    algebra: SelectionSemiring[Decimal, tuple[str, ...]] = SelectionSemiring(
+        DECIMAL_TROPICAL, (), tie_invariant_payload=True
+    )
+    value = (Decimal(2), ("a", "b"))
+    encoded = algebra.encode(value)
+    serialized = json.dumps(encoded)
+    assert algebra.decode(json.loads(serialized)) == value
