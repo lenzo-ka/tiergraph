@@ -192,6 +192,7 @@ from tiergraph.spanview import (
     to_jsonl,
     to_text,
 )
+from tiergraph.textgrid import TextGridReadResult, from_textgrid, to_textgrid
 from tiergraph.traversal import (
     NodeSequence,
     OrderedContainment,
@@ -367,6 +368,7 @@ __all__ = [
     "StarSelector",
     "Step",
     "StructuralPathProfile",
+    "TextGridReadResult",
     "TiePolicy",
     "Tier",
     "TierDeclaration",
@@ -389,6 +391,7 @@ __all__ = [
     "dumps",
     "evaluate_selection",
     "execute",
+    "from_textgrid",
     "grammar_loads",
     "graph_summary",
     "json_value_graph",
@@ -407,4 +410,5 @@ __all__ = [
     "to_json",
     "to_jsonl",
     "to_text",
+    "to_textgrid",
 ]
