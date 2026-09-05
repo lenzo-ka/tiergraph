@@ -166,6 +166,7 @@ def fixture(*, offsets: bool = True) -> tuple[Graph, SpanViewProfile]:
 
 def profile_data(profile: SpanViewProfile) -> dict[str, object]:
     """Encode the declarative profile shape used by decoder and CLI tests."""
+    assert profile.base_surface_attribute is not None
     return {
         "base_tier": profile.base_tier.to_data(),
         "span_tiers": [name.to_data() for name in profile.span_tiers],
@@ -183,6 +184,17 @@ def profile_data(profile: SpanViewProfile) -> dict[str, object]:
             if profile.alternative_relation is None
             else profile.alternative_relation.to_data()
         ),
+        "point_tiers": [name.to_data() for name in profile.point_tiers],
+        "point_coverage_relation": (
+            None
+            if profile.point_coverage_relation is None
+            else profile.point_coverage_relation.to_data()
+        ),
+        "value_attributes": {
+            str(tier): attribute.to_data()
+            for tier, attribute in profile.value_attributes
+        },
+        "clock_face": profile.clock_face,
     }
 
 
@@ -216,9 +228,17 @@ def test_profile_from_data_is_strict_and_hardens_every_qname() -> None:
     # hardening arrives here as a case.  `span_tiers` is the one plural field,
     # and carries its element index in the path, so it is checked above.
     singular = tuple(
-        field.name for field in fields(SpanViewProfile) if field.name != "span_tiers"
+        field.name
+        for field in fields(SpanViewProfile)
+        if field.name
+        not in {"span_tiers", "point_tiers", "value_attributes", "clock_face"}
     )
-    assert set(singular) | {"span_tiers"} == set(profile_data(profile))
+    assert set(singular) | {
+        "span_tiers",
+        "point_tiers",
+        "value_attributes",
+        "clock_face",
+    } == set(profile_data(profile))
     for field_name in singular:
         with pytest.raises(
             ValueError,
@@ -335,6 +355,11 @@ def test_boundary_coverage_projects_anchor_at_leading_offset() -> None:
     )
     graph = replace(
         graph,
+        tiers=(
+            graph.tiers[0],
+            replace(graph.tiers[1], items=graph.tiers[1].items[:1]),
+            *graph.tiers[2:],
+        ),
         relation_declarations=tuple(
             boundary_coverage if declaration.name == COVERAGE else declaration
             for declaration in graph.relation_declarations
@@ -347,13 +372,86 @@ def test_boundary_coverage_projects_anchor_at_leading_offset() -> None:
             ),
         ),
     )
-    view = span_view(graph, profile)
+    point_profile = replace(
+        profile,
+        span_tiers=(),
+        point_tiers=(SPANS,),
+        point_coverage_relation=COVERAGE,
+    )
+    view = span_view(graph, point_profile)
     assert len(view.spans) == 1
     assert (view.spans[0].start, view.spans[0].end) == (0, 0)
     assert (view.spans[0].char_start, view.spans[0].char_end) == (10, 10)
-    rendered = tiergraph_dot.dumps_spans(graph, profile)
+    rendered = tiergraph_dot.dumps_spans(graph, point_profile)
     assert "boundary_0_0 [shape=point" in rendered
     assert 'item_1_0 -> boundary_0_0 [xlabel="extent"' in rendered
+
+
+def test_span_tier_refuses_boundary_only_zero_width_coverage() -> None:
+    """A boundary anchor must be declared as a point rather than a span."""
+    graph, profile = fixture()
+    graph = replace(
+        graph,
+        relation_declarations=tuple(
+            replace(
+                declaration,
+                left_endpoint=RelationEndpointKind.BOUNDARY,
+            )
+            if declaration.name == COVERAGE
+            and isinstance(declaration, BipartiteRelationDeclaration)
+            else declaration
+            for declaration in graph.relation_declarations
+        ),
+        relations=(
+            RelationInstance(
+                COVERAGE,
+                DurableBoundaryRef(BASE, BoundarySide.BEFORE),
+                ItemRef(SPANS, 0),
+            ),
+        ),
+        tiers=(
+            graph.tiers[0],
+            replace(graph.tiers[1], items=graph.tiers[1].items[:1]),
+            *graph.tiers[2:],
+        ),
+    )
+    with pytest.raises(ValueError, match=r"span tier .* item 0 projects zero width"):
+        span_view(graph, profile)
+
+
+def test_point_coverage_relation_must_be_boundary_left() -> None:
+    """An item-left relation cannot define point anchoring."""
+    graph, profile = fixture()
+    with pytest.raises(ValueError, match="point coverage relation.*boundary to item"):
+        span_view(
+            graph,
+            replace(
+                profile,
+                span_tiers=(),
+                point_tiers=(SPANS,),
+                point_coverage_relation=COVERAGE,
+            ),
+        )
+
+
+def test_point_projection_refuses_positive_width_after_role_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The width check remains local even when a prevalidated caller projects."""
+    graph, profile = fixture()
+    monkeypatch.setattr(
+        "tiergraph.spanview._validate_profile", lambda _graph, _profile: None
+    )
+    with pytest.raises(ValueError, match="point tier.*positive width"):
+        span_view(
+            graph,
+            replace(
+                profile,
+                span_tiers=(),
+                point_tiers=(SPANS,),
+                point_coverage_relation=COVERAGE,
+            ),
+        )
 
 
 def test_conflicting_boundary_coverage_refuses() -> None:
@@ -385,7 +483,15 @@ def test_conflicting_boundary_coverage_refuses() -> None:
         ),
     )
     with pytest.raises(ValueError, match="conflicting boundary coverage"):
-        span_view(graph, profile)
+        span_view(
+            graph,
+            replace(
+                profile,
+                span_tiers=(),
+                point_tiers=(SPANS,),
+                point_coverage_relation=COVERAGE,
+            ),
+        )
 
 
 def test_coverage_ignores_item_and_boundary_endpoints_outside_base_tier() -> None:
@@ -429,7 +535,8 @@ def test_coverage_ignores_item_and_boundary_endpoints_outside_base_tier() -> Non
             ),
         ),
     )
-    assert span_view(boundary_graph, profile).spans == ()
+    with pytest.raises(ValueError, match="item 0 has no coverage"):
+        span_view(boundary_graph, profile)
 
 
 def test_projection_reports_profile_surface_and_coverage_errors() -> None:

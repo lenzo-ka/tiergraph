@@ -749,7 +749,11 @@ def dumps_spans(
 ) -> str:
     """Return deterministic DOT focused on a segmentation and its span extents."""
     view = span_view(graph, profile, alternatives=alternatives)
-    selected_tiers = (profile.base_tier, *profile.span_tiers)
+    selected_tiers = (
+        profile.base_tier,
+        *profile.span_tiers,
+        *profile.point_tiers,
+    )
     tiers = tuple(
         (index, tier)
         for index, tier in enumerate(graph.tiers)

@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from tiergraph.core import (
     AttributeDeclaration,
@@ -66,7 +66,10 @@ from tiergraph.spanview import SpanViewProfile, span_view
 from tiergraph.traversal import OrderedContainment
 from tiergraph.value import JsonValueProfile, json_value_graph
 
-type RoleValue = QualifiedName | tuple[QualifiedName, ...]
+type ValueAttributeBindings = tuple[tuple[QualifiedName, QualifiedName], ...]
+type RoleValue = (
+    QualifiedName | tuple[QualifiedName, ...] | ValueAttributeBindings | str
+)
 """One bound role: a single declaration name, or an ordered set of them."""
 
 type RoleBinding = Mapping[str, RoleValue]
@@ -330,6 +333,9 @@ class ProfileRegistry:
 PROFILES = ProfileRegistry()
 """The registry this package's own profiles register into."""
 
+_VALUE_ATTRIBUTE_BINDING_SIZE = 2
+"""A value-attribute binding pairs one tier with one attribute."""
+
 
 def _single(roles: RoleBinding, role: str) -> QualifiedName:
     """Read one role bound to a single declaration name."""
@@ -347,8 +353,31 @@ def _optional(roles: RoleBinding, role: str) -> QualifiedName | None:
 def _sequence(roles: RoleBinding, role: str) -> tuple[QualifiedName, ...]:
     """Read one role bound to an ordered set of declaration names."""
     value = roles[role]
-    if isinstance(value, QualifiedName):
+    if not isinstance(value, tuple) or not all(
+        isinstance(item, QualifiedName) for item in value
+    ):
         raise ValueError(f"role {role!r} binds one name where a sequence is read")
+    return cast(tuple[QualifiedName, ...], value)
+
+
+def _value_attributes(roles: RoleBinding) -> ValueAttributeBindings:
+    """Read optional per-tier value-attribute bindings."""
+    value = roles.get("value_attributes", ())
+    if not isinstance(value, tuple) or not all(
+        isinstance(item, tuple)
+        and len(item) == _VALUE_ATTRIBUTE_BINDING_SIZE
+        and all(isinstance(name, QualifiedName) for name in item)
+        for item in value
+    ):
+        raise ValueError("role 'value_attributes' must bind tier-attribute pairs")
+    return cast(ValueAttributeBindings, value)
+
+
+def _clock_face(roles: RoleBinding) -> str:
+    """Read the optional clock-face choice."""
+    value = roles.get("clock_face", "tick")
+    if not isinstance(value, str):
+        raise ValueError("role 'clock_face' must bind a string")
     return value
 
 
@@ -723,7 +752,6 @@ _SPAN_ROLES = (
     "coverage_relation",
     "score_attribute",
     "value_attribute",
-    "base_surface_attribute",
 )
 
 
@@ -739,20 +767,25 @@ class _SpanView(GraphProfile):
 
     name = "tiergraph.span-view"
     required_roles = ("span_tiers", *_SPAN_ROLES)
-    optional_roles = ("char_offset_attribute", "alternative_relation")
+    optional_roles = (
+        "base_surface_attribute",
+        "char_offset_attribute",
+        "alternative_relation",
+        "point_tiers",
+        "point_coverage_relation",
+        "value_attributes",
+        "clock_face",
+    )
     decides = (
         "the base tier and every span tier are declared",
         "the coverage and alternative relations are declared bipartite, so a "
         "partial segmentation is not projected as a complete one",
         "every named attribute is declared",
         "every base item carries a surface, and a character offset when one is read",
-        "each covered span has contiguous coverage and one boundary anchor",
+        "each selected span or point has coverage with the declared width",
         "the projected cover is ordered, non-overlapping, and within the base",
     )
-    leaves_undecided = (
-        "whether every item on a span tier is covered, since an uncovered span "
-        "item contributes nothing to the projection",
-    )
+    leaves_undecided = ()
 
     @classmethod
     def check(cls, graph: Graph, roles: RoleBinding) -> None:
@@ -764,9 +797,13 @@ class _SpanView(GraphProfile):
             _single(roles, "coverage_relation"),
             _single(roles, "score_attribute"),
             _single(roles, "value_attribute"),
-            _single(roles, "base_surface_attribute"),
+            _optional(roles, "base_surface_attribute"),
             _optional(roles, "char_offset_attribute"),
             alternative,
+            _sequence(roles, "point_tiers") if "point_tiers" in roles else (),
+            _optional(roles, "point_coverage_relation"),
+            _value_attributes(roles),
+            _clock_face(roles),
         )
         span_view(graph, profile, alternatives=alternative is not None)
 
