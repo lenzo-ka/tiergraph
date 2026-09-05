@@ -255,6 +255,7 @@ ascending sort order.
   still exists, before `rm -rf dist build` removes it. That listing is read, not
   scored: the pattern matches either package, so *both* is a fact about the
   output rather than about the exit status.
+- **Tag-sensitive format-growth tests**: A regression test that asserts what `format-growth` reports is phase-dependent: the report changes the moment the line's first tag exists. Such a test must read the phase from the tags, as `test_the_committed_schema_reports_only_the_break_this_release_priced` does, or it fails on the release commit once tagged; the tag goes up with the release commit in step 4, and the CI run that must be green before step 5 checks out full history and tags, so it sees the tag and a test depending on the tag's absence fails there.
 - **CI must be green first**: `ci.yml` runs on the push; only cut the release
   once it passes.
 - **Re-releases**: PyPI is immutable — you cannot overwrite `X.Y.Z`. If a build
