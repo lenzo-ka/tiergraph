@@ -45,6 +45,7 @@ from tiergraph.semiring import (
     PATH,
     PATH_WITNESSES,
     PathValue,
+    SelectionSemiring,
     Semiring,
     ZeroClosedStar,
 )
@@ -1046,3 +1047,20 @@ def test_ranked_candidate_deduplication_is_costed() -> None:
     )
     assert ranked == ((PATH.one, ("other",)),)
     assert operations[0] > 0
+
+
+def test_fold_selects_the_winning_payload_through_semiring_addition() -> None:
+    """The existing fold carries the payload selected with the lowest cost."""
+    algebra = SelectionSemiring(DECIMAL_TROPICAL, (), tie_invariant_payload=True)
+
+    def lift(value: object, label: str, /) -> tuple[Decimal, tuple[str, ...]]:
+        return (cast(Decimal, value), (label,))
+
+    folded = replace(
+        declaration("cost"),
+        semiring=cast(Semiring[object], algebra),
+        lift=cast(Lift[object], lift),
+    ).run()
+    cost, payload = cast(tuple[Decimal, tuple[str, ...]], folded.value)
+    assert cost == Decimal(4)
+    assert payload

@@ -18,6 +18,8 @@ tuple that gives each dependency relation an `AND` or `OR` meaning. `AND`
 combines a node's children as joint requirements; `OR` combines them as
 alternatives. Import concrete semirings from `tiergraph.semiring`.
 
+Use selection when the payload is invariant across optimal paths: `SelectionSemiring` keeps the payload attached to the winning cost and resolves a cost tie by operand order. A payload that is the path itself can differ between tied optima and therefore wants accumulation with `PATH`. Selection requires the caller to declare tie invariance, and `tiergraph semirings` does not list it because its payload identity, payload combination, codecs, and declaration are supplied by Python callers rather than nameable by `tiergraph fold`.
+
 Each transition must name a bipartite declaration, because a fold reads one
 parent and one child per incidence. A declared relation of another kind is
 refused and named for the kind it is, rather than being reported as undeclared

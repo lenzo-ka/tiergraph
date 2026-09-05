@@ -34,6 +34,7 @@ from tiergraph.semiring import (
     PathValue,
     PathWitnessSemiring,
     ProductSemiring,
+    SelectionSemiring,
     Semiring,
     TropicalSemiring,
     inexact_laws,
@@ -171,6 +172,7 @@ class SemiringCase:
 PRODUCT = ProductSemiring(DECIMAL_TROPICAL, COUNTING)
 SELECTIVE_PRODUCT = ProductSemiring(DECIMAL_TROPICAL, DECIMAL_ARCTIC)
 EXPECTATION = ExpectationSemiring(COUNTING)
+SELECTION = SelectionSemiring(DECIMAL_TROPICAL, 0, tie_invariant_payload=True)
 CASES = (
     SemiringCase("boolean", BOOLEAN, st.booleans()),
     SemiringCase("double-tropical", TROPICAL, TROPICAL_VALUES),
@@ -203,6 +205,11 @@ CASES = (
     ),
     SemiringCase(
         "expectation", EXPECTATION, st.tuples(COUNTING_VALUES, COUNTING_VALUES)
+    ),
+    SemiringCase(
+        "selection",
+        SELECTION,
+        st.one_of(st.tuples(DECIMALS, COUNTING_VALUES), st.just(SELECTION.zero)),
     ),
 )
 

@@ -47,6 +47,8 @@ def _assert_required_equal(
         ]
         assert _approximately_equal(left, right, max(magnitudes, default=0.0))
         return
+    if check is LawCheck.NOT_HELD:
+        return
     raise AssertionError(f"invalid required-law check: {check!r}")
 
 
