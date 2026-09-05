@@ -3,6 +3,9 @@ VENV ?= .venv
 PYTHON ?= python3.12
 VENV_PYTHON := $(VENV)/bin/python
 
+# The capture script defines the supported pytest flags passed through here.
+CORPUS_CAPTURE_FLAGS ?=
+
 # The gate reads the checkout this file lives in, not whatever the ambient
 # environment resolves. A git worktree has no virtualenv of its own, so it is
 # run with VENV pointing at another checkout's -- and that virtualenv carries an
@@ -91,12 +94,12 @@ format-semantics:
 
 # Capture is deliberately NOT part of the gate. A corpus regenerated from current
 # code is accepted by current code by construction, and the check over it would
-# pass without ever being able to fail. Run this at a release; the gate runs the
-# frozen result every time.
+# pass without ever being able to fail. This merges into the frozen result and
+# refuses an unreproduced row unless CORPUS_CAPTURE_FLAGS=--retain-unreproduced.
 corpus-capture:
 	@TIERGRAPH_CORPUS_OUT=corpus/accepted-documents.jsonl \
 	 TIERGRAPH_CORPUS_VERSION=$$($(VENV_PYTHON) -c 'import tiergraph; print(tiergraph.__version__)') \
-	 $(VENV_PYTHON) -m pytest -p scripts.capture_corpus -q
+	 $(VENV_PYTHON) -m pytest -p scripts.capture_corpus -q $(CORPUS_CAPTURE_FLAGS)
 
 docs:
 	@$(VENV_PYTHON) scripts/generate_docs.py

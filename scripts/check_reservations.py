@@ -303,6 +303,29 @@ UNENFORCEABLE: tuple[Unenforceable, ...] = (
             "no check because a reader would count it as coverage"
         ),
     ),
+    Unenforceable(
+        name="cone-model",
+        site="src/tiergraph/core.py",
+        symbol="SealDeclaration",
+        text=(
+            "The cone model is reserved until a whole-graph seal exists as one "
+            "frozen base,\na mergeable delta type exists, coordinate removal is "
+            "expressible within a\nfootprint or excluded from the mergeable set, "
+            "and observed-read validation is\ndecided."
+        ),
+        condition=(
+            "one whole-graph seal can freeze the base, a mergeable delta type "
+            "exists, coordinate removal is either representable in a footprint "
+            "or excluded, and observed-read validation has a decision"
+        ),
+        why=(
+            "SealedCarrier exposes only one tier or relation carrier at a time, "
+            "and their conjunction is not one base for a footprint declaration; "
+            "the other arrivals have no reserved names or declaration fields, so "
+            "syntax cannot distinguish them from unrelated deltas, removals, or "
+            "read validation without guessing their eventual forms"
+        ),
+    ),
 )
 
 

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Registered the cone-model successor at `SealDeclaration` with the conditions that must hold before it can replace whole-document edits.
 - Added exact-Decimal Praat TextGrid reading for long and short forms and long-form writing through `SpanViewProfile`. Imported interval tiers retain empty labels, point tiers anchor to base boundaries, physical output requires declared clock timing, and refined structural coordinates require an explicit integer scale.
 - Extended `SpanViewProfile` with point tiers, a boundary-left point coverage relation, per-tier value attributes, a clock-face choice, and optional base surfaces. Projection now refuses missing coverage, positive-width points, and zero-width spans by naming the tier item.
 - `Walk` now follows a polyadic relation as well as a bipartite one, so the
@@ -225,6 +226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The CLI reference now states why `action` and `react` remain library-only instead of implying a declarative callback format.
 - `PathRefusal` and `ProfileRegistrationRefusal` are now `ValueError` subclasses, so `except ValueError` catches every exported class ending in `Refusal`.
 - `Refusal`'s docstring now states where staging stops. The class says it is the
   one base every staged refusal has, which is true and was silent about the
@@ -552,6 +554,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The gate environment tests now require every non-file Make target to appear in `.PHONY`, so a same-named file cannot suppress its recipe.
+- Corpus capture now refuses every unreproduced row by default and requires `--retain-unreproduced` to preserve one without a new witness.
 - `discharge rewrite` and `discharge fold` now report false effect or exactness claims as JSON on the staged-refusal stderr channel, with a message naming the offender.
 - A clock profile now refuses a gap past its tick's refinement count at construction, naming the tick, gap, and count.
 - The semantic-corpus gate now consults a document's disposition on both

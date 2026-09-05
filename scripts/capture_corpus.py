@@ -42,12 +42,17 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+import pytest
 
 import tiergraph
 import tiergraph.wire
 
 ENV_OUT = "TIERGRAPH_CORPUS_OUT"
+
+# The spelling comes from the release operator's need to acknowledge stale rows.
+RETAIN_OPTION = "--retain-unreproduced"
 
 # Row identity, and the only field a corpus row means anything without. The gate
 # hands `document` and nothing else to the decoder, so two rows carrying the same
@@ -60,15 +65,16 @@ ENV_OUT = "TIERGRAPH_CORPUS_OUT"
 # same bytes while making the corpus unreadable.
 IDENTITY = "document"
 
-# The one disposition whose absence from a new capture is already accounted for.
-# `never-legal` says the spec never allowed the document and the decoder has been
-# corrected, so a later capture CANNOT witness it -- that is what the ruling
-# means. Absence is the expected consequence, not a finding.
-NEVER_LEGAL = "never-legal"
-
 
 class CaptureRefused(Exception):
     """A merge that would have lost a row the corpus already holds."""
+
+
+class OptionConfig(Protocol):
+    """Read the capture option from pytest without widening the hook to Any."""
+
+    def getoption(self, name: str) -> object:
+        """Return one parsed pytest option."""
 
 
 class Recorder:
@@ -172,7 +178,10 @@ class Merge:
 
 
 def merge_corpus(
-    existing: list[dict[str, str]], captured: list[dict[str, str]]
+    existing: list[dict[str, str]],
+    captured: list[dict[str, str]],
+    *,
+    retain_unreproduced: bool = False,
 ) -> Merge:
     """Fold a fresh capture into the corpus, preserving every row already there.
 
@@ -182,33 +191,24 @@ def merge_corpus(
     already in, so a merge shows up as an insert-only diff.
 
     The refusal is the point. An existing row the capture did not reproduce is
-    never silently dropped -- but neither is it silently kept, unless its own
-    disposition already accounts for the absence. `never-legal` does: the decoder
-    was corrected against that document, so no capture can witness it again. Any
-    other row going unreproduced means the suite stopped exercising a document
-    the corpus still asserts, and carrying it forward without saying so hides
-    that the frozen record and the running suite have drifted apart.
+    never silently dropped or kept. Retaining one requires the explicit override,
+    because even an expected absence is evidence that the new run did not witness
+    the frozen record.
     """
     witnessed = {row[IDENTITY] for row in captured}
     unwitnessed = tuple(
         row[IDENTITY] for row in existing if row[IDENTITY] not in witnessed
     )
-    lost = [
-        row
-        for row in existing
-        if row[IDENTITY] not in witnessed and row.get("disposition") != NEVER_LEGAL
-    ]
-    if lost:
+    if unwitnessed and not retain_unreproduced:
+        missing = [row for row in existing if row[IDENTITY] not in witnessed]
         raise CaptureRefused(
-            f"{len(lost)} of {len(existing)} corpus rows were not reproduced by "
-            "this capture, and no disposition accounts for that. A capture "
-            "merges into the corpus and never drops a row, so nothing was "
-            "written. Each is a question: the suite stopped exercising a "
-            "document it still asserts, or the row was never reproducible and "
-            "belongs adjudicated. Rows: "
+            f"{len(missing)} of {len(existing)} corpus rows were not reproduced "
+            "by this capture. A capture merges into the corpus and never drops "
+            "a row, so nothing was written. Pass --retain-unreproduced to keep "
+            "the named rows without a new witness. Rows: "
             + "; ".join(
-                f"[{row.get('disposition', 'unknown')}] {row[IDENTITY][:120]!r}"
-                for row in lost
+                f"[{row.get('disposition', 'unknown')}] {row[IDENTITY]!r}"
+                for row in missing
             )
         )
     held = {row[IDENTITY] for row in existing}
@@ -225,6 +225,16 @@ def merge_corpus(
 _RECORDER = Recorder()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Expose the override only on the capture invocation that needs it."""
+    parser.addoption(
+        RETAIN_OPTION,
+        action="store_true",
+        default=False,
+        help="retain existing corpus rows this capture did not reproduce",
+    )
+
+
 def install(recorder: Recorder) -> None:
     """Route both spellings of the decoder through the recorder.
 
@@ -237,13 +247,13 @@ def install(recorder: Recorder) -> None:
     tiergraph.loads = wrapped
 
 
-def pytest_configure(config: object) -> None:  # noqa: ARG001 -- pytest matches this hook by parameter name
+def pytest_configure(config: pytest.Config | None) -> None:  # noqa: ARG001 -- pytest fixes the hook signature
     """Install the recorder before collection imports anything."""
     if os.environ.get(ENV_OUT):
         install(_RECORDER)
 
 
-def pytest_unconfigure(config: object) -> None:  # noqa: ARG001 -- pytest matches this hook by parameter name
+def pytest_unconfigure(config: OptionConfig | None) -> None:
     """Merge what the run accepted into the corpus, if this was a capture run.
 
     A refusal is raised, not printed and swallowed. This hook runs after pytest
@@ -261,7 +271,12 @@ def pytest_unconfigure(config: object) -> None:  # noqa: ARG001 -- pytest matche
     captured = _RECORDER.entries(version)
     scaffolded = seen - len(captured)
     try:
-        merged = merge_corpus(read_corpus(path), captured)
+        retain_unreproduced = bool(config and config.getoption(RETAIN_OPTION))
+        merged = merge_corpus(
+            read_corpus(path),
+            captured,
+            retain_unreproduced=retain_unreproduced,
+        )
     except CaptureRefused as refusal:
         print(f"\ncapture refused: {refusal}", file=sys.stderr)
         raise
@@ -272,5 +287,5 @@ def pytest_unconfigure(config: object) -> None:  # noqa: ARG001 -- pytest matche
         f" merged into {destination}: {merged.kept} rows kept, {merged.added} added,"
         f" {count} in the corpus."
         f" {len(merged.unwitnessed)} kept rows this capture did not witness,"
-        " each already adjudicated never-legal."
+        " kept by explicit request."
     )

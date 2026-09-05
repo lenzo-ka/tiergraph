@@ -20,6 +20,15 @@ import pytest
 from scripts import capture_corpus
 
 
+class RetainConfig:
+    """Supply the enabled capture option to the plugin hook."""
+
+    def getoption(self, name: str) -> bool:
+        """Return the retain flag while checking the hook asks by its public name."""
+        assert name == capture_corpus.RETAIN_OPTION
+        return True
+
+
 def a_row(
     document: str, disposition: str = "legal", reason: str = ""
 ) -> dict[str, str]:
@@ -78,15 +87,30 @@ def test_an_existing_row_survives_a_capture_byte_for_byte() -> None:
     assert merged.added == 0
 
 
-def test_a_never_legal_row_survives_a_capture_that_cannot_witness_it() -> None:
-    """REGRESSION: the rows a rewrite loses and cannot get back.
-
-    `never-legal` means the decoder has been corrected against the document, so
-    no later capture reproduces it. Its absence is the ruling's consequence, and
-    the row is kept and reported rather than dropped or refused over.
-    """
+def test_a_missing_never_legal_row_refuses_by_default() -> None:
+    """REGRESSION: an unreproduced adjudication needs an explicit choice."""
     ruled = a_row("gone", "never-legal", "an unpaired surrogate has no encoding")
-    merged = capture_corpus.merge_corpus([ruled], a_capture("other"))
+    with pytest.raises(capture_corpus.CaptureRefused) as refusal:
+        capture_corpus.merge_corpus([ruled], a_capture("other"))
+    assert "gone" in str(refusal.value)
+
+
+def test_the_retain_flag_keeps_a_missing_never_legal_row() -> None:
+    """REGRESSION: the override retains the adjudication byte for byte."""
+    parser = pytest.Parser(_ispytest=True)
+    capture_corpus.pytest_addoption(parser)
+    absent, unknown = parser.parse_known_and_unknown_args([])
+    assert absent.retain_unreproduced is False
+    assert unknown == []
+    present, unknown = parser.parse_known_and_unknown_args(
+        [capture_corpus.RETAIN_OPTION]
+    )
+    assert present.retain_unreproduced is True
+    assert unknown == []
+    ruled = a_row("gone", "never-legal", "an unpaired surrogate has no encoding")
+    merged = capture_corpus.merge_corpus(
+        [ruled], a_capture("other"), retain_unreproduced=True
+    )
     assert ruled in merged.rows
     assert merged.unwitnessed == ("gone",)
     assert merged.kept == 1
@@ -149,6 +173,18 @@ def test_a_refusal_names_every_lost_row_not_just_the_first() -> None:
     assert "three" in message
 
 
+def test_a_refusal_distinguishes_documents_with_a_long_common_prefix() -> None:
+    """REGRESSION: exact document text identifies each unreproduced corpus row."""
+    common = '{"format_version":"0.2.0","namespaces":[],"tiers":[' + " " * 120
+    first = common + '"first"]}'
+    second = common + '"second"]}'
+    with pytest.raises(capture_corpus.CaptureRefused) as refusal:
+        capture_corpus.merge_corpus([a_row(first), a_row(second)], [])
+    message = str(refusal.value)
+    assert first in message
+    assert second in message
+
+
 # ------------------------------------------------------------- the plugin
 
 
@@ -189,7 +225,7 @@ def test_the_plugin_reports_what_the_merge_did(
     recorder.accepted = {"fresh": None}
     recorder.original = lambda document: None
     monkeypatch.setattr(capture_corpus, "_RECORDER", recorder)
-    capture_corpus.pytest_unconfigure(None)
+    capture_corpus.pytest_unconfigure(RetainConfig())
     reported = capsys.readouterr().out
     assert "1 rows kept, 1 added, 2 in the corpus" in reported
     assert "1 kept rows this capture did not witness" in reported

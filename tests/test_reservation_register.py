@@ -10,6 +10,9 @@ from scripts import check_reservations
 ROOT = check_reservations.ROOT
 MODULE = check_reservations.MODULE_SYMBOL
 
+# The lane register names the existing entries plus the cone-model reservation.
+EXPECTED_RESERVATIONS = 5
+
 
 def _module(path: Path, source: str) -> Path:
     """Write one synthetic Python module and return its path."""
@@ -35,6 +38,11 @@ def test_the_register_matches_the_prose_and_covers_every_announcement() -> None:
         == []
     )
     assert check_reservations.main() == 0
+
+
+def test_the_register_holds_every_named_reservation() -> None:
+    """The cone model remains visible beside the established reservations."""
+    assert len(check_reservations.registered()) == EXPECTED_RESERVATIONS
 
 
 def test_a_resolver_that_produces_the_reserved_refusal_is_named(tmp_path: Path) -> None:
