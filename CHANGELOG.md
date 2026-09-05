@@ -553,6 +553,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The gate environment tests now require every non-file Make target to appear in `.PHONY`, so a same-named file cannot suppress its recipe.
 - Corpus capture now refuses every unreproduced row by default and requires `--retain-unreproduced` to preserve one without a new witness.
 - `discharge rewrite` and `discharge fold` now report false effect or exactness claims as JSON on the staged-refusal stderr channel, with a message naming the offender.
 - A clock profile now refuses a gap past its tick's refinement count at construction, naming the tick, gap, and count.

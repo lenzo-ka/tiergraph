@@ -21,6 +21,7 @@ A defect that can only be seen by running make is checked by running make.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -126,3 +127,22 @@ def test_an_inherited_python_path_is_kept_behind_the_checkout(tmp_path: Path) ->
     imported, path = _probe(root, MAKEFILE.read_text(encoding="utf-8"), str(extra))
     assert imported.startswith(str(root.resolve()))
     assert path == f"{root.resolve()}/src:{extra}"
+
+
+def test_every_non_file_target_is_phony() -> None:
+    """A command target cannot become inert when a same-named file appears."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    phony_line = next(line for line in text.splitlines() if line.startswith(".PHONY:"))
+    phony = set(phony_line.partition(":")[2].split())
+    targets = {
+        target
+        for line in text.splitlines()
+        if (match := re.match(r"^([^#\s][^:]*)\s*:(?!=)", line)) is not None
+        for target in match.group(1).split()
+    }
+    # The lane defines file rules by a slash or dot; deriving them from .PHONY
+    # would make the completeness assertion true even when an entry was missing.
+    non_file_targets = {
+        target for target in targets if "/" not in target and "." not in target
+    }
+    assert non_file_targets <= phony, sorted(non_file_targets - phony)
