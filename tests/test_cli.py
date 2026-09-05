@@ -706,7 +706,9 @@ def _span_files(
     return graph_path, profile_path, graph, profile
 
 
-@pytest.mark.parametrize("format_name", ("text", "json", "jsonl", "html", "dot"))
+@pytest.mark.parametrize(
+    "format_name", ("text", "json", "jsonl", "html", "dot", "textgrid")
+)
 def test_span_render_formats(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -735,6 +737,7 @@ def test_span_render_formats(
         "jsonl": tiergraph.to_jsonl(view),
         "html": tiergraph.to_html(view),
         "dot": __import__("tiergraph_dot").dumps_spans(graph, profile),
+        "textgrid": tiergraph.to_textgrid(graph, profile),
     }[format_name]
     assert capsys.readouterr().out == expected
 
@@ -766,6 +769,8 @@ def test_span_render_options_and_misuse_errors(
     assert "--jsonl-record requires --format jsonl" in capsys.readouterr().err
     assert main([*common, "--format", "html", "--include-empty-tiers"]) == 1
     assert "--include-empty-tiers requires --format dot" in capsys.readouterr().err
+    assert main([*common, "--format", "textgrid", "--alternatives"]) == 1
+    assert "--alternatives is unavailable" in capsys.readouterr().err
 
 
 def _grammar(path: Path, *, unit: bool = False) -> GrammarDeclaration:

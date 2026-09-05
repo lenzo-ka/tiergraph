@@ -36,3 +36,7 @@ governs intervals, not kernel spans.) Coverage must be contiguous. If an item
 appears inside a span's range without a corresponding coverage edge, projection
 refuses the hole, forcing the caller to decide how membership changes instead
 of silently absorbing the item or splitting the span.
+
+Point tiers use `point_tiers` and a boundary-left `point_coverage_relation`; every selected point must project with equal bounds, while every selected span must have positive width. `value_attributes` can override the default value attribute by tier. Omitting `base_surface_attribute` gives every base item an empty surface. `clock_face` selects structural ticks or physical timing for renderers that support both.
+
+`from_textgrid` reads Praat long and short forms and returns the graph with the profile that selects its imported tiers. `to_textgrid` writes long form by projecting each declared tier separately, fills uncovered interval-tier ranges with empty labels, and reads the requested clock face from that profile.
