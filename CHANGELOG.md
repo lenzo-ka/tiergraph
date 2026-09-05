@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `make gate-fast` for the full gate except cross-process hash-seed checks.
 - Added `SelectionSemiring`, which carries the winning cost's tie-invariant payload while declaring operand-ordered ties noncommutative.
 - Registered the cone-model successor at `SealDeclaration` with the conditions that must hold before it can replace whole-document edits.
 - Added exact-Decimal Praat TextGrid reading for long and short forms and long-form writing through `SpanViewProfile`. Imported interval tiers retain empty labels, point tiers anchor to base boundaries, physical output requires declared clock timing, and refined structural coordinates require an explicit integer scale.
@@ -555,6 +556,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Corpus-capture tests now document pytest's private parser construction and name the former refusal prefix bound they exercise.
+- Documentation generation now closes subprocess stdin, so `step` cannot enter its interactive debugger under a terminal.
 - The gate environment tests now require every non-file Make target to appear in `.PHONY`, so a same-named file cannot suppress its recipe.
 - Corpus capture now refuses every unreproduced row by default and requires `--retain-unreproduced` to preserve one without a new witness.
 - `discharge rewrite` and `discharge fold` now report false effect or exactness claims as JSON on the staged-refusal stderr channel, with a message naming the offender.
