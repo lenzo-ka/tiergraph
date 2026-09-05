@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `make gate-fast` for the full gate except cross-process hash-seed checks.
 - Added `SelectionSemiring`, which carries the winning cost's tie-invariant payload while declaring operand-ordered ties noncommutative.
 - Registered the cone-model successor at `SealDeclaration` with the conditions that must hold before it can replace whole-document edits.
 - Added exact-Decimal Praat TextGrid reading for long and short forms and long-form writing through `SpanViewProfile`. Imported interval tiers retain empty labels, point tiers anchor to base boundaries, physical output requires declared clock timing, and refined structural coordinates require an explicit integer scale.

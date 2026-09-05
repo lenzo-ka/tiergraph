@@ -26,7 +26,7 @@ export PYTHONPATH := $(MAKEFILE_DIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 # and runs nothing. A target left off this line is silent until something in the
 # tree happens to share its name, which is why `format-semantics` and
 # `corpus-capture` sat missing here without ever being noticed.
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate check
+.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate-fast gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -112,5 +112,8 @@ docs-check:
 # can still run the whole gate rather than a hand-copied subset of it -- and the
 # list of steps exists once, where it cannot be transcribed wrongly.
 gate: lint format-check types test determinism schema-check format-growth format-semantics docs-check tracked-clean documented reservations changelog-claims
+
+# Run the gate without the slower cross-process hash-seed checks.
+gate-fast: lint format-check types test schema-check format-growth format-semantics docs-check tracked-clean documented reservations changelog-claims
 
 check: venv gate
