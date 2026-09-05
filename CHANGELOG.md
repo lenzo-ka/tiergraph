@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-05
+
 ### Highlights
 
 - **BREAKING:** The boundary family is now `Boundary`, `BoundaryRef`, `DurableBoundaryRef`, `boundary_values`, `resolve_boundary`, and `from_boundary_values`, while `position_values`, `durable_position`, `promote_position`, and `/positions/…` retain their document spellings; `FORMAT_VERSION` is `"0.2.0"`.
-- Document, program, and selector readers apply the declared refusal order where their inputs can raise it; `Refusal` is the `ValueError` base for staged refusals, and `PathRefusal` and `ProfileRegistrationRefusal` are `ValueError` subclasses.
-- The Praat TextGrid codec reads long and short forms with exact-Decimal numbers and writes long form through `SpanViewProfile`.
+- Document, program, and selector readers apply the declared refusal order where their inputs can raise it; `Refusal` is the `ValueError` base for staged refusals, and `PathRefusal` and `ProfileRegistrationRefusal` are `ValueError` subclasses whose `code` and `offender` are the contract rather than the message text.
+- The Praat TextGrid codec reads long and short forms with exact-Decimal numbers and writes long form through `SpanViewProfile`; a TextGrid cannot say whether its numbers are ticks or seconds, so `from_textgrid(unit=)` is the reader's declaration.
 - The semiring `star` member resolves cyclic folds.
 - Graph-carried seals constrain ordered tier, binary-relation, and polyadic-relation carriers through `SealDeclaration`.
 - `SelectionSemiring` carries the winning cost's tie-invariant payload and declares operand-ordered ties noncommutative.
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A TextGrid carries numbers and no unit — ticks or a physical unit, and the file cannot say which — so `from_textgrid(unit=)` is the reader's declaration; the default is seconds.
 - Added explicit arithmetic and order-preservation workload declarations for lexicographic semirings over float components.
 - Added caller-selected TextGrid containment by enclosure or endpoint coincidence, with enclosure as the default.
 - Added `make gate-fast` for the full gate except cross-process hash-seed checks.
@@ -241,6 +244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PathRefusal`'s contract is its `code` and `offender`; its message string is diagnostic wording and not a promise.
 - The CLI reference now states why `action` and `react` remain library-only instead of implying a declarative callback format.
 - `PathRefusal` and `ProfileRegistrationRefusal` are now `ValueError` subclasses, so `except ValueError` catches every exported class ending in `Refusal`.
 - `Refusal`'s docstring now states where staging stops. The class says it is the
@@ -877,5 +881,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lenzo-ka/tiergraph/releases/tag/v0.1.0
