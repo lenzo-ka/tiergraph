@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -15,6 +16,7 @@ from tiergraph.core import (
     Item,
     ItemRef,
     QualifiedName,
+    RelationEndpointKind,
     Tier,
 )
 from tiergraph.machine import _QNameFields
@@ -49,29 +51,100 @@ class SpanViewProfile:
     coverage_relation: QualifiedName
     score_attribute: QualifiedName
     value_attribute: QualifiedName
-    base_surface_attribute: QualifiedName
+    base_surface_attribute: QualifiedName | None = None
     char_offset_attribute: QualifiedName | None = None
     alternative_relation: QualifiedName | None = None
+    point_tiers: tuple[QualifiedName, ...] = ()
+    point_coverage_relation: QualifiedName | None = None
+    value_attributes: tuple[tuple[QualifiedName, QualifiedName], ...] = ()
+    clock_face: str = "tick"
+
+    def __post_init__(self) -> None:
+        """Refuse ambiguous tier roles and incomplete point declarations."""
+        overlap = set(self.span_tiers).intersection(self.point_tiers)
+        if overlap:
+            offender = min(overlap)
+            raise ValueError(
+                f"tier {str(offender)!r} is both a span tier and a point tier"
+            )
+        if self.point_tiers and self.point_coverage_relation is None:
+            raise ValueError(
+                "point_coverage_relation is required when point_tiers is non-empty"
+            )
+        if self.clock_face not in {"tick", "physical"}:
+            raise ValueError(
+                f"clock_face {self.clock_face!r} must be 'tick' or 'physical'"
+            )
+        value_tiers = [tier for tier, _ in self.value_attributes]
+        if len(set(value_tiers)) != len(value_tiers):
+            duplicate = next(
+                tier for tier in value_tiers if value_tiers.count(tier) > 1
+            )
+            raise ValueError(
+                f"value_attributes names tier {str(duplicate)!r} more than once"
+            )
 
     @classmethod
     def from_data(cls, data: object) -> SpanViewProfile:
         """Decode a strict declarative span-view profile document."""
-        keys = {
+        required_keys = {
             "base_tier",
             "span_tiers",
             "coverage_relation",
             "score_attribute",
             "value_attribute",
-            "base_surface_attribute",
             "char_offset_attribute",
             "alternative_relation",
         }
-        fields = _QNameFields(data, "span profile", keys)
+        optional_keys = {
+            "base_surface_attribute",
+            "point_tiers",
+            "point_coverage_relation",
+            "value_attributes",
+            "clock_face",
+        }
+        if not isinstance(data, dict):
+            raise ValueError("span profile must be an object")
+        actual = set(data)
+        if not required_keys <= actual or not actual <= required_keys | optional_keys:
+            raise ValueError(
+                "span profile fields must include "
+                f"{sorted(required_keys)!r} and may include "
+                f"{sorted(optional_keys)!r}; got {sorted(actual)!r}"
+            )
+        fields = _QNameFields(data, "span profile", actual)
         obj = fields.obj
 
         span_tiers = obj["span_tiers"]
         if not isinstance(span_tiers, list):
             raise ValueError("span profile.span_tiers must be a list")
+        point_tiers = obj.get("point_tiers", [])
+        if not isinstance(point_tiers, list):
+            raise ValueError("span profile.point_tiers must be a list")
+        value_attributes = obj.get("value_attributes", {})
+        if not isinstance(value_attributes, dict):
+            raise ValueError("span profile.value_attributes must be an object")
+        decoded_values: list[tuple[QualifiedName, QualifiedName]] = []
+        for index, (tier_data, attribute_data) in enumerate(value_attributes.items()):
+            if not isinstance(tier_data, str):
+                raise ValueError("span profile.value_attributes keys must be strings")
+            match = re.fullmatch(r"\{(.+)\}([^{}]+)", tier_data)
+            if match is None:
+                raise ValueError(
+                    "span profile.value_attributes keys must use {namespace}local_name"
+                )
+            decoded_values.append(
+                (
+                    QualifiedName(match.group(1), match.group(2)),
+                    fields.decode(
+                        attribute_data,
+                        f"span profile.value_attributes[{index}]",
+                    ),
+                )
+            )
+        clock_face = obj.get("clock_face", "tick")
+        if not isinstance(clock_face, str):
+            raise ValueError("span profile.clock_face must be a string")
         return cls(
             fields.required("base_tier"),
             tuple(
@@ -81,9 +154,20 @@ class SpanViewProfile:
             fields.required("coverage_relation"),
             fields.required("score_attribute"),
             fields.required("value_attribute"),
-            fields.required("base_surface_attribute"),
+            fields.optional("base_surface_attribute")
+            if "base_surface_attribute" in obj
+            else None,
             fields.optional("char_offset_attribute"),
             fields.optional("alternative_relation"),
+            tuple(
+                fields.decode(value, f"span profile.point_tiers[{index}]")
+                for index, value in enumerate(point_tiers)
+            ),
+            fields.optional("point_coverage_relation")
+            if "point_coverage_relation" in obj
+            else None,
+            tuple(decoded_values),
+            clock_face,
         )
 
 
@@ -164,6 +248,7 @@ def _validate_profile(graph: Graph, profile: SpanViewProfile) -> None:
     for role, name in (
         ("base tier", profile.base_tier),
         *(("span tier", name) for name in profile.span_tiers),
+        *(("point tier", name) for name in profile.point_tiers),
     ):
         if name not in tiers:
             raise ValueError(f"{role} {str(name)!r} is not declared in the graph")
@@ -172,6 +257,7 @@ def _validate_profile(graph: Graph, profile: SpanViewProfile) -> None:
     }
     for role, optional_name in (
         ("coverage relation", profile.coverage_relation),
+        ("point coverage relation", profile.point_coverage_relation),
         ("alternative relation", profile.alternative_relation),
     ):
         if optional_name is None:
@@ -189,12 +275,23 @@ def _validate_profile(graph: Graph, profile: SpanViewProfile) -> None:
                 "requires a bipartite declaration, so it cannot project a "
                 f"{kind} relation"
             )
+        if role == "point coverage relation" and (
+            declaration.left_endpoint is not RelationEndpointKind.BOUNDARY
+            or declaration.right_endpoint is not RelationEndpointKind.ITEM
+        ):
+            raise ValueError(
+                f"point coverage relation {str(optional_name)!r} must relate boundary to item"
+            )
     attributes = {declaration.name for declaration in graph.attribute_declarations}
     for role, optional_name in (
         ("score attribute", profile.score_attribute),
         ("value attribute", profile.value_attribute),
         ("base surface attribute", profile.base_surface_attribute),
         ("character offset attribute", profile.char_offset_attribute),
+        *(
+            (f"value attribute for tier {str(tier)!r}", attribute)
+            for tier, attribute in profile.value_attributes
+        ),
     ):
         if optional_name is not None and optional_name not in attributes:
             raise ValueError(
@@ -211,11 +308,16 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
     surfaces: list[str] = []
     offsets: list[int] = []
     for index, item in enumerate(base.items):
-        surface = _attribute(item, profile.base_surface_attribute)
-        if surface is None:
+        surface = (
+            ""
+            if profile.base_surface_attribute is None
+            else _attribute(item, profile.base_surface_attribute)
+        )
+        if surface is None and profile.base_surface_attribute is not None:
             raise ValueError(
                 f"base item {index} lacks surface attribute {str(profile.base_surface_attribute)!r}"
             )
+        assert surface is not None
         surfaces.append(surface)
         if profile.char_offset_attribute is not None:
             lexical = _attribute(item, profile.char_offset_attribute)
@@ -234,11 +336,20 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
     members: dict[ItemRef, set[int]] = {}
     anchors: dict[ItemRef, int] = {}
     span_tiers = set(profile.span_tiers)
+    point_tiers = set(profile.point_tiers)
     for relation in graph.relations:
+        right_tier = (
+            relation.right.tier if isinstance(relation.right, ItemRef) else None
+        )
+        expected_relation = (
+            profile.point_coverage_relation
+            if right_tier in point_tiers
+            else profile.coverage_relation
+        )
         if (
-            relation.declaration != profile.coverage_relation
+            relation.declaration != expected_relation
             or not isinstance(relation.right, ItemRef)
-            or relation.right.tier not in span_tiers
+            or relation.right.tier not in span_tiers | point_tiers
         ):
             continue
         if isinstance(relation.left, ItemRef):
@@ -258,7 +369,17 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
 
     paths = StructuralPathProfile()
     projected: list[Span] = []
-    for reference in members.keys() | anchors.keys():
+    covered_references = members.keys() | anchors.keys()
+    for tier_name in (*profile.span_tiers, *profile.point_tiers):
+        tier = _tier(graph, tier_name)
+        for index in range(len(tier.items)):
+            reference = ItemRef(tier_name, index)
+            if reference not in covered_references:
+                role = "point" if tier_name in point_tiers else "span"
+                raise ValueError(
+                    f"{role} tier {str(tier_name)!r} item {index} has no coverage"
+                )
+    for reference in covered_references:
         covered = members.get(reference)
         if covered is None:
             start = end = anchors[reference]
@@ -267,6 +388,16 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
         if covered is not None and covered != set(range(start, end)):
             raise ValueError(
                 f"span {str(reference.tier)!r} item {reference.index} has non-contiguous coverage"
+            )
+        if reference.tier in point_tiers and start != end:
+            raise ValueError(
+                f"point tier {str(reference.tier)!r} item {reference.index} "
+                f"projects positive width {start}..{end}; a point must be zero-width"
+            )
+        if reference.tier in span_tiers and start == end:
+            raise ValueError(
+                f"span tier {str(reference.tier)!r} item {reference.index} "
+                f"projects zero width at {start}; a span must be positive-width"
             )
         tier = _tier(graph, reference.tier)
         item = tier.items[reference.index]
@@ -338,6 +469,9 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
             )
         else:
             char_start = char_end = None
+        value_attribute = dict(profile.value_attributes).get(
+            reference.tier, profile.value_attribute
+        )
         projected.append(
             Span(
                 label,
@@ -345,7 +479,7 @@ def span_view(  # noqa: PLR0915 -- one ordered span projection
                 end,
                 char_start,
                 char_end,
-                _attribute(item, profile.value_attribute),
+                _attribute(item, value_attribute),
                 _attribute(item, profile.score_attribute),
                 path,
                 ranked,

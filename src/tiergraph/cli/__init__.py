@@ -214,7 +214,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     span_render.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     span_render.add_argument("--profile", required=True, metavar="FILE")
     span_render.add_argument(
-        "--format", choices=("text", "json", "jsonl", "html", "dot"), required=True
+        "--format",
+        choices=("text", "json", "jsonl", "html", "dot", "textgrid"),
+        required=True,
     )
     span_render.add_argument("--alternatives", action="store_true")
     span_render.add_argument("--jsonl-record", choices=("input", "span"), default=None)
@@ -1071,6 +1073,10 @@ def _span_render(
             alternatives=args.alternatives,
             include_empty_tiers=args.include_empty_tiers,
         )
+    if args.format == "textgrid":
+        if args.alternatives:
+            raise ValueError("--alternatives is unavailable for --format textgrid")
+        return tiergraph.to_textgrid(graph, profile)
     view = tiergraph.span_view(graph, profile, alternatives=args.alternatives)
     if args.format == "text":
         return tiergraph.to_text(view, alternatives=args.alternatives)

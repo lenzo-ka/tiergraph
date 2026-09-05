@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 190 top-level `tiergraph` exports exactly once.
+It covers 193 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -3315,7 +3315,7 @@ See PEP 695 for more information.
 ### `SpanViewProfile`
 
 ```text
-SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
+SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName | None' = None, char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None, point_tiers: 'tuple[QualifiedName, ...]' = (), point_coverage_relation: 'QualifiedName | None' = None, value_attributes: 'tuple[tuple[QualifiedName, QualifiedName], ...]' = (), clock_face: 'str' = 'tick') -> None
 ```
 
 Name the graph declarations a segmentation has to be selected among.
@@ -4245,6 +4245,42 @@ so the whole summary is JSON-serializable. The wire's compact
 ``prefix:local`` spelling is deliberately not used: it depends on the
 document's prefix bindings, which are a wire choice rather than graph
 content, and a summary of graph content should not vary with them.
+
+## Textgrid
+
+### `TextGridReadResult`
+
+```text
+TextGridReadResult(graph: ForwardRef('Graph'), profile: ForwardRef('SpanViewProfile'))
+```
+
+Return the decoded graph beside the profile that selects its TextGrid tiers.
+
+#### `TextGridReadResult.clock`
+
+Property.
+
+```text
+TextGridReadResult.clock(self) -> 'ClockProfile'
+```
+
+Construct the physical clock declared by the decoded graph.
+
+### `from_textgrid`
+
+```text
+from_textgrid(document: 'str | bytes', *, unit: 'str' = 's') -> 'TextGridReadResult'
+```
+
+Decode a long- or short-form TextGrid into a graph and its selection profile.
+
+### `to_textgrid`
+
+```text
+to_textgrid(graph: 'Graph', profile: 'SpanViewProfile', *, clock: 'ClockProfile | None' = None, scale: 'int | None' = None) -> 'str'
+```
+
+Render declared span and point tiers as a long-form TextGrid document.
 
 ## Traversal
 
@@ -5936,7 +5972,7 @@ Hold reconstructed input text and its ordered, non-overlapping spans.
 ### `SpanViewProfile`
 
 ```text
-SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName', char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None) -> None
+SpanViewProfile(base_tier: 'QualifiedName', span_tiers: 'tuple[QualifiedName, ...]', coverage_relation: 'QualifiedName', score_attribute: 'QualifiedName', value_attribute: 'QualifiedName', base_surface_attribute: 'QualifiedName | None' = None, char_offset_attribute: 'QualifiedName | None' = None, alternative_relation: 'QualifiedName | None' = None, point_tiers: 'tuple[QualifiedName, ...]' = (), point_coverage_relation: 'QualifiedName | None' = None, value_attributes: 'tuple[tuple[QualifiedName, QualifiedName], ...]' = (), clock_face: 'str' = 'tick') -> None
 ```
 
 Name the graph declarations a segmentation has to be selected among.
@@ -6005,6 +6041,43 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 ```
 
 Return a deterministic ruler and aligned plain-text span table.
+### `tiergraph.textgrid`
+
+This module is importable and usable, but carries no API-stability promise at version 0.2.0.
+
+### `TextGridReadResult`
+
+```text
+TextGridReadResult(graph: ForwardRef('Graph'), profile: ForwardRef('SpanViewProfile'))
+```
+
+Return the decoded graph beside the profile that selects its TextGrid tiers.
+
+#### `TextGridReadResult.clock`
+
+Property.
+
+```text
+TextGridReadResult.clock(self) -> 'ClockProfile'
+```
+
+Construct the physical clock declared by the decoded graph.
+
+### `from_textgrid`
+
+```text
+from_textgrid(document: 'str | bytes', *, unit: 'str' = 's') -> 'TextGridReadResult'
+```
+
+Decode a long- or short-form TextGrid into a graph and its selection profile.
+
+### `to_textgrid`
+
+```text
+to_textgrid(graph: 'Graph', profile: 'SpanViewProfile', *, clock: 'ClockProfile | None' = None, scale: 'int | None' = None) -> 'str'
+```
+
+Render declared span and point tiers as a long-form TextGrid document.
 
 ## Companion package
 

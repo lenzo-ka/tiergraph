@@ -40,6 +40,7 @@ from tiergraph import (
     RoleBinding,
     Tier,
     TierDeclaration,
+    from_textgrid,
 )
 
 NS = "urn:tiergraph:test:profile"
@@ -411,6 +412,51 @@ def test_span_view_reads_an_optional_role_when_it_is_bound() -> None:
     report = PROFILES.report("tiergraph.span-view", graph, bound)
     assert report.outcome is ProfileOutcome.REFUSED
     assert "character offset attribute" in (report.reason or "")
+
+
+def test_span_view_profile_registry_accepts_points_without_base_surfaces() -> None:
+    """REGRESSION: the registered profile carries the additive span-view roles."""
+    result = from_textgrid(
+        'File type = "ooTextFile short"\n"TextGrid"\n\n0\n1\n<exists>\n'
+        '1\n"TextTier"\n"marks"\n0\n1\n1\n0.5\n"x"\n'
+    )
+    profile = result.profile
+    assert profile.point_coverage_relation is not None
+    roles: RoleBinding = {
+        "base_tier": profile.base_tier,
+        "span_tiers": (),
+        "coverage_relation": profile.coverage_relation,
+        "score_attribute": profile.score_attribute,
+        "value_attribute": profile.value_attribute,
+        "point_tiers": profile.point_tiers,
+        "point_coverage_relation": profile.point_coverage_relation,
+        "value_attributes": ((profile.point_tiers[0], profile.value_attribute),),
+        "clock_face": "tick",
+    }
+    report = PROFILES.report("tiergraph.span-view", result.graph, roles)
+    assert report.outcome is ProfileOutcome.SATISFIED
+    without_point_coverage = {
+        key: value for key, value in roles.items() if key != "point_coverage_relation"
+    }
+    refused = PROFILES.report(
+        "tiergraph.span-view", result.graph, without_point_coverage
+    )
+    assert refused.outcome is ProfileOutcome.REFUSED
+    assert "point_coverage_relation is required" in (refused.reason or "")
+    bad_values = PROFILES.report(
+        "tiergraph.span-view",
+        result.graph,
+        {**roles, "value_attributes": (profile.value_attribute,)},
+    )
+    assert bad_values.outcome is ProfileOutcome.REFUSED
+    assert "tier-attribute pairs" in (bad_values.reason or "")
+    bad_face = PROFILES.report(
+        "tiergraph.span-view",
+        result.graph,
+        {**roles, "clock_face": profile.value_attribute},
+    )
+    assert bad_face.outcome is ProfileOutcome.REFUSED
+    assert "must bind a string" in (bad_face.reason or "")
 
 
 def test_a_role_bound_to_the_wrong_shape_is_refused() -> None:

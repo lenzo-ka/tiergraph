@@ -216,6 +216,11 @@
     "inspection": [
       "graph_summary"
     ],
+    "textgrid": [
+      "TextGridReadResult",
+      "from_textgrid",
+      "to_textgrid"
+    ],
     "traversal": [
       "NodeSequence",
       "OrderedContainment",
@@ -417,6 +422,11 @@
       "to_json",
       "to_jsonl",
       "to_text"
+    ],
+    "tiergraph.textgrid": [
+      "TextGridReadResult",
+      "from_textgrid",
+      "to_textgrid"
     ]
   }
 }

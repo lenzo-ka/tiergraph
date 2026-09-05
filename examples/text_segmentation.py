@@ -67,25 +67,25 @@ def render_views() -> str:
     )
     graph = builder.build()
 
-    common = {
-        "score_attribute": builder.qname("score"),
-        "value_attribute": builder.qname("value"),
-        "base_surface_attribute": builder.qname("surface"),
-        "char_offset_attribute": builder.qname("offset"),
-    }
     word_profile = SpanViewProfile(
         characters.name,
         (words.name,),
         coverage.name,
+        builder.qname("score"),
+        builder.qname("value"),
+        builder.qname("surface"),
+        builder.qname("offset"),
         alternative_relation=alternatives.name,
-        **common,
     )
     sentence_profile = SpanViewProfile(
         characters.name,
         (sentences.name,),
         builder.qname("sentence-covers"),
+        builder.qname("score"),
+        builder.qname("value"),
+        builder.qname("surface"),
+        builder.qname("offset"),
         alternative_relation=None,
-        **common,
     )
     word_view = span_view(graph, word_profile, alternatives=True)
     sentence_view = span_view(graph, sentence_profile)

@@ -507,8 +507,8 @@ options:
 
 ```text
 usage: tiergraph span render [-h] --profile FILE --format
-                             {text,json,jsonl,html,dot} [--alternatives]
-                             [--jsonl-record {input,span}]
+                             {text,json,jsonl,html,dot,textgrid}
+                             [--alternatives] [--jsonl-record {input,span}]
                              [--include-empty-tiers] [-o FILE]
                              GRAPH
 
@@ -518,7 +518,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --profile FILE
-  --format {text,json,jsonl,html,dot}
+  --format {text,json,jsonl,html,dot,textgrid}
   --alternatives
   --jsonl-record {input,span}
   --include-empty-tiers
