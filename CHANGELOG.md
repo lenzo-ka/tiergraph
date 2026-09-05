@@ -555,6 +555,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Corpus-capture tests now document pytest's private parser construction and name the former refusal prefix bound they exercise.
 - Documentation generation now closes subprocess stdin, so `step` cannot enter its interactive debugger under a terminal.
 - The gate environment tests now require every non-file Make target to appear in `.PHONY`, so a same-named file cannot suppress its recipe.
 - Corpus capture now refuses every unreproduced row by default and requires `--retain-unreproduced` to preserve one without a new witness.

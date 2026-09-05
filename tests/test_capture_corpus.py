@@ -19,6 +19,10 @@ from pathlib import Path
 import pytest
 from scripts import capture_corpus
 
+# This mirrors the former refusal's 120-character truncation bound so the
+# distinguishing suffixes begin beyond the text it used to report.
+COMMON_PREFIX_PADDING = 120
+
 
 class RetainConfig:
     """Supply the enabled capture option to the plugin hook."""
@@ -97,6 +101,7 @@ def test_a_missing_never_legal_row_refuses_by_default() -> None:
 
 def test_the_retain_flag_keeps_a_missing_never_legal_row() -> None:
     """REGRESSION: the override retains the adjudication byte for byte."""
+    # Parser has no public constructor, and Config exposes its parser only privately.
     parser = pytest.Parser(_ispytest=True)
     capture_corpus.pytest_addoption(parser)
     absent, unknown = parser.parse_known_and_unknown_args([])
@@ -175,7 +180,10 @@ def test_a_refusal_names_every_lost_row_not_just_the_first() -> None:
 
 def test_a_refusal_distinguishes_documents_with_a_long_common_prefix() -> None:
     """REGRESSION: exact document text identifies each unreproduced corpus row."""
-    common = '{"format_version":"0.2.0","namespaces":[],"tiers":[' + " " * 120
+    common = (
+        '{"format_version":"0.2.0","namespaces":[],"tiers":['
+        + " " * COMMON_PREFIX_PADDING
+    )
     first = common + '"first"]}'
     second = common + '"second"]}'
     with pytest.raises(capture_corpus.CaptureRefused) as refusal:
