@@ -1856,7 +1856,13 @@ class Graph:
 
 @dataclass(frozen=True, slots=True)
 class SealDeclaration:
-    """Bind the seals one graph carries to the graph that claims to honor them."""
+    """Bind the seals one graph carries to the graph that claims to honor them.
+
+    The cone model is reserved until a whole-graph seal exists as one frozen base,
+    a mergeable delta type exists, coordinate removal is expressible within a
+    footprint or excluded from the mergeable set, and observed-read validation is
+    decided.
+    """
 
     name: str
     source: Graph
