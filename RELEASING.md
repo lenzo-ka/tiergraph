@@ -199,7 +199,9 @@ corrected against exactly those documents, so no later capture can witness one
 again. `scripts/capture_corpus.py` therefore **merges** rather than rewrites. It
 carries every existing row through byte for byte, appends only documents the
 corpus does not already hold, and refuses the whole write — non-zero, naming
-each row — if a row it cannot reproduce is not already adjudicated `never-legal`.
+each row — if the capture cannot reproduce it.
+`make corpus-capture CORPUS_CAPTURE_FLAGS=--retain-unreproduced` explicitly
+keeps those rows; the flag's default is false.
 That makes running it *safe*. It does not make running it *useful at a release*:
 
 - **A capture at the release commit cannot evidence that it was one.** The stamp
