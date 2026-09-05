@@ -19,6 +19,8 @@ from typing import Any
 import pytest
 from scripts import check_format_growth as growth
 
+from tiergraph import __version__
+
 ROOT = growth.ROOT
 RELEASED: dict[str, Any] = json.loads(
     (ROOT / growth.SCHEMA_PATH).read_text(encoding="utf-8")
@@ -92,6 +94,10 @@ def verdict(
 # --- the released tree itself -------------------------------------------------
 
 
+# The release line this one advanced past; its tag is the baseline the priced
+# break is measured against, whichever phase the current line is in.
+PREVIOUS_LINE_TAG = "v0.1.0"
+
 PRICED_BREAKS = (
     "/properties/graph/properties/attribute_declarations/items/properties/domain: "
     'the value "position" was dropped',
@@ -103,19 +109,48 @@ def test_the_committed_schema_reports_only_the_break_this_release_priced(
 ) -> None:
     """REGRESSION. Predict the reported breaks are exactly the ones paid for.
 
-    This is the gate running against the real repository and its real tag. It
-    deliberately does not assert on the exit status alone. Once ``__version__``
-    advanced past the released line, an unreleased line has no baseline it can
-    be held to, so the gate prints its findings and returns zero whether or not
-    the format shrank -- and an assertion on the status would hold just as well
-    over a schema that had lost half its vocabulary. The claim that survives the
-    permissive window is the *set* of breaks, which is exactly the one this
-    release spent a version position on.
+    This is the gate running against the real repository and its real tags. It
+    deliberately does not assert on the exit status alone. Between the version
+    step that opens a release line and the tag that releases it, the line has no
+    baseline it can be held to, so the gate compares against the newest released
+    line, prints its findings and returns zero whether or not the format shrank
+    -- and an assertion on the status would hold just as well over a schema that
+    had lost half its vocabulary. The claim that survives the permissive window
+    is the *set* of breaks, which is exactly the one this release spent a
+    version position on.
 
-    The window closes by itself: tagging v0.2.0 gives the line a baseline and
-    the gate refuses again, at which point a status assertion means something
-    once more.
+    The window closes by itself: the first tag in the line becomes the baseline,
+    the gate holds the committed schema to that tag, and a schema identical to
+    its own release tag reports nothing. So the expectation follows the phase
+    the repository is in, read from its tags the same way the gate reads them,
+    and the release's price is pinned separately against the previous line's
+    tag so it stays checked after the tag exists.
     """
+    baseline_text = growth.git_output(
+        ["show", f"{PREVIOUS_LINE_TAG}:{growth.SCHEMA_PATH.as_posix()}"]
+    )
+    assert baseline_text is not None
+    baseline = growth.document(baseline_text, f"the schema at {PREVIOUS_LINE_TAG}")
+    current = growth.document(
+        (ROOT / growth.SCHEMA_PATH).read_text(encoding="utf-8"), "the committed schema"
+    )
+    priced = tuple(
+        line.strip()
+        for line in growth._lines(growth.compare(baseline, current))
+        if line.startswith("  ")
+    )
+    assert priced == PRICED_BREAKS
+
+    listing = growth.git_output(["tag", "--list", "v*"])
+    assert listing is not None
+    declared = growth.parse_version(__version__)
+    assert declared is not None
+    line_is_tagged = any(
+        growth.release_line(version) == growth.release_line(declared)
+        for version in growth.released(listing)
+    )
+    expected = () if line_is_tagged else PRICED_BREAKS
+
     status = growth.main()
     printed = capsys.readouterr()
     reported = tuple(
@@ -123,7 +158,7 @@ def test_the_committed_schema_reports_only_the_break_this_release_priced(
         for line in (printed.out + printed.err).splitlines()
         if line.startswith("  ")
     )
-    assert (status, reported) == (0, PRICED_BREAKS)
+    assert (status, reported) == (0, expected)
 
 
 def test_the_walk_reaches_every_definition() -> None:
