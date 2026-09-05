@@ -226,6 +226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The CLI reference now states why `action` and `react` remain library-only instead of implying a declarative callback format.
 - `PathRefusal` and `ProfileRegistrationRefusal` are now `ValueError` subclasses, so `except ValueError` catches every exported class ending in `Refusal`.
 - `Refusal`'s docstring now states where staging stops. The class says it is the
   one base every staged refusal has, which is true and was silent about the

@@ -20,6 +20,8 @@ Every command that reads an input document accepts `-` in place of that document
 
 `fold` evaluates a finite dependency relation with one of those algebras and emits the public `FoldResult.to_data()` report. `--tier` and `--transition` are repeatable; `--root` is repeatable and, when omitted, the roots are the domain items nothing depends on. The valuation carries the attribute's local name, because that name only ever appears in a refusal. Two lifts are nameable: `value` embeds the read attribute value in the carrier, and `one` embeds the semiring's multiplicative identity regardless of the value. A general lift, a witness order, and an index product are caller code, so they stay in the Python API; without a witness order the report's `provenance` is always null, and `--ranked` is the shell's route to witnesses. `--ranked` needs an algebra that declares `multiply_preserves_witness_order` and supplies the tie policy the declaration requires but ranked selection never consults. `--output-cap` caps ranked witnesses and so requires `--ranked`.
 
+`action` and `react` are library-only. `ActionDeclaration` binds its behavior as an `ActionFunction` Python callable, and `ReactDeclaration` also binds a `DeliveryYield` callable. Neither callable has a declarative or wire form for the CLI to read, so the shell cannot construct either declaration without inventing an executable callback format.
+
 ## Deterministic stepping example
 
 For a program whose first opcode declares prefix `s` for `urn:step`, dump its exact public step states:

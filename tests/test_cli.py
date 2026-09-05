@@ -127,6 +127,21 @@ def _item_path(index: int) -> str:
     return f"/items/structural/urn:test:traversal/nodes/{index}"
 
 
+def test_action_inputs_refuse_because_callbacks_are_library_only(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Near-valid action invocations cannot imply an executable JSON format."""
+    for arguments in (["action"], ["action", "-"]):
+        with pytest.raises(SystemExit) as stopped:
+            main(arguments)
+        assert stopped.value.code == 2
+        assert "invalid choice: 'action'" in capsys.readouterr().err
+    reference = (Path(__file__).parents[1] / "docs/reference/cli.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`action` and `react` are library-only" in reference
+
+
 def test_select_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The selection command evaluates compounds and diagnoses refused selectors."""
     source = tmp_path / "graph.json"
