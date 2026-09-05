@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added exact-Decimal Praat TextGrid reading for long and short forms and long-form writing through `SpanViewProfile`. Imported interval tiers retain empty labels, point tiers anchor to base boundaries, physical output requires declared clock timing, and refined structural coordinates require an explicit integer scale.
+- Extended `SpanViewProfile` with point tiers, a boundary-left point coverage relation, per-tier value attributes, a clock-face choice, and optional base surfaces. Projection now refuses missing coverage, positive-width points, and zero-width spans by naming the tier item.
 - `Walk` now follows a polyadic relation as well as a bipartite one, so the
   library and the `walk` command reach the same relations the rest of traversal
   does. One step from any endpoint of the near side reaches every endpoint of
