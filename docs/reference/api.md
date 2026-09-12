@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 193 top-level `tiergraph` exports exactly once.
+It covers 194 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -3349,6 +3349,24 @@ SpanViewProfile.from_data(cls, data: 'object') -> 'SpanViewProfile'
 ```
 
 Decode a strict declarative span-view profile document.
+
+### `embed_json_value`
+
+```text
+embed_json_value(graph: 'Graph', value: 'JsonValue', *, namespace: 'NamespaceDeclaration') -> 'tuple[Graph, JsonValueProfile, ItemRef]'
+```
+
+Embed a native JSON value using an explicitly fresh namespace and prefix.
+
+Return the extended graph, its validated value profile, and the value root.
+Existing graph content and the input object remain unchanged. Both the URI
+and prefix must be unused, even for null or an empty container; collisions
+refuse rather than rename, alias, or overwrite existing declarations.
+
+No owner relation is inferred: callers can link the returned root through
+their own declared relation. This embeds one JSON value, not an arbitrary
+graph fragment or a migration of existing profile tiers. Failure never
+exposes a partially changed graph.
 
 ### `json_value_graph`
 

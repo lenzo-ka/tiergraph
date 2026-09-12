@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 from tiergraph.core import (
@@ -12,6 +12,7 @@ from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
     JsonValue,
@@ -480,3 +481,39 @@ def json_value_graph(  # noqa: PLR0915 -- one declarative JSON vocabulary
         names["double"],
     )
     return graph, profile, root
+
+
+def embed_json_value(
+    graph: Graph, value: JsonValue, *, namespace: NamespaceDeclaration
+) -> tuple[Graph, JsonValueProfile, ItemRef]:
+    """Embed a native JSON value using an explicitly fresh namespace and prefix.
+
+    Return the extended graph, its validated value profile, and the value root.
+    Existing graph content and the input object remain unchanged. Both the URI
+    and prefix must be unused, even for null or an empty container; collisions
+    refuse rather than rename, alias, or overwrite existing declarations.
+
+    No owner relation is inferred: callers can link the returned root through
+    their own declared relation. This embeds one JSON value, not an arbitrary
+    graph fragment or a migration of existing profile tiers. Failure never
+    exposes a partially changed graph.
+    """
+    if any(
+        existing.namespace == namespace.namespace or existing.prefix == namespace.prefix
+        for existing in graph.namespaces
+    ):
+        raise GraphValidationError(
+            "JSON embedding requires an unused namespace URI and prefix"
+        )
+    fragment, profile, root = json_value_graph(value, namespace.namespace)
+    editor = graph.edit().declare(namespace)
+    for declaration in fragment.attribute_declarations + fragment.relation_declarations:
+        editor.declare(declaration)
+    for tier in fragment.tiers:
+        editor.declare(tier.declaration)
+        for index, item in enumerate(tier.items):
+            editor.insert_item(tier.declaration.name, index, item)
+    for relation in fragment.polyadic_relations:
+        editor.add_relation(relation)
+    extended = editor.freeze()
+    return extended, replace(profile, graph=extended), root

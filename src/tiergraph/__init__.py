@@ -203,7 +203,7 @@ from tiergraph.traversal import (
     WalkDirection,
     WalkResult,
 )
-from tiergraph.value import JsonValueProfile, json_value_graph
+from tiergraph.value import JsonValueProfile, embed_json_value, json_value_graph
 from tiergraph.wire import (
     FORMAT_VERSION,
     MAX_DOCUMENT_BYTES,
@@ -389,6 +389,7 @@ __all__ = [
     "dump_bytes",
     "dump_compact",
     "dumps",
+    "embed_json_value",
     "evaluate_selection",
     "execute",
     "from_textgrid",
