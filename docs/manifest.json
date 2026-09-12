@@ -147,6 +147,7 @@
       "RoleBinding",
       "RoleValue",
       "SpanViewProfile",
+      "embed_json_value",
       "json_value_graph",
       "span_view",
       "to_html",

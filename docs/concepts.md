@@ -121,11 +121,15 @@ or schema is present or recognized; required fields or types inside `value`;
 numeric ranges; or canonical serialization. The producing and consuming
 applications must perform those validations.
 
-Separately, `json_value_graph` and `JsonValueProfile` already represent a JSON
-value as a checked, standalone graph. They are the foundation for a future
-first-class payload-attachment API that could attach a JSON value to an item in
-another graph. That API does not yet exist. If it is added, stringified-JSON
-attributes will be candidates for migration.
+Separately, `json_value_graph` and `JsonValueProfile` represent a JSON value as
+a checked, standalone graph. `embed_json_value(graph, value, namespace=...)`
+adds that native structure to an existing graph and returns the extended graph,
+validated profile, and root reference. Supply a `NamespaceDeclaration` with an
+unused URI and prefix; collisions refuse rather than rename or overwrite.
+Existing facts remain unchanged, including boundaries, seals, and layers.
+The helper does not infer an owner: link the returned root through your own
+declared relation. It is not an arbitrary graph merge or an automatic migration
+of stringified-JSON attributes.
 
 ## Coordinates, and what an edit does to them
 
