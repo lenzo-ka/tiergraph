@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-13
+
+### Added
+
+- Added `embed_json_value` to embed a native JSON value in an existing graph
+  through an explicitly fresh namespace. It returns the extended graph, its
+  validated value profile, and the value root while preserving the source
+  graph. Namespace collisions refuse without partial changes; owner relations
+  remain caller-declared. The graph interchange format is unchanged (#183).
+
+### Documentation
+
+- Clarified that release-phase format-growth regression tests must consult
+  tags, so the release tag does not invalidate their expectations (#182).
+
 ## [0.2.0] - 2026-09-05
 
 ### Highlights
@@ -881,6 +896,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lenzo-ka/tiergraph/releases/tag/v0.1.0
