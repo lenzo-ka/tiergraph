@@ -82,7 +82,11 @@ job references it; the OIDC identity is scoped to it).
    opened the release line, and this edit is what leaves something for that
    commit.
 
-3. **Verify locally.** Run these from the development virtualenv that
+3. **Regenerate version-bearing documentation, then verify locally.** Run
+   `make docs` after changing the package version: the generated API and CLI
+   references carry it. Commit those generated changes with the
+   release preparation so the gate checks the documentation that will ship.
+   Run these from the development virtualenv that
    [CONTRIBUTING.md](CONTRIBUTING.md#set-up-a-development-environment) builds —
    `make venv` creates `.venv` and installs the `build` frontend along with the
    rest of the development dependencies. Three of these steps are **read**, not
