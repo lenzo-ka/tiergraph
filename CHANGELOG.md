@@ -19,15 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base (#186).
 - Added `PathPlan`, which compiles a `FoldDeclaration` over one `OR` relation on
   an acyclic graph once and evaluates it again under any vector of carrier
-  values in the plan's item order. `evaluate` returns what `run` returns for the
-  same values, provenance and cost account included; `marginals` adds the
-  outside pass and returns `PathMarginals`, whose `posteriors(readout=...)`
-  reads probabilities through the readout the caller declares and the algebra
-  publishes, and reports zero mass rather than fabricating a distribution, as
-  `PathPosteriors` with the readout named. Under
-  `LOG_PROBABILITY`, `ARCTIC`, and `TROPICAL` the plan runs a fused schedule of
-  the algebra's operations; `AlgebraOrder` is a witness order by an algebra's own
-  selective addition, which the plan fuses too. Ranked output, index axes,
+  values in the plan's item order. `evaluate` reproduces what `run` returns for
+  the same values, with the same provenance and cost account: exactly under the
+  `ARCTIC` and `TROPICAL` carriers, and within the algebra's declared
+  approximation under `LOG_PROBABILITY`, where a gathered log-sum-exp sums its
+  exponentials in a different order than pairwise addition does. `marginals`
+  adds the outside pass and returns `PathMarginals`, whose
+  `posteriors(readout=...)` reads probabilities through the readout the caller
+  declares and the algebra publishes, and reports zero mass rather than
+  fabricating a distribution, as `PathPosteriors` with the readout named. Under
+  those three carriers the plan runs the algebra's operations in a fused
+  schedule when the declaration states no witness order, and under the extremum
+  carriers also under an `AlgebraOrder` — a witness order by an algebra's own
+  selective addition — with `CHOOSE_FIRST`, whose selection it fuses too; every
+  other declaration runs the general schedule. Ranked output, index axes,
   several relations, `AND` transitions, and cycles are refused by name (#186).
 
 ### Changed
@@ -43,7 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readout it applies (#186).
 - The gate's three hash-seed test passes run concurrently under `make
   determinism`; `DETERMINISM_JOBS=1` runs them one at a time, and each seed
-  writes its own log under the virtualenv and prints only its summary line.
+  writes its own log under the virtualenv and prints only its summary line when
+  it passes; a failing seed prints its whole log.
   The publishability test that plants a sentinel under the checkout's ignored
   local agent directory names it per process, so concurrent passes over one
   checkout no longer race on its cleanup (#187).
@@ -59,8 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The release runbook's step 3 no longer says a stale local `dist/` build is
   what the publish workflow would upload; the workflow builds from a fresh
-  checkout of the tag. It names the local version and package-listing checks
-  that would read such a build instead (#185).
+  checkout of the tag. It now separates the two local checks: the wheel package
+  listing reads `dist/*.whl`, so a stale archive is what it would read, while
+  the printed version imports from `src` and never consults `dist/` at all. The
+  `dist/` filename listing is the only step that would expose a stale build, as
+  an extra pair of archives (#185).
 
 ## [0.2.1] - 2026-09-13
 
