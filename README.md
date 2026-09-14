@@ -4,8 +4,7 @@
 
 tiergraph holds parallel ordered sequences and the declared links between them
 as one immutable graph, checked when it is built. Every view — selection,
-traversal, containment, timing, folds — is computed from that one graph, so no
-view can disagree with the store.
+traversal, containment, timing, folds — is computed from that one graph.
 
 The shape is the track view of an audio or video editor: rows of items, ordered
 within a row, aligned across rows, with links between rows. Aligned annotations
