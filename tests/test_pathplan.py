@@ -444,7 +444,7 @@ def test_marginals_agree_with_enumerated_derivations() -> None:
         through = log_sum([value for path, value in paths if item in path])
         assert close(marginals.marginals[item], through), plan.labels[item]
     assert marginals.inside == tuple(value for _, value in plan.evaluate().values)
-    posteriors = marginals.posteriors()
+    posteriors = marginals.posteriors(readout="normalize")
     assert posteriors.readout == "normalize"
     assert not posteriors.zero_mass
     assert posteriors.values is not None
@@ -509,11 +509,11 @@ def test_zero_mass_reports_no_posteriors() -> None:
     zero = plan.marginals([-math.inf] * len(plan.items))
     assert zero.total == -math.inf
     assert set(zero.marginals) == {-math.inf}
-    posteriors = zero.posteriors()
+    posteriors = zero.posteriors(readout="normalize")
     assert posteriors.zero_mass and posteriors.values is None
     assert posteriors.readout == "normalize"
     unreached = PathPlan.prepare(declare(graph, LOG_PROBABILITY, roots=("dead",)))
-    assert unreached.marginals().posteriors().zero_mass
+    assert unreached.marginals().posteriors(readout="normalize").zero_mass
 
 
 def test_posteriors_are_read_only_through_a_declared_readout() -> None:
@@ -523,9 +523,13 @@ def test_posteriors_are_read_only_through_a_declared_readout() -> None:
         declare(graph, COUNTING, attribute=COST, lift=lambda _value, _label: 1)
     )
     with pytest.raises(
-        ValueError, match="'CountingSemiring' publishes no normalize readout"
+        ValueError, match="'CountingSemiring' publishes no 'normalize' readout"
     ):
-        plan.marginals().posteriors()
+        plan.marginals().posteriors(readout="normalize")
+    log_plan = PathPlan.prepare(declare(graph, LOG_PROBABILITY))
+    for undeclared in ("_value", "missing"):
+        with pytest.raises(ValueError, match=f"publishes no {undeclared!r} readout"):
+            log_plan.marginals().posteriors(readout=undeclared)
 
 
 def test_the_log_carrier_survives_weights_raw_exponentials_cannot() -> None:
@@ -537,7 +541,7 @@ def test_the_log_carrier_survives_weights_raw_exponentials_cannot() -> None:
     plan = PathPlan.prepare(declare(graph, LOG_PROBABILITY))
     marginals = plan.marginals()
     assert marginals.total == pytest.approx(-1000 + math.log1p(math.exp(-1)))
-    posteriors = marginals.posteriors()
+    posteriors = marginals.posteriors(readout="normalize")
     assert posteriors.values is not None
     by_label = dict(zip(plan.labels, posteriors.values, strict=True))
     assert by_label["a"] == pytest.approx(1 / (1 + math.exp(-1)))
@@ -641,8 +645,22 @@ def test_a_result_that_leaves_the_finite_carrier_is_refused(case: str) -> None:
         declare(lattice(weights, edges), semiring, lift=lift, roots=roots)
     )
     with pytest.raises(OverflowError, match="leaves the finite IEEE-double carrier"):
-        plan.evaluate()
         plan.marginals()
+    if "outside" in case or "through" in case:
+        # The inside pass is finite here; only the outside pass overflows.
+        assert math.isfinite(plan.evaluate().value)
+    else:
+        with pytest.raises(
+            OverflowError, match="leaves the finite IEEE-double carrier"
+        ):
+            plan.evaluate()
+
+
+def test_the_fused_log_schedule_associates_as_the_fold_does() -> None:
+    """Local times the summed alternatives, so cancellation rounds identically."""
+    graph = lattice({"s": -1e16, "a": 1e16, "b": 1e16}, (("s", "a"), ("s", "b")))
+    declaration = declare(graph, LOG_PROBABILITY)
+    assert PathPlan.prepare(declaration).evaluate().value == declaration.run().value
 
 
 def test_selection_is_fused_and_ties_choose_the_canonical_first() -> None:
@@ -770,7 +788,7 @@ def test_an_empty_path_has_mass_one() -> None:
     plan = PathPlan.prepare(declare(lattice({"s": 0.0}, ()), LOG_PROBABILITY))
     marginals = plan.marginals()
     assert marginals.total == 0.0
-    assert marginals.posteriors().values == (1.0,)
+    assert marginals.posteriors(readout="normalize").values == (1.0,)
     best = PathPlan.prepare(
         declare(
             lattice({"s": 0.0}, ()),

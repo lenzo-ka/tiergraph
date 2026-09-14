@@ -467,12 +467,29 @@ class LogProbabilitySemiring:
         mass to normalize against and is refused rather than answered with
         fabricated probabilities. A value that exceeds the total by rounding
         reads as a probability slightly above one, and that is reported as
-        read: the readout normalizes, it does not clip.
+        read: the readout normalizes, it does not clip. Every value is held to
+        the carrier, and a difference or an exponential that leaves the finite
+        carrier is refused as overflow rather than read as infinite mass.
         """
         total = self._value(total, "total")
         if total == self.zero:
             raise ValueError("total is the zero: no mass to normalize against")
-        return tuple(map(math.exp, map(operator.sub, values, repeat(total))))
+        readings = tuple(values)
+        if (
+            set(map(type, readings)) - {float}
+            or any(map(math.isnan, readings))
+            or math.inf in readings
+        ):
+            raise ValueError("values must be IEEE-double carrier values")
+        shifted = list(map(operator.sub, readings, repeat(total)))
+        if math.inf in shifted:
+            raise OverflowError("result leaves the finite IEEE-double carrier")
+        try:
+            return tuple(map(math.exp, shifted))
+        except OverflowError:
+            raise OverflowError(
+                "result leaves the finite IEEE-double carrier"
+            ) from None
 
     def encode(self, value: float, /) -> object:
         """Encode a log weight losslessly without non-JSON numeric tokens."""

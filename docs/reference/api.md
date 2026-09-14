@@ -1357,15 +1357,17 @@ passes.
 Method.
 
 ```text
-PathMarginals.posteriors(self) -> 'PathPosteriors'
+PathMarginals.posteriors(self, *, readout: 'str') -> 'PathPosteriors'
 ```
 
-Read every marginal as a probability of the total.
+Read every marginal as a probability of the total through a declared readout.
 
-This is a readout above the algebra, and it is taken only through the
-algebra's own ``normalize``, which the log-probability carrier
-publishes; an algebra without one is refused by name rather than
-divided by hand. A zero total reports ``zero_mass`` with no values.
+A readout is a division above the algebra, so the caller declares it by
+name and the algebra must publish it: ``readout="normalize"`` is the
+one the log-probability carrier publishes, and an algebra without the
+named readout is refused rather than divided by hand. The result
+records the readout it applied. A zero total reports ``zero_mass``
+with no values.
 
 ### `PathPlan`
 
@@ -1397,10 +1399,13 @@ and the same cost account. Under the log-probability, arctic, and tropical
 carriers the plan runs the algebra's operations in a fused schedule that
 gathers each item's alternatives at once. The operation counts it reports
 are the general schedule's, which the fused schedule performs in gathered
-form, sharing one product across the children it reaches; a log-sum-exp
-over a gathered tuple sums in a different order than pairwise addition, so
-its values agree with the general schedule to rounding rather than bit for
-bit. A selective carrier with an ``AlgebraOrder`` and ``CHOOSE_FIRST``
+form, sharing one product across the children it reaches. A gathered
+log-sum-exp sums its exponentials in a different order than pairwise
+addition does, so under the log carrier the two schedules agree within the
+algebra's declared approximation -- at the rounding scale of the operands,
+which on a total near cancellation can be visible in the result -- and
+under the extremum carriers they agree exactly. A selective carrier with
+an ``AlgebraOrder`` and ``CHOOSE_FIRST``
 fuses its selection too. Every other declaration runs the general schedule
 through the algebra's own methods.
 
@@ -1452,8 +1457,9 @@ PathPosteriors(readout: 'str', zero_mass: 'bool', values: 'tuple[float, ...] | N
 
 Probabilities read out of a plan's marginals, with the readout named.
 
-``readout`` records the algebra method that produced ``values``, so the
-result says which post-pass above the algebra it applied. ``zero_mass`` is
+``readout`` is the name the caller declared and the algebra method that
+produced ``values``, so the result says which post-pass above the algebra
+it applied. ``zero_mass`` is
 true when the total was the algebra's zero; ``values`` is then ``None``,
 because there is no distribution to report and none is fabricated.
 
@@ -5467,7 +5473,9 @@ Each result is ``exp(value - total)``. A total equal to the zero has no
 mass to normalize against and is refused rather than answered with
 fabricated probabilities. A value that exceeds the total by rounding
 reads as a probability slightly above one, and that is reported as
-read: the readout normalizes, it does not clip.
+read: the readout normalizes, it does not clip. Every value is held to
+the carrier, and a difference or an exponential that leaves the finite
+carrier is refused as overflow rather than read as infinite mass.
 
 #### `LogProbabilitySemiring.encode`
 

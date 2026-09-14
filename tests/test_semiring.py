@@ -415,6 +415,14 @@ def test_log_probability_normalize_reads_probabilities_of_a_total() -> None:
         log.normalize((0.0,), -math.inf)
     with pytest.raises(ValueError, match="total"):
         log.normalize((0.0,), math.nan)
+    for bad in (math.nan, math.inf, True, 1):
+        with pytest.raises(ValueError, match="IEEE-double carrier values"):
+            log.normalize((0.0, cast(float, bad)), 0.0)
+    with pytest.raises(OverflowError, match="leaves the finite"):
+        log.normalize((1e308,), -1e308)
+    with pytest.raises(OverflowError, match="leaves the finite"):
+        log.normalize((1000.0,), -1000.0)
+    assert log.normalize((-math.inf,), -1000.0) == (0.0,)
 
 
 def test_double_associativity_is_approximate_but_bounded() -> None:

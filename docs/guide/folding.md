@@ -442,7 +442,7 @@ plan = PathPlan.prepare(
 )
 marginals = plan.marginals()
 print("log mass:", round(marginals.total, 6))
-posteriors = marginals.posteriors()
+posteriors = marginals.posteriors(readout="normalize")
 print("readout:", posteriors.readout)
 probabilities = posteriors.values
 assert probabilities is not None  # zero mass is reported, never fabricated
@@ -462,10 +462,11 @@ silent: 0.2727
 ```
 
 The mass is `0.4 + 0.3 × 0.5 = 0.55`, and each posterior is the share of that
-mass passing through the item. `PathPosteriors` names the readout it applied,
-because normalizing is a division above the algebra: it is taken only through
-the carrier's own `normalize`, and a zero total is reported as `zero_mass`
-with no values rather than as a fabricated distribution. Aggregating
+mass passing through the item. Normalizing is a division above the algebra,
+so the caller declares the readout by name and the carrier must publish it —
+`normalize` is the one `LOG_PROBABILITY` publishes — and `PathPosteriors`
+records the readout it applied. A zero total is reported as `zero_mass` with
+no values rather than as a fabricated distribution. Aggregating
 posteriors by anything other than item — by the output an arc emits, say — is
 the caller's readout in turn; two arcs producing the same output each carry
 their own share here.
@@ -517,10 +518,13 @@ carrier ops: 8
 Under `LOG_PROBABILITY`, `ARCTIC`, and `TROPICAL` the plan runs a fused
 schedule that gathers each item's alternatives at once with the algebra's
 operations inlined, and an `AlgebraOrder` with `CHOOSE_FIRST` fuses the
-selection too; the cost account is the general schedule's, and a gathered
-log-sum-exp sums in a different order than pairwise addition, so its values
-agree with `run` to rounding. Every other declaration runs the general
-schedule through the algebra's methods and agrees with `run` exactly. A result
+selection too. The cost account is the general schedule's. A gathered
+log-sum-exp sums its exponentials in a different order than pairwise
+addition, so under the log carrier the plan agrees with `run` within the
+algebra's declared approximation — at the rounding scale of the operands,
+which a total near cancellation can show in its result — and under the
+extremum carriers exactly. Every other declaration runs the general schedule
+through the algebra's methods and agrees with `run` exactly. A result
 that would leave the finite double carrier is refused as overflow rather than
 read as mass created or destroyed, and a value vector outside the carrier —
 `NaN`, a Boolean, the excluded infinity — is refused before anything runs.

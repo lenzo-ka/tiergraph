@@ -79,8 +79,9 @@ class AlgebraOrder[Value]:
 class PathPosteriors:
     """Probabilities read out of a plan's marginals, with the readout named.
 
-    ``readout`` records the algebra method that produced ``values``, so the
-    result says which post-pass above the algebra it applied. ``zero_mass`` is
+    ``readout`` is the name the caller declared and the algebra method that
+    produced ``values``, so the result says which post-pass above the algebra
+    it applied. ``zero_mass`` is
     true when the total was the algebra's zero; ``values`` is then ``None``,
     because there is no distribution to report and none is fabricated.
     """
@@ -110,26 +111,26 @@ class PathMarginals[Value]:
     marginals: tuple[Value, ...]
     cost: FoldCost
 
-    def posteriors(self) -> PathPosteriors:
-        """Read every marginal as a probability of the total.
+    def posteriors(self, *, readout: str) -> PathPosteriors:
+        """Read every marginal as a probability of the total through a declared readout.
 
-        This is a readout above the algebra, and it is taken only through the
-        algebra's own ``normalize``, which the log-probability carrier
-        publishes; an algebra without one is refused by name rather than
-        divided by hand. A zero total reports ``zero_mass`` with no values.
+        A readout is a division above the algebra, so the caller declares it by
+        name and the algebra must publish it: ``readout="normalize"`` is the
+        one the log-probability carrier publishes, and an algebra without the
+        named readout is refused rather than divided by hand. The result
+        records the readout it applied. A zero total reports ``zero_mass``
+        with no values.
         """
         algebra = self.plan.declaration.semiring
-        normalize = getattr(algebra, "normalize", None)
-        if normalize is None:
+        method = None if readout.startswith("_") else getattr(algebra, readout, None)
+        if not callable(method):
             raise ValueError(
-                f"algebra {type(algebra).__name__!r} publishes no normalize "
-                "readout; a posterior is read only through one"
+                f"algebra {type(algebra).__name__!r} publishes no {readout!r} "
+                "readout; a posterior is read only through one the caller declares"
             )
         if self.total == algebra.zero:
-            return PathPosteriors("normalize", True, None)
-        return PathPosteriors(
-            "normalize", False, tuple(normalize(self.marginals, self.total))
-        )
+            return PathPosteriors(readout, True, None)
+        return PathPosteriors(readout, False, tuple(method(self.marginals, self.total)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,10 +178,13 @@ class PathPlan[Value]:
     carriers the plan runs the algebra's operations in a fused schedule that
     gathers each item's alternatives at once. The operation counts it reports
     are the general schedule's, which the fused schedule performs in gathered
-    form, sharing one product across the children it reaches; a log-sum-exp
-    over a gathered tuple sums in a different order than pairwise addition, so
-    its values agree with the general schedule to rounding rather than bit for
-    bit. A selective carrier with an ``AlgebraOrder`` and ``CHOOSE_FIRST``
+    form, sharing one product across the children it reaches. A gathered
+    log-sum-exp sums its exponentials in a different order than pairwise
+    addition does, so under the log carrier the two schedules agree within the
+    algebra's declared approximation -- at the rounding scale of the operands,
+    which on a total near cancellation can be visible in the result -- and
+    under the extremum carriers they agree exactly. A selective carrier with
+    an ``AlgebraOrder`` and ``CHOOSE_FIRST``
     fuses its selection too. Every other declaration runs the general schedule
     through the algebra's own methods.
     """
@@ -535,10 +539,11 @@ def _log_inside(
             if high == _NEGATIVE:
                 value = _NEGATIVE
             else:
-                value = (
-                    v[item]
-                    + high
-                    + log(fsum(map(exp, map(sub, candidates, repeat(high)))))
+                # Associated as the fold does it, local ⊗ (sum of alternatives),
+                # so the two schedules differ only in the order the
+                # exponentials are summed.
+                value = v[item] + (
+                    high + log(fsum(map(exp, map(sub, candidates, repeat(high)))))
                 )
                 if value == _NEGATIVE and v[item] != _NEGATIVE:
                     raise _overflow(plan)
