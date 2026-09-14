@@ -411,6 +411,10 @@ class AttributeValue:
 
     def __post_init__(self) -> None:
         """Separate lexical validation from the canonical spelling stored afterward."""
+        if not isinstance(self.value_type, XsdType):
+            raise GraphValidationError(
+                f"attribute {str(self.name)!r} requires a scalar XSD type"
+            )
         try:
             canonical = _canonical_lexical(self.value_type, self.lexical)
         except ValueError as error:

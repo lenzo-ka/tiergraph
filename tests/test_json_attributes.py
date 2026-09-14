@@ -16,10 +16,13 @@ from tiergraph import (
     AttachValue,
     AttributeDeclaration,
     AttributeDomain,
+    AttributeValuation,
+    AttributeValue,
     BoundaryRef,
     DeclareAttribute,
     DeclareNamespace,
     Delivery,
+    GrammarRule,
     Graph,
     GraphValidationError,
     Item,
@@ -32,11 +35,15 @@ from tiergraph import (
     NamespaceDeclaration,
     Program,
     QualifiedName,
+    RewriteDeclaration,
+    RewriteEffect,
+    XsdType,
     execute,
     program_dumps,
     program_loads,
     wire,
 )
+from tiergraph.build import Document, item
 from tiergraph.core import JsonValue, _scalar_attribute
 from tiergraph.schema import validation_errors
 
@@ -179,6 +186,45 @@ def test_example_scalar_reader_refuses_json() -> None:
     """The example's actual reading path refuses JSON rather than inventing lexical data."""
     with pytest.raises(GraphValidationError, match="scalar XSD"):
         _document_int(document(1), NAME)
+
+
+def test_scalar_constructor_refuses_json_type() -> None:
+    """A widened declaration type cannot manufacture a JSON lexical carrier."""
+    with pytest.raises(GraphValidationError, match="scalar XSD type"):
+        AttributeValue(NAME, cast(XsdType, JsonType.JSON), "1")
+
+
+def test_grammar_weight_refuses_json_carrier() -> None:
+    """A wrong-family weight is refused before diagnostic lexical access."""
+    with pytest.raises(GraphValidationError, match="scalar XSD value"):
+        GrammarRule(
+            NAME, (), (), weight=cast(AttributeValue, JsonAttributeValue(NAME, 1))
+        )
+
+
+def test_builder_json_snapshot_and_fold_scalar_refusal() -> None:
+    """Native builder lowering snapshots JSON and fold refuses its declared family."""
+    builder = Document(NAME.namespace, prefix="j")
+    builder.attribute(NAME, JsonType.JSON)
+    payload: dict[str, JsonValue] = {"array": [1]}
+    tier = builder.tier("values", (item(attrs={NAME: payload}),))
+    graph = builder.build()
+    payload["array"] = [2]
+    value = graph.tiers[0].items[0].attributes[0]
+    assert isinstance(value, JsonAttributeValue)
+    assert value.to_value() == {"array": [1]}
+    assert wire.loads(wire.dump_compact(graph)) == graph
+    with pytest.raises(ValueError, match="scalar XSD"):
+        AttributeValuation("payload", NAME, (tier.name,)).declaration_type(graph)
+
+
+def test_rewrite_preserves_json_signed_zero_disturbance() -> None:
+    """Actual generic fact diagnostics distinguish JSON double signs."""
+    disturbances = RewriteDeclaration(
+        "signed", document(-0.0), document(0.0)
+    ).disturbances()
+    assert len(disturbances) == 1
+    assert disturbances[0].effect is RewriteEffect.REVISE
 
 
 def test_every_carrier_layers_edit_transport_and_dot() -> None:

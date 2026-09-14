@@ -195,6 +195,8 @@ class GrammarRule:
         _string_value(self.boundary, f"rule {str(self.left)!r} boundary")
         for variable in self.awaited_variables:
             _string_value(variable, f"rule {str(self.left)!r} awaited variable")
+        if self.weight is not None:
+            _scalar_attribute(self.weight)
         if self.weight is not None and self.weight.value_type is not XsdType.DECIMAL:
             raise ValueError(
                 f"rule {str(self.left)!r} weight {self.weight.lexical!r} "
