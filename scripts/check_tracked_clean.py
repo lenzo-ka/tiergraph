@@ -137,6 +137,7 @@ _STDLIB_IMPORTS = {
     "itertools",
     "json",
     "math",
+    "operator",
     "os",
     "pathlib",
     "random",

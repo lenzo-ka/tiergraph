@@ -335,6 +335,204 @@ Use `TROPICAL` or `ARCTIC`, whose associativity check is approximate, for
 `xsd:double` values. The refusal is a declaration-time guard, so a fold that
 runs has already been checked for this mismatch.
 
+## Preparing a path plan
+
+A fold over one `OR` relation on an acyclic graph is a path graph: every
+derivation is a root-to-sink path, and its value is the product of the local
+values along it. When the graph stays fixed and only the values change — an
+expectation step re-weighting the same lattice, a sweep over parameters —
+`PathPlan` compiles the declaration's topology once and evaluates it under any
+vector of carrier values given in the plan's item order. `PathPlan.evaluate`
+returns what `FoldDeclaration.run` returns, provenance and cost account
+included, and `PathPlan.marginals` adds the outside pass: for every item, the
+sum over the derivations that pass through it.
+
+The example is a small lattice whose states and arcs are items of one tier,
+joined by a `next` relation, with the arcs after the states. Under
+`LOG_PROBABILITY` the values are log weights and `-INF` is the zero. A sink
+accepts with its own value, so the final state carries `0.0` and a dead end
+would carry `-INF`.
+
+```python
+import math
+
+from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValuation,
+    AttributeValue,
+    BipartiteRelationDeclaration,
+    ChildCombination,
+    FoldDeclaration,
+    FoldTransition,
+    Graph,
+    Item,
+    ItemRef,
+    NamespaceDeclaration,
+    QualifiedName,
+    RelationInstance,
+    SimpleRelationDeclaration,
+    Tier,
+    TierDeclaration,
+    TiePolicy,
+    XsdType,
+)
+from tiergraph.pathplan import AlgebraOrder, PathPlan
+from tiergraph.semiring import ARCTIC, LOG_PROBABILITY
+
+ns = "https://example.com/plan"
+nodes = QualifiedName(ns, "nodes")
+node = QualifiedName(ns, "node")
+follows = QualifiedName(ns, "next")
+weight = QualifiedName(ns, "weight")
+
+
+def item(label: str, log_weight: float) -> Item:
+    lexical = "-INF" if log_weight == -math.inf else repr(log_weight)
+    return Item(label, (AttributeValue(weight, XsdType.DOUBLE, lexical),))
+
+
+labels = ("s", "m", "f", "merged", "first", "silent")
+lattice_refs = {label: ItemRef(nodes, index) for index, label in enumerate(labels)}
+graph = Graph(
+    (NamespaceDeclaration("lattice", ns),),
+    (
+        Tier(
+            TierDeclaration(nodes, "States and arcs"),
+            (
+                item("s", 0.0),
+                item("m", 0.0),
+                item("f", 0.0),
+                item("merged", math.log(0.4)),
+                item("first", math.log(0.3)),
+                item("silent", math.log(0.5)),
+            ),
+        ),
+    ),
+    (
+        SimpleRelationDeclaration(QualifiedName(ns, "membership"), nodes, node),
+        BipartiteRelationDeclaration(follows, node, node, acyclic=True),
+    ),
+    tuple(
+        RelationInstance(follows, lattice_refs[left], lattice_refs[right])
+        for left, right in (
+            ("s", "merged"),
+            ("merged", "f"),
+            ("s", "first"),
+            ("first", "m"),
+            ("m", "silent"),
+            ("silent", "f"),
+        )
+    ),
+    (AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DOUBLE),),
+)
+valuation = AttributeValuation("weight", weight, (nodes,))
+transitions = (FoldTransition(follows, ChildCombination.OR),)
+
+plan = PathPlan.prepare(
+    FoldDeclaration(
+        "lattice",
+        graph,
+        valuation,
+        LOG_PROBABILITY,
+        lambda value, _label: value,
+        transitions,
+        roots=(lattice_refs["s"],),
+    )
+)
+marginals = plan.marginals()
+print("log mass:", round(marginals.total, 6))
+posteriors = marginals.posteriors(readout="normalize")
+print("readout:", posteriors.readout)
+probabilities = posteriors.values
+assert probabilities is not None  # zero mass is reported, never fabricated
+for label, probability in zip(plan.labels, probabilities):
+    print(f"{label}: {probability:.4f}")
+```
+
+```text
+log mass: -0.597837
+readout: normalize
+s: 1.0000
+m: 0.2727
+f: 1.0000
+merged: 0.7273
+first: 0.2727
+silent: 0.2727
+```
+
+The mass is `0.4 + 0.3 × 0.5 = 0.55`, and each posterior is the share of that
+mass passing through the item. Normalizing is a division above the algebra,
+so the caller declares the readout by name and the carrier must publish it —
+`normalize` is the one `LOG_PROBABILITY` publishes — and `PathPosteriors`
+records the readout it applied. A zero total is reported as `zero_mass` with
+no values rather than as a fabricated distribution. Aggregating
+posteriors by anything other than item — by the output an arc emits, say — is
+the caller's readout in turn; two arcs producing the same output each carry
+their own share here.
+
+New values reuse the compiled topology. `plan.values` holds what the
+declaration lifted, `plan.index` locates an item's position, and a vector of
+another length is refused:
+
+```python
+reweighted = list(plan.values)
+reweighted[plan.index(lattice_refs["merged"])] = math.log(0.1)
+print("re-weighted log mass:", round(plan.marginals(reweighted).total, 6))
+```
+
+```text
+re-weighted log mass: -1.386294
+```
+
+A best path runs the same plan under a selective carrier. `AlgebraOrder` is a
+witness order by the algebra's own addition, so the fold and the plan agree on
+what wins; with `CHOOSE_FIRST` a tie goes to the alternative earliest in the
+graph's canonical order, deterministically, and `ALL` keeps every tied path up
+to `output_cap`.
+
+```python
+best = PathPlan.prepare(
+    FoldDeclaration(
+        "best",
+        graph,
+        valuation,
+        ARCTIC,
+        lambda value, _label: value,
+        transitions,
+        roots=(lattice_refs["s"],),
+        witness_order=AlgebraOrder(ARCTIC),
+        tie_policy=TiePolicy.CHOOSE_FIRST,
+    )
+)
+result = best.evaluate()
+print("best:", round(result.value, 6), result.provenance)
+print("carrier ops:", result.cost.carrier_work)
+```
+
+```text
+best: -0.916291 (('s', 'merged', 'f'),)
+carrier ops: 8
+```
+
+Under `LOG_PROBABILITY`, `ARCTIC`, and `TROPICAL` the plan runs a fused
+schedule that gathers each item's alternatives at once with the algebra's
+operations inlined, and an `AlgebraOrder` with `CHOOSE_FIRST` fuses the
+selection too. The cost account is the general schedule's. A gathered
+log-sum-exp sums its exponentials in a different order than pairwise
+addition, so under the log carrier the plan agrees with `run` within the
+algebra's declared approximation — at the rounding scale of the operands,
+which a total near cancellation can show in its result — and under the
+extremum carriers exactly. Every other declaration runs the general schedule
+through the algebra's methods and agrees with `run` exactly. A result
+that would leave the finite double carrier is refused as overflow rather than
+read as mass created or destroyed, and a value vector outside the carrier —
+`NaN`, a Boolean, the excluded infinity — is refused before anything runs.
+
+A plan refuses what a path cannot carry, each by name: ranked output, an index
+product, more than one dependency relation, an `AND` transition, and a cycle,
+which is reported by its closing edge.
+
 ## From the command line
 
 `tiergraph semirings` lists the algebras the `tiergraph fold` shell can name,

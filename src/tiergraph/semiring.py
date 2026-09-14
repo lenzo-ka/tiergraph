@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+import operator
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
 from enum import Enum
+from itertools import repeat
 from typing import Any, Protocol, cast
 
 
@@ -388,6 +390,120 @@ class TropicalSemiring(DoubleExtremumSemiring):
 
     def __init__(self) -> None:
         super().__init__(minimum=True)
+
+
+class LogProbabilitySemiring:
+    """The inexact log-sum-exp semiring over finite IEEE-double log weights.
+
+    Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
+    the numerically stable log-sum-exp, multiplication is ordinary addition of
+    logs, and ``0.0`` is the one. Positive values are admitted because a weight
+    need not be a normalized probability. A path of ``-1000`` log weights folds
+    without the underflow that raw exponentials suffer, which is the reason to
+    fold in this carrier rather than in probabilities.
+
+    Every required law is checked approximately except addition commutativity,
+    which the symmetric log-sum-exp keeps exactly. That is the honest claim for
+    floating-point accumulation, and an acyclic dependency graph does not
+    change it: a finite derivation set makes the *search* exhaustive and says
+    nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
+    for the same reason, and that refusal stands. A result that leaves the
+    finite carrier is refused rather than read as mass created or destroyed.
+    The carrier declares no star.
+
+    ``normalize`` is the readout above the algebra: it reads log weights out
+    as probabilities of a total, and a construct applying it says so where it
+    reports the result. ``readouts`` names it, so a caller can declare it and
+    nothing else is mistaken for one.
+    """
+
+    zero = -math.inf
+    one = 0.0
+    readouts = ("normalize",)
+    add_associativity = multiply_associativity = LawCheck.APPROXIMATE
+    add_commutativity = LawCheck.EXACT
+    left_distributivity = right_distributivity = LawCheck.APPROXIMATE
+    add_idempotent = False
+    multiply_commutative = True
+    add_selective = False
+    multiply_strictly_order_preserving = False
+    multiply_preserves_witness_order = False
+    zero_sum_free = no_zero_divisors = True
+    star = None
+
+    def _value(self, value: float, name: str) -> float:
+        if type(value) is not float or math.isnan(value):
+            raise ValueError(f"{name} must be an IEEE-double carrier value")
+        if value == math.inf:
+            raise ValueError(f"{name} contains the excluded infinite bound")
+        return value
+
+    def add(self, left: float, right: float, /) -> float:
+        """Return the log of the summed weights, computed stably."""
+        left = self._value(left, "left")
+        right = self._value(right, "right")
+        if left == self.zero:
+            return right
+        if right == self.zero:
+            return left
+        high, low = (left, right) if left >= right else (right, left)
+        # The sum is at most ``high + ln 2``, which rounds back into the finite
+        # carrier for every finite ``high``, so addition alone cannot overflow.
+        return high + math.log1p(math.exp(low - high))
+
+    def multiply(self, left: float, right: float, /) -> float:
+        """Add log weights, refusing overflow and preserving the annihilator."""
+        left = self._value(left, "left")
+        right = self._value(right, "right")
+        if left == self.zero or right == self.zero:
+            return self.zero
+        result = left + right
+        if not math.isfinite(result):
+            raise OverflowError("result leaves the finite IEEE-double carrier")
+        return result
+
+    def normalize(self, values: Iterable[float], total: float, /) -> tuple[float, ...]:
+        """Read log weights out as probabilities of a total, in one pass.
+
+        Each result is ``exp(value - total)``. A total equal to the zero has no
+        mass to normalize against and is refused rather than answered with
+        fabricated probabilities. A value that exceeds the total by rounding
+        reads as a probability slightly above one, and that is reported as
+        read: the readout normalizes, it does not clip. Every value is held to
+        the carrier, and a difference or an exponential that leaves the finite
+        carrier is refused as overflow rather than read as infinite mass.
+        """
+        total = self._value(total, "total")
+        if total == self.zero:
+            raise ValueError("total is the zero: no mass to normalize against")
+        readings = tuple(values)
+        if (
+            set(map(type, readings)) - {float}
+            or any(map(math.isnan, readings))
+            or math.inf in readings
+        ):
+            raise ValueError("values must be IEEE-double carrier values")
+        shifted = list(map(operator.sub, readings, repeat(total)))
+        if math.inf in shifted:
+            raise OverflowError("result leaves the finite IEEE-double carrier")
+        try:
+            return tuple(map(math.exp, shifted))
+        except OverflowError:
+            raise OverflowError(
+                "result leaves the finite IEEE-double carrier"
+            ) from None
+
+    def encode(self, value: float, /) -> object:
+        """Encode a log weight losslessly without non-JSON numeric tokens."""
+        value = self._value(value, "value")
+        return "-INF" if value == self.zero else value.hex()
+
+    def decode(self, value: object, /) -> float:
+        """Decode lossless hexadecimal log-weight text."""
+        if not isinstance(value, str):
+            raise TypeError("encoded value must be a string")
+        decoded = -math.inf if value == "-INF" else float.fromhex(value)
+        return self._value(decoded, "encoded value")
 
 
 class ArcticSemiring(DoubleExtremumSemiring):
@@ -943,6 +1059,7 @@ DECIMAL_TROPICAL = DecimalExtremumSemiring(minimum=True)
 DECIMAL_ARCTIC = DecimalExtremumSemiring(minimum=False)
 TROPICAL = TropicalSemiring()
 ARCTIC = ArcticSemiring()
+LOG_PROBABILITY = LogProbabilitySemiring()
 PATH_WITNESSES = PathWitnessSemiring()
 PATH = PathSemiring()
 
@@ -952,6 +1069,7 @@ __all__ = [
     "COUNTING",
     "DECIMAL_ARCTIC",
     "DECIMAL_TROPICAL",
+    "LOG_PROBABILITY",
     "PATH",
     "PATH_WITNESSES",
     "TROPICAL",
@@ -963,6 +1081,7 @@ __all__ = [
     "ExpectationSemiring",
     "LawCheck",
     "LexicographicSemiring",
+    "LogProbabilitySemiring",
     "Path",
     "PathSemiring",
     "PathValue",

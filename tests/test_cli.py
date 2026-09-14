@@ -1289,6 +1289,27 @@ def test_semirings_lists_exactly_the_algebras_this_shell_can_name(
     assert tropical["properties"]["multiply_preserves_witness_order"] is True
 
 
+def test_semirings_lists_the_log_probability_carrier(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The log carrier is named with its bounds, its laws, and no star."""
+    assert main(["semirings"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    entry = next(
+        candidate
+        for candidate in report["semirings"]
+        if candidate["name"] == "log-probability"
+    )
+    assert entry["type"] == "LogProbabilitySemiring"
+    assert entry["zero"] == "-INF"
+    assert entry["one"] == "0x0.0p+0"
+    assert entry["star"] is None
+    assert entry["laws"]["add_commutativity"] == "exact"
+    assert entry["laws"]["add_associativity"] == "approximate"
+    assert entry["properties"]["add_selective"] is False
+    assert entry["properties"]["zero_sum_free"] is True
+
+
 def test_semirings_writes_to_a_file_without_reading_a_document(
     tmp_path: Path,
 ) -> None:
