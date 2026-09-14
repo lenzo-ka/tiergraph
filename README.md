@@ -76,7 +76,7 @@ The complete runnable example keeps the displayed phone labels separate from
 their durable ids and prints `['K', 'AE', 'T']`; see
 [`examples/caption_alignment.py`](examples/caption_alignment.py).
 
-The model learned from Paul Hertz's Delta representation and the heterogeneous
+The model learned from Sue Hertz's Delta representation and the heterogeneous
 relation graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps
 their emphasis on explicit tiered structure while defining a typed, immutable
 model and a versioned interchange format.
