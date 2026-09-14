@@ -55,6 +55,9 @@ class Drift:
     schema_accepts: bool
     codec_diagnostic: str
     validation_diagnostic: str
+    # A validator or codec that raised outside its contract is reported whatever
+    # the policy says; only a plain three-way disagreement is subtractable.
+    subtractable: bool = False
 
 
 def undeclared_drifts(
@@ -62,6 +65,38 @@ def undeclared_drifts(
     divergences: tuple[DeclaredDivergence, ...] = LIVE_DIVERGENCES,
 ) -> tuple[Drift, ...]:
     """Compare all acceptance paths and subtract only policy-listed divergence."""
+    return subtract_declared(audit_drifts(probes), divergences)
+
+
+def subtract_declared(
+    drifts: tuple[Drift, ...], divergences: tuple[DeclaredDivergence, ...]
+) -> tuple[Drift, ...]:
+    """Remove the drifts the policy declares, leaving every other one standing.
+
+    The audit is deterministic, so subtracting from an audit already taken is
+    the same answer as auditing again under the policy, at the cost of a
+    predicate per drift rather than a validator, a codec, and a schema check per
+    probe; the slow tests share one audit for that reason.
+    """
+    return tuple(
+        drift
+        for drift in drifts
+        if not (
+            drift.subtractable
+            and drift.schema_accepts
+            and drift.codec_diagnostic != "accepted"
+            and any(
+                divergence.matches(drift.probe.id)
+                and (drift.validation_diagnostic == "accepted")
+                is divergence.validation_accepts
+                for divergence in divergences
+            )
+        )
+    )
+
+
+def audit_drifts(probes: tuple[Probe, ...]) -> tuple[Drift, ...]:
+    """Compare all acceptance paths and report every disagreement, policy aside."""
     validator = Draft202012Validator(json_schema(FORMAT_VERSION))
     result: list[Drift] = []
     for probe in probes:
@@ -101,19 +136,15 @@ def undeclared_drifts(
             diagnostic = "accepted"
         if schema_accepts == codec_accepts == validation_accepts:
             continue
-        declared = (
-            schema_accepts
-            and not codec_accepts
-            and any(
-                divergence.matches(probe.id)
-                and validation_accepts is divergence.validation_accepts
-                for divergence in divergences
+        result.append(
+            Drift(
+                probe,
+                schema_accepts,
+                diagnostic,
+                validation_diagnostic,
+                subtractable=True,
             )
         )
-        if not declared:
-            result.append(
-                Drift(probe, schema_accepts, diagnostic, validation_diagnostic)
-            )
     return tuple(result)
 
 

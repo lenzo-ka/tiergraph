@@ -26,7 +26,7 @@ export PYTHONPATH := $(MAKEFILE_DIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 # and runs nothing. A target left off this line is silent until something in the
 # tree happens to share its name, which is why `format-semantics` and
 # `corpus-capture` sat missing here without ever being noticed.
-.PHONY: venv lint format-check types test determinism-seed determinism schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate-fast gate check
+.PHONY: venv lint format-check types test determinism-seed determinism determinism-seed-0 determinism-seed-12345 determinism-seed-999 schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate-fast gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -56,10 +56,26 @@ determinism-seed:
 	@test -n "$(HASH_SEED)" || (echo "HASH_SEED is required" >&2; exit 2)
 	@PYTHONHASHSEED=$(HASH_SEED) $(VENV_PYTHON) -m pytest
 
+# The three seeds are independent, so they run concurrently: measured serial,
+# they were the larger half of the gate's wall time. Each seed writes its own
+# log under the virtualenv (ignored, so it cannot ship) and prints only its
+# summary line, so three interleaved dot streams do not have to be read. A
+# failing seed prints its whole log. DETERMINISM_JOBS=1 runs them one at a
+# time on a machine that cannot hold three interpreters at once.
+DETERMINISM_JOBS ?= 3
+DETERMINISM_SEEDS := 0 12345 999
+
 determinism:
-	@for seed in 0 12345 999; do \
-		$(MAKE) --no-print-directory determinism-seed HASH_SEED=$$seed || exit $$?; \
-	done
+	@$(MAKE) --no-print-directory -j$(DETERMINISM_JOBS) \
+		$(addprefix determinism-seed-,$(DETERMINISM_SEEDS))
+
+determinism-seed-0 determinism-seed-12345 determinism-seed-999:
+	@seed=$(@:determinism-seed-%=%); log=$(VENV)/determinism-$$seed.log; \
+	if $(MAKE) --no-print-directory determinism-seed HASH_SEED=$$seed >$$log 2>&1; then \
+		printf 'seed %s: %s\n' "$$seed" "$$(tail -n 1 $$log)"; \
+	else \
+		status=$$?; cat $$log; echo "seed $$seed failed" >&2; exit $$status; \
+	fi
 
 tracked-clean:
 	@$(VENV_PYTHON) scripts/check_tracked_clean.py
