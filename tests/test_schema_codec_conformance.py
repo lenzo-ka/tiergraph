@@ -14,9 +14,12 @@ from tests.conformance.declared_schema_codec_divergences import (
     DeclaredDivergence,
 )
 from tests.conformance.schema_codec import (
+    Drift,
+    audit_drifts,
     conformance_probes,
     declared_variants,
     realized_variants,
+    subtract_declared,
     undeclared_drifts,
 )
 from tests.test_wire import (
@@ -39,9 +42,22 @@ from tiergraph.schema import (
 from tiergraph.wire import to_data
 
 
-def test_declaration_derived_schema_codec_acceptance() -> None:
+@pytest.fixture(scope="module")
+def raw_drifts() -> tuple[Drift, ...]:
+    """Audit every generated probe once per module; the policy is applied per test.
+
+    The audit runs a schema check, the validator, and the codec over several
+    thousand probes and is the slow half of this suite, so the three tests
+    that need it in full share one audit and subtract their policies from it.
+    """
+    return audit_drifts(conformance_probes(_seeds(), DOCUMENT))
+
+
+def test_declaration_derived_schema_codec_acceptance(
+    raw_drifts: tuple[Drift, ...],
+) -> None:
     """Every near-miss follows declared schema, validator, and codec acceptance."""
-    drifts = undeclared_drifts(conformance_probes(_seeds(), DOCUMENT))
+    drifts = subtract_declared(raw_drifts, LIVE_DIVERGENCES)
     assert not drifts, [
         (
             drift.probe.id,
@@ -53,17 +69,30 @@ def test_declaration_derived_schema_codec_acceptance() -> None:
     ]
 
 
-def test_every_live_divergence_is_reached_and_removal_exposes_drift() -> None:
+def test_subtracting_from_an_audit_is_auditing_under_the_policy(
+    raw_drifts: tuple[Drift, ...],
+) -> None:
+    """The shared audit answers exactly what a policy audit of the same probes does."""
+    drifting = tuple(drift.probe for drift in raw_drifts)
+    assert raw_drifts
+    assert undeclared_drifts(drifting, ()) == raw_drifts
+    assert undeclared_drifts(drifting, LIVE_DIVERGENCES) == subtract_declared(
+        raw_drifts, LIVE_DIVERGENCES
+    )
+
+
+def test_every_live_divergence_is_reached_and_removal_exposes_drift(
+    raw_drifts: tuple[Drift, ...],
+) -> None:
     """Each subtraction rule matches real drift and removing it exposes drift."""
-    _assert_live_divergences_are_reached(LIVE_DIVERGENCES)
+    _assert_live_divergences_are_reached(LIVE_DIVERGENCES, raw_drifts)
 
 
 def _assert_live_divergences_are_reached(
     divergences: tuple[DeclaredDivergence, ...],
+    raw_drifts: tuple[Drift, ...],
 ) -> None:
     """Audit live rules against actual disagreements in the generated probes."""
-    probes = conformance_probes(_seeds(), DOCUMENT)
-    raw_drifts = undeclared_drifts(probes, ())
     for divergence in divergences:
         matching = tuple(
             drift
@@ -75,15 +104,17 @@ def _assert_live_divergences_are_reached(
         )
         assert matching, f"inert live divergence: {divergence.name}"
         without = tuple(item for item in divergences if item is not divergence)
-        surfaced = undeclared_drifts(tuple(drift.probe for drift in matching), without)
+        surfaced = subtract_declared(matching, without)
         assert any(drift in surfaced for drift in matching), divergence.name
 
 
-def test_inert_live_divergence_fails_the_policy_audit() -> None:
+def test_inert_live_divergence_fails_the_policy_audit(
+    raw_drifts: tuple[Drift, ...],
+) -> None:
     """Demonstrate that inflating the live policy with an inert entry fails."""
     inert = DeclaredDivergence("inert", r":mutation-that-does-not-exist$", "test")
     with pytest.raises(AssertionError, match="inert live divergence"):
-        _assert_live_divergences_are_reached((*LIVE_DIVERGENCES, inert))
+        _assert_live_divergences_are_reached((*LIVE_DIVERGENCES, inert), raw_drifts)
 
 
 def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:

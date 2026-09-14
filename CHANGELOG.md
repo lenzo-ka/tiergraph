@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the `declared-readout` reservation is discharged: the reservation
   register carries four entries, and `PathMarginals.posteriors` records the
   readout it applies.
+- The gate's three hash-seed test passes run concurrently under `make
+  determinism`; `DETERMINISM_JOBS=1` runs them one at a time, and each seed
+  writes its own log under the virtualenv and prints only its summary line.
+  The publishability test that plants a sentinel under the checkout's
+  `.claude/` names it per process, so concurrent passes over one checkout no
+  longer race on its cleanup.
+- The schema-codec conformance suite audits its generated probes once per
+  module and subtracts each test's policy from that audit, through the
+  harness's new `audit_drifts` and `subtract_declared`, whose composition
+  `undeclared_drifts` still is; a test holds the two answers equal. The three
+  tests that each ran the full audit took most of the suite's time.
 
 ## [0.2.1] - 2026-09-13
 

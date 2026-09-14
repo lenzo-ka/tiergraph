@@ -52,7 +52,10 @@ version this section used to carry fell a step behind twice: a copied list is a
 claim about the gate that nothing checks.
 
 `make check` builds the virtualenv and then runs `make gate`, which is the same
-steps against an environment that already exists. Run `gate` where an index
+steps against an environment that already exists. The `determinism` step runs
+its three seeds concurrently, each writing a log under the virtualenv and
+printing its summary line; on a machine that cannot hold three interpreters at
+once, `make gate DETERMINISM_JOBS=1` runs them one at a time. Run `gate` where an index
 cannot be reached, rather than copying its steps out by hand. Coverage is
 measured for the `tiergraph` and `tiergraph_dot` packages and for the `scripts`
 gates, and must remain at 100% branch coverage.

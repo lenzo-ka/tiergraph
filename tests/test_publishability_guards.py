@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import shutil
 import subprocess
 import tarfile
@@ -748,16 +750,20 @@ def test_nothing_under_the_local_agent_directory_can_reach_the_distribution(
     """
     monkeypatch.chdir(check_tracked_clean.ROOT)
     local = check_tracked_clean.ROOT / ".claude"
-    # A developer's own `.claude/` holds live worktrees, so the cleanup below
-    # removes the topmost directory this test had to create and nothing above it.
-    created = local if not local.is_dir() else local / "sentinel-worktree"
-    planted = local / "sentinel-worktree" / "CONTRIBUTING.md"
+    # A developer's own `.claude/` holds live worktrees, and the gate runs this
+    # suite in three processes at once over one checkout, so the sentinel is
+    # named per process and the cleanup removes only that sentinel, then the
+    # directory above it only if this process left it empty.
+    sentinel = local / f"sentinel-worktree-{os.getpid()}"
+    planted = sentinel / "CONTRIBUTING.md"
     planted.parent.mkdir(parents=True, exist_ok=True)
     planted.write_text("Local scratch that must never ship.\n", encoding="utf-8")
     try:
         members = _distribution_members(tmp_path)
     finally:
-        shutil.rmtree(created)
+        shutil.rmtree(sentinel)
+        with contextlib.suppress(OSError):
+            local.rmdir()
     assert [name for name in members if name.startswith(".claude/")] == []
     # The build has to have produced something, or the assertion above is vacuous.
     assert "pyproject.toml" in members
