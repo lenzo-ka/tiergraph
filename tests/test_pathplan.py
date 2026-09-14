@@ -185,7 +185,7 @@ def decimal_order(left: Any, right: Any) -> int:
     """Order decimal or path carriers by their scalar."""
     left_value = left[0] if isinstance(left, tuple) else left
     right_value = right[0] if isinstance(right, tuple) else right
-    return (left_value > right_value) - (left_value < right_value)
+    return int(left_value > right_value) - int(left_value < right_value)
 
 
 def close(left: Any, right: Any) -> bool:
