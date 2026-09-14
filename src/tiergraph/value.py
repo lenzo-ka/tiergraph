@@ -25,6 +25,7 @@ from tiergraph.core import (
     Tier,
     TierDeclaration,
     XsdType,
+    _scalar_attribute,
 )
 
 _KINDS = frozenset(
@@ -237,7 +238,7 @@ class JsonValueProfile:
             raise ValueError(
                 f"JSON value node {reference.to_data()!r} does not exist"
             ) from error
-        values = {value.name: value for value in item.attributes}
+        values = {value.name: _scalar_attribute(value) for value in item.attributes}
         if self.key_attribute in values:
             raise ValueError(
                 f"JSON value node {reference.to_data()!r} carries an object-member key"
@@ -319,7 +320,10 @@ class JsonValueProfile:
         tier = next(
             item for item in self.graph.tiers if item.declaration.name == reference.tier
         )
-        return {value.name: value for value in tier.items[reference.index].attributes}
+        return {
+            value.name: _scalar_attribute(value)
+            for value in tier.items[reference.index].attributes
+        }
 
 
 def json_value_graph(  # noqa: PLR0915 -- one declarative JSON vocabulary

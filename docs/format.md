@@ -5,7 +5,18 @@ arrays retain order, and scalar attribute values retain their declared XSD type
 and canonical lexical form. The top-level document carries
 `"format_version": "0.2.0"`.
 
-Empty arrays and null-valued fields are not emitted, with one presence-sensitive
+Structured literal concerns use a declared `"value_type": "json"` attribute.
+Its record has `name`, `value_type`, and a required `value`, including null.
+For example, `{"name":"form:profile","value_type":"json","value":{"empty":[],"start":null}}`.
+The JSON literal retains empty containers, nulls, array order and primitive
+kinds; object keys are sorted. Finite doubles retain their sign, including
+negative zero. Namespace-shaped objects inside literals remain ordinary user
+data. Graph references remain native relation endpoints, with their existing
+declaration and reference validation. Literal strings carry no automatic
+reference semantics. Scalar XSD records continue to use `lexical`.
+
+Outside structured JSON attribute literals, empty arrays and null-valued fields
+are not emitted, with one presence-sensitive
 exception: a relation side's explicit `"tiers": []` means that no tier is
 allowed, while an absent `tiers` field means that any tier is allowed. Other
 missing array fields decode as empty collections, and missing nullable strings

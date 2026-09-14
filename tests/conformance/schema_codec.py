@@ -296,6 +296,8 @@ def _example(shape: Shape) -> JsonValue:
         }
     if shape.kind is ShapeKind.ARRAY:
         return []
+    if shape.kind is ShapeKind.JSON:
+        return {"literal": None}
     if shape.kind is ShapeKind.NULLABLE_STRING:
         return None
     if shape.kind is ShapeKind.STRING:
@@ -321,6 +323,7 @@ def _replacements(shape: Shape, value: JsonValue) -> tuple[tuple[str, JsonValue]
         ShapeKind.BOOLEAN: (None, [], {}, "wrong", 0, 1),
         ShapeKind.NULLABLE_STRING: ([], {}, 0, False),
         ShapeKind.REFERENCE: (),
+        ShapeKind.JSON: (),
     }
     candidates: list[tuple[str, JsonValue]] = [
         (f"wrong-type-{type(candidate).__name__}", candidate)

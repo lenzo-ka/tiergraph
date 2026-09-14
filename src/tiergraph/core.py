@@ -188,6 +188,15 @@ class XsdType(StrEnum):
     DOUBLE = "double"
 
 
+class JsonType(StrEnum):
+    """Name structured literal data independently of XSD lexical values."""
+
+    JSON = "json"
+
+
+type AttributeType = XsdType | JsonType
+
+
 class BoundarySide(StrEnum):
     """Choose the boundary immediately before or after an anchor."""
 
@@ -421,6 +430,115 @@ class AttributeValue:
 
 
 @dataclass(frozen=True, slots=True)
+class _FrozenJson:
+    kind: str
+    payload: object
+
+
+def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
+    """Snapshot finite JSON with exact primitive kinds and signed doubles."""
+    if value is None:
+        return _FrozenJson("null", None)
+    if type(value) is bool:
+        return _FrozenJson("boolean", value)
+    if type(value) is int:
+        return _FrozenJson("integer", value)
+    if type(value) is float:
+        number = value
+        if not math.isfinite(number):
+            raise GraphValidationError("JSON doubles must be finite")
+        return _FrozenJson("double", number.hex())
+    if type(value) is str:
+        text = value
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise GraphValidationError(
+                "JSON strings must be UTF-8 encodable"
+            ) from error
+        return _FrozenJson("string", text)
+    if type(value) not in (list, dict):
+        raise GraphValidationError(
+            "JSON values must be ordinary JSON primitives or containers"
+        )
+    identity = id(value)
+    if identity in active:
+        raise GraphValidationError("JSON containers must be acyclic")
+    active.add(identity)
+    try:
+        if type(value) is list:
+            return _FrozenJson(
+                "array",
+                tuple(_freeze_json(item, active) for item in cast(list[object], value)),
+            )
+        mapping = cast(dict[object, object], value)
+        if any(type(key) is not str for key in mapping):
+            raise GraphValidationError("JSON object keys must be strings")
+        entries = tuple(
+            (_freeze_json(key, active).payload, _freeze_json(item, active))
+            for key, item in sorted(cast(dict[str, object], mapping).items())
+        )
+        return _FrozenJson("object", entries)
+    finally:
+        active.remove(identity)
+
+
+def _thaw_json(value: _FrozenJson) -> JsonValue:
+    """Return fresh ordinary JSON containers from the immutable literal."""
+    if value.kind == "array":
+        return [
+            _thaw_json(item) for item in cast(tuple[_FrozenJson, ...], value.payload)
+        ]
+    if value.kind == "object":
+        return {
+            key: _thaw_json(item)
+            for key, item in cast(tuple[tuple[str, _FrozenJson], ...], value.payload)
+        }
+    if value.kind == "double":
+        return float.fromhex(cast(str, value.payload))
+    return cast(JsonScalar, value.payload)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class JsonAttributeValue:
+    """Carry an owned immutable JSON literal, retaining exact primitive kinds."""
+
+    name: QualifiedName
+    _value: _FrozenJson
+    value_type: JsonType = field(default=JsonType.JSON, init=False)
+
+    def __init__(self, name: QualifiedName, value: JsonValue) -> None:
+        """Snapshot caller data; opaque values and cyclic containers are refused."""
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "_value", _freeze_json(value, set()))
+        object.__setattr__(self, "value_type", JsonType.JSON)
+
+    def to_value(self) -> JsonValue:
+        """Return caller-owned plain JSON data without exposing graph storage."""
+        return _thaw_json(self._value)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the structured native attribute variant, including null."""
+        return {
+            "name": self.name.to_data(),
+            "value_type": "json",
+            "value": self.to_value(),
+        }
+
+
+type Attribute = AttributeValue | JsonAttributeValue
+
+
+def _scalar_attribute(value: Attribute) -> AttributeValue:
+    """Refuse structured data at a scalar-profile reading boundary."""
+    if not isinstance(value, AttributeValue):
+        raise GraphValidationError(
+            f"attribute {str(value.name)!r} requires a scalar XSD value"
+        )
+    return value
+
+
+@dataclass(frozen=True, slots=True)
 class TierDeclaration:
     """Name an ordered tier without coupling its name to item identity."""
 
@@ -451,7 +569,7 @@ class AttributeDeclaration:
 
     name: QualifiedName
     domain: AttributeDomain
-    value_type: XsdType
+    value_type: AttributeType
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the declaration as JSON-serializable data."""
@@ -469,7 +587,7 @@ class SimpleRelationDeclaration:
     name: QualifiedName
     tier: QualifiedName
     item_type: QualifiedName
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize declaration attributes by their qualified names."""
@@ -502,7 +620,7 @@ class BipartiteRelationDeclaration:
     right_endpoint: RelationEndpointKind = RelationEndpointKind.ITEM
     single_parent: bool = False
     acyclic: bool = False
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require JSON-boolean promises."""
@@ -594,7 +712,7 @@ class PolyadicRelationDeclaration:
     single_parent: bool = False
     acyclic: bool = False
     targets_subset_of: QualifiedName | None = None
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require actual JSON-boolean promises."""
@@ -637,7 +755,7 @@ class Item:
     """Represent a tier member with attributes and a durable identifier seam."""
 
     durable_id: str | None = None
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and refuse a carried empty durable id."""
@@ -659,7 +777,7 @@ class Tier:
 
     declaration: TierDeclaration
     items: tuple[Item, ...] = ()
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize tier attributes while retaining item order."""
@@ -900,7 +1018,7 @@ class Boundary:
     """Hold values for one addressable boundary while empty boundaries stay derived."""
 
     reference: BoundaryRef | DurableBoundaryRef
-    attributes: tuple[AttributeValue, ...]
+    attributes: tuple[Attribute, ...]
 
     def __post_init__(self) -> None:
         """Canonicalize the values attached to this boundary."""
@@ -922,7 +1040,7 @@ class RelationInstance:
     left: RelationEndpointRef
     right: RelationEndpointRef
     durable_id: str | None = None
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require a usable carried durable id."""
@@ -949,7 +1067,7 @@ class PolyadicRelationInstance:
     sources: tuple[RelationEndpointRef, ...]
     targets: tuple[RelationEndpointRef, ...]
     durable_id: str | None = None
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require a usable carried durable id."""
@@ -1002,7 +1120,7 @@ class LayerFact:
     """State one named typed value at one subject of the base."""
 
     subject: LayerSubject
-    value: AttributeValue
+    value: Attribute
 
 
 @dataclass(frozen=True, slots=True)
@@ -1040,7 +1158,7 @@ class Consensus:
 
     subject: LayerSubject
     name: QualifiedName
-    readings: tuple[tuple[LayerName, AttributeValue], ...]
+    readings: tuple[tuple[LayerName, Attribute], ...]
     agreed: bool
 
 
@@ -1071,7 +1189,7 @@ class Graph:
     relations: tuple[RelationInstance, ...] = ()
     attribute_declarations: tuple[AttributeDeclaration, ...] = ()
     boundary_values: tuple[Boundary, ...] = ()
-    attributes: tuple[AttributeValue, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
     polyadic_relations: tuple[PolyadicRelationInstance, ...] = ()
     seals: tuple[Seal, ...] = ()
     layers: tuple[Layer, ...] = ()
@@ -1471,7 +1589,7 @@ class Graph:
 
     def layer_values(
         self, subject: LayerSubject, name: QualifiedName, delivery: Delivery
-    ) -> tuple[AttributeValue, ...]:
+    ) -> tuple[Attribute, ...]:
         """Return what the explicit delivery reads at this live subject and name."""
         readings = self._layer_readings(subject, name, delivery)
         if delivery.read is LayerRead.FIRST:
@@ -1572,7 +1690,7 @@ class Graph:
 
     def _layer_readings(
         self, subject: LayerSubject, name: QualifiedName, delivery: Delivery
-    ) -> tuple[tuple[LayerName, AttributeValue], ...]:
+    ) -> tuple[tuple[LayerName, Attribute], ...]:
         if isinstance(subject, OrphanedSubject):
             return ()
         return tuple(
@@ -1815,7 +1933,7 @@ class Graph:
         """Return a new graph carrying one more declaration."""
         return self.edit().declare(declaration).freeze()
 
-    def set_attribute(self, target: EditTarget, value: AttributeValue) -> Graph:
+    def set_attribute(self, target: EditTarget, value: Attribute) -> Graph:
         """Return a new graph whose target carries this value under its name."""
         return self.edit().set_attribute(target, value).freeze()
 
@@ -2047,7 +2165,7 @@ class GraphEditor:
             )
         return self
 
-    def set_attribute(self, target: EditTarget, value: AttributeValue) -> GraphEditor:
+    def set_attribute(self, target: EditTarget, value: Attribute) -> GraphEditor:
         """Give one carrier this value, replacing any value of the same name.
 
         The value's declaration decides which carrier the target names, so a
@@ -2320,13 +2438,13 @@ class GraphEditor:
                 return index
         raise GraphValidationError(f"relation {str(name)!r} is undeclared")
 
-    def _instance(self, polyadic: bool, index: int) -> tuple[AttributeValue, ...]:
+    def _instance(self, polyadic: bool, index: int) -> tuple[Attribute, ...]:
         if polyadic:
             return self._polyadic_relations[index].attributes
         return self._relations[index].attributes
 
     def _set_relation_attributes(
-        self, polyadic: bool, index: int, attributes: tuple[AttributeValue, ...]
+        self, polyadic: bool, index: int, attributes: tuple[Attribute, ...]
     ) -> None:
         if polyadic:
             relation = self._polyadic_relations[index]
@@ -2734,9 +2852,7 @@ def _compose_displacement_space[Coordinate: _Coordinate](
     return composed, frozenset(departed)
 
 
-def _with_value(
-    values: Iterable[AttributeValue], value: AttributeValue
-) -> tuple[AttributeValue, ...]:
+def _with_value(values: Iterable[Attribute], value: Attribute) -> tuple[Attribute, ...]:
     return (
         *(existing for existing in values if existing.name != value.name),
         value,
@@ -2744,8 +2860,8 @@ def _with_value(
 
 
 def _without_value(
-    values: Iterable[AttributeValue], name: QualifiedName, subject: str
-) -> tuple[AttributeValue, ...]:
+    values: Iterable[Attribute], name: QualifiedName, subject: str
+) -> tuple[Attribute, ...]:
     remaining = tuple(values)
     kept = tuple(existing for existing in remaining if existing.name != name)
     if len(kept) == len(remaining):
@@ -2756,7 +2872,7 @@ def _without_value(
 
 
 def _relation_declaration_with(
-    declaration: RelationDeclaration, attributes: tuple[AttributeValue, ...]
+    declaration: RelationDeclaration, attributes: tuple[Attribute, ...]
 ) -> RelationDeclaration:
     if isinstance(declaration, SimpleRelationDeclaration):
         return SimpleRelationDeclaration(
@@ -2813,7 +2929,7 @@ def _require_boundary_target(
 class _MutableTier:
     declaration: TierDeclaration
     items: list[Item]
-    attributes: list[AttributeValue]
+    attributes: list[Attribute]
 
 
 class _GraphBuilder:
@@ -2826,7 +2942,7 @@ class _GraphBuilder:
         self.relations: list[RelationInstance] = []
         self.attribute_declarations: list[AttributeDeclaration] = []
         self.boundary_values: list[Boundary] = []
-        self.attributes: list[AttributeValue] = []
+        self.attributes: list[Attribute] = []
         self.polyadic_relations: list[PolyadicRelationInstance] = []
         self.declared_namespaces: set[str] = set()
         self.tiers_by_name: dict[QualifiedName, _MutableTier] = {}
@@ -2950,13 +3066,13 @@ def _canonical_lexical(value_type: XsdType, lexical: str) -> str:
     return f"{sign}{digits[0]}.{mantissa_tail}E{scientific_exponent}"
 
 
-def _attributes_data(attributes: tuple[AttributeValue, ...]) -> list[JsonValue]:
+def _attributes_data(attributes: tuple[Attribute, ...]) -> list[JsonValue]:
     return [attribute.to_data() for attribute in attributes]
 
 
 class _AttributeCarrier(Protocol):
     @property
-    def attributes(self) -> tuple[AttributeValue, ...]:
+    def attributes(self) -> tuple[Attribute, ...]:
         """Return the carrier's attribute values, in canonical name order."""
         ...
 
@@ -3007,7 +3123,7 @@ def _require_unique_durable_ids(values: Iterable[tuple[str, str]]) -> None:
 
 
 def _validate_attributes(
-    values: tuple[AttributeValue, ...],
+    values: tuple[Attribute, ...],
     domain: AttributeDomain,
     declarations: Mapping[QualifiedName, AttributeDeclaration],
 ) -> None:

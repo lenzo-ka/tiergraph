@@ -503,6 +503,7 @@ def test_validator_names_every_scalar_construction_it_refuses() -> None:
         ShapeKind.OBJECT,
         ShapeKind.ARRAY,
         ShapeKind.REFERENCE,
+        ShapeKind.JSON,
     }
     wrong: dict[ShapeKind, object] = {
         ShapeKind.STRING: 0,

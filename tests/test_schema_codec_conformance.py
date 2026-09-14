@@ -123,6 +123,21 @@ def _seeds() -> tuple[tuple[str, dict[str, JsonValue]], ...]:
     graph = cast(dict[str, JsonValue], surface["graph"])
     declarations = cast(list[JsonValue], graph["attribute_declarations"])
     attributes = cast(list[JsonValue], graph["attributes"])
+    declarations.append(
+        {"name": "w:json-surface", "domain": "document", "value_type": "json"}
+    )
+    attributes.append(
+        {
+            "name": "w:json-surface",
+            "value_type": "json",
+            "value": {
+                "namespace": "literal",
+                "local_name": "x",
+                "empty": [],
+                "null": None,
+            },
+        }
+    )
     for local_name, value_type, lexical in (
         ("integer-surface", "integer", "0"),
         ("double-surface", "double", "INF"),

@@ -14,7 +14,13 @@ from typing import cast
 # refusal channels can reach without a cycle.  They stay named here, and in
 # __all__, so that every caller who already imports a refusal from this module
 # keeps working; the promised import is `tiergraph` itself.
-from tiergraph.core import JsonValue, Refusal, RefusalStage
+from tiergraph.core import (
+    GraphValidationError,
+    JsonValue,
+    Refusal,
+    RefusalStage,
+    _freeze_json,
+)
 
 
 class ShapeKind(StrEnum):
@@ -27,6 +33,7 @@ class ShapeKind(StrEnum):
     BOOLEAN = "boolean"
     NULLABLE_STRING = "nullable_string"
     REFERENCE = "reference"
+    JSON = "json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +110,8 @@ ATTRIBUTE_VALUE = _reference(
     *(
         f"{value_type}_attribute_value"
         for value_type in ("string", "boolean", "integer", "decimal", "double")
-    )
+    ),
+    "json_attribute_value",
 )
 ATTRIBUTES = _array(ATTRIBUTE_VALUE)
 ITEM_REFERENCE = _object(
@@ -120,6 +128,11 @@ DURABLE_ITEM_ENDPOINT = _object(
 )
 
 DECLARATIONS: dict[str, Shape] = {
+    "json_attribute_value": _object(
+        _field("name", QUALIFIED_NAME),
+        _field("value_type", Shape(ShapeKind.STRING, values=("json",))),
+        _field("value", Shape(ShapeKind.JSON)),
+    ),
     **{
         f"{value_type}_attribute_value": _attribute_value(value_type)
         for value_type in ("string", "boolean", "integer", "decimal", "double")
@@ -343,7 +356,14 @@ GRAPH = _object(
                     "value_type",
                     Shape(
                         ShapeKind.STRING,
-                        values=("string", "boolean", "integer", "decimal", "double"),
+                        values=(
+                            "string",
+                            "boolean",
+                            "integer",
+                            "decimal",
+                            "double",
+                            "json",
+                        ),
                     ),
                 ),
             )
@@ -588,6 +608,12 @@ def _declared_format_version(value: object) -> str | None:
 
 
 def _validation_errors(value: object, shape: Shape, path: str) -> list[str]:
+    if shape.kind is ShapeKind.JSON:
+        try:
+            _freeze_json(value, set())
+        except GraphValidationError as error:
+            return [f"{path}: {error}"]
+        return []
     if shape.kind is ShapeKind.REFERENCE:
         alternatives = [
             _validation_errors(value, DECLARATIONS[name], path)
@@ -702,6 +728,8 @@ def _shape_data(shape: Shape) -> dict[str, JsonValue]:
 
 
 def _json_schema(shape: Shape) -> JsonValue:
+    if shape.kind is ShapeKind.JSON:
+        return {}
     if shape.kind is ShapeKind.OBJECT:
         return {
             "type": "object",

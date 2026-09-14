@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from tiergraph.core import (
+    Attribute,
     AttributeValue,
     BoundaryRef,
     Graph,
@@ -368,12 +369,17 @@ class _Fact:
         return RewriteDisturbance(RewriteEffect.REVISE, self.subject, self.tier, detail)
 
 
-def _attributes(values: tuple[AttributeValue, ...]) -> tuple[tuple[str, str], ...]:
-    """Key each carried value by its expanded name, with type and lexical."""
-    return tuple(
-        (str(value.name), f"{value.value_type.value}:{value.lexical}")
-        for value in values
+def _attribute_text(value: Attribute) -> str:
+    if isinstance(value, AttributeValue):
+        return f"{value.value_type.value}:{value.lexical}"
+    return "json:" + json.dumps(
+        value.to_value(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+
+
+def _attributes(values: tuple[Attribute, ...]) -> tuple[tuple[str, str], ...]:
+    """Key each carried value by its expanded name, with type and lexical."""
+    return tuple((str(value.name), _attribute_text(value)) for value in values)
 
 
 def _shape(data: dict[str, JsonValue]) -> str:
@@ -477,7 +483,7 @@ def _facts(graph: Graph) -> Iterator[_Fact]:
                 (
                     (
                         "statement",
-                        f"{fact.value.value_type.value}:{fact.value.lexical}",
+                        _attribute_text(fact.value),
                     ),
                 ),
             )

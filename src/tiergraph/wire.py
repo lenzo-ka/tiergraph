@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from typing import cast
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -24,6 +25,8 @@ from tiergraph.core import (
     GraphCarrier,
     Item,
     ItemRef,
+    JsonAttributeValue,
+    JsonType,
     JsonValue,
     Layer,
     LayerFact,
@@ -107,6 +110,15 @@ def _encode_value(value: JsonValue, prefixes: dict[str, str]) -> JsonValue:
     if isinstance(value, list):
         return [_encode_value(item, prefixes) for item in value]
     if isinstance(value, dict):
+        if (
+            set(value) == {"name", "value_type", "value"}
+            and value["value_type"] == "json"
+        ):
+            return {
+                "name": _encode_value(value["name"], prefixes),
+                "value_type": "json",
+                "value": value["value"],
+            }
         if set(value) == {"namespace", "local_name"}:
             namespace = cast(str, value["namespace"])
             local_name = cast(str, value["local_name"])
@@ -142,6 +154,7 @@ def _refuse_unencodable_strings(value: JsonValue, path: str) -> None:
             _refuse_unencodable_strings(item, f"{path}[{index}]")
     elif isinstance(value, dict):
         for key, item in value.items():
+            _refuse_unencodable_strings(key, f"{path} object key")
             child_path = f"{path}.{key}" if path else key
             _refuse_unencodable_strings(item, child_path)
 
@@ -802,29 +815,26 @@ def _attribute_declaration(data: dict[str, object], index: int) -> AttributeDecl
     return AttributeDeclaration(
         _name(data["name"], f"{path}.name"),
         _enum(AttributeDomain, data["domain"], f"{path}.domain"),
-        _enum(XsdType, data["value_type"], f"{path}.value_type"),
+        JsonType.JSON
+        if data["value_type"] == "json"
+        else _enum(XsdType, data["value_type"], f"{path}.value_type"),
     )
 
 
-def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
+def _attributes(value: object, path: str) -> tuple[Attribute, ...]:
     return tuple(
-        AttributeValue(
-            _name(data["name"], f"{path}[{index}].name"),
-            _enum(XsdType, data["value_type"], f"{path}[{index}].value_type"),
-            _string(data["lexical"], f"{path}[{index}].lexical"),
-        )
-        for index, data in enumerate(
-            _objects(
-                value,
-                path,
-                object_fields(DECLARATIONS["string_attribute_value"]),
-            )
-        )
+        _attribute(data, f"{path}[{index}]")
+        for index, data in enumerate(_array(value, path))
     )
 
 
-def _attribute(value: object, path: str) -> AttributeValue:
+def _attribute(value: object, path: str) -> Attribute:
     data = _object(value, path)
+    if data.get("value_type") == "json":
+        _keys(data, object_fields(DECLARATIONS["json_attribute_value"]), path)
+        return JsonAttributeValue(
+            _name(data["name"], f"{path}.name"), cast(JsonValue, data["value"])
+        )
     _keys(data, object_fields(DECLARATIONS["string_attribute_value"]), path)
     return AttributeValue(
         _name(data["name"], f"{path}.name"),
