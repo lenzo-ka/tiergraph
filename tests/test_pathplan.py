@@ -43,7 +43,7 @@ from tiergraph.semiring import (
     Semiring,
 )
 
-NS = "https://example.com/paths"
+NS = "https://example.com/plan"
 NODES = QualifiedName(NS, "nodes")
 NODE = QualifiedName(NS, "node")
 NEXT = QualifiedName(NS, "next")

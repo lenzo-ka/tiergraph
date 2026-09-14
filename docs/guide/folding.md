@@ -380,7 +380,7 @@ from tiergraph import (
 from tiergraph.pathplan import AlgebraOrder, PathPlan
 from tiergraph.semiring import ARCTIC, LOG_PROBABILITY
 
-ns = "https://example.com/lattice"
+ns = "https://example.com/plan"
 nodes = QualifiedName(ns, "nodes")
 node = QualifiedName(ns, "node")
 follows = QualifiedName(ns, "next")
