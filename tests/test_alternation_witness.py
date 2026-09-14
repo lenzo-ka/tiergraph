@@ -27,6 +27,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 from tiergraph.semiring import BOOLEAN, COUNTING, DECIMAL_TROPICAL
 
 T = TypeVar("T")
@@ -344,14 +345,14 @@ def _arc_decimals(graph: Graph) -> dict[str, Decimal]:
     result: dict[str, Decimal] = {}
     for arc in graph.relations:
         assert arc.durable_id is not None
-        result[arc.durable_id] = Decimal(arc.attributes[0].lexical)
+        result[arc.durable_id] = Decimal(_scalar_attribute(arc.attributes[0]).lexical)
     return result
 
 
 def _item_attribute(item: Item, declaration: QualifiedName) -> str:
     """Read one string attribute from a fixture item."""
     return next(
-        attribute.lexical
+        _scalar_attribute(attribute).lexical
         for attribute in item.attributes
         if attribute.name == declaration
     )

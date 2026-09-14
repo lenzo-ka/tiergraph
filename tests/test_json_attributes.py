@@ -8,17 +8,27 @@ from dataclasses import replace
 from typing import cast
 
 import pytest
+from examples.mix_paths import _document_int
 
+import tiergraph_dot
+from tests import test_wire as fixtures
 from tiergraph import (
     AttachValue,
     AttributeDeclaration,
     AttributeDomain,
+    BoundaryRef,
     DeclareAttribute,
     DeclareNamespace,
+    Delivery,
     Graph,
     GraphValidationError,
+    Item,
+    ItemRef,
     JsonAttributeValue,
     JsonType,
+    Layer,
+    LayerFact,
+    LayerRead,
     NamespaceDeclaration,
     Program,
     QualifiedName,
@@ -163,3 +173,62 @@ def test_wrong_domain_and_scalar_boundary_refusal() -> None:
         )
     with pytest.raises(GraphValidationError, match="scalar"):
         _scalar_attribute(graph.attributes[0])
+
+
+def test_example_scalar_reader_refuses_json() -> None:
+    """The example's actual reading path refuses JSON rather than inventing lexical data."""
+    with pytest.raises(GraphValidationError, match="scalar XSD"):
+        _document_int(document(1), NAME)
+
+
+def test_every_carrier_layers_edit_transport_and_dot() -> None:
+    """Every declared carrier and layer preserves native structured values."""
+    base = fixtures.graph_with_layers()
+    declarations = tuple(
+        replace(declaration, value_type=JsonType.JSON)
+        for declaration in base.attribute_declarations
+    )
+    old = fixtures.six_domain_layer()
+    layer = Layer(
+        old.name,
+        tuple(
+            LayerFact(
+                fact.subject,
+                JsonAttributeValue(fact.value.name, {"value": None, "array": []}),
+            )
+            for fact in old.facts
+        ),
+    )
+    graph = replace(base, attribute_declarations=declarations, layers=(layer,))
+    assert wire.loads(wire.dump_compact(graph)) == graph
+    flat = graph.flatten(Delivery((old.name,), LayerRead.ALL))
+    assert wire.loads(wire.dump_compact(flat)) == flat
+    targets = {
+        AttributeDomain.DOCUMENT: None,
+        AttributeDomain.TIER: fixtures.WORDS,
+        AttributeDomain.ITEM: ItemRef(fixtures.WORDS, 0),
+        AttributeDomain.BOUNDARY: BoundaryRef(fixtures.WORDS, 1),
+        AttributeDomain.RELATION_DECLARATION: fixtures.LINKS,
+        AttributeDomain.RELATION_INSTANCE: 0,
+    }
+    for declaration in declarations:
+        updated = flat.set_attribute(
+            targets[declaration.domain],
+            JsonAttributeValue(declaration.name, {"signed": -0.0}),
+        )
+        assert wire.loads(wire.dump_compact(updated)) == updated
+    edited = flat.insert_item(fixtures.WORDS, 0, Item("new"))
+    assert wire.loads(wire.dump_compact(edited)) == edited
+    assert '\\"array\\":[]' in tiergraph_dot.dumps(flat)
+
+
+def test_json_schema_value_refusal_and_duplicate_keys() -> None:
+    """Python-data validation and parser duplicate-key limits remain active."""
+    data = json.loads(wire.dump_compact(document(None)))
+    data["graph"]["attributes"][0]["value"] = float("inf")
+    assert validation_errors(data, wire.FORMAT_VERSION)
+    with pytest.raises(ValueError):
+        wire.loads(json.dumps(data))
+    raw = wire.dump_compact(document({"a": 1})).replace('"a":1', '"a":1,"a":2')
+    with pytest.raises(ValueError, match="duplicate"):
+        wire.loads(raw)

@@ -39,7 +39,7 @@ from tiergraph import (
     dumps,
     loads,
 )
-from tiergraph.core import EditDeclaration, EditTarget
+from tiergraph.core import EditDeclaration, EditTarget, _scalar_attribute
 
 NS = "urn:edit"
 
@@ -147,7 +147,7 @@ def item_score(graph: Graph, index: int) -> str:
     """Return the score carried by one word, or the empty string."""
     values = graph.tiers[0].items[index].attributes
     return next(
-        (value.lexical for value in values if value.name == SCORE),
+        (_scalar_attribute(value).lexical for value in values if value.name == SCORE),
         "",
     )
 

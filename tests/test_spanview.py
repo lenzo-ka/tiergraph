@@ -29,6 +29,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 from tiergraph.spanview import (
     Span,
     SpanAlternative,
@@ -782,7 +783,9 @@ def test_character_offset_refusal_names_the_item_and_lexical() -> None:
                             AttributeValue(
                                 OFFSET,
                                 XsdType.DECIMAL,
-                                "1.5" if index == 0 else value.lexical,
+                                "1.5"
+                                if index == 0
+                                else _scalar_attribute(value).lexical,
                             )
                             if value.name == OFFSET
                             else value

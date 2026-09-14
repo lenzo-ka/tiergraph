@@ -61,6 +61,7 @@ from tiergraph import (
     to_data,
     wire,
 )
+from tiergraph.core import _scalar_attribute
 from tiergraph.schema import (
     DECLARATIONS,
     Refusal,
@@ -298,7 +299,7 @@ def canonical_variants() -> tuple[Graph, Graph]:
     extra_boundary = Boundary(
         BoundaryRef(name("placements"), 0),
         tuple(
-            AttributeValue(value.name, value.value_type, "0")
+            AttributeValue(value.name, _scalar_attribute(value).value_type, "0")
             for value in baseline.boundary_values[0].attributes
         ),
     )
@@ -1190,7 +1191,23 @@ def test_unknown_field_probe_family_denominator_is_pinned() -> None:
 
     probes = conformance_probes(_seeds(), DOCUMENT)
     unknown = [probe for probe in probes if probe.mutation == "unknown-field"]
-    assert len(unknown) == 239
+    # The JSON declaration and its value record add two structural objects.
+    # Its opaque literal is not an unknown-field refusal surface.
+    assert len(unknown) == 241
+    assert any(
+        probe.seed == "polyadic"
+        and probe.path == ("graph", "attribute_declarations", 6)
+        for probe in unknown
+    )
+    assert any(
+        probe.seed == "polyadic" and probe.path == ("graph", "attributes", 2)
+        for probe in unknown
+    )
+    assert not any(
+        probe.seed == "polyadic"
+        and probe.path[:4] == ("graph", "attributes", 2, "value")
+        for probe in unknown
+    )
 
 
 LAYER_NS = "urn:layer-test"
@@ -1390,7 +1407,7 @@ def test_two_sources_and_first_last_all_are_distinct() -> None:
     deliveries = {read: Delivery((SOURCE_A, SOURCE_B), read) for read in LayerRead}
     answers = {
         read: tuple(
-            item.lexical
+            _scalar_attribute(item).lexical
             for item in graph.layer_values(
                 subject, NAMES[AttributeDomain.ITEM], delivery
             )
@@ -1729,9 +1746,9 @@ def test_durable_subjects_and_relation_orphan_round_trip() -> None:
 def test_flatten_six_domains_and_polyadic_subjects() -> None:
     graph = graph_with_layers(six_domain_layer())
     flattened = graph.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
-    assert flattened.attributes[0].lexical == "document"
-    assert flattened.tiers[0].attributes[0].lexical == "tier"
-    assert flattened.relations[0].attributes[0].lexical == "instance"
+    assert _scalar_attribute(flattened.attributes[0]).lexical == "document"
+    assert _scalar_attribute(flattened.tiers[0].attributes[0]).lexical == "tier"
+    assert _scalar_attribute(flattened.relations[0].attributes[0]).lexical == "instance"
 
     side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORDS,))
     poly_name = q("poly")

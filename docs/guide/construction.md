@@ -59,6 +59,8 @@ follow; `promote_boundary()` gives it one. A removal is refused while the graph
 still references the item, and a refused operation writes nothing.
 
 ```python
+from tiergraph.core import _scalar_attribute
+
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
@@ -111,7 +113,7 @@ edit_settled = edit_editor.freeze()
 print(
     "scores:",
     [
-        value.lexical
+        _scalar_attribute(value).lexical
         for item in edit_settled.tiers[0].items
         for value in item.attributes
     ],

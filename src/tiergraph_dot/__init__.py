@@ -934,7 +934,7 @@ def _attribute_label(value: Attribute) -> str:
     )
     return (
         f"{_quote(value.name.local_name, 'attribute name')}"
-        f"={_quote(lexical, 'item attribute value')}"
+        f"={_quote(lexical, 'item attribute lexical value' if isinstance(value, AttributeValue) else 'item JSON attribute value')}"
     )
 
 

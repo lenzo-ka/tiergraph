@@ -23,6 +23,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 
 NS = "urn:tiergraph:witness:mix-correspondence"
 NAMESPACES = (NamespaceDeclaration("mix", NS),)
@@ -105,7 +106,7 @@ def recover(
     examined = (
         (
             *visits.relation(relation),
-            relation.attributes[0].lexical,
+            _scalar_attribute(relation.attributes[0]).lexical,
         )
         for relation in correspondences
     )
@@ -331,7 +332,7 @@ def endpoint_weights(relations: tuple[RelationInstance, ...]) -> dict[ItemRef, s
     """Attempt the endpoint-held representation and refuse its first collision."""
     assigned: dict[ItemRef, str] = {}
     for relation in relations:
-        lexical = relation.attributes[0].lexical
+        lexical = _scalar_attribute(relation.attributes[0]).lexical
         left = cast(ItemRef, relation.left)
         previous = assigned.get(left)
         if previous is not None and previous != lexical:
@@ -356,4 +357,12 @@ def test_endpoint_held_weight_cannot_represent_distinct_link_weights() -> None:
     ):
         endpoint_weights(source_zero_links)
     assert len(source_zero_links) == 2
-    assert len({relation.attributes[0].lexical for relation in source_zero_links}) == 2
+    assert (
+        len(
+            {
+                _scalar_attribute(relation.attributes[0]).lexical
+                for relation in source_zero_links
+            }
+        )
+        == 2
+    )

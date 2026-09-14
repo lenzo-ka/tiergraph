@@ -25,6 +25,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 
 NS = "urn:tiergraph:witness:mix-boundary"
 NAMESPACE = (NamespaceDeclaration("mix", NS),)
@@ -128,7 +129,9 @@ class BoundaryFixture:
 
         def label(item: Item) -> str:
             return next(
-                value.lexical for value in item.attributes if value.name == LABEL
+                _scalar_attribute(value).lexical
+                for value in item.attributes
+                if value.name == LABEL
             )
 
         before = (

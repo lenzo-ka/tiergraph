@@ -1,4 +1,6 @@
-untracked/
+# Anchored for the same build-root exclusion hazard documented at /.claude/:
+# a worktree beneath another checkout's untracked/ must retain every exclusion.
+/untracked/
 
 __pycache__/
 *.py[cod]

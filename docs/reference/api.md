@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 206 top-level `tiergraph` exports exactly once.
+It covers 198 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -470,7 +470,7 @@ Return the machine version and graph as JSON-serializable data.
 ### `AttachValue`
 
 ```text
-AttachValue(domain: 'AttributeDomain', target: 'AttributeTarget', value: 'AttributeValue') -> None
+AttachValue(domain: 'AttributeDomain', target: 'AttributeTarget', value: 'Attribute') -> None
 ```
 
 Attach a typed value to an owner in its declared attribute domain.
@@ -895,7 +895,7 @@ whole graph rather than an edit to a place in it.
 Method.
 
 ```text
-GraphEditor.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'GraphEditor'
+GraphEditor.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'GraphEditor'
 ```
 
 Give one carrier this value, replacing any value of the same name.
@@ -982,21 +982,6 @@ GraphEditor.remove_relation(self, target: 'int | str') -> 'GraphEditor'
 Remove one relation instance by bipartite index or by durable id.
 
 ## Fold
-
-### `AlgebraOrder`
-
-```text
-AlgebraOrder(algebra: 'Semiring[Value]') -> None
-```
-
-Compare carrier values by the algebra's own selective addition.
-
-A fold accepts it as a ``witness_order``: the preferred operand is the one
-the algebra's addition returns, and equal values tie. ``PathPlan``
-recognizes it and fuses the selection into its schedule, so a best path
-under ``ARCTIC`` or ``TROPICAL`` is found in the same pass that values the
-graph, with no comparator calls. The algebra must declare
-``add_selective``: an aggregating addition names no winner to order by.
 
 ### `AttributeValuation`
 
@@ -1143,12 +1128,10 @@ The dependency relation is finite and need not be acyclic. An acyclic one has a
 finite derivation set; a cyclic one is specified by the starred fixpoint the
 algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
-A readout or final division above the algebra is taken only where it is
-declared: ``PathMarginals.posteriors`` reads marginals out through a
-readout the caller names and the algebra lists in its ``readouts``, and
-records the readout it applied. A construct
-whose soundness depends on a property it cannot verify must declare that
-property rather than assume it.
+A readout or final division above the algebra is not currently provided. If one
+is introduced, it must be declared as part of what the fold profile records. A
+construct whose soundness depends on a property it cannot verify must declare
+that property rather than assume it.
 
 ``witness_order`` and ``tie_policy`` are one mechanism and are declared together:
 the order names the winner and the policy says what happens where it reports a
@@ -1336,253 +1319,6 @@ FoldTransition(relation: 'QualifiedName', combination: 'ChildCombination') -> No
 ```
 
 Give one dependency relation its local AND/OR incidence meaning.
-
-### `Emissions`
-
-```text
-Emissions(plan: 'PathPlan[Value]', per_item: 'tuple[tuple[str, ...], ...]') -> None
-```
-
-Per-item token tuples bound to one path plan's label inventory.
-
-#### `Emissions.bind`
-
-Class method.
-
-```text
-Emissions.bind(cls, plan: 'PathPlan[Value]', by_label: 'Mapping[str, Sequence[str]]') -> 'Emissions[Value]'
-```
-
-Bind emissions by item label, leaving unlisted items non-emitting.
-
-### `OutputItemMarginals`
-
-```text
-OutputItemMarginals(total: 'Value', zero_mass: 'bool', values: 'tuple[Value, ...] | None', cost: 'FoldCost') -> None
-```
-
-Conditioned marginals pooled into the base plan's item order.
-
-#### `OutputItemMarginals.to_data`
-
-Method.
-
-```text
-OutputItemMarginals.to_data(self, semiring: 'Semiring[Value]') -> 'dict[str, object]'
-```
-
-Return deterministic strict-JSON data using the carrier encoding.
-
-### `OutputMasses`
-
-```text
-OutputMasses(total: 'Value', per_candidate: 'tuple[Value, ...]', residual: 'Value', zero_mass: 'bool', decided: 'bool | None', tied: 'tuple[int, ...] | None', cost: 'FoldCost') -> None
-```
-
-Candidate and residual masses from one product-plan marginal pass.
-
-``decided`` and ``tied`` are available only for ``LOG_PROBABILITY`` and
-``COUNTING`` because their numeric order gives the certificate its meaning;
-both are ``None`` under other algebras. Counting ties use exact integer
-equality. Log-probability ties use equality of the computed doubles, so an
-approximate addition can split equal real masses and ``tied`` is not a tie
-certificate for the underlying real values.
-
-#### `OutputMasses.to_data`
-
-Method.
-
-```text
-OutputMasses.to_data(self, semiring: 'Semiring[Value]') -> 'dict[str, object]'
-```
-
-Return deterministic strict-JSON data using the carrier encoding.
-
-### `OutputPlan`
-
-```text
-OutputPlan(base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'tuple[tuple[str, ...], ...]', plan: 'PathPlan[Value]', base_index: 'Mapping[ItemRef, ItemRef]', accepted: 'tuple[bool, ...]', _product_base: 'tuple[int | None, ...]', _accept_indices: 'tuple[int, ...]', _residual_index: 'int', _conditioned_cache: 'dict[int, tuple[PathPlan[Value], tuple[int, ...]]]' = <factory>) -> None
-```
-
-A cached product plan for complete output candidates and their residual.
-
-#### `OutputPlan.prepare`
-
-Class method.
-
-```text
-OutputPlan.prepare(cls, base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'Sequence[Sequence[str]]') -> 'OutputPlan[Value]'
-```
-
-Build the reachable product with the candidates' trie and a residual.
-
-#### `OutputPlan.values`
-
-Method.
-
-```text
-OutputPlan.values(self, base_values: 'Sequence[Value] | None' = None) -> 'tuple[Value, ...]'
-```
-
-Gather base values into the product plan's canonical item order.
-
-#### `OutputPlan.masses`
-
-Method.
-
-```text
-OutputPlan.masses(self, base_values: 'Sequence[Value] | None' = None) -> 'OutputMasses[Value]'
-```
-
-Evaluate masses, with certificates only for log probability or counting.
-
-#### `OutputPlan.conditioned`
-
-Method.
-
-```text
-OutputPlan.conditioned(self, candidate: 'int') -> 'PathPlan[Value]'
-```
-
-Return the product restricted to paths accepting one candidate.
-
-#### `OutputPlan.item_marginals`
-
-Method.
-
-```text
-OutputPlan.item_marginals(self, candidate: 'int', base_values: 'Sequence[Value] | None' = None) -> 'OutputItemMarginals[Value]'
-```
-
-Pool one candidate's conditioned product copies onto base items.
-
-### `PathMarginals`
-
-```text
-PathMarginals(plan: 'PathPlan[Value]', total: 'Value', inside: 'tuple[Value, ...]', outside: 'tuple[Value, ...]', marginals: 'tuple[Value, ...]', cost: 'FoldCost') -> None
-```
-
-The inside and outside passes of one evaluation, per item in plan order.
-
-``inside[i]`` is the fold value at item ``i``, the sum over the derivations
-rooted there. ``outside[i]`` is the sum over the prefixes that reach it
-from a root, with the multiplicative identity contributed at every root.
-``marginals[i]`` is their product: the sum over every complete derivation
-through ``i``, which is the zero at a dead end and at an unreachable item.
-``total`` is the fold value over the roots, and ``cost`` accounts for both
-passes.
-
-#### `PathMarginals.posteriors`
-
-Method.
-
-```text
-PathMarginals.posteriors(self, *, readout: 'str') -> 'PathPosteriors'
-```
-
-Read every marginal as a probability of the total through a declared readout.
-
-A readout is a division above the algebra, so the caller declares it by
-name and the algebra must publish it in its ``readouts``:
-``readout="normalize"`` is the one the log-probability carrier
-publishes, and a name the algebra does not list there is refused rather
-than divided by hand, whatever other methods the algebra happens to
-have. The result records the readout it applied. A zero total reports
-``zero_mass`` with no values.
-
-### `PathPlan`
-
-```text
-PathPlan(declaration: 'FoldDeclaration[Value]', items: 'tuple[ItemRef, ...]', labels: 'tuple[str, ...]', values: 'tuple[Value, ...]', children: 'tuple[tuple[int, ...], ...]', parents: 'tuple[tuple[int, ...], ...]', roots: 'tuple[int, ...]', order: 'tuple[int, ...]', _compiled: '_Compiled') -> None
-```
-
-A fold declaration compiled to its path topology, evaluable under new values.
-
-``items`` are the declaration's domain items in the graph's canonical
-order, and that order is the plan's value order: ``evaluate`` and
-``marginals`` take one carrier value per item in it, and ``values`` holds
-the values the declaration itself lifts, so a caller can start from those
-and replace what changed. ``labels`` are the items' durable identities or
-structural labels, the names a fold's provenance spells. A vector of
-another length is refused, because a vector from a different inventory has
-no position that means anything here.
-
-``children[i]`` are the indices of item ``i``'s alternatives in canonical
-order, ``parents[i]`` the items it is an alternative of, ``roots`` the
-declared or inferred roots, and ``order`` a children-first evaluation
-order. The plan is what the declaration is: a sink accepts with its own
-value, so a dead end is a sink the caller values at the zero, and an item
-no root reaches contributes nothing.
-
-``evaluate`` reproduces ``FoldDeclaration.run`` for the same values, with
-the same provenance under the same ``witness_order`` and ``tie_policy``,
-and the same cost account. Under the log-probability, arctic, and tropical
-carriers the plan runs the algebra's operations in a fused schedule that
-gathers each item's alternatives at once. The operation counts it reports
-are the general schedule's, which the fused schedule performs in gathered
-form, sharing one product across the children it reaches. A gathered
-log-sum-exp sums its exponentials in a different order than pairwise
-addition does, so under the log carrier the two schedules agree within the
-algebra's declared approximation -- at the rounding scale of the operands,
-which on a total near cancellation can be visible in the result -- and
-under the extremum carriers they agree exactly. A selective carrier with
-an ``AlgebraOrder`` and ``CHOOSE_FIRST``
-fuses its selection too. Every other declaration runs the general schedule
-through the algebra's own methods.
-
-#### `PathPlan.prepare`
-
-Class method.
-
-```text
-PathPlan.prepare(cls, declaration: 'FoldDeclaration[Value]') -> 'PathPlan[Value]'
-```
-
-Compile the declaration's topology, refusing what a path cannot carry.
-
-#### `PathPlan.index`
-
-Method.
-
-```text
-PathPlan.index(self, reference: 'ItemRef') -> 'int'
-```
-
-Return an item's position in the plan's value order.
-
-#### `PathPlan.evaluate`
-
-Method.
-
-```text
-PathPlan.evaluate(self, values: 'Sequence[Value] | None' = None) -> 'FoldResult[Value]'
-```
-
-Fold the compiled topology under these values, or the declaration's own.
-
-#### `PathPlan.marginals`
-
-Method.
-
-```text
-PathPlan.marginals(self, values: 'Sequence[Value] | None' = None) -> 'PathMarginals[Value]'
-```
-
-Run the inside and outside passes under these values.
-
-### `PathPosteriors`
-
-```text
-PathPosteriors(readout: 'str', zero_mass: 'bool', values: 'tuple[float, ...] | None') -> None
-```
-
-Probabilities read out of a plan's marginals, with the readout named.
-
-``readout`` is the name the caller declared and the algebra method that
-produced ``values``, so the result says which post-pass above the algebra
-it applied. ``zero_mass`` is
-true when the total was the algebra's zero; ``values`` is then ``None``,
-because there is no distribution to report and none is fabricated.
 
 ### `TiePolicy`
 
@@ -1921,10 +1657,10 @@ space in input length ``n``.
 ### `AttributeDeclaration`
 
 ```text
-AttributeDeclaration(name: 'QualifiedName', domain: 'AttributeDomain', value_type: 'XsdType') -> None
+AttributeDeclaration(name: 'QualifiedName', domain: 'AttributeDomain', value_type: 'AttributeType') -> None
 ```
 
-Declare an optional, at-most-one value for one domain and XSD type.
+Declare an optional, at-most-one value for one domain and value type.
 
 Absence means absent: attributes have no defaults, deliberately, because a
 default would put a value in the reading that is missing from graph bytes.
@@ -1974,10 +1710,100 @@ AttributeValue.to_data(self) -> 'dict[str, JsonValue]'
 
 Use lexical strings so every XSD value remains valid JSON.
 
+### `Attribute`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `AttributeType`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `JsonAttributeValue`
+
+```text
+JsonAttributeValue(name: 'QualifiedName', value: 'JsonValue') -> 'None'
+```
+
+Carry an owned immutable JSON literal, retaining exact primitive kinds.
+
+#### `JsonAttributeValue.to_value`
+
+Method.
+
+```text
+JsonAttributeValue.to_value(self) -> 'JsonValue'
+```
+
+Return caller-owned plain JSON data without exposing graph storage.
+
+#### `JsonAttributeValue.to_data`
+
+Method.
+
+```text
+JsonAttributeValue.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the structured native attribute variant, including null.
+
+### `JsonType`
+
+```text
+JsonType(*values)
+```
+
+Name structured literal data independently of XSD lexical values.
+
+#### `JsonType` members
+
+- `JSON` = `json`
+
 ### `BipartiteRelationDeclaration`
 
 ```text
-BipartiteRelationDeclaration(name: 'QualifiedName', left_type: 'QualifiedName', right_type: 'QualifiedName', left_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, right_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, single_parent: 'bool' = False, acyclic: 'bool' = False, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+BipartiteRelationDeclaration(name: 'QualifiedName', left_type: 'QualifiedName', right_type: 'QualifiedName', left_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, right_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, single_parent: 'bool' = False, acyclic: 'bool' = False, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Declare typed links and the graph invariants they promise.
@@ -1999,7 +1825,7 @@ Return the declaration as JSON-serializable data.
 ### `Boundary`
 
 ```text
-Boundary(reference: 'BoundaryRef | DurableBoundaryRef', attributes: 'tuple[AttributeValue, ...]') -> None
+Boundary(reference: 'BoundaryRef | DurableBoundaryRef', attributes: 'tuple[Attribute, ...]') -> None
 ```
 
 Hold values for one addressable boundary while empty boundaries stay derived.
@@ -2030,7 +1856,7 @@ Choose the boundary immediately before or after an anchor.
 ### `Graph`
 
 ```text
-Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = (), layers: 'tuple[Layer, ...]' = ()) -> None
+Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[Attribute, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = (), layers: 'tuple[Layer, ...]' = ()) -> None
 ```
 
 Hold a validated immutable graph and derive order and empty boundaries.
@@ -2047,7 +1873,7 @@ remain ordered because their sequence carries graph meaning.
 Method.
 
 ```text
-Graph.layer_values(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'tuple[AttributeValue, ...]'
+Graph.layer_values(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'tuple[Attribute, ...]'
 ```
 
 Return what the explicit delivery reads at this live subject and name.
@@ -2241,7 +2067,7 @@ Return a new graph carrying one more declaration.
 Method.
 
 ```text
-Graph.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'Graph'
+Graph.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'Graph'
 ```
 
 Return a new graph whose target carries this value under its name.
@@ -2356,7 +2182,7 @@ still does.
 ### `Item`
 
 ```text
-Item(durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+Item(durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Represent a tier member with attributes and a durable identifier seam.
@@ -2402,7 +2228,7 @@ Return the prefix binding as JSON-serializable data.
 ### `PolyadicRelationDeclaration`
 
 ```text
-PolyadicRelationDeclaration(name: 'QualifiedName', sources: 'RelationSideDeclaration', targets: 'RelationSideDeclaration', unique_sources: 'bool' = False, distinct_targets: 'bool' = False, single_parent: 'bool' = False, acyclic: 'bool' = False, targets_subset_of: 'QualifiedName | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+PolyadicRelationDeclaration(name: 'QualifiedName', sources: 'RelationSideDeclaration', targets: 'RelationSideDeclaration', unique_sources: 'bool' = False, distinct_targets: 'bool' = False, single_parent: 'bool' = False, acyclic: 'bool' = False, targets_subset_of: 'QualifiedName | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Declare ordered endpoint sequences and general incidence constraints.
@@ -2433,7 +2259,7 @@ Return the declaration as JSON-serializable data.
 ### `PolyadicRelationInstance`
 
 ```text
-PolyadicRelationInstance(declaration: 'QualifiedName', sources: 'tuple[RelationEndpointRef, ...]', targets: 'tuple[RelationEndpointRef, ...]', durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+PolyadicRelationInstance(declaration: 'QualifiedName', sources: 'tuple[RelationEndpointRef, ...]', targets: 'tuple[RelationEndpointRef, ...]', durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Link two declared, ordered endpoint sequences.
@@ -2578,7 +2404,7 @@ Declare whether one relation endpoint is an item or a boundary.
 ### `RelationInstance`
 
 ```text
-RelationInstance(declaration: 'QualifiedName', left: 'RelationEndpointRef', right: 'RelationEndpointRef', durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+RelationInstance(declaration: 'QualifiedName', left: 'RelationEndpointRef', right: 'RelationEndpointRef', durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Link item or anchored-boundary endpoints through a declared relation.
@@ -2729,7 +2555,7 @@ See PEP 695 for more information.
 ### `SimpleRelationDeclaration`
 
 ```text
-SimpleRelationDeclaration(name: 'QualifiedName', tier: 'QualifiedName', item_type: 'QualifiedName', attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+SimpleRelationDeclaration(name: 'QualifiedName', tier: 'QualifiedName', item_type: 'QualifiedName', attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Give every member of one tier its type through a depth-one relation.
@@ -2747,7 +2573,7 @@ Return the declaration as JSON-serializable data.
 ### `Tier`
 
 ```text
-Tier(declaration: 'TierDeclaration', items: 'tuple[Item, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+Tier(declaration: 'TierDeclaration', items: 'tuple[Item, ...]' = (), attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Pair a declaration with immutable ordered members and tier attributes.
@@ -2816,7 +2642,7 @@ validate what it denotes.
 ### `Consensus`
 
 ```text
-Consensus(subject: 'LayerSubject', name: 'QualifiedName', readings: 'tuple[tuple[LayerName, AttributeValue], ...]', agreed: 'bool') -> None
+Consensus(subject: 'LayerSubject', name: 'QualifiedName', readings: 'tuple[tuple[LayerName, Attribute], ...]', agreed: 'bool') -> None
 ```
 
 Report every delivered reading and whether their canonical values agree.
@@ -2850,7 +2676,7 @@ Return the layer and its tagged facts as JSON-serializable data.
 ### `LayerFact`
 
 ```text
-LayerFact(subject: 'LayerSubject', value: 'AttributeValue') -> None
+LayerFact(subject: 'LayerSubject', value: 'Attribute') -> None
 ```
 
 State one named typed value at one subject of the base.
@@ -2964,7 +2790,7 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 
 ### `__version__`
 
-Installed distribution version. Current value: `0.2.3`.
+Installed distribution version. Current value: `0.2.1`.
 
 ## Paths
 
@@ -4350,10 +4176,6 @@ as well as there.
 
 ## Semirings
 
-### `ARCTIC`
-
-The inexact IEEE-double max-plus semiring.
-
 ### `BOOLEAN`
 
 The exact Boolean semiring, with disjunction and conjunction.
@@ -4362,46 +4184,13 @@ The exact Boolean semiring, with disjunction and conjunction.
 
 The exact natural-number semiring.
 
-### `DECIMAL_ARCTIC`
-
-An exact min-plus or max-plus semiring with XSD-decimal finite values.
-
 ### `DECIMAL_TROPICAL`
 
 An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
-### `LOG_PROBABILITY`
-
-The inexact log-sum-exp semiring over finite IEEE-double log weights.
-
-Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
-the numerically stable log-sum-exp, multiplication is ordinary addition of
-logs, and ``0.0`` is the one. Positive values are admitted because a weight
-need not be a normalized probability. A path of ``-1000`` log weights folds
-without the underflow that raw exponentials suffer, which is the reason to
-fold in this carrier rather than in probabilities.
-
-Every required law is checked approximately except addition commutativity,
-which the symmetric log-sum-exp keeps exactly. That is the honest claim for
-floating-point accumulation, and an acyclic dependency graph does not
-change it: a finite derivation set makes the *search* exhaustive and says
-nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
-for the same reason, and that refusal stands. A result that leaves the
-finite carrier is refused rather than read as mass created or destroyed.
-The carrier declares no star.
-
-``normalize`` is the readout above the algebra: it reads log weights out
-as probabilities of a total, and a construct applying it says so where it
-reports the result. ``readouts`` names it, so a caller can declare it and
-nothing else is mistaken for one.
-
 ### `PATH`
 
 The exact decimal tropical semiring enriched with tied best paths.
-
-### `TROPICAL`
-
-The inexact IEEE-double min-plus semiring.
 
 ### `StarRefusal`
 
@@ -4901,7 +4690,7 @@ Return strict-JSON traversal data in canonical node order.
 
 ### `tiergraph.build`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.2.1.
 
 Builder notation errors raise the directly importable `tiergraph.build.BuilderError`, a `ValueError` subclass. It is not part of the module's star-exported surface.
 
@@ -4938,7 +4727,7 @@ Expand a local spelling in the default or explicitly selected namespace.
 Method.
 
 ```text
-Document.attribute(self, name: 'Name', value_type: 'XsdType | str', *, domain: 'AttributeDomain | str' = <AttributeDomain.ITEM: 'item'>) -> 'None'
+Document.attribute(self, name: 'Name', value_type: 'AttributeType | str', *, domain: 'AttributeDomain | str' = <AttributeDomain.ITEM: 'item'>) -> 'None'
 ```
 
 Declare an attribute without inferring its type from Python values.
@@ -5071,31 +4860,6 @@ An exact min-plus or max-plus semiring with XSD-decimal finite values.
 ### `DECIMAL_TROPICAL`
 
 An exact min-plus or max-plus semiring with XSD-decimal finite values.
-
-### `LOG_PROBABILITY`
-
-The inexact log-sum-exp semiring over finite IEEE-double log weights.
-
-Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
-the numerically stable log-sum-exp, multiplication is ordinary addition of
-logs, and ``0.0`` is the one. Positive values are admitted because a weight
-need not be a normalized probability. A path of ``-1000`` log weights folds
-without the underflow that raw exponentials suffer, which is the reason to
-fold in this carrier rather than in probabilities.
-
-Every required law is checked approximately except addition commutativity,
-which the symmetric log-sum-exp keeps exactly. That is the honest claim for
-floating-point accumulation, and an acyclic dependency graph does not
-change it: a finite derivation set makes the *search* exhaustive and says
-nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
-for the same reason, and that refusal stands. A result that leaves the
-finite carrier is refused rather than read as mass created or destroyed.
-The carrier declares no star.
-
-``normalize`` is the readout above the algebra: it reads log weights out
-as probabilities of a total, and a construct applying it says so where it
-reports the result. ``readouts`` names it, so a caller can declare it and
-nothing else is mistaken for one.
 
 ### `PATH`
 
@@ -5569,93 +5333,6 @@ LexicographicSemiring.no_zero_divisors(self) -> 'bool'
 ```
 
 The restricted carrier makes componentwise zero operands whole zeros.
-
-### `LogProbabilitySemiring`
-
-```text
-LogProbabilitySemiring()
-```
-
-The inexact log-sum-exp semiring over finite IEEE-double log weights.
-
-Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
-the numerically stable log-sum-exp, multiplication is ordinary addition of
-logs, and ``0.0`` is the one. Positive values are admitted because a weight
-need not be a normalized probability. A path of ``-1000`` log weights folds
-without the underflow that raw exponentials suffer, which is the reason to
-fold in this carrier rather than in probabilities.
-
-Every required law is checked approximately except addition commutativity,
-which the symmetric log-sum-exp keeps exactly. That is the honest claim for
-floating-point accumulation, and an acyclic dependency graph does not
-change it: a finite derivation set makes the *search* exhaustive and says
-nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
-for the same reason, and that refusal stands. A result that leaves the
-finite carrier is refused rather than read as mass created or destroyed.
-The carrier declares no star.
-
-``normalize`` is the readout above the algebra: it reads log weights out
-as probabilities of a total, and a construct applying it says so where it
-reports the result. ``readouts`` names it, so a caller can declare it and
-nothing else is mistaken for one.
-
-#### `LogProbabilitySemiring.add`
-
-Method.
-
-```text
-LogProbabilitySemiring.add(self, left: 'float', right: 'float', /) -> 'float'
-```
-
-Return the log of the summed weights, computed stably.
-
-#### `LogProbabilitySemiring.multiply`
-
-Method.
-
-```text
-LogProbabilitySemiring.multiply(self, left: 'float', right: 'float', /) -> 'float'
-```
-
-Add log weights, refusing overflow and preserving the annihilator.
-
-#### `LogProbabilitySemiring.normalize`
-
-Method.
-
-```text
-LogProbabilitySemiring.normalize(self, values: 'Iterable[float]', total: 'float', /) -> 'tuple[float, ...]'
-```
-
-Read log weights out as probabilities of a total, in one pass.
-
-Each result is ``exp(value - total)``. A total equal to the zero has no
-mass to normalize against and is refused rather than answered with
-fabricated probabilities. A value that exceeds the total by rounding
-reads as a probability slightly above one, and that is reported as
-read: the readout normalizes, it does not clip. Every value is held to
-the carrier, and a difference or an exponential that leaves the finite
-carrier is refused as overflow rather than read as infinite mass.
-
-#### `LogProbabilitySemiring.encode`
-
-Method.
-
-```text
-LogProbabilitySemiring.encode(self, value: 'float', /) -> 'object'
-```
-
-Encode a log weight losslessly without non-JSON numeric tokens.
-
-#### `LogProbabilitySemiring.decode`
-
-Method.
-
-```text
-LogProbabilitySemiring.decode(self, value: 'object', /) -> 'float'
-```
-
-Decode lossless hexadecimal log-weight text.
 
 ### `Path`
 
@@ -6393,7 +6070,7 @@ that they hold, which is why a caller that needs the stronger fact has to
 check the laws at values rather than read this tuple.
 ### `tiergraph.schema`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.2.1.
 
 ### `Refusal`
 
@@ -6508,7 +6185,7 @@ shape_hash() -> 'str'
 Hash the declaration independently of JSON Schema presentation.
 ### `tiergraph.cli`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.2.1.
 
 ### `build_parser`
 
@@ -6527,7 +6204,7 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 Run the command line. Returns the process exit status.
 ### `tiergraph.spanview`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.2.1.
 
 ### `SPANVIEW_FORMAT_VERSION`
 
@@ -6645,7 +6322,7 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 Return a deterministic ruler and aligned plain-text span table.
 ### `tiergraph.textgrid`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.2.1.
 
 ### `TextGridReadResult`
 

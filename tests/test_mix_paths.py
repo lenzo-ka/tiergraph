@@ -51,6 +51,7 @@ from tiergraph import (
     XsdType,
     resolve_path,
 )
+from tiergraph.core import _scalar_attribute
 
 
 def refusal(profile: MixPathProfile, text: str) -> PathRefusal:
@@ -340,7 +341,7 @@ def _with_value(graph: Graph, name: QualifiedName, lexical: str) -> Graph:
     return replace(
         graph,
         attributes=tuple(
-            AttributeValue(value.name, value.value_type, lexical)
+            AttributeValue(value.name, _scalar_attribute(value).value_type, lexical)
             if value.name == name
             else value
             for value in graph.attributes

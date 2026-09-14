@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from tiergraph import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -25,6 +26,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 
 NS = "urn:tiergraph:witness:external-reference"
 SOURCE_TIER = QualifiedName(NS, "source")
@@ -55,7 +57,11 @@ def _value(name: QualifiedName, value_type: XsdType, lexical: str) -> AttributeV
 
 
 def _lexical(item: Item, name: QualifiedName) -> str:
-    return next(value.lexical for value in item.attributes if value.name == name)
+    return next(
+        _scalar_attribute(value).lexical
+        for value in item.attributes
+        if value.name == name
+    )
 
 
 def _canonical_bytes(graph: Graph) -> bytes:
@@ -316,7 +322,7 @@ class SplitPopulation:
 
     def attributes(
         self, owner: Item | PrimitiveSelection
-    ) -> tuple[tuple[AttributeValue, ...], int]:
+    ) -> tuple[tuple[Attribute, ...], int]:
         """Dispatch attributes through distinct item and primitive cases."""
         owner_types = (Item, PrimitiveSelection)
         if isinstance(owner, Item):

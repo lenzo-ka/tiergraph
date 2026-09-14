@@ -11,6 +11,7 @@ from tiergraph import (
     evaluate_selection,
 )
 from tiergraph.build import document, item
+from tiergraph.core import _scalar_attribute
 
 NAMESPACE = "https://tiergraph.dev/examples/caption-alignment"
 
@@ -52,7 +53,7 @@ def aligned_phones() -> list[str]:
     label_name = builder.qname("label")
     return [
         next(
-            value.lexical
+            _scalar_attribute(value).lexical
             for value in phone_tier.items[reference.index].attributes
             if value.name == label_name
         )

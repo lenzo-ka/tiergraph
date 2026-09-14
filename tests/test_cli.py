@@ -85,6 +85,7 @@ from tiergraph import (
     XsdType,
 )
 from tiergraph.cli import build_parser, main
+from tiergraph.core import _scalar_attribute
 from tiergraph.schema import json_schema, shape_hash
 
 
@@ -2881,7 +2882,7 @@ def test_every_remaining_opcode_shape_round_trips_through_decoder(
     output = tmp_path / "all.json"
     assert main(["run", str(source), "--to", "json", "-o", str(output)]) == 0
     graph = tiergraph.loads(output.read_bytes())
-    assert graph.attributes[0].lexical == "value"
+    assert _scalar_attribute(graph.attributes[0]).lexical == "value"
 
 
 def test_polyadic_relate_round_trips_through_run_and_step(tmp_path: Path) -> None:

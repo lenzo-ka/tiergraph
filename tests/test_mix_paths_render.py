@@ -52,6 +52,7 @@ from tiergraph import (
     Tier,
     resolve_path,
 )
+from tiergraph.core import _scalar_attribute
 
 ROOT = Path(__file__).resolve().parent.parent
 END_OF_TRACK = b"\xff\x2f\x00"
@@ -152,7 +153,7 @@ def _attribute(graph: Graph, reference: ItemRef, name: QualifiedName) -> int:
     (value,) = [
         value for value in _item(graph, reference).attributes if value.name == name
     ]
-    return int(value.lexical)
+    return int(_scalar_attribute(value).lexical)
 
 
 def _arrangement(graph: Graph, index: int) -> tuple[ItemRef, ...]:
@@ -179,7 +180,7 @@ def _with_pitch(graph: Graph, reference: ItemRef, pitch: int) -> Graph:
     items[reference.index] = replace(
         item,
         attributes=tuple(
-            AttributeValue(value.name, value.value_type, str(pitch))
+            AttributeValue(value.name, _scalar_attribute(value).value_type, str(pitch))
             if value.name == PITCH
             else value
             for value in item.attributes

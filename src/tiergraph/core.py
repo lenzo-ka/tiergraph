@@ -561,7 +561,7 @@ class TierDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class AttributeDeclaration:
-    """Declare an optional, at-most-one value for one domain and XSD type.
+    """Declare an optional, at-most-one value for one domain and value type.
 
     Absence means absent: attributes have no defaults, deliberately, because a
     default would put a value in the reading that is missing from graph bytes.

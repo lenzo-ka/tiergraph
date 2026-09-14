@@ -48,6 +48,7 @@ from tiergraph import (
     XsdType,
     resolve_path,
 )
+from tiergraph.core import _scalar_attribute
 
 MIX_NAMESPACE = "https://tiergraph.dev/examples/mix-paths/mix"
 CLOCK_NAMESPACE = "https://tiergraph.dev/examples/mix-paths/clock"
@@ -369,11 +370,23 @@ def _attribute_int(graph: Graph, reference: ItemRef, name: QualifiedName) -> int
         for tier in graph.tiers
         if tier.declaration.name == reference.tier
     )
-    return int(next(value.lexical for value in item.attributes if value.name == name))
+    return int(
+        next(
+            _scalar_attribute(value).lexical
+            for value in item.attributes
+            if value.name == name
+        )
+    )
 
 
 def _document_int(graph: Graph, name: QualifiedName) -> int:
-    return int(next(value.lexical for value in graph.attributes if value.name == name))
+    return int(
+        next(
+            _scalar_attribute(value).lexical
+            for value in graph.attributes
+            if value.name == name
+        )
+    )
 
 
 def _vlq(value: int) -> bytes:

@@ -22,7 +22,7 @@ from tiergraph import (
     json_value_graph,
     loads,
 )
-from tiergraph.core import JsonValue
+from tiergraph.core import JsonValue, _scalar_attribute
 from tiergraph.schema import validation_errors
 from tiergraph.wire import FORMAT_VERSION, to_data
 
@@ -254,7 +254,7 @@ def test_payload_and_container_shape_refusals_name_nodes() -> None:
     tier = graph.tiers[0]
     item = tier.items[0]
     kind = item.attributes[0]
-    bad_kind = replace(kind, lexical="record")
+    bad_kind = replace(_scalar_attribute(kind), lexical="record")
     changed = replace(
         graph,
         tiers=(
@@ -367,7 +367,7 @@ def test_member_key_rules_and_numeric_leaves() -> None:
         for value in double_item.attributes
         if value.name == double_profile.double_attribute
     )
-    infinite = replace(double_value, lexical="INF")
+    infinite = replace(_scalar_attribute(double_value), lexical="INF")
     infinite_graph = replace(
         double_graph,
         tiers=(

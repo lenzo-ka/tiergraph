@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 
 from tiergraph import Graph, ItemRef
+from tiergraph.core import _scalar_attribute
 from tiergraph.semiring import (
     DECIMAL_ARCTIC,
     DECIMAL_TROPICAL,
@@ -193,7 +194,9 @@ def fused_recognize_and_act(
             if tier.declaration.name == reference.tier
         )
         delivery = next(
-            value.lexical for value in item.attributes if value.name == delivery_name
+            _scalar_attribute(value).lexical
+            for value in item.attributes
+            if value.name == delivery_name
         )
         return (int(delivery),) if question == "deliveries" else delivery
 
