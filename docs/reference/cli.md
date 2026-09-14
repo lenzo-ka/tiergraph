@@ -140,7 +140,7 @@ options:
 usage: tiergraph discharge fold [-h] [--name NAME] --attribute-namespace NS
                                 --attribute-local LOCAL --tier NS LOCAL
                                 --semiring
-                                {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+                                {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
                                 --lift {one,value} --transition NS LOCAL
                                 COMBINATION [--root TGPATH] [--ranked]
                                 [--output-cap N]
@@ -157,7 +157,7 @@ options:
   --attribute-namespace NS
   --attribute-local LOCAL
   --tier NS LOCAL       one valuation domain tier; repeatable
-  --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+  --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
   --lift {one,value}    embed the read value, or the semiring's multiplicative
                         identity
   --transition NS LOCAL COMBINATION
@@ -548,7 +548,7 @@ options:
 ```text
 usage: tiergraph fold [-h] [--name NAME] --attribute-namespace NS
                       --attribute-local LOCAL --tier NS LOCAL --semiring
-                      {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+                      {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
                       --lift {one,value} --transition NS LOCAL COMBINATION
                       [--root TGPATH] [--ranked] [--output-cap N] [-o FILE]
                       GRAPH
@@ -562,7 +562,7 @@ options:
   --attribute-namespace NS
   --attribute-local LOCAL
   --tier NS LOCAL       one valuation domain tier; repeatable
-  --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,path,tropical}
+  --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
   --lift {one,value}    embed the read value, or the semiring's multiplicative
                         identity
   --transition NS LOCAL COMBINATION

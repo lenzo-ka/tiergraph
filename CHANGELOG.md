@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `LOG_PROBABILITY`, the log-sum-exp semiring over finite IEEE-double log
+  weights with `-inf` as its zero: stable addition, log-product multiplication,
+  positive weights admitted, overflow refused, every required law except
+  addition commutativity declared approximate, and no star. `tiergraph semirings` lists it as
+  `log-probability`, and `tiergraph fold --semiring log-probability` runs it.
+  Its `normalize` method is the declared readout that turns log weights into
+  probabilities of a total; `ExpectationSemiring` still refuses this inexact
+  base.
+- Added `PathPlan`, which compiles a `FoldDeclaration` over one `OR` relation on
+  an acyclic graph once and evaluates it again under any vector of carrier
+  values in the plan's item order. `evaluate` returns what `run` returns for the
+  same values, provenance and cost account included; `marginals` adds the
+  outside pass and returns `PathMarginals`, whose `posteriors(readout=...)`
+  reads probabilities through the readout the caller declares and the algebra
+  publishes, and reports zero mass rather than fabricating a distribution, as
+  `PathPosteriors` with the readout named. Under
+  `LOG_PROBABILITY`, `ARCTIC`, and `TROPICAL` the plan runs a fused schedule of
+  the algebra's operations; `AlgebraOrder` is a witness order by an algebra's own
+  selective addition, which the plan fuses too. Ranked output, index axes,
+  several relations, `AND` transitions, and cycles are refused by name.
+
+### Changed
+
+- The package root now exports every semiring constant the shell can name:
+  `ARCTIC`, `DECIMAL_ARCTIC`, `LOG_PROBABILITY` and `TROPICAL` join `BOOLEAN`,
+  `COUNTING`, `DECIMAL_TROPICAL` and `PATH` there. `PATH_WITNESSES`, which the
+  shell has no spelling for, stays on `tiergraph.semiring`, as every constant
+  still does.
+- `FoldDeclaration` now states where a readout above the algebra is declared,
+  and the `declared-readout` reservation is discharged: the reservation
+  register carries four entries, and `PathMarginals.posteriors` records the
+  readout it applies.
+
 ## [0.2.1] - 2026-09-13
 
 ### Added

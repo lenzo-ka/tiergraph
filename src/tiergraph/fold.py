@@ -385,10 +385,12 @@ class FoldDeclaration[Value]:
     finite derivation set; a cyclic one is specified by the starred fixpoint the
     algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
-    A readout or final division above the algebra is not currently provided. If one
-    is introduced, it must be declared as part of what the fold profile records. A
-    construct whose soundness depends on a property it cannot verify must declare
-    that property rather than assume it.
+    A readout or final division above the algebra is taken only where it is
+    declared: ``PathMarginals.posteriors`` reads marginals out through a
+    readout the caller names and the algebra lists in its ``readouts``, and
+    records the readout it applied. A construct
+    whose soundness depends on a property it cannot verify must declare that
+    property rather than assume it.
 
     ``witness_order`` and ``tie_policy`` are one mechanism and are declared together:
     the order names the winner and the policy says what happens where it reports a
