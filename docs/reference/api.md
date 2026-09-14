@@ -1144,8 +1144,9 @@ finite derivation set; a cyclic one is specified by the starred fixpoint the
 algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
 A readout or final division above the algebra is taken only where it is
-declared: ``PathMarginals.posteriors`` reads marginals out through the
-algebra's own ``normalize`` and records the readout it applied. A construct
+declared: ``PathMarginals.posteriors`` reads marginals out through a
+readout the caller names and the algebra lists in its ``readouts``, and
+records the readout it applied. A construct
 whose soundness depends on a property it cannot verify must declare that
 property rather than assume it.
 
@@ -1363,11 +1364,12 @@ PathMarginals.posteriors(self, *, readout: 'str') -> 'PathPosteriors'
 Read every marginal as a probability of the total through a declared readout.
 
 A readout is a division above the algebra, so the caller declares it by
-name and the algebra must publish it: ``readout="normalize"`` is the
-one the log-probability carrier publishes, and an algebra without the
-named readout is refused rather than divided by hand. The result
-records the readout it applied. A zero total reports ``zero_mass``
-with no values.
+name and the algebra must publish it in its ``readouts``:
+``readout="normalize"`` is the one the log-probability carrier
+publishes, and a name the algebra does not list there is refused rather
+than divided by hand, whatever other methods the algebra happens to
+have. The result records the readout it applied. A zero total reports
+``zero_mass`` with no values.
 
 ### `PathPlan`
 
@@ -4936,7 +4938,8 @@ The carrier declares no star.
 
 ``normalize`` is the readout above the algebra: it reads log weights out
 as probabilities of a total, and a construct applying it says so where it
-reports the result.
+reports the result. ``readouts`` names it, so a caller can declare it and
+nothing else is mistaken for one.
 
 ### `PATH`
 
@@ -5437,7 +5440,8 @@ The carrier declares no star.
 
 ``normalize`` is the readout above the algebra: it reads log weights out
 as probabilities of a total, and a construct applying it says so where it
-reports the result.
+reports the result. ``readouts`` names it, so a caller can declare it and
+nothing else is mistaken for one.
 
 #### `LogProbabilitySemiring.add`
 

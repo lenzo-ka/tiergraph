@@ -39,6 +39,7 @@ from tiergraph.semiring import (
     LOG_PROBABILITY,
     PATH,
     TROPICAL,
+    ArcticSemiring,
     PathValue,
     Semiring,
 )
@@ -527,9 +528,12 @@ def test_posteriors_are_read_only_through_a_declared_readout() -> None:
     ):
         plan.marginals().posteriors(readout="normalize")
     log_plan = PathPlan.prepare(declare(graph, LOG_PROBABILITY))
-    for undeclared in ("_value", "missing"):
+    # Only a name the algebra lists in ``readouts`` is a readout; another public
+    # method of the algebra is not mistaken for one.
+    for undeclared in ("_value", "missing", "encode", "add", "multiply"):
         with pytest.raises(ValueError, match=f"publishes no {undeclared!r} readout"):
             log_plan.marginals().posteriors(readout=undeclared)
+    assert LOG_PROBABILITY.readouts == ("normalize",)
 
 
 def test_the_log_carrier_survives_weights_raw_exponentials_cannot() -> None:
@@ -821,3 +825,129 @@ def test_the_cost_accounts_for_both_passes() -> None:
     assert (both.carrier_additions, both.carrier_multiplications) == (3, 18)
     assert both.document_size == 6 and both.relation_incidence == 6
     assert both.index_product_size == 1 and both.witness_count == 0
+
+
+def test_a_root_listed_twice_is_refused() -> None:
+    """The fold counts a repeated root per listing; the plan refuses the ambiguity."""
+    graph = lattice({"r": math.log(0.5), "x": 0.0}, (("r", "x"),))
+    declaration = declare(graph, LOG_PROBABILITY, roots=("r", "r"))
+    assert declaration.run().value == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="lists root .*'index': 0.* more than once"):
+        PathPlan.prepare(declaration)
+
+
+class Saturating(ArcticSemiring):
+    """A max-plus carrier whose product saturates, to prove fusion defers to it."""
+
+    def multiply(self, left: float, right: float, /) -> float:
+        """Add, then cap at ten."""
+        return min(super().multiply(left, right), 10.0)
+
+
+def test_a_subclass_overriding_an_operation_runs_unfused() -> None:
+    """Fusion inlines only the base operations; an override is evaluated as written."""
+    graph = lattice({"s": 6.0, "a": 7.0, "b": 1.0}, (("s", "a"), ("s", "b")))
+    saturating = Saturating()
+    declaration = declare(graph, saturating)
+    plan = PathPlan.prepare(declaration)
+    assert plan._compiled.fused is None
+    assert plan.evaluate().value == declaration.run().value == 10.0
+    assert plan.marginals().marginals == tuple(
+        saturating.multiply(prefix, suffix)
+        for prefix, suffix in zip(
+            plan.marginals().outside, plan.marginals().inside, strict=True
+        )
+    )
+    plain = PathPlan.prepare(declare(graph, ARCTIC))
+    assert plain._compiled.fused == "max"
+    assert plain.evaluate().value == 13.0
+
+
+def test_an_algebra_order_is_declared_over_the_declarations_own_algebra() -> None:
+    """Ordering by another algebra's addition is refused; another instance is one algebra."""
+    graph = lattice(
+        {"s": 0.0, "hi": 5.0, "lo": 1.0, "f": 0.0},
+        (("s", "hi"), ("s", "lo"), ("hi", "f"), ("lo", "f")),
+    )
+    with pytest.raises(
+        ValueError,
+        match="orders witnesses by 'TropicalSemiring' while it sums with 'ArcticSemiring'",
+    ):
+        PathPlan.prepare(
+            declare(
+                graph,
+                ARCTIC,
+                witness_order=AlgebraOrder(TROPICAL),
+                tie_policy=TiePolicy.CHOOSE_FIRST,
+            )
+        )
+    fresh = PathPlan.prepare(
+        declare(
+            graph,
+            ARCTIC,
+            witness_order=AlgebraOrder(ArcticSemiring()),
+            tie_policy=TiePolicy.CHOOSE_FIRST,
+        )
+    )
+    assert fresh._compiled.fused == "max" and fresh._compiled.select
+    assert fresh.evaluate().provenance == (("s", "hi", "f"),)
+
+
+def test_a_carried_product_that_overflows_is_refused_before_it_becomes_nan() -> None:
+    """A prefix product past the carrier is refused even where a later gather would hide it."""
+    graph = lattice(
+        {"r": BIG, "a": BIG, "b": 0.0, "c": -BIG},
+        (("r", "a"), ("r", "b"), ("a", "c"), ("b", "c")),
+    )
+    for semiring, lift in ((LOG_PROBABILITY, value_lift), (ARCTIC, value_lift)):
+        plan = PathPlan.prepare(declare(graph, semiring, lift=lift, roots=("r",)))
+        assert math.isfinite(plan.evaluate().value)
+        with pytest.raises(
+            OverflowError, match="leaves the finite IEEE-double carrier"
+        ):
+            plan.marginals()
+
+
+def test_a_through_value_that_overflows_by_rounding_is_refused() -> None:
+    """Prefix and suffix each round back into the carrier, but their product does not."""
+    # Every prefix product and the inside value at the root round back to the
+    # carrier's top, because each step adds less than half an ulp of it; the
+    # suffix summed from the sink adds more, so only the product through ``a``
+    # leaves the carrier.
+    top = 1.7976931348623157e308
+    weights = {"r": top, "p": -0.3e292, "a": 0.6e292, "z": 0.6e292}
+    edges: Edges = (("r", "p"), ("p", "a"), ("a", "z"))
+    for semiring, lift in (
+        (LOG_PROBABILITY, value_lift),
+        (ARCTIC, value_lift),
+        (TROPICAL, negated_lift),
+    ):
+        plan = PathPlan.prepare(
+            declare(lattice(weights, edges), semiring, lift=lift, roots=("r",))
+        )
+        assert math.isfinite(plan.evaluate().value)
+        with pytest.raises(
+            OverflowError, match="leaves the finite IEEE-double carrier"
+        ):
+            plan.marginals()
+
+
+def test_the_general_schedule_holds_double_values_to_the_carrier_too() -> None:
+    """A double carrier's vector is checked before anything runs, fused or not."""
+    graph = lattice(LATTICE_WEIGHTS, LATTICE_EDGES)
+    plan = PathPlan.prepare(
+        declare(
+            graph,
+            LOG_PROBABILITY,
+            witness_order=lambda left, right: (left < right) - (left > right),
+            tie_policy=TiePolicy.CHOOSE_FIRST,
+        )
+    )
+    assert plan._compiled.fused is None
+    good = list(LATTICE_WEIGHTS.values())
+    with pytest.raises(
+        ValueError, match="path plan 'lattice' values must be IEEE-double"
+    ):
+        plan.evaluate([*good[:-1], math.nan])
+    with pytest.raises(ValueError, match="excluded infinite bound"):
+        plan.marginals([*good[:-1], math.inf])

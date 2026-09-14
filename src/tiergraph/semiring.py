@@ -413,11 +413,13 @@ class LogProbabilitySemiring:
 
     ``normalize`` is the readout above the algebra: it reads log weights out
     as probabilities of a total, and a construct applying it says so where it
-    reports the result.
+    reports the result. ``readouts`` names it, so a caller can declare it and
+    nothing else is mistaken for one.
     """
 
     zero = -math.inf
     one = 0.0
+    readouts = ("normalize",)
     add_associativity = multiply_associativity = LawCheck.APPROXIMATE
     add_commutativity = LawCheck.EXACT
     left_distributivity = right_distributivity = LawCheck.APPROXIMATE

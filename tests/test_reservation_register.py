@@ -192,6 +192,27 @@ def test_removing_the_graph_composition_entry_is_refused() -> None:
     ]
 
 
+def test_removing_a_class_symbol_entry_is_refused() -> None:
+    """The vocabulary scan reaches a class docstring, not only a module's."""
+    entry = next(
+        entry
+        for entry in check_reservations.UNENFORCEABLE
+        if entry.name == "cone-model"
+    )
+    entries = tuple(
+        candidate
+        for candidate in check_reservations.registered()
+        if candidate.name != "cone-model"
+    )
+    documented = dict(check_reservations.docstrings(ROOT / entry.site))
+    found = check_reservations.ANNOUNCEMENT.search(documented[entry.symbol])
+    assert found is not None
+    assert check_reservations.undeclared(entries, [ROOT / entry.site]) == [
+        f"{entry.site}:{entry.symbol} announces a reservation "
+        f"({found.group(0)!r}) that the register does not carry"
+    ]
+
+
 def test_the_readout_is_provided_and_no_longer_reserved() -> None:
     """The fold declaration announces no readout reservation: one is declared."""
     documented = dict(

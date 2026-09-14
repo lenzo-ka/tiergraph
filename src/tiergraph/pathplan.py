@@ -115,21 +115,24 @@ class PathMarginals[Value]:
         """Read every marginal as a probability of the total through a declared readout.
 
         A readout is a division above the algebra, so the caller declares it by
-        name and the algebra must publish it: ``readout="normalize"`` is the
-        one the log-probability carrier publishes, and an algebra without the
-        named readout is refused rather than divided by hand. The result
-        records the readout it applied. A zero total reports ``zero_mass``
-        with no values.
+        name and the algebra must publish it in its ``readouts``:
+        ``readout="normalize"`` is the one the log-probability carrier
+        publishes, and a name the algebra does not list there is refused rather
+        than divided by hand, whatever other methods the algebra happens to
+        have. The result records the readout it applied. A zero total reports
+        ``zero_mass`` with no values.
         """
         algebra = self.plan.declaration.semiring
-        method = None if readout.startswith("_") else getattr(algebra, readout, None)
-        if not callable(method):
+        published: tuple[str, ...] = getattr(algebra, "readouts", ())
+        if readout not in published:
             raise ValueError(
                 f"algebra {type(algebra).__name__!r} publishes no {readout!r} "
-                "readout; a posterior is read only through one the caller declares"
+                "readout; a posterior is read only through one the algebra lists "
+                "in its readouts and the caller declares"
             )
         if self.total == algebra.zero:
             return PathPosteriors(readout, True, None)
+        method = getattr(algebra, readout)
         return PathPosteriors(readout, False, tuple(method(self.marginals, self.total)))
 
 
@@ -147,7 +150,9 @@ class _Compiled:
     outside_multiplications: int
     fused: str | None
     select: bool
+    doubles: bool
     excluded: float
+    positions: dict[ItemRef, int]
     inside_schedule: _InsideSchedule
     outside_schedule: _OutsideSchedule
 
@@ -249,6 +254,17 @@ class PathPlan[Value]:
             for child in links:
                 parent_lists[child].append(parent)
         parents = tuple(tuple(links) for links in parent_lists)
+        if len(set(declaration.roots)) != len(declaration.roots):
+            repeated = next(
+                reference
+                for reference in declaration.roots
+                if declaration.roots.count(reference) > 1
+            )
+            raise ValueError(
+                f"path plan {name!r} lists root {repeated.to_data()!r} more than "
+                "once; the fold would count its value once per listing and the "
+                "outside pass would seat it once, so the passes could not agree"
+            )
         roots = tuple(index[reference] for reference in declaration.roots) or tuple(
             position for position, links in enumerate(parents) if not links
         )
@@ -259,7 +275,7 @@ class PathPlan[Value]:
             for reference, label in zip(items, labels, strict=True)
         )
         compiled = _compile(declaration, items, children, parents, roots, order)
-        if compiled.fused is not None:
+        if compiled.doubles:
             _check_doubles(name, values, compiled.excluded)
         return cls(
             declaration,
@@ -276,8 +292,8 @@ class PathPlan[Value]:
     def index(self, reference: ItemRef) -> int:
         """Return an item's position in the plan's value order."""
         try:
-            return self.items.index(reference)
-        except ValueError:
+            return self._compiled.positions[reference]
+        except KeyError:
             raise ValueError(
                 f"path plan {self.declaration.name!r} has no item "
                 f"{reference.to_data()!r}"
@@ -319,7 +335,7 @@ class PathPlan[Value]:
             inside, _selected = self._inside_general(vector)
             outside, through = self._outside_general(vector, inside)
         else:
-            inside, _selected = self._inside_fused(vector)
+            inside, _selected = self._inside_fused(vector, select=False)
             outside, through = self._outside_fused(vector, inside)
         return PathMarginals(
             self,
@@ -346,7 +362,7 @@ class PathPlan[Value]:
                 f"values in plan item order and was given {len(vector)}"
             )
         compiled = self._compiled
-        if compiled.fused is not None:
+        if compiled.doubles:
             _check_doubles(self.declaration.name, vector, compiled.excluded)
         return vector
 
@@ -463,7 +479,7 @@ class PathPlan[Value]:
         return outside, through
 
     def _inside_fused(
-        self, vector: tuple[Value, ...]
+        self, vector: tuple[Value, ...], *, select: bool = True
     ) -> tuple[list[Value], _Selected[Value] | None]:
         """Evaluate a double carrier with the algebra's operations inlined."""
         compiled = self._compiled
@@ -473,7 +489,7 @@ class PathPlan[Value]:
                 list[Value], _log_inside(self, compiled.inside_schedule, v)
             ), None
         extreme: _Extreme = min if compiled.fused == "min" else max
-        choice: list[int] | None = [-1] * len(v) if compiled.select else None
+        choice: list[int] | None = [-1] * len(v) if compiled.select and select else None
         inside = _extreme_inside(
             self, compiled.inside_schedule, v, extreme, compiled.excluded, choice
         )
@@ -504,10 +520,13 @@ class PathPlan[Value]:
             outside, carried = _extreme_outside(
                 self, compiled.outside_schedule, v, extreme, compiled.excluded
             )
-        del carried
-        if compiled.excluded in outside:
+        # A product that left the carrier toward the excluded infinity is still
+        # in ``carried`` even where a later gather turned it into NaN.
+        if compiled.excluded in carried or compiled.excluded in outside:
             raise _overflow(self)
         through = list(map(operator.add, outside, suffix))
+        if compiled.excluded in through:
+            raise _overflow(self)
         # The zero annihilates, so a product is the zero exactly where an
         # operand is, unless it overflowed there. Counting both sides is the
         # same test as reading every position, without a Python-level loop.
@@ -593,6 +612,7 @@ def _log_outside(
     outside = [_NEGATIVE] * len(v)
     carried = [_NEGATIVE] * len(v)
     log = math.log
+    log1p = math.log1p
     fsum = math.fsum
     exp = math.exp
     sub = operator.sub
@@ -600,8 +620,10 @@ def _log_outside(
         if kind == 1:
             value = carried[argument]
             if root and value != _NEGATIVE:
+                # The algebra's own addition of the identity, bit for bit.
                 high = value if value > 0.0 else 0.0
-                value = high + log(exp(0.0 - high) + exp(value - high))
+                low = value if value <= 0.0 else 0.0
+                value = high + log1p(exp(low - high))
             elif root:
                 value = 0.0
         elif kind:
@@ -740,21 +762,39 @@ def _compile(
     """Derive the schedules and operation counts a plan reuses at every run."""
     semiring = declaration.semiring
     witness = declaration.witness_order
+    if isinstance(witness, AlgebraOrder) and not _same_algebra(
+        witness.algebra, semiring
+    ):
+        raise ValueError(
+            f"path plan {declaration.name!r} orders witnesses by "
+            f"{type(witness.algebra).__name__!r} while it sums with "
+            f"{type(semiring).__name__!r}; an AlgebraOrder is declared over the "
+            "declaration's own algebra"
+        )
     fused: str | None = None
     select = False
     excluded = _POSITIVE
-    if isinstance(semiring, LogProbabilitySemiring) and witness is None:
+    doubles = isinstance(semiring, LogProbabilitySemiring | DoubleExtremumSemiring)
+    if doubles and semiring.zero == _POSITIVE:
+        excluded = _NEGATIVE
+    # A subclass that overrides an operation is evaluated through that
+    # operation, so only the base operations are fused.
+    if (
+        isinstance(semiring, LogProbabilitySemiring)
+        and _base_operations(semiring, LogProbabilitySemiring)
+        and witness is None
+    ):
         fused = "log"
-    elif isinstance(semiring, DoubleExtremumSemiring):
+    elif isinstance(semiring, DoubleExtremumSemiring) and _base_operations(
+        semiring, DoubleExtremumSemiring
+    ):
         fusible = witness is None or (
             isinstance(witness, AlgebraOrder)
-            and witness.algebra is semiring
             and declaration.tie_policy is TiePolicy.CHOOSE_FIRST
         )
         if fusible:
             fused = "min" if semiring.zero == _POSITIVE else "max"
             select = witness is not None
-            excluded = _NEGATIVE if fused == "min" else _POSITIVE
     root_set = set(roots)
     inside_schedule = tuple(
         (item, 1, children[item][0])
@@ -788,9 +828,30 @@ def _compile(
         outside_multiplications=sum(len(links) for links in parents) + len(items),
         fused=fused,
         select=select,
+        doubles=doubles,
         excluded=excluded,
+        positions={reference: position for position, reference in enumerate(items)},
         inside_schedule=inside_schedule,
         outside_schedule=outside_schedule,
+    )
+
+
+def _base_operations(
+    semiring: Semiring[Any],
+    base: type[LogProbabilitySemiring] | type[DoubleExtremumSemiring],
+) -> bool:
+    """Report whether the algebra's addition and multiplication are the base class's."""
+    kind = type(semiring)
+    return bool(
+        getattr(kind, "add", None) is base.add
+        and getattr(kind, "multiply", None) is base.multiply
+    )
+
+
+def _same_algebra(left: Semiring[Any], right: Semiring[Any]) -> bool:
+    """Report whether two algebra instances are one algebra."""
+    return left is right or (
+        type(left) is type(right) and left.zero == right.zero and left.one == right.one
     )
 
 

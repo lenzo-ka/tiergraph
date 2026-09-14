@@ -386,8 +386,9 @@ class FoldDeclaration[Value]:
     algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
     A readout or final division above the algebra is taken only where it is
-    declared: ``PathMarginals.posteriors`` reads marginals out through the
-    algebra's own ``normalize`` and records the readout it applied. A construct
+    declared: ``PathMarginals.posteriors`` reads marginals out through a
+    readout the caller names and the algebra lists in its ``readouts``, and
+    records the readout it applied. A construct
     whose soundness depends on a property it cannot verify must declare that
     property rather than assume it.
 
