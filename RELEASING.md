@@ -117,8 +117,9 @@ job references it; the OIDC identity is scoped to it).
      displaying it — so without this line the doc asks for a comparison it
      gives no way to make. Expect exactly `tiergraph-X.Y.Z.tar.gz` and
      `tiergraph-X.Y.Z-py3-none-any.whl`; a stale build left in `dist/` from an
-     earlier version shows up here as an extra pair, and it is what the publish
-     workflow would upload.
+     earlier version shows up here as an extra pair. The publish workflow never
+     sees it — it builds from a fresh checkout of the tag — but the local
+     checks below would read the wrong archive.
    - **The wheel listing must show both packages.** The grep exits 0 when
      either package is present, so the exit status decides nothing: read the
      output and confirm entries under `tiergraph/` *and* under `tiergraph_dot/`.
