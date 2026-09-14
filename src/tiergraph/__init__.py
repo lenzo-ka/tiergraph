@@ -137,6 +137,7 @@ from tiergraph.path import (
     StructuralPathProfile,
     resolve_path,
 )
+from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPosteriors
 from tiergraph.profile import (
     PROFILES,
     GraphProfile,
@@ -234,6 +235,7 @@ __all__ = [
     "PROFILES",
     "ActionDeclaration",
     "AddItem",
+    "AlgebraOrder",
     "AlternativeRef",
     "AsBuilt",
     "AttachValue",
@@ -316,7 +318,10 @@ __all__ = [
     "ParseForest",
     "PathBinding",
     "PathKind",
+    "PathMarginals",
     "PathOffender",
+    "PathPlan",
+    "PathPosteriors",
     "PathProfile",
     "PathRefusal",
     "PathRefusalCode",

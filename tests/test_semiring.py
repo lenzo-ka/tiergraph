@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
@@ -19,6 +20,7 @@ from tiergraph.semiring import (
     COUNTING,
     DECIMAL_ARCTIC,
     DECIMAL_TROPICAL,
+    LOG_PROBABILITY,
     PATH,
     PATH_WITNESSES,
     TROPICAL,
@@ -186,6 +188,7 @@ CASES = (
     SemiringCase("boolean", BOOLEAN, st.booleans()),
     SemiringCase("double-tropical", TROPICAL, TROPICAL_VALUES),
     SemiringCase("double-arctic", ARCTIC, ARCTIC_VALUES),
+    SemiringCase("log-probability", LOG_PROBABILITY, ARCTIC_VALUES),
     SemiringCase(
         "decimal-tropical",
         DECIMAL_TROPICAL,
@@ -375,6 +378,43 @@ def test_double_overflow_and_excluded_bounds_are_refused() -> None:
     with pytest.raises(ValueError, match="right"):
         TROPICAL.add(1.0, float("-inf"))
     assert TROPICAL.multiply(TROPICAL.zero, -1e308) == TROPICAL.zero
+
+
+def test_log_probability_refuses_bounds_and_overflow() -> None:
+    """The log carrier admits finite log weights and its zero, and nothing else."""
+    log = LOG_PROBABILITY
+    with pytest.raises(OverflowError, match="result"):
+        log.multiply(-1e308, -1e308)
+    with pytest.raises(ValueError, match="right"):
+        log.add(1.0, math.inf)
+    with pytest.raises(ValueError, match="left"):
+        log.add(math.nan, 0.0)
+    with pytest.raises(ValueError, match="left"):
+        log.multiply(cast(float, True), 0.0)
+    assert log.multiply(log.zero, 5.0) == log.zero
+    assert log.multiply(5.0, log.zero) == log.zero
+    assert log.add(log.zero, 5.0) == 5.0
+    assert log.add(5.0, log.zero) == 5.0
+    assert log.add(0.0, 0.0) == math.log(2)
+    assert log.add(-1000.0, -1001.0) == pytest.approx(-1000 + math.log1p(math.exp(-1)))
+    assert log.add(-1001.0, -1000.0) == log.add(-1000.0, -1001.0)
+    assert log.encode(log.zero) == "-INF"
+    assert log.decode("-INF") == log.zero
+    with pytest.raises(TypeError, match="string"):
+        log.decode(1.0)
+    with pytest.raises(ValueError, match="lacks exact"):
+        ExpectationSemiring(log)
+
+
+def test_log_probability_normalize_reads_probabilities_of_a_total() -> None:
+    """The readout divides in the probability domain and refuses a zero total."""
+    log = LOG_PROBABILITY
+    assert log.normalize((-1.0, -math.inf, 0.0), 0.0) == (math.exp(-1.0), 0.0, 1.0)
+    assert log.normalize([0.5], 0.0) == (math.exp(0.5),)
+    with pytest.raises(ValueError, match="no mass"):
+        log.normalize((0.0,), -math.inf)
+    with pytest.raises(ValueError, match="total"):
+        log.normalize((0.0,), math.nan)
 
 
 def test_double_associativity_is_approximate_but_bounded() -> None:

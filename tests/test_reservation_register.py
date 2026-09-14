@@ -11,7 +11,7 @@ ROOT = check_reservations.ROOT
 MODULE = check_reservations.MODULE_SYMBOL
 
 # The lane register names the existing entries plus the cone-model reservation.
-EXPECTED_RESERVATIONS = 5
+EXPECTED_RESERVATIONS = 4
 
 
 def _module(path: Path, source: str) -> Path:
@@ -144,52 +144,63 @@ def test_an_entry_that_no_longer_matches_its_prose_fails(
     assert reason in message
 
 
-def test_the_declared_readout_prose_is_pinned_exactly_once() -> None:
-    """The readout obligation appears once at the declaration readers inspect."""
+def test_the_graph_composition_prose_is_pinned_exactly_once() -> None:
+    """The composition reservation appears once at the example readers inspect."""
     entry = next(
         entry
         for entry in check_reservations.UNENFORCEABLE
-        if entry.name == "declared-readout"
+        if entry.name == "graph-composition"
     )
     documented = dict(check_reservations.docstrings(ROOT / entry.site))
     assert documented[entry.symbol].count(entry.text) == 1
     assert check_reservations.unpinned([entry]) == []
 
 
-def test_rewording_the_declared_readout_prose_is_refused() -> None:
-    """The register refuses a changed statement of the readout obligation."""
+def test_rewording_the_graph_composition_prose_is_refused() -> None:
+    """The register refuses a changed statement of the composition reservation."""
     entry = next(
         entry
         for entry in check_reservations.UNENFORCEABLE
-        if entry.name == "declared-readout"
+        if entry.name == "graph-composition"
     )
     changed = check_reservations.Unenforceable(
         name=entry.name,
         site=entry.site,
         symbol=entry.symbol,
-        text=entry.text.replace("must be declared", "should be declared"),
+        text=entry.text.replace("does not yet provide", "does not provide"),
         condition=entry.condition,
         why=entry.why,
     )
     assert check_reservations.unpinned([changed]) == [
-        "declared-readout: the reserving prose in "
-        "src/tiergraph/fold.py:FoldDeclaration is missing or changed"
+        "graph-composition: the reserving prose in "
+        "examples/json_document.py:<module> is missing or changed"
     ]
 
 
-def test_removing_the_declared_readout_entry_is_refused() -> None:
-    """The vocabulary scan refuses the obligation when its entry is removed."""
+def test_removing_the_graph_composition_entry_is_refused() -> None:
+    """The vocabulary scan refuses the reservation when its entry is removed."""
     entries = tuple(
         entry
         for entry in check_reservations.registered()
-        if entry.name != "declared-readout"
+        if entry.name != "graph-composition"
     )
     assert check_reservations.undeclared(
-        entries, [ROOT / "src" / "tiergraph" / "fold.py"]
+        entries, [ROOT / "examples" / "json_document.py"]
     ) == [
-        "src/tiergraph/fold.py:FoldDeclaration announces a reservation "
-        "('not currently') that the register does not carry"
+        "examples/json_document.py:<module> announces a reservation "
+        "('not yet') that the register does not carry"
     ]
+
+
+def test_the_readout_is_provided_and_no_longer_reserved() -> None:
+    """The fold declaration announces no readout reservation: one is declared."""
+    documented = dict(
+        check_reservations.docstrings(ROOT / "src" / "tiergraph" / "fold.py")
+    )
+    assert "PathMarginals.posteriors" in documented["FoldDeclaration"]
+    assert not any(
+        entry.name == "declared-readout" for entry in check_reservations.registered()
+    )
 
 
 def test_an_undeclared_announcement_is_refused(tmp_path: Path) -> None:

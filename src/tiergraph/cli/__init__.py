@@ -30,6 +30,7 @@ _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
     "counting": semiring.COUNTING,
     "decimal-arctic": semiring.DECIMAL_ARCTIC,
     "decimal-tropical": semiring.DECIMAL_TROPICAL,
+    "log-probability": semiring.LOG_PROBABILITY,
     "path": semiring.PATH,
     "tropical": semiring.TROPICAL,
 }

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 194 top-level `tiergraph` exports exactly once.
+It covers 198 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -983,6 +983,21 @@ Remove one relation instance by bipartite index or by durable id.
 
 ## Fold
 
+### `AlgebraOrder`
+
+```text
+AlgebraOrder(algebra: 'Semiring[Value]') -> None
+```
+
+Compare carrier values by the algebra's own selective addition.
+
+A fold accepts it as a ``witness_order``: the preferred operand is the one
+the algebra's addition returns, and equal values tie. ``PathPlan``
+recognizes it and fuses the selection into its schedule, so a best path
+under ``ARCTIC`` or ``TROPICAL`` is found in the same pass that values the
+graph, with no comparator calls. The algebra must declare
+``add_selective``: an aggregating addition names no winner to order by.
+
 ### `AttributeValuation`
 
 ```text
@@ -1128,10 +1143,11 @@ The dependency relation is finite and need not be acyclic. An acyclic one has a
 finite derivation set; a cyclic one is specified by the starred fixpoint the
 algebra's ``star`` solves, and ``exactness`` is where that difference is stated.
 
-A readout or final division above the algebra is not currently provided. If one
-is introduced, it must be declared as part of what the fold profile records. A
-construct whose soundness depends on a property it cannot verify must declare
-that property rather than assume it.
+A readout or final division above the algebra is taken only where it is
+declared: ``PathMarginals.posteriors`` reads marginals out through the
+algebra's own ``normalize`` and records the readout it applied. A construct
+whose soundness depends on a property it cannot verify must declare that
+property rather than assume it.
 
 ``witness_order`` and ``tie_policy`` are one mechanism and are declared together:
 the order names the winner and the policy says what happens where it reports a
@@ -1319,6 +1335,127 @@ FoldTransition(relation: 'QualifiedName', combination: 'ChildCombination') -> No
 ```
 
 Give one dependency relation its local AND/OR incidence meaning.
+
+### `PathMarginals`
+
+```text
+PathMarginals(plan: 'PathPlan[Value]', total: 'Value', inside: 'tuple[Value, ...]', outside: 'tuple[Value, ...]', marginals: 'tuple[Value, ...]', cost: 'FoldCost') -> None
+```
+
+The inside and outside passes of one evaluation, per item in plan order.
+
+``inside[i]`` is the fold value at item ``i``, the sum over the derivations
+rooted there. ``outside[i]`` is the sum over the prefixes that reach it
+from a root, with the multiplicative identity contributed at every root.
+``marginals[i]`` is their product: the sum over every complete derivation
+through ``i``, which is the zero at a dead end and at an unreachable item.
+``total`` is the fold value over the roots, and ``cost`` accounts for both
+passes.
+
+#### `PathMarginals.posteriors`
+
+Method.
+
+```text
+PathMarginals.posteriors(self) -> 'PathPosteriors'
+```
+
+Read every marginal as a probability of the total.
+
+This is a readout above the algebra, and it is taken only through the
+algebra's own ``normalize``, which the log-probability carrier
+publishes; an algebra without one is refused by name rather than
+divided by hand. A zero total reports ``zero_mass`` with no values.
+
+### `PathPlan`
+
+```text
+PathPlan(declaration: 'FoldDeclaration[Value]', items: 'tuple[ItemRef, ...]', labels: 'tuple[str, ...]', values: 'tuple[Value, ...]', children: 'tuple[tuple[int, ...], ...]', parents: 'tuple[tuple[int, ...], ...]', roots: 'tuple[int, ...]', order: 'tuple[int, ...]', _compiled: '_Compiled') -> None
+```
+
+A fold declaration compiled to its path topology, evaluable under new values.
+
+``items`` are the declaration's domain items in the graph's canonical
+order, and that order is the plan's value order: ``evaluate`` and
+``marginals`` take one carrier value per item in it, and ``values`` holds
+the values the declaration itself lifts, so a caller can start from those
+and replace what changed. ``labels`` are the items' durable identities or
+structural labels, the names a fold's provenance spells. A vector of
+another length is refused, because a vector from a different inventory has
+no position that means anything here.
+
+``children[i]`` are the indices of item ``i``'s alternatives in canonical
+order, ``parents[i]`` the items it is an alternative of, ``roots`` the
+declared or inferred roots, and ``order`` a children-first evaluation
+order. The plan is what the declaration is: a sink accepts with its own
+value, so a dead end is a sink the caller values at the zero, and an item
+no root reaches contributes nothing.
+
+``evaluate`` reproduces ``FoldDeclaration.run`` for the same values, with
+the same provenance under the same ``witness_order`` and ``tie_policy``,
+and the same cost account. Under the log-probability, arctic, and tropical
+carriers the plan runs the algebra's operations in a fused schedule that
+gathers each item's alternatives at once. The operation counts it reports
+are the general schedule's, which the fused schedule performs in gathered
+form, sharing one product across the children it reaches; a log-sum-exp
+over a gathered tuple sums in a different order than pairwise addition, so
+its values agree with the general schedule to rounding rather than bit for
+bit. A selective carrier with an ``AlgebraOrder`` and ``CHOOSE_FIRST``
+fuses its selection too. Every other declaration runs the general schedule
+through the algebra's own methods.
+
+#### `PathPlan.prepare`
+
+Class method.
+
+```text
+PathPlan.prepare(cls, declaration: 'FoldDeclaration[Value]') -> 'PathPlan[Value]'
+```
+
+Compile the declaration's topology, refusing what a path cannot carry.
+
+#### `PathPlan.index`
+
+Method.
+
+```text
+PathPlan.index(self, reference: 'ItemRef') -> 'int'
+```
+
+Return an item's position in the plan's value order.
+
+#### `PathPlan.evaluate`
+
+Method.
+
+```text
+PathPlan.evaluate(self, values: 'Sequence[Value] | None' = None) -> 'FoldResult[Value]'
+```
+
+Fold the compiled topology under these values, or the declaration's own.
+
+#### `PathPlan.marginals`
+
+Method.
+
+```text
+PathPlan.marginals(self, values: 'Sequence[Value] | None' = None) -> 'PathMarginals[Value]'
+```
+
+Run the inside and outside passes under these values.
+
+### `PathPosteriors`
+
+```text
+PathPosteriors(readout: 'str', zero_mass: 'bool', values: 'tuple[float, ...] | None') -> None
+```
+
+Probabilities read out of a plan's marginals, with the readout named.
+
+``readout`` records the algebra method that produced ``values``, so the
+result says which post-pass above the algebra it applied. ``zero_mass`` is
+true when the total was the algebra's zero; ``values`` is then ``None``,
+because there is no distribution to report and none is fabricated.
 
 ### `TiePolicy`
 
@@ -4771,6 +4908,30 @@ An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
 An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
+### `LOG_PROBABILITY`
+
+The inexact log-sum-exp semiring over finite IEEE-double log weights.
+
+Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
+the numerically stable log-sum-exp, multiplication is ordinary addition of
+logs, and ``0.0`` is the one. Positive values are admitted because a weight
+need not be a normalized probability. A path of ``-1000`` log weights folds
+without the underflow that raw exponentials suffer, which is the reason to
+fold in this carrier rather than in probabilities.
+
+Every required law is checked approximately except addition commutativity,
+which the symmetric log-sum-exp keeps exactly. That is the honest claim for
+floating-point accumulation, and an acyclic dependency graph does not
+change it: a finite derivation set makes the *search* exhaustive and says
+nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
+for the same reason, and that refusal stands. A result that leaves the
+finite carrier is refused rather than read as mass created or destroyed.
+The carrier declares no star.
+
+``normalize`` is the readout above the algebra: it reads log weights out
+as probabilities of a total, and a construct applying it says so where it
+reports the result.
+
 ### `PATH`
 
 The exact decimal tropical semiring enriched with tied best paths.
@@ -5243,6 +5404,90 @@ LexicographicSemiring.no_zero_divisors(self) -> 'bool'
 ```
 
 The restricted carrier makes componentwise zero operands whole zeros.
+
+### `LogProbabilitySemiring`
+
+```text
+LogProbabilitySemiring()
+```
+
+The inexact log-sum-exp semiring over finite IEEE-double log weights.
+
+Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
+the numerically stable log-sum-exp, multiplication is ordinary addition of
+logs, and ``0.0`` is the one. Positive values are admitted because a weight
+need not be a normalized probability. A path of ``-1000`` log weights folds
+without the underflow that raw exponentials suffer, which is the reason to
+fold in this carrier rather than in probabilities.
+
+Every required law is checked approximately except addition commutativity,
+which the symmetric log-sum-exp keeps exactly. That is the honest claim for
+floating-point accumulation, and an acyclic dependency graph does not
+change it: a finite derivation set makes the *search* exhaustive and says
+nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
+for the same reason, and that refusal stands. A result that leaves the
+finite carrier is refused rather than read as mass created or destroyed.
+The carrier declares no star.
+
+``normalize`` is the readout above the algebra: it reads log weights out
+as probabilities of a total, and a construct applying it says so where it
+reports the result.
+
+#### `LogProbabilitySemiring.add`
+
+Method.
+
+```text
+LogProbabilitySemiring.add(self, left: 'float', right: 'float', /) -> 'float'
+```
+
+Return the log of the summed weights, computed stably.
+
+#### `LogProbabilitySemiring.multiply`
+
+Method.
+
+```text
+LogProbabilitySemiring.multiply(self, left: 'float', right: 'float', /) -> 'float'
+```
+
+Add log weights, refusing overflow and preserving the annihilator.
+
+#### `LogProbabilitySemiring.normalize`
+
+Method.
+
+```text
+LogProbabilitySemiring.normalize(self, values: 'Iterable[float]', total: 'float', /) -> 'tuple[float, ...]'
+```
+
+Read log weights out as probabilities of a total, in one pass.
+
+Each result is ``exp(value - total)``. A total equal to the zero has no
+mass to normalize against and is refused rather than answered with
+fabricated probabilities. A value that exceeds the total by rounding
+reads as a probability slightly above one, and that is reported as
+read: the readout normalizes, it does not clip.
+
+#### `LogProbabilitySemiring.encode`
+
+Method.
+
+```text
+LogProbabilitySemiring.encode(self, value: 'float', /) -> 'object'
+```
+
+Encode a log weight losslessly without non-JSON numeric tokens.
+
+#### `LogProbabilitySemiring.decode`
+
+Method.
+
+```text
+LogProbabilitySemiring.decode(self, value: 'object', /) -> 'float'
+```
+
+Decode lossless hexadecimal log-weight text.
 
 ### `Path`
 

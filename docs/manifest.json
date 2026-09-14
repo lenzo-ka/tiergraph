@@ -38,6 +38,7 @@
       "GraphEditor"
     ],
     "fold": [
+      "AlgebraOrder",
       "AttributeValuation",
       "ChildCombination",
       "ExactnessRefusal",
@@ -48,6 +49,9 @@
       "FoldHomomorphism",
       "FoldResult",
       "FoldTransition",
+      "PathMarginals",
+      "PathPlan",
+      "PathPosteriors",
       "TiePolicy"
     ],
     "grammar": [
@@ -298,6 +302,12 @@
       "text",
       "python",
       "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
       "console"
     ],
     "docs/guide/profiles.md": [
@@ -379,6 +389,7 @@
       "COUNTING",
       "DECIMAL_ARCTIC",
       "DECIMAL_TROPICAL",
+      "LOG_PROBABILITY",
       "PATH",
       "PATH_WITNESSES",
       "TROPICAL",
@@ -390,6 +401,7 @@
       "ExpectationSemiring",
       "LawCheck",
       "LexicographicSemiring",
+      "LogProbabilitySemiring",
       "Path",
       "PathSemiring",
       "PathValue",
