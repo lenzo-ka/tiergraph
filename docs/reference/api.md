@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 198 top-level `tiergraph` exports exactly once.
+It covers 202 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -4231,6 +4231,10 @@ as well as there.
 
 ## Semirings
 
+### `ARCTIC`
+
+The inexact IEEE-double max-plus semiring.
+
 ### `BOOLEAN`
 
 The exact Boolean semiring, with disjunction and conjunction.
@@ -4239,13 +4243,46 @@ The exact Boolean semiring, with disjunction and conjunction.
 
 The exact natural-number semiring.
 
+### `DECIMAL_ARCTIC`
+
+An exact min-plus or max-plus semiring with XSD-decimal finite values.
+
 ### `DECIMAL_TROPICAL`
 
 An exact min-plus or max-plus semiring with XSD-decimal finite values.
 
+### `LOG_PROBABILITY`
+
+The inexact log-sum-exp semiring over finite IEEE-double log weights.
+
+Values are log weights: finite doubles, or ``-inf`` as the zero. Addition is
+the numerically stable log-sum-exp, multiplication is ordinary addition of
+logs, and ``0.0`` is the one. Positive values are admitted because a weight
+need not be a normalized probability. A path of ``-1000`` log weights folds
+without the underflow that raw exponentials suffer, which is the reason to
+fold in this carrier rather than in probabilities.
+
+Every required law is checked approximately except addition commutativity,
+which the symmetric log-sum-exp keeps exactly. That is the honest claim for
+floating-point accumulation, and an acyclic dependency graph does not
+change it: a finite derivation set makes the *search* exhaustive and says
+nothing about the arithmetic. ``ExpectationSemiring`` refuses this base
+for the same reason, and that refusal stands. A result that leaves the
+finite carrier is refused rather than read as mass created or destroyed.
+The carrier declares no star.
+
+``normalize`` is the readout above the algebra: it reads log weights out
+as probabilities of a total, and a construct applying it says so where it
+reports the result. ``readouts`` names it, so a caller can declare it and
+nothing else is mistaken for one.
+
 ### `PATH`
 
 The exact decimal tropical semiring enriched with tied best paths.
+
+### `TROPICAL`
+
+The inexact IEEE-double min-plus semiring.
 
 ### `StarRefusal`
 

@@ -200,10 +200,14 @@
       "selection_loads"
     ],
     "semirings": [
+      "ARCTIC",
       "BOOLEAN",
       "COUNTING",
+      "DECIMAL_ARCTIC",
       "DECIMAL_TROPICAL",
+      "LOG_PROBABILITY",
       "PATH",
+      "TROPICAL",
       "StarRefusal",
       "StarSelector",
       "ZeroClosedStar"

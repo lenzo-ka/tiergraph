@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The package root now exports every semiring constant the shell can name:
+  `ARCTIC`, `DECIMAL_ARCTIC`, `LOG_PROBABILITY` and `TROPICAL` join `BOOLEAN`,
+  `COUNTING`, `DECIMAL_TROPICAL` and `PATH` there. `PATH_WITNESSES`, which the
+  shell has no spelling for, stays on `tiergraph.semiring`, as every constant
+  still does.
 - `FoldDeclaration` now states where a readout above the algebra is declared,
   and the `declared-readout` reservation is discharged: the reservation
   register carries four entries, and `PathMarginals.posteriors` records the

@@ -177,10 +177,14 @@ from tiergraph.selection import (
     selection_loads,
 )
 from tiergraph.semiring import (
+    ARCTIC,
     BOOLEAN,
     COUNTING,
+    DECIMAL_ARCTIC,
     DECIMAL_TROPICAL,
+    LOG_PROBABILITY,
     PATH,
+    TROPICAL,
     StarRefusal,
     StarSelector,
     ZeroClosedStar,
@@ -219,13 +223,16 @@ from tiergraph.wire import (
 __version__ = "0.2.1"
 
 __all__ = [
+    "ARCTIC",
     "BOOLEAN",
     "CHART_NAMESPACE",
     "COMPLETE_BOUNDARY",
     "COUNTING",
+    "DECIMAL_ARCTIC",
     "DECIMAL_TROPICAL",
     "FORMAT_VERSION",
     "GRAMMAR_NAMESPACE",
+    "LOG_PROBABILITY",
     "MACHINE_VERSION",
     "MAX_DOCUMENT_BYTES",
     "MAX_JSON_DEPTH",
@@ -233,6 +240,7 @@ __all__ = [
     "MAX_TOTAL_OPCODES",
     "PATH",
     "PROFILES",
+    "TROPICAL",
     "ActionDeclaration",
     "AddItem",
     "AlgebraOrder",
