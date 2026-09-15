@@ -11,7 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `Emissions` and `OutputPlan` to pool complete path outputs over caller-supplied candidates. The derived plan reports each candidate and the residual in the base algebra, conditions structurally accepted candidates across value updates, pools conditioned item marginals back to the base plan, and preserves declared roots and relation-instance multiplicity. Duplicate candidates, invalid emissions, and noncommutative multiplication are refused. Decision and tie certificates are available only under `LOG_PROBABILITY` and `COUNTING`.
+- Added `Emissions` and `OutputPlan`, which pool the mass of complete paths by
+  the output string their items emit, over candidates the caller supplies, beside
+  `PathPlan` and without changing it. `OutputPlan.masses` returns `OutputMasses`:
+  each candidate's mass and the residual mass of every other output, computed in
+  the base algebra by one marginal pass rather than by subtraction, with the zero
+  mass reported rather than a distribution fabricated. Its `decided` and `tied`
+  certificates are available only under `LOG_PROBABILITY` and `COUNTING`; under
+  `LOG_PROBABILITY`, `tied` compares computed values, which an approximate
+  algebra can split for equal real masses. `conditioned` restricts the plan to
+  paths accepted as one candidate, refused only when no such path exists, and
+  `item_marginals` pools those conditioned marginals back to the base plan's
+  items as `OutputItemMarginals`. Declared roots and relation-instance
+  multiplicity carry into the derived plan. Duplicate or empty candidate sets,
+  invalid emissions, and noncommutative multiplication are refused. The pooled
+  best output over all strings is intractable in general, so the plan scores the
+  candidates it is given and reports the residual that bounds every other (#190).
+
+### Changed
+
+- `FORMAT_VERSION` stays `"0.2.0"`: nothing in this line touches the wire
+  format, and `make format-growth` reports no break.
+
+### Documentation
+
+- The lineage now credits Sue Hertz for the Delta representation, which the
+  README and the concepts guide had attributed to Paul Hertz, and spells out
+  Heterogeneous Relation Graphs (HRGs) (#189). The README no longer claims that no
+  view can disagree with the store.
 
 ## [0.2.2] - 2026-09-14
 
