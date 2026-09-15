@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-15
+
 ### Added
 
 - Added `Emissions` and `OutputPlan` to pool complete path outputs over caller-supplied candidates. The derived plan reports each candidate and the residual in the base algebra, conditions structurally accepted candidates across value updates, pools conditioned item marginals back to the base plan, and preserves declared roots and relation-instance multiplicity. Duplicate candidates, invalid emissions, and noncommutative multiplication are refused. Decision and tie certificates are available only under `LOG_PROBABILITY` and `COUNTING`.
@@ -966,7 +968,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.1.0...v0.2.0
