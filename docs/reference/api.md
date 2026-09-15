@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 202 top-level `tiergraph` exports exactly once.
+It covers 206 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1336,6 +1336,98 @@ FoldTransition(relation: 'QualifiedName', combination: 'ChildCombination') -> No
 ```
 
 Give one dependency relation its local AND/OR incidence meaning.
+
+### `Emissions`
+
+```text
+Emissions(plan: 'PathPlan[Value]', per_item: 'tuple[tuple[str, ...], ...]') -> None
+```
+
+Per-item token tuples bound to one path plan's label inventory.
+
+#### `Emissions.bind`
+
+Class method.
+
+```text
+Emissions.bind(cls, plan: 'PathPlan[Value]', by_label: 'Mapping[str, Sequence[str]]') -> 'Emissions[Value]'
+```
+
+Bind emissions by item label, leaving unlisted items non-emitting.
+
+### `OutputItemMarginals`
+
+```text
+OutputItemMarginals(total: 'Value', zero_mass: 'bool', values: 'tuple[Value, ...] | None', cost: 'FoldCost') -> None
+```
+
+Conditioned marginals pooled into the base plan's item order.
+
+### `OutputMasses`
+
+```text
+OutputMasses(total: 'Value', per_candidate: 'tuple[Value, ...]', residual: 'Value', zero_mass: 'bool', decided: 'bool', tied: 'tuple[int, ...]', cost: 'FoldCost') -> None
+```
+
+Candidate and residual masses from one product-plan marginal pass.
+
+### `OutputPlan`
+
+```text
+OutputPlan(base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'tuple[tuple[str, ...], ...]', plan: 'PathPlan[Value]', base_index: 'Mapping[ItemRef, ItemRef]', accepted: 'tuple[bool, ...]', _product_base: 'tuple[int | None, ...]', _accept_indices: 'tuple[int, ...]', _residual_index: 'int', _conditioned_cache: 'dict[int, tuple[PathPlan[Value], tuple[int, ...]]]' = <factory>) -> None
+```
+
+A cached product plan for complete output candidates and their residual.
+
+#### `OutputPlan.prepare`
+
+Class method.
+
+```text
+OutputPlan.prepare(cls, base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'Sequence[Sequence[str]]') -> 'OutputPlan[Value]'
+```
+
+Build the reachable product with the candidates' trie and a residual.
+
+#### `OutputPlan.values`
+
+Method.
+
+```text
+OutputPlan.values(self, base_values: 'Sequence[Value] | None' = None) -> 'tuple[Value, ...]'
+```
+
+Gather base values into the product plan's canonical item order.
+
+#### `OutputPlan.masses`
+
+Method.
+
+```text
+OutputPlan.masses(self, base_values: 'Sequence[Value] | None' = None) -> 'OutputMasses[Value]'
+```
+
+Evaluate candidate and residual masses in one marginal pass.
+
+#### `OutputPlan.conditioned`
+
+Method.
+
+```text
+OutputPlan.conditioned(self, candidate: 'int') -> 'PathPlan[Value]'
+```
+
+Return the product restricted to paths accepting one candidate.
+
+#### `OutputPlan.item_marginals`
+
+Method.
+
+```text
+OutputPlan.item_marginals(self, candidate: 'int', base_values: 'Sequence[Value] | None' = None) -> 'OutputItemMarginals[Value]'
+```
+
+Pool one candidate's conditioned product copies onto base items.
 
 ### `PathMarginals`
 
