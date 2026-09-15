@@ -266,8 +266,8 @@ declarations that interpretation needs and refuses a graph that cannot carry it.
 
 ## Lineage
 
-The model learned from Paul Hertz's Delta representation and the heterogeneous
-relation graphs of the Festival Speech Synthesis System. tiergraph keeps their
+The model is informed by Sue Hertz's Delta representation and the Heterogeneous
+Relation Graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps their
 emphasis on explicit tiered structure and defines its own typed, immutable
 model with a versioned interchange format. Phonetics is one application; the
 graph and format assign no phonetic meaning to any tier or attribute.
