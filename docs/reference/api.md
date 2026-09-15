@@ -2964,7 +2964,7 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 
 ### `__version__`
 
-Installed distribution version. Current value: `0.2.2`.
+Installed distribution version. Current value: `0.2.3`.
 
 ## Paths
 
@@ -4901,7 +4901,7 @@ Return strict-JSON traversal data in canonical node order.
 
 ### `tiergraph.build`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.2.
+This module is importable and usable, but carries no API-stability promise at version 0.2.3.
 
 Builder notation errors raise the directly importable `tiergraph.build.BuilderError`, a `ValueError` subclass. It is not part of the module's star-exported surface.
 
@@ -6393,7 +6393,7 @@ that they hold, which is why a caller that needs the stronger fact has to
 check the laws at values rather than read this tuple.
 ### `tiergraph.schema`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.2.
+This module is importable and usable, but carries no API-stability promise at version 0.2.3.
 
 ### `Refusal`
 
@@ -6508,7 +6508,7 @@ shape_hash() -> 'str'
 Hash the declaration independently of JSON Schema presentation.
 ### `tiergraph.cli`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.2.
+This module is importable and usable, but carries no API-stability promise at version 0.2.3.
 
 ### `build_parser`
 
@@ -6527,7 +6527,7 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 Run the command line. Returns the process exit status.
 ### `tiergraph.spanview`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.2.
+This module is importable and usable, but carries no API-stability promise at version 0.2.3.
 
 ### `SPANVIEW_FORMAT_VERSION`
 
@@ -6645,7 +6645,7 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 Return a deterministic ruler and aligned plain-text span table.
 ### `tiergraph.textgrid`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.2.
+This module is importable and usable, but carries no API-stability promise at version 0.2.3.
 
 ### `TextGridReadResult`
 
