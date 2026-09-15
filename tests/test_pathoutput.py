@@ -134,35 +134,30 @@ def plan(
     return PathPlan.prepare(declaration)
 
 
-def logsum(values: Sequence[float]) -> float:
-    """Add log weights with the shipped carrier."""
-    total = -math.inf
-    for value in values:
-        total = LOG_PROBABILITY.add(total, value)
-    return total
-
-
 @dataclass(frozen=True)
 class Enumerated:
     """One complete base path and its emitted output."""
 
     items: tuple[int, ...]
     output: tuple[str, ...]
-    value: float
+    value: float | int
 
 
 def enumerate_paths(
-    base: PathPlan[object], emissions: Emissions[object], values: Sequence[float]
+    base: PathPlan[object], emissions: Emissions[object], values: Sequence[object]
 ) -> tuple[Enumerated, ...]:
     """Enumerate the small fixture's root-to-sink paths."""
     paths: list[Enumerated] = []
+    algebra = base.declaration.semiring
 
     def visit(index: int, seen: tuple[int, ...], output: tuple[str, ...]) -> None:
         following = seen + (index,)
         emitted = output + emissions.per_item[index]
         if not base.children[index]:
-            value = sum(values[item] for item in following)
-            paths.append(Enumerated(following, emitted, value))
+            value = algebra.one
+            for item in following:
+                value = algebra.multiply(value, values[item])
+            paths.append(Enumerated(following, emitted, cast(float | int, value)))
             return
         for child in base.children[index]:
             visit(child, following, emitted)
@@ -177,6 +172,25 @@ def assert_log_close(actual: float, expected: float) -> None:
     assert actual == expected or math.isclose(actual, expected, abs_tol=1e-12)
 
 
+def path_mass(base: PathPlan[object], paths: Sequence[Enumerated]) -> object:
+    """Add enumerated path values with the fixture's carrier."""
+    algebra = base.declaration.semiring
+    total = algebra.zero
+    for path in paths:
+        total = algebra.add(total, path.value)
+    return total
+
+
+def assert_carrier_equal(
+    base: PathPlan[object], actual: object, expected: object
+) -> None:
+    """Compare oracle values with the certified carrier's own semantics."""
+    if cast(object, base.declaration.semiring) is LOG_PROBABILITY:
+        assert_log_close(cast(float, actual), cast(float, expected))
+    else:
+        assert actual == expected
+
+
 def assert_matches_brute_force(
     base: PathPlan[object],
     emissions: Emissions[object],
@@ -184,15 +198,17 @@ def assert_matches_brute_force(
     exercised: dict[str, int],
 ) -> None:
     """Compare one output product with enumeration and record oracle branches."""
-    all_paths = enumerate_paths(base, emissions, cast(tuple[float, ...], base.values))
+    all_paths = enumerate_paths(base, emissions, base.values)
     output = OutputPlan.prepare(base, emissions, candidates)
     masses = output.masses()
-    expected_total = logsum(tuple(path.value for path in all_paths))
-    assert_log_close(cast(float, masses.total), expected_total)
+    expected_total = path_mass(base, all_paths)
+    assert_carrier_equal(base, masses.total, expected_total)
+    expected_candidates = []
     for index, candidate in enumerate(candidates):
         matching = tuple(path for path in all_paths if path.output == candidate)
-        expected = logsum(tuple(path.value for path in matching))
-        assert_log_close(cast(float, masses.per_candidate[index]), expected)
+        expected = path_mass(base, matching)
+        expected_candidates.append(expected)
+        assert_carrier_equal(base, masses.per_candidate[index], expected)
         assert output.accepted[index] is bool(matching)
         if not matching:
             exercised["not accepted"] += 1
@@ -201,7 +217,7 @@ def assert_matches_brute_force(
             continue
         exercised["accepted"] += 1
         item_marginals = output.item_marginals(index)
-        if expected == -math.inf:
+        if expected == base.declaration.semiring.zero:
             exercised["zero mass"] += 1
             assert item_marginals.zero_mass
             assert item_marginals.values is None
@@ -210,15 +226,38 @@ def assert_matches_brute_force(
         assert not item_marginals.zero_mass
         assert item_marginals.values is not None
         for item in range(len(base.items)):
-            through = logsum(
-                tuple(path.value for path in matching if item in path.items)
+            through = path_mass(
+                base, tuple(path for path in matching if item in path.items)
             )
-            assert_log_close(cast(float, item_marginals.values[item]), through)
-    residual = logsum(
-        tuple(path.value for path in all_paths if path.output not in candidates)
+            assert_carrier_equal(base, item_marginals.values[item], through)
+    residual = path_mass(
+        base, tuple(path for path in all_paths if path.output not in candidates)
     )
-    exercised["residual zero" if residual == -math.inf else "residual positive"] += 1
-    assert_log_close(cast(float, masses.residual), residual)
+    algebra = base.declaration.semiring
+    zero_mass = expected_total == algebra.zero
+    exercised["residual zero" if residual == algebra.zero else "residual positive"] += 1
+    assert_carrier_equal(base, masses.residual, residual)
+    assert masses.zero_mass is zero_mass
+    algebra_object = cast(object, algebra)
+    if algebra_object is LOG_PROBABILITY or algebra_object is COUNTING:
+        if zero_mass:
+            expected_decided = False
+            expected_tied: tuple[int, ...] = ()
+        else:
+            comparable = cast(list[float | int], expected_candidates)
+            best = max(comparable)
+            expected_decided = best >= cast(float | int, residual)
+            expected_tied = tuple(
+                index for index, value in enumerate(comparable) if value == best
+            )
+        assert masses.decided is expected_decided
+        assert masses.tied == expected_tied
+        exercised[f"decided {expected_decided}"] += 1
+        if algebra_object is COUNTING and len(expected_tied) > 1:
+            exercised["counting multi-candidate tie"] += 1
+    else:
+        assert masses.decided is None
+        assert masses.tied is None
     assert masses.cost == output.plan.marginals(output.values()).cost
 
 
@@ -231,7 +270,92 @@ def test_random_dag_matches_brute_force_oracle() -> None:
         "positive mass": 0,
         "residual zero": 0,
         "residual positive": 0,
+        "decided True": 0,
+        "decided False": 0,
+        "counting multi-candidate tie": 0,
     }
+
+    # Fixed certificate cases cover strict residual wins, equality at the
+    # decision boundary, a counting tie, zero mass, and an unsupported carrier.
+    log_base = plan(
+        {"root": 0.0, "candidate": math.log(0.25), "residual": math.log(0.75)},
+        (("root", "candidate"), ("root", "residual")),
+        roots=("root",),
+    )
+    log_emissions = Emissions.bind(
+        log_base, {"candidate": ("candidate",), "residual": ("residual",)}
+    )
+    assert_matches_brute_force(log_base, log_emissions, (("candidate",),), exercised)
+    assert (
+        OutputPlan.prepare(log_base, log_emissions, (("candidate",),)).masses().decided
+        is False
+    )
+
+    counting_base = plan(
+        {"root": 0.0, "a": 0.0, "b": 0.0, "residual": 0.0},
+        (
+            ("root", "a"),
+            ("root", "b"),
+            ("root", "residual"),
+            ("root", "residual"),
+        ),
+        roots=("root",),
+        counting=True,
+    )
+    counting_emissions = Emissions.bind(
+        counting_base, {"a": ("a",), "b": ("b",), "residual": ("residual",)}
+    )
+    assert_matches_brute_force(
+        counting_base, counting_emissions, (("a",), ("b",)), exercised
+    )
+    assert (
+        OutputPlan.prepare(counting_base, counting_emissions, (("a",), ("b",)))
+        .masses()
+        .decided
+        is False
+    )
+
+    equality_base = plan(
+        {"root": 0.0, "a": 0.0, "b": 0.0, "residual": 0.0},
+        (("root", "a"), ("root", "b"), ("root", "residual")),
+        roots=("root",),
+        counting=True,
+    )
+    equality_emissions = Emissions.bind(
+        equality_base, {"a": ("a",), "b": ("b",), "residual": ("residual",)}
+    )
+    assert_matches_brute_force(
+        equality_base,
+        equality_emissions,
+        (("a",), ("b",)),
+        exercised,
+    )
+
+    zero_base = replace(counting_base, values=tuple(0 for _item in counting_base.items))
+    assert_matches_brute_force(
+        zero_base,
+        Emissions.bind(
+            zero_base, {"a": ("a",), "b": ("b",), "residual": ("residual",)}
+        ),
+        (("missing",),),
+        exercised,
+    )
+
+    tropical_base = plan(
+        {"root": 0.0, "candidate": 1.0, "residual": 2.0},
+        (("root", "candidate"), ("root", "residual")),
+        roots=("root",),
+        semiring=cast(Semiring[object], TROPICAL),
+    )
+    assert_matches_brute_force(
+        tropical_base,
+        Emissions.bind(
+            tropical_base,
+            {"candidate": ("candidate",), "residual": ("residual",)},
+        ),
+        (("candidate",),),
+        exercised,
+    )
 
     # Retain the structures that target joins, duplicate edges, explicit roots,
     # internal candidate prefixes, and multiple product copies of one base item.
