@@ -177,8 +177,64 @@ def assert_log_close(actual: float, expected: float) -> None:
     assert actual == expected or math.isclose(actual, expected, abs_tol=1e-12)
 
 
+def assert_matches_brute_force(
+    base: PathPlan[object],
+    emissions: Emissions[object],
+    candidates: tuple[tuple[str, ...], ...],
+    exercised: dict[str, int],
+) -> None:
+    """Compare one output product with enumeration and record oracle branches."""
+    all_paths = enumerate_paths(base, emissions, cast(tuple[float, ...], base.values))
+    output = OutputPlan.prepare(base, emissions, candidates)
+    masses = output.masses()
+    expected_total = logsum(tuple(path.value for path in all_paths))
+    assert_log_close(cast(float, masses.total), expected_total)
+    for index, candidate in enumerate(candidates):
+        matching = tuple(path for path in all_paths if path.output == candidate)
+        expected = logsum(tuple(path.value for path in matching))
+        assert_log_close(cast(float, masses.per_candidate[index]), expected)
+        assert output.accepted[index] is bool(matching)
+        if not matching:
+            exercised["not accepted"] += 1
+            with pytest.raises(ValueError, match="structurally accepted"):
+                output.conditioned(index)
+            continue
+        exercised["accepted"] += 1
+        item_marginals = output.item_marginals(index)
+        if expected == -math.inf:
+            exercised["zero mass"] += 1
+            assert item_marginals.zero_mass
+            assert item_marginals.values is None
+            continue
+        exercised["positive mass"] += 1
+        assert not item_marginals.zero_mass
+        assert item_marginals.values is not None
+        for item in range(len(base.items)):
+            through = logsum(
+                tuple(path.value for path in matching if item in path.items)
+            )
+            assert_log_close(cast(float, item_marginals.values[item]), through)
+    residual = logsum(
+        tuple(path.value for path in all_paths if path.output not in candidates)
+    )
+    exercised["residual zero" if residual == -math.inf else "residual positive"] += 1
+    assert_log_close(cast(float, masses.residual), residual)
+    assert masses.cost == output.plan.marginals(output.values()).cost
+
+
 def test_random_dag_matches_brute_force_oracle() -> None:
-    """Kill prefix-terminal, edge-dedup, pooling, and root-inference mutations."""
+    """Exercise the complete oracle over fixed structures and random DAGs."""
+    exercised = {
+        "accepted": 0,
+        "not accepted": 0,
+        "zero mass": 0,
+        "positive mass": 0,
+        "residual zero": 0,
+        "residual positive": 0,
+    }
+
+    # Retain the structures that target joins, duplicate edges, explicit roots,
+    # internal candidate prefixes, and multiple product copies of one base item.
     generator = random.Random(1949)
     for _case in range(24):
         labels = tuple(f"n{index}" for index in range(11))
@@ -224,36 +280,93 @@ def test_random_dag_matches_brute_force_oracle() -> None:
         )
         candidates = (("a", "x"),)
         assert any(path.output == ("a",) for path in all_paths)
-        output = OutputPlan.prepare(base, emissions, candidates)
-        masses = output.masses()
-        expected_total = logsum(tuple(path.value for path in all_paths))
-        assert_log_close(cast(float, masses.total), expected_total)
-        for index, candidate in enumerate(candidates):
-            matching = tuple(path for path in all_paths if path.output == candidate)
-            expected = logsum(tuple(path.value for path in matching))
-            assert_log_close(cast(float, masses.per_candidate[index]), expected)
-            assert output.accepted[index] is bool(matching)
-            if not matching:
-                with pytest.raises(ValueError, match="structurally accepted"):
-                    output.conditioned(index)
-                continue
-            item_marginals = output.item_marginals(index)
-            if expected == -math.inf:
-                assert item_marginals.zero_mass
-                assert item_marginals.values is None
-                continue
-            assert not item_marginals.zero_mass
-            assert item_marginals.values is not None
-            for item in range(len(base.items)):
-                through = logsum(
-                    tuple(path.value for path in matching if item in path.items)
-                )
-                assert_log_close(cast(float, item_marginals.values[item]), through)
-        residual = logsum(
-            tuple(path.value for path in all_paths if path.output not in candidates)
+        assert_matches_brute_force(base, emissions, candidates, exercised)
+
+    emission_choices = ((), ("a",), ("b",), ("c",), ("a", "b"), ("b", "c"))
+    for seed in range(32):
+        generator = random.Random(seed)
+        labels = tuple(f"r{seed}n{index}" for index in range(generator.randint(6, 9)))
+        zero_items = set(generator.sample(labels, generator.randint(1, 2)))
+        weights = {
+            label: (
+                -math.inf
+                if label in zero_items
+                else generator.uniform(-50.0, -38.0)
+                if generator.random() < 0.18
+                else math.log(generator.uniform(0.1, 1.0))
+            )
+            for label in labels
+        }
+        random_edges = [
+            (labels[left], labels[right])
+            for left in range(len(labels))
+            for right in range(left + 1, len(labels))
+            if generator.random() < generator.uniform(0.16, 0.38)
+        ]
+        if random_edges and generator.random() < 0.6:
+            random_edges.insert(
+                generator.randrange(len(random_edges) + 1),
+                generator.choice(random_edges),
+            )
+        roots = tuple(
+            labels[index]
+            for index in sorted(
+                generator.sample(range(len(labels) - 1), generator.randint(1, 3))
+            )
         )
-        assert_log_close(cast(float, masses.residual), residual)
-        assert masses.cost == output.plan.marginals(output.values()).cost
+        base = plan(weights, tuple(random_edges), roots=roots)
+        emission_map = {
+            label: generator.choice(emission_choices)
+            for label in labels
+            if generator.random() < 0.85
+        }
+        emissions = Emissions.bind(base, emission_map)
+        all_paths = enumerate_paths(
+            base, emissions, cast(tuple[float, ...], base.values)
+        )
+        outputs = sorted({path.output for path in all_paths})
+        emitted = generator.sample(outputs, generator.randint(1, min(3, len(outputs))))
+        prefixes = sorted(
+            {
+                output[:stop]
+                for output in outputs
+                for stop in range(len(output))
+                if output[:stop] not in outputs
+            }
+        )
+        internal_prefixes = sorted(
+            {
+                tuple(
+                    token
+                    for item in path.items[:stop]
+                    for token in emissions.per_item[item]
+                )
+                for path in all_paths
+                for stop in range(1, len(path.items))
+            }
+            - set(outputs)
+        )
+        random_candidates = list(emitted)
+        if prefixes:
+            random_candidates.append(generator.choice(prefixes))
+        if internal_prefixes:
+            random_candidates.append(generator.choice(internal_prefixes))
+        random_candidates.append((f"never-{seed}",))
+
+        zero_outputs = sorted(
+            output
+            for output in outputs
+            if all(
+                path.value == -math.inf for path in all_paths if path.output == output
+            )
+        )
+        if zero_outputs:
+            random_candidates.append(generator.choice(zero_outputs))
+        random_candidates = list(dict.fromkeys(random_candidates))
+        generator.shuffle(random_candidates)
+        assert_matches_brute_force(base, emissions, tuple(random_candidates), exercised)
+
+    assert all(exercised.values()), exercised
 
 
 def test_pooled_mass_beats_best_path() -> None:
