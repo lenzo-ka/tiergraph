@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `Emissions` and `OutputPlan` to pool complete path outputs over caller-supplied candidates. The derived plan reports each candidate and the residual in the base algebra, conditions structurally accepted candidates across value updates, pools conditioned item marginals back to the base plan, and preserves declared roots and relation-instance multiplicity. Duplicate candidates, invalid emissions, and noncommutative multiplication are refused. Decision and tie certificates are available only under `LOG_PROBABILITY` and `COUNTING`.
+
 ## [0.2.2] - 2026-09-14
 
 ### Added

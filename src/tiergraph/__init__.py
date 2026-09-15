@@ -1,5 +1,8 @@
 """tiergraph: ordered tiers, declared relations, and typed values."""
 
+import importlib
+from typing import TYPE_CHECKING, cast
+
 from tiergraph.action import (
     ActionDeclaration,
     DistributionWitness,
@@ -138,6 +141,14 @@ from tiergraph.path import (
     resolve_path,
 )
 from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPosteriors
+
+if TYPE_CHECKING:
+    from tiergraph.pathoutput import (
+        Emissions,
+        OutputItemMarginals,
+        OutputMasses,
+        OutputPlan,
+    )
 from tiergraph.profile import (
     PROFILES,
     GraphProfile,
@@ -222,6 +233,19 @@ from tiergraph.wire import (
 
 __version__ = "0.2.2"
 
+_PATHOUTPUT_EXPORTS = frozenset(
+    {"Emissions", "OutputItemMarginals", "OutputMasses", "OutputPlan"}
+)
+
+
+def __getattr__(name: str) -> object:
+    """Load path-output composition only when its public names are requested."""
+    if name in _PATHOUTPUT_EXPORTS:
+        pathoutput = importlib.import_module("tiergraph.pathoutput")
+        return cast(object, getattr(pathoutput, name))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ARCTIC",
     "BOOLEAN",
@@ -280,6 +304,7 @@ __all__ = [
     "DurablePolyadicRef",
     "DurableRelationRef",
     "EffectRefusal",
+    "Emissions",
     "ExactnessRefusal",
     "ExecutionError",
     "FoldCertificate",
@@ -323,6 +348,9 @@ __all__ = [
     "OrderedPolyadicTraversal",
     "OrderedRootsProfile",
     "OrphanedSubject",
+    "OutputItemMarginals",
+    "OutputMasses",
+    "OutputPlan",
     "ParseForest",
     "PathBinding",
     "PathKind",
