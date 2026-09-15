@@ -40,6 +40,7 @@ from tiergraph import (
 )
 from tiergraph.pathplan import PathPlan
 from tiergraph.semiring import (
+    ARCTIC,
     COUNTING,
     LOG_PROBABILITY,
     TROPICAL,
@@ -177,33 +178,52 @@ def assert_log_close(actual: float, expected: float) -> None:
 
 
 def test_random_dag_matches_brute_force_oracle() -> None:
-    """Kill prefix, epsilon-closure, offset, root, sink, and pooling mutations."""
+    """Kill prefix-terminal, edge-dedup, pooling, and root-inference mutations."""
     generator = random.Random(1949)
     for _case in range(24):
-        labels = tuple(f"n{index}" for index in range(8))
+        labels = tuple(f"n{index}" for index in range(11))
         weights = {
-            label: (-math.inf if index == 6 else math.log(generator.uniform(0.1, 1.0)))
+            label: (-math.inf if index == 9 else math.log(generator.uniform(0.1, 1.0)))
             for index, label in enumerate(labels)
         }
-        edges = tuple(
-            (labels[left], labels[right])
-            for left in range(len(labels))
-            for right in range(left + 1, len(labels))
-            if generator.random() < 0.22
+        edges = (
+            (labels[0], labels[1]),
+            (labels[0], labels[1]),
+            (labels[0], labels[2]),
+            (labels[1], labels[3]),
+            (labels[2], labels[3]),
+            (labels[3], labels[4]),
+            (labels[3], labels[5]),
+            (labels[0], labels[6]),
+            (labels[0], labels[7]),
+            *(
+                (labels[left], labels[right])
+                for left in range(7, 10)
+                for right in range(left + 1, 10)
+                if generator.random() < 0.35
+            ),
         )
-        base = plan(weights, edges, roots=(labels[0], labels[2]))
+        base = plan(weights, tuple(edges), roots=(labels[0], labels[1]))
         choices = ((), ("a",), ("a", "b"), ("z",))
         emission_map = {
             label: generator.choice(choices)
-            for label in labels
+            for label in labels[7:]
             if generator.random() < 0.8
         }
+        emission_map.update(
+            {
+                labels[1]: ("a",),
+                labels[4]: ("x",),
+                labels[5]: ("a", "x"),
+                labels[6]: ("a",),
+            }
+        )
         emissions = Emissions.bind(base, emission_map)
         all_paths = enumerate_paths(
             base, emissions, cast(tuple[float, ...], base.values)
         )
-        outputs = sorted({path.output for path in all_paths})
-        candidates = tuple(outputs[:2] or [()])
+        candidates = (("a", "x"),)
+        assert any(path.output == ("a",) for path in all_paths)
         output = OutputPlan.prepare(base, emissions, candidates)
         masses = output.masses()
         expected_total = logsum(tuple(path.value for path in all_paths))
@@ -253,6 +273,24 @@ def test_pooled_mass_beats_best_path() -> None:
     )
     base = plan(weights, tuple(edges), roots=("root",))
     emissions = Emissions.bind(base, {"a1": ("A",), "a2": ("A",), "b": ("B",)})
+    paths = enumerate_paths(base, emissions, cast(tuple[float, ...], base.values))
+    arctic_best = ARCTIC.zero
+    for path in paths:
+        arctic_best = ARCTIC.add(arctic_best, path.value)
+    assert tuple(path.output for path in paths if path.value == arctic_best) == (
+        ("B",),
+    )
+    costs = enumerate_paths(
+        base,
+        emissions,
+        tuple(-value for value in cast(tuple[float, ...], base.values)),
+    )
+    tropical_best = TROPICAL.zero
+    for path in costs:
+        tropical_best = TROPICAL.add(tropical_best, path.value)
+    assert tuple(path.output for path in costs if path.value == tropical_best) == (
+        ("B",),
+    )
     masses = OutputPlan.prepare(base, emissions, (("A",), ("B",))).masses()
     assert math.exp(cast(float, masses.per_candidate[0])) == pytest.approx(0.6)
     assert math.exp(cast(float, masses.per_candidate[1])) == pytest.approx(0.4)
@@ -290,6 +328,19 @@ def test_prefix_empty_and_multi_token_emissions() -> None:
         math.exp(cast(float, value)) for value in masses.per_candidate
     ) == pytest.approx((0.2, 0.8))
     assert masses.residual == -math.inf
+
+
+def test_emitted_proper_prefix_of_sole_candidate_is_residual() -> None:
+    """Kill marking every candidate-prefix trie state as terminal."""
+    base = plan(
+        {"root": 0.0, "short": math.log(0.25), "long": math.log(0.75)},
+        (("root", "short"), ("root", "long")),
+        roots=("root",),
+    )
+    emissions = Emissions.bind(base, {"short": ("a",), "long": ("a", "b")})
+    masses = OutputPlan.prepare(base, emissions, (("a", "b"),)).masses()
+    assert math.exp(cast(float, masses.per_candidate[0])) == pytest.approx(0.75)
+    assert math.exp(cast(float, masses.residual)) == pytest.approx(0.25)
 
 
 def test_conditioning_pools_base_item_copies_only_for_candidate() -> None:
@@ -341,7 +392,7 @@ def test_duplicate_relation_instances_preserve_mass() -> None:
 
 
 def test_product_uses_declared_roots() -> None:
-    """Kill falling back to parentless-root inference in the product."""
+    """Kill falling back to parentless-root inference in either derived plan."""
     base = plan(
         {"first": 0.0, "second": 0.0, "sink": 0.0},
         (("first", "second"), ("second", "sink")),
@@ -351,6 +402,7 @@ def test_product_uses_declared_roots() -> None:
     output = OutputPlan.prepare(base, emissions, (("right",),))
     assert output.plan.roots
     assert cast(float, output.masses().per_candidate[0]) == pytest.approx(math.log(2))
+    assert cast(float, output.item_marginals(0).total) == pytest.approx(math.log(2))
 
 
 def test_conditioning_survives_zero_positive_zero_revaluation() -> None:
