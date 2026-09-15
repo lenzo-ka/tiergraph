@@ -1363,13 +1363,40 @@ OutputItemMarginals(total: 'Value', zero_mass: 'bool', values: 'tuple[Value, ...
 
 Conditioned marginals pooled into the base plan's item order.
 
+#### `OutputItemMarginals.to_data`
+
+Method.
+
+```text
+OutputItemMarginals.to_data(self, semiring: 'Semiring[Value]') -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data using the carrier encoding.
+
 ### `OutputMasses`
 
 ```text
-OutputMasses(total: 'Value', per_candidate: 'tuple[Value, ...]', residual: 'Value', zero_mass: 'bool', decided: 'bool', tied: 'tuple[int, ...]', cost: 'FoldCost') -> None
+OutputMasses(total: 'Value', per_candidate: 'tuple[Value, ...]', residual: 'Value', zero_mass: 'bool', decided: 'bool | None', tied: 'tuple[int, ...] | None', cost: 'FoldCost') -> None
 ```
 
 Candidate and residual masses from one product-plan marginal pass.
+
+``decided`` and ``tied`` are available only for ``LOG_PROBABILITY`` and
+``COUNTING`` because their numeric order gives the certificate its meaning;
+both are ``None`` under other algebras. Counting ties use exact integer
+equality. Log-probability ties use equality of the computed doubles, so an
+approximate addition can split equal real masses and ``tied`` is not a tie
+certificate for the underlying real values.
+
+#### `OutputMasses.to_data`
+
+Method.
+
+```text
+OutputMasses.to_data(self, semiring: 'Semiring[Value]') -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data using the carrier encoding.
 
 ### `OutputPlan`
 
@@ -1407,7 +1434,7 @@ Method.
 OutputPlan.masses(self, base_values: 'Sequence[Value] | None' = None) -> 'OutputMasses[Value]'
 ```
 
-Evaluate candidate and residual masses in one marginal pass.
+Evaluate masses, with certificates only for log probability or counting.
 
 #### `OutputPlan.conditioned`
 
