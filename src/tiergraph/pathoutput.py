@@ -65,6 +65,28 @@ class Emissions[Value]:
     plan: PathPlan[Value]
     per_item: tuple[tuple[str, ...], ...]
 
+    def __post_init__(self) -> None:
+        """Validate the positional emission inventory at construction."""
+        if len(self.per_item) != len(self.plan.items):
+            raise ValueError(
+                f"emissions for path plan {self.plan.declaration.name!r} require "
+                f"{len(self.plan.items)} item entries and were given "
+                f"{len(self.per_item)}"
+            )
+        for index, tokens in enumerate(self.per_item):
+            label = self.plan.labels[index]
+            if type(tokens) is not tuple:
+                raise TypeError(
+                    f"emission for item {index} label {label!r} must be a tuple "
+                    "of strings"
+                )
+            for token in tokens:
+                if type(token) is not str:
+                    raise TypeError(
+                        f"emission for item {index} label {label!r} contains symbol "
+                        f"{token!r}; every symbol must be a string"
+                    )
+
     @classmethod
     def bind(
         cls, plan: PathPlan[Value], by_label: Mapping[str, Sequence[str]]
@@ -102,15 +124,35 @@ class Emissions[Value]:
 
 @dataclass(frozen=True, slots=True)
 class OutputMasses[Value]:
-    """Candidate and residual masses from one product-plan marginal pass."""
+    """Candidate and residual masses from one product-plan marginal pass.
+
+    ``decided`` and ``tied`` are available only for ``LOG_PROBABILITY`` and
+    ``COUNTING`` because their numeric order gives the certificate its meaning;
+    both are ``None`` under other algebras. Counting ties use exact integer
+    equality. Log-probability ties use equality of the computed doubles, so an
+    approximate addition can split equal real masses and ``tied`` is not a tie
+    certificate for the underlying real values.
+    """
 
     total: Value
     per_candidate: tuple[Value, ...]
     residual: Value
     zero_mass: bool
-    decided: bool
-    tied: tuple[int, ...]
+    decided: bool | None
+    tied: tuple[int, ...] | None
     cost: FoldCost
+
+    def to_data(self, semiring: Semiring[Value]) -> dict[str, object]:
+        """Return deterministic strict-JSON data using the carrier encoding."""
+        return {
+            "total": semiring.encode(self.total),
+            "per_candidate": [semiring.encode(value) for value in self.per_candidate],
+            "residual": semiring.encode(self.residual),
+            "zero_mass": self.zero_mass,
+            "decided": self.decided,
+            "tied": None if self.tied is None else list(self.tied),
+            "cost": self.cost.to_data(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +163,19 @@ class OutputItemMarginals[Value]:
     zero_mass: bool
     values: tuple[Value, ...] | None
     cost: FoldCost
+
+    def to_data(self, semiring: Semiring[Value]) -> dict[str, object]:
+        """Return deterministic strict-JSON data using the carrier encoding."""
+        return {
+            "total": semiring.encode(self.total),
+            "zero_mass": self.zero_mass,
+            "values": (
+                None
+                if self.values is None
+                else [semiring.encode(value) for value in self.values]
+            ),
+            "cost": self.cost.to_data(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +285,6 @@ class OutputPlan[Value]:
                     residual_local if target == len(parsed) else accept_local[target]
                 )
                 edges.append((product_sink, child))
-
         product_base = tuple(base_item for base_item, _state in pairs) + (None,) * (
             len(parsed) + 1
         )
@@ -280,21 +334,20 @@ class OutputPlan[Value]:
         )
 
     def masses(self, base_values: Sequence[Value] | None = None) -> OutputMasses[Value]:
-        """Evaluate candidate and residual masses in one marginal pass."""
+        """Evaluate masses, with certificates only for log probability or counting."""
         algebra = self.base.declaration.semiring
-        algebra_object = cast(object, algebra)
-        if algebra_object is not LOG_PROBABILITY and algebra_object is not COUNTING:
-            raise ValueError(
-                f"algebra {type(algebra).__name__!r} has no output argmax "
-                "certificate; only LOG_PROBABILITY and COUNTING are supported"
-            )
         result = self.plan.marginals(self.values(base_values))
         per_candidate = tuple(result.marginals[index] for index in self._accept_indices)
         residual = result.marginals[self._residual_index]
         zero_mass = result.total == algebra.zero
-        if zero_mass:
+        algebra_object = cast(object, algebra)
+        tied: tuple[int, ...] | None
+        if algebra_object is not LOG_PROBABILITY and algebra_object is not COUNTING:
+            decided = None
+            tied = None
+        elif zero_mass:
             decided = False
-            tied: tuple[int, ...] = ()
+            tied = ()
         else:
             comparable = cast(tuple[float | int, ...], per_candidate)
             best = max(comparable)

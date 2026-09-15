@@ -396,6 +396,14 @@ def test_refusals_name_the_offender() -> None:
         Emissions.bind(base, {"root": cast(Sequence[str], "a")})
     with pytest.raises(TypeError, match="symbol 1"):
         Emissions.bind(base, {"root": cast(Sequence[str], (1,))})
+    with pytest.raises(ValueError, match="require 1 item entries.*given 0"):
+        Emissions(base, ())
+    with pytest.raises(ValueError, match="require 1 item entries.*given 2"):
+        Emissions(base, ((), ()))
+    with pytest.raises(TypeError, match="item 0 label 'root'.*tuple of strings"):
+        Emissions(base, cast(tuple[tuple[str, ...], ...], ([],)))
+    with pytest.raises(TypeError, match="item 0 label 'root'.*symbol 1"):
+        Emissions(base, cast(tuple[tuple[str, ...], ...], ((1,),)))
 
     other = plan({"root": 0.0}, (), roots=("root",))
     with pytest.raises(ValueError, match="different path plan"):
@@ -411,12 +419,6 @@ def test_refusals_name_the_offender() -> None:
     with pytest.raises(ValueError, match="outside"):
         output.conditioned(cast(int, True))
 
-    tropical = plan(
-        {"root": 0.0}, (), roots=("root",), semiring=cast(Semiring[object], TROPICAL)
-    )
-    tropical_output = OutputPlan.prepare(tropical, Emissions.bind(tropical, {}), ((),))
-    with pytest.raises(ValueError, match="TropicalSemiring"):
-        tropical_output.masses()
     with pytest.raises(ValueError, match="explicit nonempty roots"):
         pathoutput._prepare_derived(
             "rootless",
@@ -460,6 +462,78 @@ def test_counting_masses_count_paths_and_reuse() -> None:
     assert reused.masses((0, 0, 0)).zero_mass
     fresh = OutputPlan.prepare(base, emissions, (("a",),))
     assert reused.masses((2, 3, 5)) == fresh.masses((2, 3, 5))
+
+
+def test_tropical_masses_are_best_path_costs_without_certificates() -> None:
+    """Keep algebra-valued masses available when numeric argmax is meaningless."""
+    base = plan(
+        {"root": 0.0, "a1": 3.0, "a2": 4.0, "b": 2.5, "other": 6.0},
+        (
+            ("root", "a1"),
+            ("root", "a2"),
+            ("root", "b"),
+            ("root", "other"),
+        ),
+        roots=("root",),
+        semiring=cast(Semiring[object], TROPICAL),
+    )
+    emissions = Emissions.bind(
+        base, {"a1": ("A",), "a2": ("A",), "b": ("B",), "other": ("other",)}
+    )
+    candidates = (("A",), ("B",))
+    paths = enumerate_paths(base, emissions, cast(tuple[float, ...], base.values))
+    masses = OutputPlan.prepare(base, emissions, candidates).masses()
+    expected = tuple(
+        min(path.value for path in paths if path.output == candidate)
+        for candidate in candidates
+    )
+    assert masses.per_candidate == expected
+    assert masses.total == min(path.value for path in paths)
+    assert masses.residual == min(
+        path.value for path in paths if path.output not in candidates
+    )
+    assert not masses.zero_mass
+    assert masses.decided is None
+    assert masses.tied is None
+    data = masses.to_data(cast(Semiring[object], TROPICAL))
+    assert json.loads(json.dumps(data, allow_nan=False)) == data
+
+
+def test_log_probability_ties_compare_computed_doubles_exactly() -> None:
+    """Pin that an approximate sum may split equal real candidate masses."""
+    base = plan(
+        {
+            "root": 0.0,
+            "a1": math.log(0.1),
+            "a2": math.log(0.2),
+            "b": math.log(0.3),
+        },
+        (("root", "a1"), ("root", "a2"), ("root", "b")),
+        roots=("root",),
+    )
+    emissions = Emissions.bind(base, {"a1": ("A",), "a2": ("A",), "b": ("B",)})
+    masses = OutputPlan.prepare(base, emissions, (("A",), ("B",))).masses()
+    assert masses.per_candidate[0] != masses.per_candidate[1]
+    assert masses.tied == (0,)
+
+
+def test_output_results_have_strict_json_serialization() -> None:
+    """Keep both public result records serializable through carrier encodings."""
+    base = plan(
+        {"root": 0.0, "sink": 0.0},
+        (("root", "sink"),),
+        roots=("root",),
+    )
+    output = OutputPlan.prepare(base, Emissions.bind(base, {"sink": ("a",)}), (("a",),))
+    results = (
+        output.masses(),
+        output.item_marginals(0),
+        output.item_marginals(0, (-math.inf, 0.0)),
+    )
+    carrier = cast(Semiring[object], LOG_PROBABILITY)
+    for result in results:
+        data = result.to_data(carrier)
+        assert json.loads(json.dumps(data, allow_nan=False)) == data
 
 
 def test_hash_seed_preserves_candidate_and_tie_order() -> None:
