@@ -21,6 +21,7 @@ from tiergraph.core import (
     RelationEndpointKind,
     XsdType,
     _canonical_lexical,
+    _scalar_attribute,
 )
 from tiergraph.machine import _QNameFields
 
@@ -359,7 +360,7 @@ class ClockProfile:
         )
         if value is None:
             raise ValueError(f"{role} {str(name)!r} has no value")
-        return value
+        return _scalar_attribute(value)
 
     def _read_clock_coordinates(self, item_count: int) -> tuple[ClockCoordinate, ...]:
         if (self.tick_attribute is None) != (self.gap_attribute is None):
@@ -380,8 +381,8 @@ class ClockProfile:
                 for value in self.graph.boundaries(self.clock_tier)[index].attributes
             }
             try:
-                tick = int(values[self.tick_attribute].lexical)
-                gap = int(values[self.gap_attribute].lexical)
+                tick = int(_scalar_attribute(values[self.tick_attribute]).lexical)
+                gap = int(_scalar_attribute(values[self.gap_attribute]).lexical)
             except KeyError as error:
                 raise ValueError(
                     f"clock boundary {reference.to_data()!r} lacks refinement"
@@ -417,7 +418,8 @@ class ClockProfile:
             tier.declaration.name
             for tier in self.graph.tiers
             if any(
-                value.name == self.untimed_attribute and value.lexical == "true"
+                value.name == self.untimed_attribute
+                and _scalar_attribute(value).lexical == "true"
                 for value in tier.attributes
             )
         }
@@ -464,8 +466,10 @@ class ClockProfile:
                     raise ValueError(
                         f"untimed tier item {reference.to_data()!r} has stored timing"
                     )
-                start = Decimal(values[self.start_attribute].lexical)
-                duration = Decimal(values[self.duration_attribute].lexical)
+                start = Decimal(_scalar_attribute(values[self.start_attribute]).lexical)
+                duration = Decimal(
+                    _scalar_attribute(values[self.duration_attribute]).lexical
+                )
                 if duration < 0:
                     raise ValueError(
                         f"item {reference.to_data()!r} has negative duration"

@@ -789,3 +789,60 @@ def test_reverting_the_checked_enum_guard_is_reported_by_the_sweep(
         for outcome in reverted
         if outcome.error is not None and not isinstance(outcome.error, Refusal)
     ]
+
+
+#: A document-domain JSON attribute, in the program format's own spelling of a
+#: name, so these reach the JSON branch rather than refusing on the name.
+_JSON_NAME = {"namespace": "urn:json-machine-test", "local_name": "payload"}
+
+
+def _attach_json(value: object) -> str:
+    return one_opcode(
+        {
+            "opcode": "attach_value",
+            "domain": "document",
+            "target": None,
+            "value": {"name": _JSON_NAME, "value_type": "json", "value": value},
+        }
+    )
+
+
+def test_an_integer_literal_too_long_to_convert_is_refused_as_the_document_reader_refuses_it() -> (
+    None
+):
+    """The program reader holds the same integer guard as the document reader.
+
+    This is one format spelled two ways. Python refuses to convert an integer
+    literal past its digit limit with a bare ValueError, which the document
+    reader already stages as a refusal; the program reader let it escape.
+    """
+    text = '{"machine_version":"1"}\n{"opcode":"repeat","count":' + "9" * 5000 + "}\n"
+    with pytest.raises(Refusal) as refused:
+        program_loads(text)
+    assert refused.value.stage is RefusalStage.VALUE
+
+
+def test_the_largest_integer_a_json_peer_holds_exactly_loads_in_a_program() -> None:
+    """The positive control: without it, a refusal below proves nothing."""
+    program_loads(_attach_json(2**53 - 1))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [2**53, -(2**53), 10**20, float("inf"), float("nan")],
+    ids=["2**53", "-2**53", "10**20", "inf", "nan"],
+)
+def test_a_json_value_the_budget_refuses_is_staged_where_the_document_reader_stages_it(
+    value: object,
+) -> None:
+    """VALUE, with its path -- not SEMANTICS with none.
+
+    Mirrors ``test_an_unsupported_spelling_is_staged_where_the_document_reader_stages_it``
+    for the JSON branch. ``json.loads`` admits ``Infinity`` and ``NaN`` by
+    default, so a non-finite double reaches the same freeze the integer budget
+    does, and is staged the same way.
+    """
+    with pytest.raises(Refusal) as refused:
+        program_loads(_attach_json(value))
+    assert refused.value.stage is RefusalStage.VALUE
+    assert ".value" in str(refused.value)

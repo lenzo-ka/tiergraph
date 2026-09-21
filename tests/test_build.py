@@ -33,7 +33,7 @@ from tiergraph import (
     dump_bytes,
 )
 from tiergraph.build import BuilderError, Document, document, item
-from tiergraph.core import RelationDeclaration
+from tiergraph.core import RelationDeclaration, _scalar_attribute
 
 
 def test_caption_builder_is_byte_identical_to_direct_construction() -> None:
@@ -626,8 +626,8 @@ def test_escape_hatches_and_attribute_attachments() -> None:
     doc.attach(AttributeDomain.BOUNDARY, boundary, {"position-value": "p"})
     doc.attach(AttributeDomain.BOUNDARY, boundary, {"position-value-2": "q"})
     graph = doc.build()
-    assert graph.attributes[0].lexical == "d"
-    assert graph.boundary_values[0].attributes[0].lexical == "p"
+    assert _scalar_attribute(graph.attributes[0]).lexical == "d"
+    assert _scalar_attribute(graph.boundary_values[0].attributes[0]).lexical == "p"
 
     direct_relation = RelationInstance(q("self"), tier.ref(0), tier.ref(0))
     extra = document(ns, prefix="e")

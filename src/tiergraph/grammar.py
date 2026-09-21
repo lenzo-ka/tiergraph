@@ -26,6 +26,7 @@ from tiergraph.core import (
     SimpleRelationDeclaration,
     TierDeclaration,
     XsdType,
+    _scalar_attribute,
 )
 from tiergraph.fold import (
     AttributeValuation,
@@ -89,10 +90,11 @@ def _decode_attribute_value(value: object, path: str) -> AttributeValue:
         or not isinstance(obj["lexical"], str)
     ):
         raise ValueError(f"{path} has invalid field types")
-    return _machine_decode_attribute_value(value, path)
+    return _scalar_attribute(_machine_decode_attribute_value(value, path))
 
 
 def _string_value(value: AttributeValue, subject: str) -> None:
+    value = _scalar_attribute(value)
     if value.value_type is not XsdType.STRING:
         raise ValueError(
             f"{subject} {value.lexical!r} must be carried as an xsd:string value"
@@ -193,6 +195,8 @@ class GrammarRule:
         _string_value(self.boundary, f"rule {str(self.left)!r} boundary")
         for variable in self.awaited_variables:
             _string_value(variable, f"rule {str(self.left)!r} awaited variable")
+        if self.weight is not None:
+            _scalar_attribute(self.weight)
         if self.weight is not None and self.weight.value_type is not XsdType.DECIMAL:
             raise ValueError(
                 f"rule {str(self.left)!r} weight {self.weight.lexical!r} "
@@ -857,7 +861,8 @@ def _source_rules(
     rules: list[tuple[QualifiedName, GrammarPattern]] = []
     for index, production in enumerate(productions.items):
         values = {
-            value.name.local_name: value.lexical for value in production.attributes
+            value.name.local_name: _scalar_attribute(value).lexical
+            for value in production.attributes
         }
         left = names[values["nonterminal"]]
         source_slot = slots_by_production[ItemRef(productions.declaration.name, index)][
@@ -866,7 +871,7 @@ def _source_rules(
         pattern: list[GrammarPatternElement] = []
         for reference in elements_by_slot[source_slot]:
             element_values = {
-                value.name.local_name: value
+                value.name.local_name: _scalar_attribute(value)
                 for value in elements.items[reference.index].attributes
             }
             if element_values["kind"].lexical == "terminal":
@@ -1198,7 +1203,9 @@ def _item_attribute(graph: Graph, reference: ItemRef, local: str) -> AttributeVa
         for tier in graph.tiers
         if tier.declaration.name == reference.tier
     )
-    return next(value for value in item.attributes if value.name.local_name == local)
+    return _scalar_attribute(
+        next(value for value in item.attributes if value.name.local_name == local)
+    )
 
 
 def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:

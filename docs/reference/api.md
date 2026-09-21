@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 206 top-level `tiergraph` exports exactly once.
+It covers 210 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -470,7 +470,7 @@ Return the machine version and graph as JSON-serializable data.
 ### `AttachValue`
 
 ```text
-AttachValue(domain: 'AttributeDomain', target: 'AttributeTarget', value: 'AttributeValue') -> None
+AttachValue(domain: 'AttributeDomain', target: 'AttributeTarget', value: 'Attribute') -> None
 ```
 
 Attach a typed value to an owner in its declared attribute domain.
@@ -895,7 +895,7 @@ whole graph rather than an edit to a place in it.
 Method.
 
 ```text
-GraphEditor.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'GraphEditor'
+GraphEditor.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'GraphEditor'
 ```
 
 Give one carrier this value, replacing any value of the same name.
@@ -1921,10 +1921,10 @@ space in input length ``n``.
 ### `AttributeDeclaration`
 
 ```text
-AttributeDeclaration(name: 'QualifiedName', domain: 'AttributeDomain', value_type: 'XsdType') -> None
+AttributeDeclaration(name: 'QualifiedName', domain: 'AttributeDomain', value_type: 'AttributeType') -> None
 ```
 
-Declare an optional, at-most-one value for one domain and XSD type.
+Declare an optional, at-most-one value for one domain and value type.
 
 Absence means absent: attributes have no defaults, deliberately, because a
 default would put a value in the reading that is missing from graph bytes.
@@ -1974,10 +1974,100 @@ AttributeValue.to_data(self) -> 'dict[str, JsonValue]'
 
 Use lexical strings so every XSD value remains valid JSON.
 
+### `Attribute`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `AttributeType`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `JsonAttributeValue`
+
+```text
+JsonAttributeValue(name: 'QualifiedName', value: 'JsonValue') -> 'None'
+```
+
+Carry an owned immutable JSON literal, retaining exact primitive kinds.
+
+#### `JsonAttributeValue.to_value`
+
+Method.
+
+```text
+JsonAttributeValue.to_value(self) -> 'JsonValue'
+```
+
+Return caller-owned plain JSON data without exposing graph storage.
+
+#### `JsonAttributeValue.to_data`
+
+Method.
+
+```text
+JsonAttributeValue.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the structured native attribute variant, including null.
+
+### `JsonType`
+
+```text
+JsonType(*values)
+```
+
+Name structured literal data independently of XSD lexical values.
+
+#### `JsonType` members
+
+- `JSON` = `json`
+
 ### `BipartiteRelationDeclaration`
 
 ```text
-BipartiteRelationDeclaration(name: 'QualifiedName', left_type: 'QualifiedName', right_type: 'QualifiedName', left_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, right_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, single_parent: 'bool' = False, acyclic: 'bool' = False, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+BipartiteRelationDeclaration(name: 'QualifiedName', left_type: 'QualifiedName', right_type: 'QualifiedName', left_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, right_endpoint: 'RelationEndpointKind' = <RelationEndpointKind.ITEM: 'item'>, single_parent: 'bool' = False, acyclic: 'bool' = False, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Declare typed links and the graph invariants they promise.
@@ -1999,7 +2089,7 @@ Return the declaration as JSON-serializable data.
 ### `Boundary`
 
 ```text
-Boundary(reference: 'BoundaryRef | DurableBoundaryRef', attributes: 'tuple[AttributeValue, ...]') -> None
+Boundary(reference: 'BoundaryRef | DurableBoundaryRef', attributes: 'tuple[Attribute, ...]') -> None
 ```
 
 Hold values for one addressable boundary while empty boundaries stay derived.
@@ -2030,7 +2120,7 @@ Choose the boundary immediately before or after an anchor.
 ### `Graph`
 
 ```text
-Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = (), layers: 'tuple[Layer, ...]' = ()) -> None
+Graph(namespaces: 'tuple[NamespaceDeclaration, ...]', tiers: 'tuple[Tier, ...]', relation_declarations: 'tuple[RelationDeclaration, ...]', relations: 'tuple[RelationInstance, ...]' = (), attribute_declarations: 'tuple[AttributeDeclaration, ...]' = (), boundary_values: 'tuple[Boundary, ...]' = (), attributes: 'tuple[Attribute, ...]' = (), polyadic_relations: 'tuple[PolyadicRelationInstance, ...]' = (), seals: 'tuple[Seal, ...]' = (), layers: 'tuple[Layer, ...]' = ()) -> None
 ```
 
 Hold a validated immutable graph and derive order and empty boundaries.
@@ -2047,7 +2137,7 @@ remain ordered because their sequence carries graph meaning.
 Method.
 
 ```text
-Graph.layer_values(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'tuple[AttributeValue, ...]'
+Graph.layer_values(self, subject: 'LayerSubject', name: 'QualifiedName', delivery: 'Delivery') -> 'tuple[Attribute, ...]'
 ```
 
 Return what the explicit delivery reads at this live subject and name.
@@ -2241,7 +2331,7 @@ Return a new graph carrying one more declaration.
 Method.
 
 ```text
-Graph.set_attribute(self, target: 'EditTarget', value: 'AttributeValue') -> 'Graph'
+Graph.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'Graph'
 ```
 
 Return a new graph whose target carries this value under its name.
@@ -2356,7 +2446,7 @@ still does.
 ### `Item`
 
 ```text
-Item(durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+Item(durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Represent a tier member with attributes and a durable identifier seam.
@@ -2402,7 +2492,7 @@ Return the prefix binding as JSON-serializable data.
 ### `PolyadicRelationDeclaration`
 
 ```text
-PolyadicRelationDeclaration(name: 'QualifiedName', sources: 'RelationSideDeclaration', targets: 'RelationSideDeclaration', unique_sources: 'bool' = False, distinct_targets: 'bool' = False, single_parent: 'bool' = False, acyclic: 'bool' = False, targets_subset_of: 'QualifiedName | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+PolyadicRelationDeclaration(name: 'QualifiedName', sources: 'RelationSideDeclaration', targets: 'RelationSideDeclaration', unique_sources: 'bool' = False, distinct_targets: 'bool' = False, single_parent: 'bool' = False, acyclic: 'bool' = False, targets_subset_of: 'QualifiedName | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Declare ordered endpoint sequences and general incidence constraints.
@@ -2433,7 +2523,7 @@ Return the declaration as JSON-serializable data.
 ### `PolyadicRelationInstance`
 
 ```text
-PolyadicRelationInstance(declaration: 'QualifiedName', sources: 'tuple[RelationEndpointRef, ...]', targets: 'tuple[RelationEndpointRef, ...]', durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+PolyadicRelationInstance(declaration: 'QualifiedName', sources: 'tuple[RelationEndpointRef, ...]', targets: 'tuple[RelationEndpointRef, ...]', durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Link two declared, ordered endpoint sequences.
@@ -2578,7 +2668,7 @@ Declare whether one relation endpoint is an item or a boundary.
 ### `RelationInstance`
 
 ```text
-RelationInstance(declaration: 'QualifiedName', left: 'RelationEndpointRef', right: 'RelationEndpointRef', durable_id: 'str | None' = None, attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+RelationInstance(declaration: 'QualifiedName', left: 'RelationEndpointRef', right: 'RelationEndpointRef', durable_id: 'str | None' = None, attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Link item or anchored-boundary endpoints through a declared relation.
@@ -2729,7 +2819,7 @@ See PEP 695 for more information.
 ### `SimpleRelationDeclaration`
 
 ```text
-SimpleRelationDeclaration(name: 'QualifiedName', tier: 'QualifiedName', item_type: 'QualifiedName', attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+SimpleRelationDeclaration(name: 'QualifiedName', tier: 'QualifiedName', item_type: 'QualifiedName', attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Give every member of one tier its type through a depth-one relation.
@@ -2747,7 +2837,7 @@ Return the declaration as JSON-serializable data.
 ### `Tier`
 
 ```text
-Tier(declaration: 'TierDeclaration', items: 'tuple[Item, ...]' = (), attributes: 'tuple[AttributeValue, ...]' = ()) -> None
+Tier(declaration: 'TierDeclaration', items: 'tuple[Item, ...]' = (), attributes: 'tuple[Attribute, ...]' = ()) -> None
 ```
 
 Pair a declaration with immutable ordered members and tier attributes.
@@ -2816,7 +2906,7 @@ validate what it denotes.
 ### `Consensus`
 
 ```text
-Consensus(subject: 'LayerSubject', name: 'QualifiedName', readings: 'tuple[tuple[LayerName, AttributeValue], ...]', agreed: 'bool') -> None
+Consensus(subject: 'LayerSubject', name: 'QualifiedName', readings: 'tuple[tuple[LayerName, Attribute], ...]', agreed: 'bool') -> None
 ```
 
 Report every delivered reading and whether their canonical values agree.
@@ -2850,7 +2940,7 @@ Return the layer and its tagged facts as JSON-serializable data.
 ### `LayerFact`
 
 ```text
-LayerFact(subject: 'LayerSubject', value: 'AttributeValue') -> None
+LayerFact(subject: 'LayerSubject', value: 'Attribute') -> None
 ```
 
 State one named typed value at one subject of the base.
@@ -2928,7 +3018,7 @@ without them; ``flatten`` refuses rather than hiding that cost in the base.
 
 ### `FORMAT_VERSION`
 
-Version tag written by the JSON wire codec. Current value: `0.2.0`.
+Version tag written by the JSON wire codec. Current value: `0.3.0`.
 
 ### `MACHINE_VERSION`
 
@@ -2964,7 +3054,7 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 
 ### `__version__`
 
-Installed distribution version. Current value: `0.2.3`.
+Installed distribution version. Current value: `0.3.0`.
 
 ## Paths
 
@@ -4901,7 +4991,7 @@ Return strict-JSON traversal data in canonical node order.
 
 ### `tiergraph.build`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
 
 Builder notation errors raise the directly importable `tiergraph.build.BuilderError`, a `ValueError` subclass. It is not part of the module's star-exported surface.
 
@@ -4938,7 +5028,7 @@ Expand a local spelling in the default or explicitly selected namespace.
 Method.
 
 ```text
-Document.attribute(self, name: 'Name', value_type: 'XsdType | str', *, domain: 'AttributeDomain | str' = <AttributeDomain.ITEM: 'item'>) -> 'None'
+Document.attribute(self, name: 'Name', value_type: 'AttributeType | str', *, domain: 'AttributeDomain | str' = <AttributeDomain.ITEM: 'item'>) -> 'None'
 ```
 
 Declare an attribute without inferring its type from Python values.
@@ -6393,7 +6483,7 @@ that they hold, which is why a caller that needs the stronger fact has to
 check the laws at values rather than read this tuple.
 ### `tiergraph.schema`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
 
 ### `Refusal`
 
@@ -6508,7 +6598,7 @@ shape_hash() -> 'str'
 Hash the declaration independently of JSON Schema presentation.
 ### `tiergraph.cli`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
 
 ### `build_parser`
 
@@ -6527,7 +6617,7 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 Run the command line. Returns the process exit status.
 ### `tiergraph.spanview`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
 
 ### `SPANVIEW_FORMAT_VERSION`
 
@@ -6645,7 +6735,7 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 Return a deterministic ruler and aligned plain-text span table.
 ### `tiergraph.textgrid`
 
-This module is importable and usable, but carries no API-stability promise at version 0.2.3.
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
 
 ### `TextGridReadResult`
 

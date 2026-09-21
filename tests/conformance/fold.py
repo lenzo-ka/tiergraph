@@ -24,6 +24,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 from tiergraph.semiring import Semiring
 
 Value = TypeVar("Value")
@@ -206,7 +207,7 @@ class FoldFixture:
             value = next(
                 value for value in item.attributes if value.name == attribute_name
             )
-            return Decimal(value.lexical)
+            return Decimal(_scalar_attribute(value).lexical)
 
         return read
 
@@ -228,7 +229,7 @@ class FoldFixture:
                 value = next(
                     value for value in item.attributes if value.name == delivery_name
                 )
-                result.append(int(value.lexical))
+                result.append(int(_scalar_attribute(value).lexical))
         return tuple(result)
 
     def states(self, graph: Graph) -> tuple[State, ...]:

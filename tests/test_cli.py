@@ -85,6 +85,7 @@ from tiergraph import (
     XsdType,
 )
 from tiergraph.cli import build_parser, main
+from tiergraph.core import _scalar_attribute
 from tiergraph.schema import json_schema, shape_hash
 
 
@@ -2077,9 +2078,9 @@ def test_schema_outputs_current_selected_version_and_hash(
     )
 
     output = tmp_path / "schema.json"
-    assert main(["schema", "--format-version", "0.2.0", "-o", str(output)]) == 0
+    assert main(["schema", "--format-version", "0.3.0", "-o", str(output)]) == 0
     selected = json.loads(output.read_text())
-    assert selected["properties"]["format_version"] == {"const": "0.2.0"}
+    assert selected["properties"]["format_version"] == {"const": "0.3.0"}
 
     assert main(["schema", "--hash"]) == 0
     assert capsys.readouterr().out == f"{shape_hash()}\n"
@@ -2881,7 +2882,7 @@ def test_every_remaining_opcode_shape_round_trips_through_decoder(
     output = tmp_path / "all.json"
     assert main(["run", str(source), "--to", "json", "-o", str(output)]) == 0
     graph = tiergraph.loads(output.read_bytes())
-    assert graph.attributes[0].lexical == "value"
+    assert _scalar_attribute(graph.attributes[0]).lexical == "value"
 
 
 def test_polyadic_relate_round_trips_through_run_and_step(tmp_path: Path) -> None:
@@ -3125,7 +3126,7 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
     # the failure a substitute for a real function is most able to hide.
     monkeypatch.setattr(
         "tiergraph.machine_codec.json.loads",
-        lambda line, object_pairs_hook: (_ for _ in ()).throw(
+        lambda line, object_pairs_hook, parse_int: (_ for _ in ()).throw(
             RecursionError("parser recursion")
         ),
     )

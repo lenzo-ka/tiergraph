@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import cast
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -22,8 +24,11 @@ from tiergraph.core import (
     DurableRelationRef,
     Graph,
     GraphCarrier,
+    GraphValidationError,
     Item,
     ItemRef,
+    JsonAttributeValue,
+    JsonType,
     JsonValue,
     Layer,
     LayerFact,
@@ -72,7 +77,7 @@ from tiergraph.schema import (
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
 # artifact. The format omits empty collections and nulls and spells qualified names
 # with document prefixes. Documents carrying other versions are deliberately refused.
-FORMAT_VERSION = "0.2.0"
+FORMAT_VERSION = "0.3.0"
 # Owner-tunable policy: bound parser memory while admitting substantial graphs.
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 # Owner-tunable policy: stay well below interpreter/parser recursion limits.
@@ -107,6 +112,15 @@ def _encode_value(value: JsonValue, prefixes: dict[str, str]) -> JsonValue:
     if isinstance(value, list):
         return [_encode_value(item, prefixes) for item in value]
     if isinstance(value, dict):
+        if (
+            set(value) == {"name", "value_type", "value"}
+            and value["value_type"] == "json"
+        ):
+            return {
+                "name": _encode_value(value["name"], prefixes),
+                "value_type": "json",
+                "value": value["value"],
+            }
         if set(value) == {"namespace", "local_name"}:
             namespace = cast(str, value["namespace"])
             local_name = cast(str, value["local_name"])
@@ -142,6 +156,7 @@ def _refuse_unencodable_strings(value: JsonValue, path: str) -> None:
             _refuse_unencodable_strings(item, f"{path}[{index}]")
     elif isinstance(value, dict):
         for key, item in value.items():
+            _refuse_unencodable_strings(key, f"{path} object key")
             child_path = f"{path}.{key}" if path else key
             _refuse_unencodable_strings(item, child_path)
 
@@ -218,7 +233,11 @@ def _parsed_json(document: str | bytes) -> object:
     """
     try:
         text = _checked_document(document)
-        parsed = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_int=_integer_literal,
+        )
     except json.JSONDecodeError as error:
         raise Refusal(RefusalStage.SYNTAX, f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
@@ -260,6 +279,26 @@ def loads(document: str | bytes) -> Graph:
     _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
     return _graph(_object(root["graph"], "graph"))
+
+
+def _integer_literal(literal: str) -> int:
+    """Read one integer literal, refusing one too long to convert.
+
+    Python refuses to convert an integer literal past its configured digit
+    limit, and raises a bare ValueError doing so. That would escape this
+    reader as something other than a staged refusal, so the length is
+    checked first. This bounds only what can be converted at all; the range
+    a JSON attribute value may hold is enforced where the value is built.
+    """
+    limit = sys.get_int_max_str_digits()
+    digits = len(literal) - (literal[0] == "-")
+    if limit and digits > limit:
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"integer literal has {digits} digits, past the {limit} this "
+            "process converts",
+        )
+    return int(literal)
 
 
 def _object_without_duplicate_keys(
@@ -802,29 +841,28 @@ def _attribute_declaration(data: dict[str, object], index: int) -> AttributeDecl
     return AttributeDeclaration(
         _name(data["name"], f"{path}.name"),
         _enum(AttributeDomain, data["domain"], f"{path}.domain"),
-        _enum(XsdType, data["value_type"], f"{path}.value_type"),
+        JsonType.JSON
+        if data["value_type"] == "json"
+        else _enum(XsdType, data["value_type"], f"{path}.value_type"),
     )
 
 
-def _attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
+def _attributes(value: object, path: str) -> tuple[Attribute, ...]:
     return tuple(
-        AttributeValue(
-            _name(data["name"], f"{path}[{index}].name"),
-            _enum(XsdType, data["value_type"], f"{path}[{index}].value_type"),
-            _string(data["lexical"], f"{path}[{index}].lexical"),
-        )
-        for index, data in enumerate(
-            _objects(
-                value,
-                path,
-                object_fields(DECLARATIONS["string_attribute_value"]),
-            )
-        )
+        _attribute(data, f"{path}[{index}]")
+        for index, data in enumerate(_array(value, path))
     )
 
 
-def _attribute(value: object, path: str) -> AttributeValue:
+def _attribute(value: object, path: str) -> Attribute:
     data = _object(value, path)
+    if data.get("value_type") == "json":
+        _keys(data, object_fields(DECLARATIONS["json_attribute_value"]), path)
+        name = _name(data["name"], f"{path}.name")
+        try:
+            return JsonAttributeValue(name, cast(JsonValue, data["value"]))
+        except GraphValidationError as error:
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
     _keys(data, object_fields(DECLARATIONS["string_attribute_value"]), path)
     return AttributeValue(
         _name(data["name"], f"{path}.name"),

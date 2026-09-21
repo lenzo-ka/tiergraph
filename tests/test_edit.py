@@ -39,7 +39,7 @@ from tiergraph import (
     dumps,
     loads,
 )
-from tiergraph.core import EditDeclaration, EditTarget
+from tiergraph.core import EditDeclaration, EditTarget, _scalar_attribute
 
 NS = "urn:edit"
 
@@ -147,7 +147,7 @@ def item_score(graph: Graph, index: int) -> str:
     """Return the score carried by one word, or the empty string."""
     values = graph.tiers[0].items[index].attributes
     return next(
-        (value.lexical for value in values if value.name == SCORE),
+        (_scalar_attribute(value).lexical for value in values if value.name == SCORE),
         "",
     )
 
@@ -1101,5 +1101,5 @@ def test_seals_are_canonical_optional_and_round_trip() -> None:
 
     current = dumps(Graph((), (), ()))
     format_six = '{\n  "format_version": "6",\n  "graph": {}\n}\n'
-    assert current == '{\n  "format_version": "0.2.0",\n  "graph": {}\n}\n'
-    assert current.replace('"0.2.0"', '"6"', 1) == format_six
+    assert current == '{\n  "format_version": "0.3.0",\n  "graph": {}\n}\n'
+    assert current.replace('"0.3.0"', '"6"', 1) == format_six

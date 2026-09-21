@@ -11,11 +11,13 @@ independently installable renderer.
 from __future__ import annotations
 
 import itertools
+import json
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from tiergraph import (
+    Attribute,
     AttributeValue,
     BoundaryRef,
     ClockCoordinate,
@@ -922,10 +924,17 @@ def _item_label(graph: Graph, reference: ItemRef, clock: ClockProfile | None) ->
     return "\\n".join((heading, *fields))
 
 
-def _attribute_label(value: AttributeValue) -> str:
+def _attribute_label(value: Attribute) -> str:
+    lexical = (
+        value.lexical
+        if isinstance(value, AttributeValue)
+        else json.dumps(
+            value.to_value(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    )
     return (
         f"{_quote(value.name.local_name, 'attribute name')}"
-        f"={_quote(value.lexical, 'item attribute lexical value')}"
+        f"={_quote(lexical, 'item attribute lexical value' if isinstance(value, AttributeValue) else 'item JSON attribute value')}"
     )
 
 

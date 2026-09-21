@@ -19,8 +19,10 @@ from tiergraph.clock import (
     anchored_boundary,
 )
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
+    AttributeType,
     AttributeValue,
     BipartiteRelationDeclaration,
     Boundary,
@@ -40,6 +42,8 @@ from tiergraph.core import (
     GraphValidationError,
     Item,
     ItemRef,
+    JsonAttributeValue,
+    JsonType,
     Layer,
     LayerFact,
     LayerName,
@@ -231,7 +235,7 @@ from tiergraph.wire import (
     to_data,
 )
 
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 
 _PATHOUTPUT_EXPORTS = frozenset(
     {"Emissions", "OutputItemMarginals", "OutputMasses", "OutputPlan"}
@@ -271,9 +275,11 @@ __all__ = [
     "AlternativeRef",
     "AsBuilt",
     "AttachValue",
+    "Attribute",
     "AttributeDeclaration",
     "AttributeDomain",
     "AttributeSelector",
+    "AttributeType",
     "AttributeValuation",
     "AttributeValue",
     "BestDerivation",
@@ -331,6 +337,8 @@ __all__ = [
     "ItemRef",
     "ItemSelector",
     "ItemsSelector",
+    "JsonAttributeValue",
+    "JsonType",
     "JsonValueProfile",
     "Layer",
     "LayerFact",

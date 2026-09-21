@@ -31,6 +31,7 @@ from tiergraph import (
     recognize,
 )
 from tiergraph import grammar as grammar_module
+from tiergraph.core import _scalar_attribute
 from tiergraph.fold import ChildCombination, FoldTransition, TiePolicy
 from tiergraph.grammar import _best_fold
 from tiergraph.semiring import COUNTING, PATH, PathValue, Semiring
@@ -392,7 +393,7 @@ def test_lowering_uses_machine_built_ordered_hedges() -> None:
     lowered = lower_grammar(GrammarDeclaration((sentence, noun), sentence, (rule,)))
     graph = lowered.as_built.graph
     production = graph.tiers[0].items[0]
-    assert {value.lexical for value in production.attributes} >= {
+    assert {_scalar_attribute(value).lexical for value in production.attributes} >= {
         "grammar-rule-rhs",
         str(sentence),
         "complete",
@@ -584,7 +585,7 @@ def test_fold_transitions_determine_recognition() -> None:
         if relation.declaration.local_name == "children"
         and relation.left == root_application
         and next(
-            value.lexical
+            _scalar_attribute(value).lexical
             for value in chart_tier.items[
                 cast(ItemRef, relation.right).index
             ].attributes

@@ -10,10 +10,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from typing import cast
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
+    AttributeType,
     AttributeValue,
     BipartiteRelationDeclaration,
     Boundary,
@@ -24,6 +27,9 @@ from tiergraph.core import (
     Graph,
     Item,
     ItemRef,
+    JsonAttributeValue,
+    JsonType,
+    JsonValue,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
@@ -50,7 +56,7 @@ type AttributeTarget = (
 )
 type AttributeInput = Mapping[Name, object] | None
 type AttributeDeclarationInput = (
-    XsdType | str | tuple[XsdType | str, AttributeDomain | str]
+    AttributeType | str | tuple[AttributeType | str, AttributeDomain | str]
 )
 
 _MISSING = object()
@@ -144,7 +150,7 @@ class Document:
         self._polyadic_instances: list[PolyadicRelationInstance] = []
         self._attribute_declarations: list[AttributeDeclaration] = []
         self._boundaries: list[Boundary] = []
-        self._attributes: list[AttributeValue] = []
+        self._attributes: list[Attribute] = []
 
     def namespace(self, namespace: str, *, prefix: str) -> None:
         """Register an additional namespace binding."""
@@ -159,14 +165,16 @@ class Document:
     def attribute(
         self,
         name: Name,
-        value_type: XsdType | str,
+        value_type: AttributeType | str,
         *,
         domain: AttributeDomain | str = AttributeDomain.ITEM,
     ) -> None:
         """Declare an attribute without inferring its type from Python values."""
         operation = f"attribute {self._local(name)}"
         try:
-            declared_type = XsdType(value_type)
+            declared_type = (
+                JsonType.JSON if value_type == "json" else XsdType(value_type)
+            )
             declared_domain = AttributeDomain(domain)
         except ValueError as error:
             raise BuilderError(f"{operation}: {error}") from error
@@ -205,7 +213,9 @@ class Document:
                 declared_domain = default_domain
             try:
                 qualified = self._name(name)
-                normalized_type = XsdType(value_type)
+                normalized_type = (
+                    JsonType.JSON if value_type == "json" else XsdType(value_type)
+                )
                 normalized_domain = AttributeDomain(declared_domain)
             except (TypeError, ValueError) as error:
                 raise BuilderError(f"{operation}: {error}") from error
@@ -691,7 +701,7 @@ class Document:
 
     def _mapping_values(
         self, values: AttributeInput, operation: str
-    ) -> tuple[AttributeValue, ...]:
+    ) -> tuple[Attribute, ...]:
         if values is None:
             return ()
         if not isinstance(values, Mapping):
@@ -700,10 +710,10 @@ class Document:
 
     def _values(
         self, values: tuple[tuple[Name, object], ...], operation: str
-    ) -> tuple[AttributeValue, ...]:
+    ) -> tuple[Attribute, ...]:
         return tuple(self._value(name, value, operation) for name, value in values)
 
-    def _value(self, name: Name, value: object, operation: str) -> AttributeValue:
+    def _value(self, name: Name, value: object, operation: str) -> Attribute:
         qualified = self._name(name)
         declarations = [
             declaration
@@ -715,6 +725,8 @@ class Document:
                 f"{operation}: attribute {qualified.local_name} needs exactly one declaration"
             )
         value_type = declarations[0].value_type
+        if value_type is JsonType.JSON:
+            return JsonAttributeValue(qualified, cast(JsonValue, value))
         lexical: str
         if value_type is XsdType.STRING and isinstance(value, str):
             lexical = value
@@ -737,7 +749,7 @@ class Document:
         return AttributeValue(qualified, value_type, lexical)
 
     def _attach_value(
-        self, domain: AttributeDomain, target: AttributeTarget, value: AttributeValue
+        self, domain: AttributeDomain, target: AttributeTarget, value: Attribute
     ) -> None:
         operation = f"attach {domain.value}"
         if domain is AttributeDomain.DOCUMENT:

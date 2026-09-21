@@ -28,6 +28,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
+from tiergraph.core import _scalar_attribute
 from tiergraph.fold import (
     AttributeValuation,
     ChildCombination,
@@ -119,7 +120,9 @@ def mismatch() -> object:
                 Item(
                     item.durable_id,
                     tuple(
-                        AttributeValue(value.name, XsdType.DOUBLE, value.lexical)
+                        AttributeValue(
+                            value.name, XsdType.DOUBLE, _scalar_attribute(value).lexical
+                        )
                         if value.name == tie
                         else value
                         for value in item.attributes

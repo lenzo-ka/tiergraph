@@ -30,6 +30,7 @@ from tiergraph import (
     recognize,
     resolve_path,
 )
+from tiergraph.core import _scalar_attribute
 
 NS = "urn:path:alternation:test"
 S = QualifiedName(NS, "S")
@@ -88,7 +89,7 @@ def application_key(
     )
     rule_index = int(
         next(
-            value.lexical
+            _scalar_attribute(value).lexical
             for value in item.attributes
             if value.name.local_name == "start"
         )
@@ -108,7 +109,8 @@ def application_key(
             if tier.declaration.name == child.tier
         )
         values = {
-            value.name.local_name: value.lexical for value in child_item.attributes
+            value.name.local_name: _scalar_attribute(value).lexical
+            for value in child_item.attributes
         }
         spans.append((int(values["start"]), int(values["end"])))
     return rule_index, tuple(spans)

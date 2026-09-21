@@ -40,6 +40,7 @@ from tiergraph import (
     XsdType,
     anchored_boundary,
 )
+from tiergraph.core import _scalar_attribute
 
 NS = "urn:tiergraph:dot:test"
 DOT = shutil.which("dot")
@@ -830,7 +831,7 @@ def _durable(item: Item) -> str:
 def _attr(item: Item, local: str) -> str | None:
     for value in item.attributes:
         if value.name.local_name == local:
-            return value.lexical
+            return _scalar_attribute(value).lexical
     return None
 
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Self, cast
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -19,8 +20,11 @@ from tiergraph.core import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
+    JsonAttributeValue,
+    JsonType,
     JsonValue,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
@@ -268,7 +272,7 @@ class AttachValue:
 
     domain: AttributeDomain
     target: AttributeTarget
-    value: AttributeValue
+    value: Attribute
 
     def apply(self, graph: Graph) -> Graph:
         """Replace the named owner and let graph construction check the value."""
@@ -542,11 +546,23 @@ def _decode_attribute_declaration(value: object, path: str) -> AttributeDeclarat
     return AttributeDeclaration(
         _decode_qname(obj["name"], f"{path}.name"),
         _enum(AttributeDomain, obj["domain"], f"{path}.domain"),
-        _enum(XsdType, obj["value_type"], f"{path}.value_type"),
+        JsonType.JSON
+        if obj["value_type"] == "json"
+        else _enum(XsdType, obj["value_type"], f"{path}.value_type"),
     )
 
 
-def _decode_attribute_value(value: object, path: str) -> AttributeValue:
+def _decode_attribute_value(value: object, path: str) -> Attribute:
+    if isinstance(value, dict) and value.get("value_type") == "json":
+        obj = _decode_object(value, path, {"name", "value_type", "value"})
+        name = _decode_qname(obj["name"], f"{path}.name")
+        try:
+            return JsonAttributeValue(name, cast(JsonValue, obj["value"]))
+        except GraphValidationError as error:
+            # Staged where the document reader stages the same condition, so a
+            # value past the integer budget, or a non-finite double, is VALUE
+            # with its path in either spelling of the format.
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
     obj = _decode_object(value, path, {"name", "value_type", "lexical"})
     return AttributeValue(
         _decode_qname(obj["name"], f"{path}.name"),
@@ -555,7 +571,7 @@ def _decode_attribute_value(value: object, path: str) -> AttributeValue:
     )
 
 
-def _decode_attributes(value: object, path: str) -> tuple[AttributeValue, ...]:
+def _decode_attributes(value: object, path: str) -> tuple[Attribute, ...]:
     if not isinstance(value, list):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
     return tuple(
@@ -1290,7 +1306,7 @@ def _build_attach_value(builder: _GraphBuilder, opcode: AttachValue) -> None:
 
 
 def _relation_with_value(
-    declaration: RelationDeclaration, value: AttributeValue
+    declaration: RelationDeclaration, value: Attribute
 ) -> RelationDeclaration:
     attributes = (*declaration.attributes, value)
     if isinstance(declaration, SimpleRelationDeclaration):
@@ -1439,7 +1455,7 @@ def _replace(
     relations: tuple[RelationInstance, ...] | None = None,
     attribute_declarations: tuple[AttributeDeclaration, ...] | None = None,
     boundary_values: tuple[Boundary, ...] | None = None,
-    attributes: tuple[AttributeValue, ...] | None = None,
+    attributes: tuple[Attribute, ...] | None = None,
     polyadic_relations: tuple[PolyadicRelationInstance, ...] | None = None,
 ) -> Graph:
     return replace(
@@ -1542,7 +1558,7 @@ def _map_tier(
 
 
 def _attach_item(
-    graph: Graph, reference: ItemRef | DurableItemRef, value: AttributeValue
+    graph: Graph, reference: ItemRef | DurableItemRef, value: Attribute
 ) -> tuple[Tier, ...]:
     coordinate = graph.resolve_item(reference)
     return _map_tier(
@@ -1562,7 +1578,7 @@ def _attach_item(
 
 
 def _attach_relation_declaration(
-    graph: Graph, target: QualifiedName, value: AttributeValue
+    graph: Graph, target: QualifiedName, value: Attribute
 ) -> tuple[RelationDeclaration, ...]:
     found = False
     declarations: list[RelationDeclaration] = []

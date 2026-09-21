@@ -17,6 +17,7 @@ from tiergraph.schema import Refusal, RefusalStage
 from tiergraph.wire import (
     MAX_DOCUMENT_BYTES,
     MAX_JSON_DEPTH,
+    _integer_literal,
     _object_without_duplicate_keys,
     _refuse_unencodable_strings,
 )
@@ -143,7 +144,14 @@ def load_program(stream: BinaryIO) -> Program:
             )
         _check_jsonl_depth(line, number)
         try:
-            record = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+            # The same integer guard the document reader uses: this format is
+            # one format spelled two ways, so a literal too long to convert is
+            # refused here as it is there, not left to escape as a bare ValueError.
+            record = json.loads(
+                text,
+                object_pairs_hook=_object_without_duplicate_keys,
+                parse_int=_integer_literal,
+            )
             _refuse_unencodable_strings(record, "")
         except json.JSONDecodeError as error:
             raise Refusal(

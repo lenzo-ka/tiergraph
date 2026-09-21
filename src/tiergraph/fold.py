@@ -12,12 +12,14 @@ from typing import Protocol, TypeVar
 
 from tiergraph.core import (
     AttributeDomain,
+    AttributeValue,
     BipartiteRelationDeclaration,
     Graph,
     Item,
     ItemRef,
     QualifiedName,
     XsdType,
+    _scalar_attribute,
 )
 from tiergraph.semiring import LawCheck, Semiring, StarRefusal, inexact_laws
 
@@ -188,6 +190,8 @@ class AttributeValuation:
                 f"valuation {self.name!r} attribute {str(self.attribute)!r} has domain "
                 f"{declaration.domain.value!r}, not 'item'"
             )
+        if not isinstance(declaration.value_type, XsdType):
+            raise ValueError(f"valuation {self.name!r} requires a scalar XSD attribute")
         return declaration.value_type
 
     def read(self, graph: Graph, reference: ItemRef) -> object:
@@ -210,6 +214,7 @@ class AttributeValuation:
                 f"valuation {self.name!r} item {reference.to_data()!r} lacks "
                 f"attribute {str(self.attribute)!r}"
             )
+        attribute = _scalar_attribute(attribute)
         if attribute.value_type in {XsdType.INTEGER, XsdType.DECIMAL}:
             return Decimal(attribute.lexical)
         if attribute.value_type is XsdType.DOUBLE:
@@ -1278,6 +1283,7 @@ class _CoordinatePass[Value]:
                     and {
                         value.name.local_name: value.lexical
                         for value in _item(self.fold.graph, member).attributes
+                        if isinstance(value, AttributeValue)
                     }.get("kind")
                     == "chart-item"
                 ),
@@ -1286,6 +1292,7 @@ class _CoordinatePass[Value]:
             chart_attributes = {
                 value.name.local_name: value.lexical
                 for value in _item(self.fold.graph, chart_item).attributes
+                if isinstance(value, AttributeValue)
             }
             span = (chart_attributes.get("start"), chart_attributes.get("end"))
             raise StarRefusal(

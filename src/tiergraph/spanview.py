@@ -18,6 +18,7 @@ from tiergraph.core import (
     QualifiedName,
     RelationEndpointKind,
     Tier,
+    _scalar_attribute,
 )
 from tiergraph.machine import _QNameFields
 from tiergraph.path import ItemBinding, StructuralPathProfile
@@ -235,7 +236,12 @@ class SpanView:
 
 def _attribute(item: Item, name: QualifiedName) -> str | None:
     return next(
-        (value.lexical for value in item.attributes if value.name == name), None
+        (
+            _scalar_attribute(value).lexical
+            for value in item.attributes
+            if value.name == name
+        ),
+        None,
     )
 
 
