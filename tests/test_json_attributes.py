@@ -35,6 +35,8 @@ from tiergraph import (
     NamespaceDeclaration,
     Program,
     QualifiedName,
+    Refusal,
+    RefusalStage,
     RewriteDeclaration,
     RewriteEffect,
     XsdType,
@@ -278,3 +280,64 @@ def test_json_schema_value_refusal_and_duplicate_keys() -> None:
     raw = wire.dump_compact(document({"a": 1})).replace('"a":1', '"a":1,"a":2')
     with pytest.raises(ValueError, match="duplicate"):
         wire.loads(raw)
+
+
+#: The largest integer a JSON peer decodes exactly. Spelled here rather
+#: than imported, so a change to the library's bound fails this test.
+SAFE = 2**53 - 1
+
+
+@pytest.mark.parametrize("value", [SAFE, -SAFE, 0, 1, -1])
+def test_an_integer_a_json_peer_holds_exactly_is_admitted(value: int) -> None:
+    """The budget admits every integer a double represents exactly."""
+    assert JsonAttributeValue(NAME, value).to_value() == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [SAFE + 1, -SAFE - 1, 2**64, 10**5000],
+    # pytest names a case by str() of its parameter, and str(10**5000)
+    # is itself past the digit limit this test is about.
+    ids=["2**53", "-2**53", "2**64", "10**5000"],
+)
+def test_an_integer_a_json_peer_would_corrupt_is_refused(value: int) -> None:
+    """Refused where it is built, as a declared refusal.
+
+    2**53 is the first integer a double cannot tell apart from its neighbour,
+    so a peer would read it back as a different number with no error.
+    10**5000 is also past the process's integer-to-text limit; it is refused
+    by comparison, before anything tries to spell it, so the refusal is
+    this one rather than a bare ValueError from a writer.
+    """
+    with pytest.raises(GraphValidationError, match="2\\*\\*53"):
+        JsonAttributeValue(NAME, value)
+
+
+def test_the_largest_admitted_integer_crosses_the_wire_unchanged() -> None:
+    graph = document(SAFE)
+    back = wire.loads(wire.dump_compact(graph)).attributes[0]
+    assert isinstance(back, JsonAttributeValue)
+    assert back.to_value() == SAFE
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        # past the budget, but short enough to convert: refused by value
+        "9" * 20,
+        # past the process's conversion limit: refused before converting
+        "9" * 5000,
+    ],
+    ids=["20-digits", "5000-digits"],
+)
+def test_the_reader_refuses_an_out_of_budget_integer_as_staged(literal: str) -> None:
+    """A document written elsewhere is held to the same budget, and says so.
+
+    Before the budget, the 20-digit literal loaded silently -- a number a
+    JSON peer would already have corrupted -- and the 5000-digit literal
+    escaped as a bare ValueError rather than a staged refusal.
+    """
+    text = wire.dump_compact(document(7)).replace('"value":7', '"value":' + literal)
+    with pytest.raises(Refusal) as refused:
+        wire.loads(text)
+    assert refused.value.stage is RefusalStage.VALUE

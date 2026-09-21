@@ -439,6 +439,16 @@ class _FrozenJson:
     payload: object
 
 
+#: The largest integer a JSON peer can hold exactly. JSON has one number
+#: type, and the readers that share this format -- JavaScript first among
+#: them -- decode it as an IEEE double, which is exact only up to this
+#: magnitude. Above it, two different integers read back as the same value
+#: with no error, so a native graph that admitted one would hand its peers a
+#: number they silently corrupt. The bound is exclusive of 2**53 itself,
+#: which a double cannot tell apart from 2**53 + 1.
+_JSON_SAFE_INTEGER = 2**53 - 1
+
+
 def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
     """Snapshot finite JSON with exact primitive kinds and signed doubles."""
     if value is None:
@@ -446,6 +456,14 @@ def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
     if type(value) is bool:
         return _FrozenJson("boolean", value)
     if type(value) is int:
+        # Compared as integers, never converted to text, so an integer far
+        # past the budget is refused here rather than failing later in a
+        # writer that cannot spell it.
+        if not -_JSON_SAFE_INTEGER <= value <= _JSON_SAFE_INTEGER:
+            raise GraphValidationError(
+                "JSON integers must lie within +/-(2**53 - 1), the range a JSON "
+                "peer decodes exactly"
+            )
         return _FrozenJson("integer", value)
     if type(value) is float:
         number = value

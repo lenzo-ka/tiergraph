@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import cast
@@ -14,6 +15,7 @@ from tiergraph.core import (
     AttributeValue,
     BipartiteRelationDeclaration,
     Boundary,
+    GraphValidationError,
     BoundaryRef,
     BoundarySide,
     DocumentRef,
@@ -231,7 +233,11 @@ def _parsed_json(document: str | bytes) -> object:
     """
     try:
         text = _checked_document(document)
-        parsed = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_int=_integer_literal,
+        )
     except json.JSONDecodeError as error:
         raise Refusal(RefusalStage.SYNTAX, f"parse JSON failed: {error.msg}") from error
     except UnicodeDecodeError as error:
@@ -273,6 +279,26 @@ def loads(document: str | bytes) -> Graph:
     _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
     return _graph(_object(root["graph"], "graph"))
+
+
+def _integer_literal(literal: str) -> int:
+    """Read one integer literal, refusing one too long to convert.
+
+    Python refuses to convert an integer literal past its configured digit
+    limit, and raises a bare ValueError doing so. That would escape this
+    reader as something other than a staged refusal, so the length is
+    checked first. This bounds only what can be converted at all; the range
+    a JSON attribute value may hold is enforced where the value is built.
+    """
+    limit = sys.get_int_max_str_digits()
+    digits = len(literal) - (literal[0] == "-")
+    if limit and digits > limit:
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"integer literal has {digits} digits, past the {limit} this "
+            "process converts",
+        )
+    return int(literal)
 
 
 def _object_without_duplicate_keys(
@@ -832,9 +858,11 @@ def _attribute(value: object, path: str) -> Attribute:
     data = _object(value, path)
     if data.get("value_type") == "json":
         _keys(data, object_fields(DECLARATIONS["json_attribute_value"]), path)
-        return JsonAttributeValue(
-            _name(data["name"], f"{path}.name"), cast(JsonValue, data["value"])
-        )
+        name = _name(data["name"], f"{path}.name")
+        try:
+            return JsonAttributeValue(name, cast(JsonValue, data["value"]))
+        except GraphValidationError as error:
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
     _keys(data, object_fields(DECLARATIONS["string_attribute_value"]), path)
     return AttributeValue(
         _name(data["name"], f"{path}.name"),
