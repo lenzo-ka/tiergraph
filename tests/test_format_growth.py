@@ -96,12 +96,11 @@ def verdict(
 
 # The release line this one advanced past; its tag is the baseline the priced
 # break is measured against, whichever phase the current line is in.
-PREVIOUS_LINE_TAG = "v0.1.0"
+PREVIOUS_LINE_TAG = "v0.2.0"
 
-PRICED_BREAKS = (
-    "/properties/graph/properties/attribute_declarations/items/properties/domain: "
-    'the value "position" was dropped',
-)
+# Derived against v0.2.0: the JSON attribute record only grows the schema. The
+# release-line break is the exact-match version discriminator, not lost shape.
+PRICED_BREAKS: tuple[str, ...] = ()
 
 
 def test_the_committed_schema_reports_only_the_break_this_release_priced(
@@ -980,7 +979,7 @@ def test_the_stamp_the_project_ships_is_recognized() -> None:
     check the generator and not the value, and this assertion exists to make a
     format change visible to whoever takes it.
     """
-    assert growth.stamp(RELEASED) == "0.2.0"
+    assert growth.stamp(RELEASED) == "0.3.0"
 
 
 def test_a_pointer_that_names_nothing_returns_nothing() -> None:

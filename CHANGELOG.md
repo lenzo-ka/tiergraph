@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-21
+
+### Added
+
+- Added JSON-valued attributes. `JsonType.JSON` declares an attribute whose
+  value is ordinary JSON -- null, a boolean, an integer, a double, a string,
+  an array or an object -- held as `JsonAttributeValue` on any carrier a
+  scalar attribute can sit on. The value is owned: the attribute keeps its own
+  snapshot, so a caller mutating the container it passed, or the one it is
+  handed back, changes neither. Kinds and float signs are part of the value's
+  identity, so `0`, `0.0` and `False` are three values and `-0.0` crosses the
+  wire as `-0.0`.
+- **BREAKING:** `FORMAT_VERSION` moves from `"0.2.0"` to `"0.3.0"`. This
+  reader accepts only its own format version, so it refuses a document written
+  at `"0.2.0"` with a discriminator refusal. The release line moves because
+  the schema grows by the JSON attribute record; otherwise its shape is
+  unchanged against the 0.2 line.
+
+### Changed
+
+- A JSON integer must lie within +/-(2**53 - 1), the range a JSON peer decodes
+  exactly. JSON has one number type and its peers read it as an IEEE double,
+  so a larger integer reads back as a different number with no error.
+  `JsonAttributeValue` refuses one where it is built, and reading a document
+  refuses one as a staged `Refusal` rather than loading a value its peers
+  would corrupt.
+- Reading a document refuses an integer literal too long to convert as a
+  staged `Refusal`, where it previously raised a bare `ValueError` from the
+  process's digit limit. This bounds conversion only; it places no budget on
+  integer fields other than JSON attribute values.
+- The scalar attribute constructor and a grammar weight refuse a JSON-typed
+  declaration, so a JSON value cannot reach a place that reads only scalars.
+
 ## [0.2.3] - 2026-09-15
 
 ### Added
@@ -995,7 +1028,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.0...v0.2.1

@@ -77,7 +77,7 @@ META_NS = "urn:wire-meta"
 
 def test_compact_serializer_has_exact_canonical_spelling() -> None:
     graph = Graph((), (), ())
-    assert dump_compact(graph) == '{"format_version":"0.2.0","graph":{}}\n'
+    assert dump_compact(graph) == '{"format_version":"0.3.0","graph":{}}\n'
 
 
 def test_deep_json_is_cleanly_refused_before_parser_recursion() -> None:
@@ -880,7 +880,7 @@ def test_reference_kinds_and_anchor_union_round_trip_distinguishably() -> None:
     assert item_anchor != outer_anchor
 
 
-def test_format_0_2_0_round_trip_uses_boundary_domain_and_durable_item_tag() -> None:
+def test_current_format_round_trip_uses_boundary_domain_and_durable_item_tag() -> None:
     """REGRESSION: fails on parent with position and no durable endpoint wire arm."""
     graph = rich_graph()
     durable = DurableItemRef("lead")
@@ -900,7 +900,7 @@ def test_format_0_2_0_round_trip_uses_boundary_domain_and_durable_item_tag() -> 
     )
 
     document = json.loads(dumps(extended))
-    assert document["format_version"] == "0.2.0"
+    assert document["format_version"] == "0.3.0"
     declarations = document["graph"]["attribute_declarations"]
     boundary_domains = [
         declaration["domain"]

@@ -3,7 +3,7 @@
 The wire representation is strict JSON: object keys are strings,
 arrays retain order, and scalar attribute values retain their declared XSD type
 and canonical lexical form. The top-level document carries
-`"format_version": "0.2.0"`.
+`"format_version": "0.3.0"`.
 
 Structured literal concerns use a declared `"value_type": "json"` attribute.
 Its record has `name`, `value_type`, and a required `value`, including null.
@@ -72,12 +72,13 @@ accepts documents of the version it implements and refuses any other, naming
 the version it found and the one it expected.
 
 The version names **the release at which the format last changed**, not the
-release that wrote the document. This release stamps `"0.2.0"`, and `0.2.1` and
-`0.3.0` will keep stamping `"0.2.0"` until the format itself moves again.
+release that wrote the document. This release stamps `"0.3.0"`, and later
+releases in the 0.3 line will keep stamping `"0.3.0"` until the format itself
+moves again.
 
 It is worth being clear about why it is not simply the writing package's version,
 which is the obvious reading. Versions are compared by string equality, so a
-reader built at `0.2.0` would refuse a document written by `0.2.1` even though
+reader built at `0.3.0` would refuse a document written by `0.3.1` even though
 the two formats are identical -- every patch release would break document
 reading. Repairing that needs compatibility ranges, which is more machinery than
 the plain counter it replaced rather than less. The rare thing must not inherit
@@ -90,8 +91,12 @@ find out what format `7` was.
 Within a release line the format may only grow: a change that shrinks what an
 existing document may say is legal, but it costs the version position that
 carries breaking changes -- the minor while the major is zero, the major after
-that. This release spent one, moving to `0.2.0` to drop `position` from the
-attribute-domain vocabulary in favor of `boundary`.
+that. The 0.2 line spent one to drop `position` from the attribute-domain
+vocabulary in favor of `boundary`. This release spends the next one, moving
+from `"0.2.0"` to `"0.3.0"` because the schema grows by the JSON attribute
+record. Its shape otherwise does not shrink against the 0.2 line, but the
+exact-match reader makes the discriminator move itself a break: it refuses
+every document that still declares `"0.2.0"`.
 
 Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a

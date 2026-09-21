@@ -15,7 +15,6 @@ from tiergraph.core import (
     AttributeValue,
     BipartiteRelationDeclaration,
     Boundary,
-    GraphValidationError,
     BoundaryRef,
     BoundarySide,
     DocumentRef,
@@ -25,6 +24,7 @@ from tiergraph.core import (
     DurableRelationRef,
     Graph,
     GraphCarrier,
+    GraphValidationError,
     Item,
     ItemRef,
     JsonAttributeValue,
@@ -77,7 +77,7 @@ from tiergraph.schema import (
 # FORMAT_VERSION is gate-bound to both the declared schema shape and its published
 # artifact. The format omits empty collections and nulls and spells qualified names
 # with document prefixes. Documents carrying other versions are deliberately refused.
-FORMAT_VERSION = "0.2.0"
+FORMAT_VERSION = "0.3.0"
 # Owner-tunable policy: bound parser memory while admitting substantial graphs.
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 # Owner-tunable policy: stay well below interpreter/parser recursion limits.

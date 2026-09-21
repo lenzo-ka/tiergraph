@@ -140,7 +140,7 @@ def test_shape_or_artifact_change_requires_the_format_release_step() -> None:
             match="without moving the package to the release named by FORMAT_VERSION",
         ):
             refuse_unversioned_shape_change(prior, altered, "0.1.0")
-        refuse_unversioned_shape_change(prior, altered, "0.2.0")
+        refuse_unversioned_shape_change(prior, altered, "0.3.0")
         altered["format_version"] = "foreign"
         refuse_unversioned_shape_change(prior, altered, "0.1.0")
 

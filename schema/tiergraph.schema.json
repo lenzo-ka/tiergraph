@@ -20,6 +20,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -98,6 +101,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -367,6 +373,29 @@
       ],
       "type": "object"
     },
+    "json_attribute_value": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 3,
+          "pattern": "^[^:]+:[\\s\\S]+$",
+          "type": "string"
+        },
+        "value": {},
+        "value_type": {
+          "enum": [
+            "json"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value_type",
+        "value"
+      ],
+      "type": "object"
+    },
     "layer": {
       "additionalProperties": false,
       "properties": {
@@ -587,6 +616,9 @@
             },
             {
               "$ref": "#/$defs/double_attribute_value"
+            },
+            {
+              "$ref": "#/$defs/json_attribute_value"
             }
           ]
         }
@@ -806,6 +838,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -886,6 +921,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -1005,6 +1043,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -1108,13 +1149,13 @@
       "type": "object"
     }
   },
-  "$id": "https://tiergraph.org/schema/format-0.2.0.json",
+  "$id": "https://tiergraph.org/schema/format-0.3.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Structural validation is necessary but not sufficient for codec acceptance. Codec-only checks include, but are not limited to, referential integrity; unique declaration, tier, item, and relation names; unique item and boundary durable ids; one namespace prefix per URI; one simple relation per tier; relation-instance references to bipartite declarations; endpoint typing; non-empty boundary attributes; and single_parent and acyclic promises. The codec also requires structural indices to use an integral JSON spelling: JSON Schema considers a number such as 1.0 an integer, while the codec deliberately refuses it. This list is illustrative rather than exhaustive; JSON Schema is the structural contract and codec acceptance remains authoritative. Older format versions are refused rather than migrated because migration requires an explicit, loss-aware conversion outside the primitive codec.",
   "properties": {
     "format_version": {
-      "const": "0.2.0"
+      "const": "0.3.0"
     },
     "graph": {
       "additionalProperties": false,
@@ -1145,7 +1186,8 @@
                   "boolean",
                   "integer",
                   "decimal",
-                  "double"
+                  "double",
+                  "json"
                 ],
                 "type": "string"
               }
@@ -1176,6 +1218,9 @@
               },
               {
                 "$ref": "#/$defs/double_attribute_value"
+              },
+              {
+                "$ref": "#/$defs/json_attribute_value"
               }
             ]
           },
@@ -1233,6 +1278,9 @@
                     },
                     {
                       "$ref": "#/$defs/double_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/json_attribute_value"
                     }
                   ]
                 },
@@ -1333,6 +1381,9 @@
                     },
                     {
                       "$ref": "#/$defs/double_attribute_value"
+                    },
+                    {
+                      "$ref": "#/$defs/json_attribute_value"
                     }
                   ]
                 },
@@ -1378,6 +1429,9 @@
                           },
                           {
                             "$ref": "#/$defs/double_attribute_value"
+                          },
+                          {
+                            "$ref": "#/$defs/json_attribute_value"
                           }
                         ]
                       },

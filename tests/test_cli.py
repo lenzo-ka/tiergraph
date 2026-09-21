@@ -2078,9 +2078,9 @@ def test_schema_outputs_current_selected_version_and_hash(
     )
 
     output = tmp_path / "schema.json"
-    assert main(["schema", "--format-version", "0.2.0", "-o", str(output)]) == 0
+    assert main(["schema", "--format-version", "0.3.0", "-o", str(output)]) == 0
     selected = json.loads(output.read_text())
-    assert selected["properties"]["format_version"] == {"const": "0.2.0"}
+    assert selected["properties"]["format_version"] == {"const": "0.3.0"}
 
     assert main(["schema", "--hash"]) == 0
     assert capsys.readouterr().out == f"{shape_hash()}\n"
