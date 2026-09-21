@@ -3126,7 +3126,7 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
     # the failure a substitute for a real function is most able to hide.
     monkeypatch.setattr(
         "tiergraph.machine_codec.json.loads",
-        lambda line, object_pairs_hook: (_ for _ in ()).throw(
+        lambda line, object_pairs_hook, parse_int: (_ for _ in ()).throw(
             RecursionError("parser recursion")
         ),
     )
