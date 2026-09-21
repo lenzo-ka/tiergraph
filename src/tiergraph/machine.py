@@ -20,6 +20,7 @@ from tiergraph.core import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphValidationError,
     Item,
     ItemRef,
     JsonAttributeValue,
@@ -554,9 +555,14 @@ def _decode_attribute_declaration(value: object, path: str) -> AttributeDeclarat
 def _decode_attribute_value(value: object, path: str) -> Attribute:
     if isinstance(value, dict) and value.get("value_type") == "json":
         obj = _decode_object(value, path, {"name", "value_type", "value"})
-        return JsonAttributeValue(
-            _decode_qname(obj["name"], f"{path}.name"), cast(JsonValue, obj["value"])
-        )
+        name = _decode_qname(obj["name"], f"{path}.name")
+        try:
+            return JsonAttributeValue(name, cast(JsonValue, obj["value"]))
+        except GraphValidationError as error:
+            # Staged where the document reader stages the same condition, so a
+            # value past the integer budget, or a non-finite double, is VALUE
+            # with its path in either spelling of the format.
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
     obj = _decode_object(value, path, {"name", "value_type", "lexical"})
     return AttributeValue(
         _decode_qname(obj["name"], f"{path}.name"),
