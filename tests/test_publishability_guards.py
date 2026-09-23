@@ -829,6 +829,31 @@ def test_main_refuses_an_external_reference_in_each_shipped_file_named_here(
     assert check_tracked_clean.main() == 0
 
 
+def test_main_refuses_an_external_reference_in_a_readable_pyproject(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """REGRESSION: the reference check fires in a pyproject.toml it can read.
+
+    pyproject.toml is the one shipped file the test above cannot name: its
+    comment-only payload has no ``[project]`` table, and the gate refuses a
+    pyproject it cannot read, so that case goes red before and after any fix.
+    This writes a readable one instead, so what it witnesses is the leak and
+    not the refusal to read.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check_tracked_clean, "ROOT", tmp_path)
+    path = Path("pyproject.toml")
+    digest_path = tmp_path / "digests.txt"
+    _write_digest_file(digest_path, [_synthetic_digest(TOKEN)])
+    monkeypatch.setattr(check_tracked_clean, "tracked_files", lambda: [path])
+    monkeypatch.setattr(check_tracked_clean, "DENIED_DIGESTS_PATH", digest_path)
+    table = '[project]\nname = "portable"\nversion = "0"\n'
+    path.write_text(f"{table}# See {LEAK_URL} for details.\n", encoding="utf-8")
+    assert check_tracked_clean.main() == 1
+    path.write_text(f"{table}# A portable paragraph.\n", encoding="utf-8")
+    assert check_tracked_clean.main() == 0
+
+
 def test_only_the_gate_script_itself_is_exempt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
