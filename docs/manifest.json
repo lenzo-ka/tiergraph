@@ -322,6 +322,12 @@
       "text",
       "console"
     ],
+    "docs/guide/matching-with-existing-pieces.md": [
+      "python",
+      "text",
+      "python",
+      "text"
+    ],
     "docs/guide/profiles.md": [
       "python",
       "text",
@@ -379,6 +385,7 @@
     "docs/guide/construction.md",
     "docs/guide/selection-and-traversal.md",
     "docs/guide/folding.md",
+    "docs/guide/matching-with-existing-pieces.md",
     "docs/guide/recognize-and-act.md",
     "docs/guide/timing.md",
     "docs/guide/serialization.md",
