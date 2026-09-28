@@ -188,6 +188,7 @@ from tiergraph.selection import (
     TierSelector,
     TypeSelector,
     UnionSelector,
+    WhereSelector,
     evaluate_selection,
     selection_loads,
 )
@@ -428,6 +429,7 @@ __all__ = [
     "Walk",
     "WalkDirection",
     "WalkResult",
+    "WhereSelector",
     "XsdType",
     "YieldNormalization",
     "ZeroClosedStar",

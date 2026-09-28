@@ -26,6 +26,7 @@ from tiergraph.path import (
     StructuralPathProfile,
     resolve_path,
 )
+from tiergraph.predicate import Predicate, _decode_predicate, compile_predicate
 from tiergraph.schema import Refusal, RefusalStage, _refuse_field_set
 from tiergraph.wire import _object, _parsed_json, _string
 
@@ -417,6 +418,19 @@ class AttributeSelector:
 
 
 @dataclass(frozen=True, slots=True)
+class WhereSelector:
+    """Retain base-selection nodes on which one bound predicate holds."""
+
+    base: Selector
+    predicate: Predicate
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Evaluate the base first, then mask only that finite candidate domain."""
+        candidates = self.base.evaluate(graph, path_profile=path_profile)
+        return compile_predicate(self.predicate).bind(graph).select(candidates)
+
+
+@dataclass(frozen=True, slots=True)
 class UnionSelector:
     """Union one or more selectors."""
 
@@ -482,6 +496,7 @@ type Selector = (
     | ItemPathSelector
     | BoundaryPathSelector
     | AttributeSelector
+    | WhereSelector
     | UnionSelector
     | IntersectionSelector
     | DifferenceSelector
@@ -580,6 +595,12 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
             ) from error
         return AttributeSelector(
             _qualified_name(node["attribute"], f"{path}.attribute"), domain
+        )
+    if kind == "where":
+        _keys(node, {"select", "base", "predicate"}, path)
+        return WhereSelector(
+            _decode_selector(node["base"], f"{path}.base"),
+            _decode_predicate(node["predicate"], f"{path}.predicate"),
         )
     raise Refusal(
         RefusalStage.DISCRIMINATOR, f"{path}.select has unknown selector {kind!r}"
