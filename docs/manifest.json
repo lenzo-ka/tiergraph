@@ -333,6 +333,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -447,6 +449,11 @@
       "json_schema",
       "shape_hash"
     ],
+    "tiergraph.match": [
+      "Extent",
+      "SpanPairs",
+      "span_pairs"
+    ],
     "tiergraph.predicate": [
       "And",
       "Bare",
@@ -459,9 +466,11 @@
       "Elements",
       "Equals",
       "Has",
+      "IntervalRelation",
       "Literal",
       "Matches",
       "Not",
+      "OffsetProfile",
       "Operand",
       "Or",
       "Order",
@@ -469,6 +478,7 @@
       "PredicateSyntax",
       "Quantifier",
       "Related",
+      "Spans",
       "compile_predicate",
       "format_predicate",
       "parse_predicate",
