@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from functools import cmp_to_key
 from heapq import heappop, heappush
 from itertools import pairwise, product
-from typing import Protocol, TypeVar, cast
+from types import MappingProxyType
+from typing import NamedTuple, Protocol, TypeVar, cast
 
 from tiergraph.core import (
     AttributeDomain,
@@ -28,6 +29,7 @@ from tiergraph.semiring import (
     PathValue,
     Semiring,
     StarRefusal,
+    _semiring_operation_scope,
     inexact_laws,
 )
 
@@ -43,14 +45,19 @@ type RankedWitness[Value] = tuple[Value, Path]
 type _StateResult[Value] = tuple[
     Value, DerivationProvenance, tuple[RankedWitness[Value], ...], int
 ]
-type _Outgoing = dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]]
-type _DependencyGraph = tuple[
-    _Outgoing,
-    tuple[ItemRef, ...],
-    tuple[ItemRef, ...],
-    dict[ItemRef, int],
-    dict[ItemRef, tuple[ItemRef, ...]],
-]
+type _Outgoing = Mapping[ItemRef, Mapping[QualifiedName, tuple[ItemRef, ...]]]
+
+
+class _DependencyGraph(NamedTuple):
+    """Hold immutable graph-derived fold structure shared by declarations."""
+
+    outgoing: _Outgoing
+    roots: tuple[ItemRef, ...]
+    references: tuple[ItemRef, ...]
+    canonical_index: Mapping[ItemRef, int]
+    adjacency: Mapping[ItemRef, tuple[ItemRef, ...]]
+    cyclic_components: tuple[tuple[ItemRef, ...], ...]
+    component_by_item: Mapping[ItemRef, tuple[ItemRef, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,7 +576,7 @@ class FoldDeclaration[Value]:
                 raise ValueError(
                     f"fold {self.name!r} root {root.to_data()!r} is outside its domain"
                 )
-        self._topology()
+        self._dependency_graph()
 
     def _references(self) -> tuple[ItemRef, ...]:
         """Return domain items in the graph's canonical order."""
@@ -637,31 +644,65 @@ class FoldDeclaration[Value]:
 
     def _dependency_graph(self) -> _DependencyGraph:
         """Return the canonical topology, roots, order, and merged child adjacency."""
-        outgoing, item_roots = self._topology()
+        key = (
+            tuple(self.valuation.tiers),
+            tuple(self.transitions),
+            tuple(self.roots),
+        )
+        cached = self.graph._fold_dependencies.get(key)
+        if cached is not None:
+            return cast(_DependencyGraph, cached)
+        mutable_outgoing, item_roots = self._topology()
+        outgoing: _Outgoing = MappingProxyType(
+            {
+                reference: MappingProxyType(by_relation)
+                for reference, by_relation in mutable_outgoing.items()
+            }
+        )
         references = self._references()
-        canonical_index = {
-            reference: index for index, reference in enumerate(references)
-        }
-        adjacency = {
-            reference: tuple(
-                dict.fromkeys(
-                    child
-                    for transition in self.transitions
-                    for child in outgoing[reference][transition.relation]
+        canonical_index = MappingProxyType(
+            {reference: index for index, reference in enumerate(references)}
+        )
+        adjacency = MappingProxyType(
+            {
+                reference: tuple(
+                    dict.fromkeys(
+                        child
+                        for transition in self.transitions
+                        for child in outgoing[reference][transition.relation]
+                    )
                 )
-            )
-            for reference in references
-        }
-        return outgoing, item_roots, references, canonical_index, adjacency
+                for reference in references
+            }
+        )
+        cyclic_components = _cyclic_components(references, canonical_index, adjacency)
+        component_by_item = MappingProxyType(
+            {
+                reference: component
+                for component in cyclic_components
+                for reference in component
+            }
+        )
+        dependency_graph = _DependencyGraph(
+            outgoing,
+            item_roots,
+            references,
+            canonical_index,
+            adjacency,
+            cyclic_components,
+            component_by_item,
+        )
+        self.graph._fold_dependencies[key] = dependency_graph
+        return dependency_graph
 
     def _run_coordinate_pass(
         self,
         outgoing: _Outgoing,
         item_roots: tuple[ItemRef, ...],
         references: tuple[ItemRef, ...],
-        canonical_index: dict[ItemRef, int],
-        adjacency: dict[ItemRef, tuple[ItemRef, ...]],
-        component_by_item: dict[ItemRef, tuple[ItemRef, ...]],
+        canonical_index: Mapping[ItemRef, int],
+        adjacency: Mapping[ItemRef, tuple[ItemRef, ...]],
+        component_by_item: Mapping[ItemRef, tuple[ItemRef, ...]],
         coordinates: tuple[IndexCoordinate, ...],
     ) -> _FoldPass[Value]:
         """Evaluate every coordinate while preserving fold and witness order."""
@@ -720,29 +761,24 @@ class FoldDeclaration[Value]:
         component reaches the algebra's ``star`` as well, which is what
         specifies the fixpoint there.
         """
-        (
-            outgoing,
-            item_roots,
-            references,
-            canonical_index,
-            adjacency,
-        ) = self._dependency_graph()
-        cyclic_components = _cyclic_components(references, canonical_index, adjacency)
-        component_by_item = {
-            reference: component
-            for component in cyclic_components
-            for reference in component
-        }
+        dependency_graph = self._dependency_graph()
+        outgoing = dependency_graph.outgoing
+        item_roots = dependency_graph.roots
+        references = dependency_graph.references
+        canonical_index = dependency_graph.canonical_index
+        adjacency = dependency_graph.adjacency
+        component_by_item = dependency_graph.component_by_item
         coordinates = self.index_coordinates()
-        pass_result = self._run_coordinate_pass(
-            outgoing,
-            item_roots,
-            references,
-            canonical_index,
-            adjacency,
-            component_by_item,
-            coordinates,
-        )
+        with _semiring_operation_scope(self.semiring):
+            pass_result = self._run_coordinate_pass(
+                outgoing,
+                item_roots,
+                references,
+                canonical_index,
+                adjacency,
+                component_by_item,
+                coordinates,
+            )
         all_values = pass_result.values
         root_states = pass_result.root_states
         total = pass_result.total
@@ -851,14 +887,10 @@ class FoldDeclaration[Value]:
                 "be measured against (STRUCTURAL, which owes its algebra's star "
                 "warrant). Not declaring is not the same as declaring APPROXIMATE."
             )
-        (
-            outgoing,
-            item_roots,
-            references,
-            canonical_index,
-            adjacency,
-        ) = self._dependency_graph()
-        cyclic = _cyclic_components(references, canonical_index, adjacency)
+        dependency_graph = self._dependency_graph()
+        outgoing = dependency_graph.outgoing
+        item_roots = dependency_graph.roots
+        cyclic = dependency_graph.cyclic_components
         if self.exactness is FoldExactness.STRUCTURAL:
             if cyclic:
                 return FoldCertificate(self.exactness, self.run(), 0, 0, False)
@@ -1368,9 +1400,9 @@ class _CoordinatePass[Value]:
 
     fold: FoldDeclaration[Value]
     outgoing: _Outgoing
-    canonical_index: dict[ItemRef, int]
-    adjacency: dict[ItemRef, tuple[ItemRef, ...]]
-    component_by_item: dict[ItemRef, tuple[ItemRef, ...]]
+    canonical_index: Mapping[ItemRef, int]
+    adjacency: Mapping[ItemRef, tuple[ItemRef, ...]]
+    component_by_item: Mapping[ItemRef, tuple[ItemRef, ...]]
     accumulator: _FoldAccumulator[Value]
     cache: dict[ItemRef, _StateResult[Value]] = field(default_factory=dict)
 
@@ -1790,8 +1822,8 @@ class FoldHomomorphism[Value, OtherValue]:
 
 def _cyclic_components(
     references: tuple[ItemRef, ...],
-    canonical_index: dict[ItemRef, int],
-    adjacency: dict[ItemRef, tuple[ItemRef, ...]],
+    canonical_index: Mapping[ItemRef, int],
+    adjacency: Mapping[ItemRef, tuple[ItemRef, ...]],
 ) -> tuple[tuple[ItemRef, ...], ...]:
     """Return the strongly connected components that carry a cycle, in canonical order."""
     tarjan_index = 0

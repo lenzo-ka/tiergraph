@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 import operator
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
+from decimal import MAX_EMAX, MIN_EMIN, Context, Decimal, getcontext, localcontext
 from enum import Enum
 from itertools import repeat
 from typing import Any, Protocol, cast
@@ -275,6 +277,12 @@ class DecimalExtremumSemiring:
         # addition so the XSD-decimal value-space operation stays exact.
         precision = max(len(left.as_tuple().digits), len(right.as_tuple().digits))
         precision += abs(left.adjusted() - right.adjusted()) + 2
+        fold_context = _fold_decimal_context.get()
+        if fold_context is not None:
+            fold_context.prec = precision
+            fold_context.Emax = MAX_EMAX
+            fold_context.Emin = MIN_EMIN
+            return self._value(fold_context.add(left, right), "result")
         with localcontext() as context:
             context.prec = precision
             context.Emax = MAX_EMAX
@@ -1077,6 +1085,24 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
     def multiply_preserves_witness_order(self) -> bool:
         """Report preservation of the exact decimal cost ordering."""
         return True
+
+
+_fold_decimal_context: ContextVar[Context | None] = ContextVar(
+    "tiergraph_fold_decimal_context", default=None
+)
+
+
+@contextmanager
+def _semiring_operation_scope(semiring: Semiring[Any]) -> Iterator[None]:
+    """Share exact Decimal setup within one fold without changing ambient state."""
+    if not isinstance(semiring, (DecimalExtremumSemiring, PathSemiring)):
+        yield
+        return
+    token = _fold_decimal_context.set(getcontext().copy())
+    try:
+        yield
+    finally:
+        _fold_decimal_context.reset(token)
 
 
 type Path = tuple[str, ...]
