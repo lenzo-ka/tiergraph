@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-29
+
 ### Changed
 
-- Reused immutable fold structure and exact Decimal setup across fold runs.
+- Reused each graph's immutable fold dependency plan across matching declarations.
+- Set up exact Decimal arithmetic once per fold.
 
 ## [0.4.1] - 2026-09-29
 
@@ -1054,7 +1057,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.3...v0.3.0

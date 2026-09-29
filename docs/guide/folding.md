@@ -335,6 +335,13 @@ Use `TROPICAL` or `ARCTIC`, whose associativity check is approximate, for
 `xsd:double` values. The refusal is a declaration-time guard, so a fold that
 runs has already been checked for this mismatch.
 
+A graph retains the immutable dependency plan a fold derives from its valued
+tiers, transitions, and roots, so matching declarations and repeated runs reuse
+that structural setup. The cache is derived state rather than graph content:
+copying, deep-copying, or pickling a graph does not carry it into the new graph.
+Folds over an exact Decimal semiring also create one private arithmetic context
+per run and leave the caller's ambient Decimal context unchanged.
+
 ## Preparing a path plan
 
 A fold over one `OR` relation on an acyclic graph is a path graph: every
