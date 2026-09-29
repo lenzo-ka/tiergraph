@@ -1147,7 +1147,7 @@ def test_fold_reproduces_the_guide_least_cost_and_path_count(
         {"path": ["a", "b", "d"], "value": "4.0"},
         {"path": ["a", "c", "d"], "value": "7.0"},
     ]
-    assert least_cost["cost"]["carrier_work"] == 19
+    assert least_cost["cost"]["carrier_work"] == 16
 
     assert main(_fold_args(source, "counting", "one", "--name", "path-count")) == 0
     path_count = json.loads(capsys.readouterr().out)

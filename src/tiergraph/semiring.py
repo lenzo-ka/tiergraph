@@ -1044,6 +1044,35 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
     def __init__(self) -> None:
         super().__init__(DECIMAL_TROPICAL, PATH_WITNESSES)
 
+    def _ranked_key(
+        self,
+        value: tuple[Decimal, tuple[tuple[str, ...], ...]],
+        witness: tuple[str, ...],
+    ) -> tuple[Decimal, tuple[str, ...]] | None:
+        """Key a validated singleton ranked value without repeating addition."""
+        return (value[0], witness) if len(value[1]) <= 1 else None
+
+    def _ranked_value(
+        self, value: tuple[Decimal, tuple[tuple[str, ...], ...]]
+    ) -> tuple[Decimal, tuple[tuple[str, ...], ...]]:
+        """Validate a value once as it enters ranked internal work."""
+        value = self._value(value, "ranked value")
+        cost = DECIMAL_TROPICAL._value(value[0], "ranked value cost")
+        paths = PATH_WITNESSES._value(value[1], "ranked value paths")
+        return (cost, paths)
+
+    def _ranked_multiply(
+        self,
+        left: tuple[Decimal, tuple[tuple[str, ...], ...]],
+        right: tuple[Decimal, tuple[tuple[str, ...], ...]],
+    ) -> tuple[Decimal, tuple[tuple[str, ...], ...]]:
+        """Multiply values already validated inside ranked fold work."""
+        if left == self.zero or right == self.zero:
+            return self.zero
+        cost = DECIMAL_TROPICAL.multiply(left[0], right[0])
+        paths = tuple(sorted({a + b for a in left[1] for b in right[1]}))
+        return (cost, paths)
+
     @property
     def multiply_preserves_witness_order(self) -> bool:
         """Report preservation of the exact decimal cost ordering."""

@@ -422,7 +422,7 @@ def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
         result.cost.carrier_multiplications,
         result.cost.witness_operations,
         result.cost.ranked_multiplications,
-    ) == (5, 8, 6, 4)
+    ) == (2, 8, 10, 4)
 
 
 def ranked_tie() -> FoldDeclaration[object]:
@@ -1045,11 +1045,279 @@ def test_ranked_candidate_deduplication_is_costed() -> None:
     operations = [0]
     additions = [0]
     candidate = (PATH.one, ("same",))
+    second = ((Decimal(1), (("second",),)), ("same",))
+    third = ((Decimal(2), (("third",),)), ("same",))
     ranked = declared._rank_candidates(
-        (candidate, candidate, (PATH.one, ("other",))), operations, additions
+        (
+            candidate,
+            candidate,
+            second,
+            third,
+            (PATH.one, ("other",)),
+        ),
+        operations,
+        additions,
     )
     assert ranked == ((PATH.one, ("other",)),)
     assert operations[0] > 0
+
+
+def test_ranked_path_falls_back_to_addition_for_aggregated_carrier_values() -> None:
+    """A non-singleton PATH value keeps addition's subset preference."""
+    declared = declaration()
+    superset: PathValue = (Decimal(0), (("a",), ("b",)))
+    subset: PathValue = (Decimal(0), (("a",),))
+    operations = [0]
+    additions = [0]
+
+    ranked = declared._rank_candidates(
+        ((superset, ("z",)), (subset, ("y",))), operations, additions
+    )
+
+    assert ranked == ((superset, ("z",)), (subset, ("y",)))
+    assert additions == [1]
+    assert declared._rank_candidates(
+        ((subset, ("y",)), (superset, ("z",))), [0], [0]
+    ) == ((superset, ("z",)), (subset, ("y",)))
+
+
+def test_trusted_ranked_path_multiplication_is_the_public_path_product() -> None:
+    """Trusted ranked work changes validation frequency, not PATH arithmetic."""
+    left: PathValue = (Decimal("2.5"), (("a",), ("b",)))
+    right: PathValue = (Decimal("3.5"), (("c",),))
+
+    assert PATH._ranked_multiply(left, right) == PATH.multiply(left, right)
+    assert PATH._ranked_multiply(PATH.zero, right) == PATH.zero
+    assert PATH._ranked_multiply(left, PATH.zero) == PATH.zero
+
+
+def test_ranked_aggregating_semiring_keeps_the_two_stage_comparison() -> None:
+    """An arbitrary aggregating addition still decides before the path tie-break."""
+
+    class ObservedPathSemiring:
+        def __init__(self) -> None:
+            self.add_calls = 0
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(PATH, name)
+
+        def add(self, left: PathValue, right: PathValue) -> PathValue:
+            self.add_calls += 1
+            return PATH.add(left, right)
+
+    algebra = ObservedPathSemiring()
+    declared = replace(
+        declaration(), semiring=cast(Semiring[object], algebra), output_cap=2
+    )
+    left: PathValue = (Decimal(0), (("left",),))
+    right: PathValue = (Decimal(0), (("right",),))
+
+    ranked = declared._rank_candidates(((left, ("z",)), (right, ("a",))), [0], [0])
+
+    assert ranked == ((right, ("a",)), (left, ("z",)))
+    assert algebra.add_calls == 1
+    assert declared._rank_candidates(((left, ("z",)), (left, ("a",))), [0], [0]) == (
+        (left, ("a",)),
+        (left, ("z",)),
+    )
+
+
+def ranked_chain() -> FoldDeclaration[PathValue]:
+    """Return a neutral chain lattice with five independent skip alternatives."""
+    position_name = FIXTURE.name("rank-position")
+    candidate_name = FIXTURE.name("rank-candidate")
+    position_type = FIXTURE.name("rank-position-type")
+    candidate_type = FIXTURE.name("rank-candidate-type")
+    weight = FIXTURE.name("rank-weight")
+    offers = BipartiteRelationDeclaration(
+        FIXTURE.name("rank-offers"), position_type, candidate_type, acyclic=True
+    )
+    spans = BipartiteRelationDeclaration(
+        FIXTURE.name("rank-spans"), candidate_type, position_type, acyclic=True
+    )
+    positions = Tier(
+        TierDeclaration(position_name, "Rank positions"),
+        tuple(
+            Item(
+                f"p{index}",
+                (AttributeValue(weight, XsdType.DECIMAL, "0"),),
+            )
+            for index in range(21)
+        ),
+    )
+    edges = [(index, index + 1, f"u{index}") for index in range(20)] + [
+        (index, index + 2, f"a{index}") for index in range(10, 20, 2)
+    ]
+    candidates = Tier(
+        TierDeclaration(candidate_name, "Rank candidates"),
+        tuple(
+            Item(
+                label,
+                (AttributeValue(weight, XsdType.DECIMAL, str(end - start)),),
+            )
+            for start, end, label in edges
+        ),
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (positions, candidates),
+        (
+            SimpleRelationDeclaration(
+                FIXTURE.name("rank-position-members"),
+                position_name,
+                position_type,
+            ),
+            SimpleRelationDeclaration(
+                FIXTURE.name("rank-candidate-members"),
+                candidate_name,
+                candidate_type,
+            ),
+            offers,
+            spans,
+        ),
+        tuple(
+            relation
+            for candidate_index, (start, end, _label) in enumerate(edges)
+            for relation in (
+                RelationInstance(
+                    offers.name,
+                    ItemRef(position_name, start),
+                    ItemRef(candidate_name, candidate_index),
+                ),
+                RelationInstance(
+                    spans.name,
+                    ItemRef(candidate_name, candidate_index),
+                    ItemRef(position_name, end),
+                ),
+            )
+        ),
+        (AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    return FoldDeclaration(
+        "rank-chain",
+        graph,
+        AttributeValuation("rank-weight", weight, (position_name, candidate_name)),
+        PATH,
+        path_lift,
+        (
+            FoldTransition(offers.name, ChildCombination.OR),
+            FoldTransition(spans.name, ChildCombination.AND),
+        ),
+        roots=(ItemRef(position_name, 0),),
+        output_cap=8,
+        ranked_output=True,
+    )
+
+
+def test_ranked_chain_keeps_the_exact_bounded_prefix_without_quadratic_deduplication() -> (
+    None
+):
+    """A long neutral chain retains its literal ranked prefix with bounded work."""
+    result = ranked_chain().run()
+    common = (
+        "p0",
+        "u0",
+        "p1",
+        "u1",
+        "p2",
+        "u2",
+        "p3",
+        "u3",
+        "p4",
+        "u4",
+        "p5",
+        "u5",
+        "p6",
+        "u6",
+        "p7",
+        "u7",
+        "p8",
+        "u8",
+        "p9",
+        "u9",
+        "p10",
+        "a10",
+        "p12",
+        "a12",
+        "p14",
+    )
+    expected_paths = (
+        (*common, "a14", "p16", "a16", "p18", "a18", "p20"),
+        (*common, "a14", "p16", "a16", "p18", "u18", "p19", "u19", "p20"),
+        (*common, "a14", "p16", "u16", "p17", "u17", "p18", "a18", "p20"),
+        (
+            *common,
+            "a14",
+            "p16",
+            "u16",
+            "p17",
+            "u17",
+            "p18",
+            "u18",
+            "p19",
+            "u19",
+            "p20",
+        ),
+        (
+            *common,
+            "u14",
+            "p15",
+            "u15",
+            "p16",
+            "a16",
+            "p18",
+            "a18",
+            "p20",
+        ),
+        (
+            *common,
+            "u14",
+            "p15",
+            "u15",
+            "p16",
+            "a16",
+            "p18",
+            "u18",
+            "p19",
+            "u19",
+            "p20",
+        ),
+        (
+            *common,
+            "u14",
+            "p15",
+            "u15",
+            "p16",
+            "u16",
+            "p17",
+            "u17",
+            "p18",
+            "a18",
+            "p20",
+        ),
+        (
+            *common,
+            "u14",
+            "p15",
+            "u15",
+            "p16",
+            "u16",
+            "p17",
+            "u17",
+            "p18",
+            "u18",
+            "p19",
+            "u19",
+            "p20",
+        ),
+    )
+
+    assert result.cost.witness_count == 32
+    assert result.ranked_witnesses == tuple(
+        ((Decimal("20.0"), (path,)), path) for path in expected_paths
+    )
+    assert result.cost.witness_operations < 1_000
+    assert result.cost.carrier_additions < 100
 
 
 def test_fold_selects_the_winning_payload_through_semiring_addition() -> None:

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Value predicates (`tiergraph.predicate`), their strict JSON form, and `WhereSelector`.
 - Text value predicates, missing-cell aliases, and `select --where`.
 
+### Fixed
+
+- Ranked folds deduplicate witnesses by hash and validate PATH values once, so ranking no longer grows quadratically with the kept prefix; ranked output is unchanged.
+
 ## [0.3.0] - 2026-09-22
 
 ### Added
