@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import fields, replace
-from decimal import Decimal
+from decimal import ROUND_DOWN, Context, Decimal, Inexact, localcontext
 from typing import cast
 
 import pytest
 
+import tiergraph.semiring as semiring_module
 from tests.conformance.fold import FoldFixture
 from tests.conformance.recognition import FoldLawSuite
 from tiergraph import (
@@ -194,6 +197,102 @@ def test_output_cap_is_measured_and_observable() -> None:
     assert tied.cost.witness_count == 2
     assert tied.cost.emitted_count == 1
     assert tied.cost.output_cap == 1
+
+
+def test_one_graph_reuses_one_dependency_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fold modes over one immutable graph share its structural preparation."""
+    prototype = declaration()
+    graph = FIXTURE.graph()
+    topology_calls = 0
+    original = FoldDeclaration._topology
+
+    def counted_topology(
+        declared: FoldDeclaration[object],
+    ) -> tuple[
+        dict[ItemRef, dict[QualifiedName, tuple[ItemRef, ...]]], tuple[ItemRef, ...]
+    ]:
+        nonlocal topology_calls
+        topology_calls += 1
+        return original(declared)
+
+    monkeypatch.setattr(FoldDeclaration, "_topology", counted_topology)
+    ranked = replace(prototype, graph=graph)
+    counting = replace(
+        prototype,
+        graph=graph,
+        semiring=cast(Semiring[object], COUNTING),
+        lift=lambda _value, _label: 1,
+        witness_order=None,
+        tie_policy=None,
+    )
+
+    ranked.run()
+    counting.run()
+    ranked.run()
+
+    assert topology_calls == 1
+
+
+def test_fold_hoists_decimal_setup_without_changing_ambient_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One private context preserves exact output, caller settings, and traps."""
+    graph = FIXTURE.graph()
+    cost = FIXTURE.name("cost")
+    placement = FIXTURE.name("placement")
+    for index, lexical in enumerate(("0.0000", "1.2345", "9.8765", "2.3456")):
+        graph = graph.set_attribute(
+            ItemRef(placement, index),
+            AttributeValue(cost, XsdType.DECIMAL, lexical),
+        )
+    declared = replace(
+        declaration("cost", cast(Semiring[object], DECIMAL_TROPICAL)), graph=graph
+    )
+    expected = declared.run().to_data(declared.semiring)
+    getcontext_calls = 0
+    localcontext_calls = 0
+    original_getcontext = cast(
+        Callable[[], Context], semiring_module.__dict__["getcontext"]
+    )
+    original_localcontext = cast(
+        Callable[..., AbstractContextManager[Context]],
+        semiring_module.__dict__["localcontext"],
+    )
+
+    def counted_getcontext() -> Context:
+        nonlocal getcontext_calls
+        getcontext_calls += 1
+        return original_getcontext()
+
+    def counted_localcontext(
+        *args: object, **kwargs: object
+    ) -> AbstractContextManager[Context]:
+        nonlocal localcontext_calls
+        localcontext_calls += 1
+        return original_localcontext(*args, **kwargs)
+
+    monkeypatch.setattr(semiring_module, "getcontext", counted_getcontext)
+    monkeypatch.setattr(semiring_module, "localcontext", counted_localcontext)
+    with localcontext() as ambient:
+        ambient.prec = 2
+        ambient.rounding = ROUND_DOWN
+        ambient.traps[Inexact] = True
+        ambient.clear_flags()
+
+        actual = declared.run().to_data(declared.semiring)
+
+        assert ambient.prec == 2
+        assert ambient.rounding == ROUND_DOWN
+        assert ambient.traps[Inexact] is True
+        assert not any(ambient.flags.values())
+    assert actual == expected
+    assert getcontext_calls == 1
+    assert localcontext_calls == 0
+
+    DECIMAL_TROPICAL.multiply(Decimal("1.2345"), Decimal("2.3456"))
+    assert localcontext_calls == 1
 
 
 def test_witnesses_require_a_tie_policy() -> None:

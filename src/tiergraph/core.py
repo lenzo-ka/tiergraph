@@ -1225,6 +1225,13 @@ class Graph:
         init=False, repr=False, compare=False
     )
     _items_by_id: dict[str, ItemRef] = field(init=False, repr=False, compare=False)
+    # Derived fold structure is safe to retain here: every semantic collection
+    # above is an immutable tuple of frozen values, and a replacement Graph gets
+    # a fresh cache.  Keeping it on the owning graph also prevents cross-graph
+    # reuse without making the cache part of equality or the wire form.
+    _fold_dependencies: dict[object, object] = field(
+        init=False, repr=False, compare=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Canonicalize keyed collections and validate the complete graph."""
