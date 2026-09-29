@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from decimal import Decimal
 from typing import cast
 
@@ -51,8 +52,12 @@ from tiergraph.predicate import (
     Or,
     Order,
     Predicate,
+    PredicateSyntax,
     Quantifier,
     compile_predicate,
+    format_predicate,
+    parse_predicate,
+    parse_predicate_at,
     predicate_loads,
     predicate_to_data,
 )
@@ -467,7 +472,12 @@ def test_f13_regex_refusals_are_literal(regex: str, offset: int, message: str) -
 
 def test_regex_nesting_is_bounded_before_recursive_parsing() -> None:
     operand = Cell(q("label"))
-    Matches(operand, "(" * 256 + ")" * 256)
+    previous = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(400)
+        Matches(operand, "(" * 256 + ")" * 256)
+    finally:
+        sys.setrecursionlimit(previous)
     for depth in (257, 300):
         with pytest.raises(ValueError) as caught:
             Matches(operand, "(" * depth + ")" * depth)
@@ -486,12 +496,19 @@ def test_character_classes_follow_perl_for_a_leading_close_bracket() -> None:
             ("close", (xsd("label", XsdType.STRING, "]"),)),
             ("a", (xsd("label", XsdType.STRING, "a"),)),
             ("b", (xsd("label", XsdType.STRING, "b"),)),
+            ("dash", (xsd("label", XsdType.STRING, "-"),)),
         ),
         (("label", XsdType.STRING),),
         tier_name="labels",
     )
     assert selected(source, Matches(operand, "[]a]"), "labels") == ["close", "a"]
-    assert selected(source, Matches(operand, "[^]a]"), "labels") == ["b"]
+    assert selected(source, Matches(operand, "[^]a]"), "labels") == ["b", "dash"]
+    assert selected(source, Matches(operand, "[]-a]"), "labels") == ["close", "a"]
+    with pytest.raises(ValueError) as caught:
+        Matches(operand, "[]--]")
+    assert str(caught.value) == (
+        "regex at offset 3: character-class range ]-- is reversed"
+    )
 
 
 def test_f14_every_atom_is_evaluated_before_boolean_combination() -> None:
@@ -950,14 +967,14 @@ def test_bare_literals_are_typed_by_xsd_and_json_cells() -> None:
         assert (
             selected(source, Equals(Cell(q("value")), (literal,)), "data") == expected
         )
-    with pytest.raises(Refusal, match="not an exact numeric comparison value"):
-        compile_predicate(Compare(Cell(q("value")), Order.LT, Bare("word"))).bind(
-            source
-        )
-    with pytest.raises(Refusal, match="not an exact numeric comparison value"):
-        compile_predicate(Compare(Cell(q("value")), Order.LT, None)).bind(source)
-    with pytest.raises(Refusal, match="not an exact numeric comparison value"):
-        compile_predicate(Compare(Cell(q("value")), Order.LT, True)).bind(source)
+    for value, message in (
+        (Bare("word"), "value<word: 'word' is not an exact numeric comparison value"),
+        (None, "value<null: 'null' is not an exact numeric comparison value"),
+        (True, "value<true: 'true' is not an exact numeric comparison value"),
+    ):
+        with pytest.raises(Refusal) as caught:
+            compile_predicate(Compare(Cell(q("value")), Order.LT, value)).bind(source)
+        assert str(caught.value) == message
 
     null_graph = Graph(
         (NamespaceDeclaration("ex", NS),),
@@ -988,7 +1005,7 @@ def test_compare_current_refuses_a_non_numeric_literal_at_bind() -> None:
     with pytest.raises(Refusal) as caught:
         compile_predicate(predicate).bind(source)
     assert caught.value.stage is RefusalStage.SEMANTICS
-    assert str(caught.value) == "'x' is not an exact numeric comparison value"
+    assert str(caught.value) == "./y<x: 'x' is not an exact numeric comparison value"
 
 
 def test_predicate_json_decoder_refuses_each_wrong_shape() -> None:
@@ -1038,3 +1055,539 @@ def test_predicate_json_round_trips_every_literal_and_pointer_form() -> None:
         )
     )
     assert predicate_loads(json.dumps(predicate_to_data(predicate))) == predicate
+
+
+SYN = PredicateSyntax((NamespaceDeclaration("ex", NS),), default_prefix="ex")
+
+
+def parsed(text: str, syntax: PredicateSyntax = SYN) -> Predicate:
+    return parse_predicate(text, syntax)
+
+
+def test_t1_text_precedence_choice_continuation_and_keywords() -> None:
+    assert parsed("a=1 | b=2 & !c=3") == Or(
+        (
+            Equals(Cell(q("a")), (Bare("1"),)),
+            And(
+                (
+                    Equals(Cell(q("b")), (Bare("2"),)),
+                    Not(Equals(Cell(q("c")), (Bare("3"),))),
+                )
+            ),
+        )
+    )
+    assert parsed("f=a|b") == Equals(Cell(q("f")), (Bare("a"), Bare("b")))
+    assert parsed("f=a|g=b") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Equals(Cell(q("g")), (Bare("b"),)),
+        )
+    )
+    assert parsed("f=a|g/k=b") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Equals(Cell(q("g"), ("k",)), (Bare("b"),)),
+        )
+    )
+    assert parsed("f=a|none(g: .=x)") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Elements(
+                Cell(q("g")),
+                Quantifier.NONE,
+                Equals(Current(), (Bare("x"),)),
+            ),
+        )
+    )
+    assert parsed("none=x") == Equals(Cell(q("none")), (Bare("x"),))
+    missing = Not(Has(Cell(q("f")), alias="none"))
+    assert parsed("f=a|none") == Or((Equals(Cell(q("f")), (Bare("a"),)), missing))
+    assert parsed("f=(a|b)") == Equals(Cell(q("f")), (Bare("a"), Bare("b")))
+
+
+def test_t2_empty_string_quotes_and_escapes_are_distinct_from_missing() -> None:
+    source = graph(
+        (
+            ("q0", (xsd("f", XsdType.STRING, ""),)),
+            ("q1", ()),
+            ("q2", (xsd("f", XsdType.STRING, "x"),)),
+        ),
+        (("f", XsdType.STRING),),
+        tier_name="q",
+    )
+    cases = (
+        ('f=""', ["q0"]),
+        ("f=none", ["q1"]),
+        ('f!=""', ["q1", "q2"]),
+        ("f!=none", ["q0", "q2"]),
+    )
+    for text, expected in cases:
+        assert selected(source, parsed(text), "q") == expected
+    assert parsed(r'f="\""') == Equals(Cell(q("f")), ('"',))
+    assert parsed(r'f="\\"') == Equals(Cell(q("f")), ("\\",))
+    assert parsed('f="none"') == Equals(Cell(q("f")), ("none",))
+    assert parsed('f="a\nb"') == Equals(Cell(q("f")), ("a\nb",))
+    with pytest.raises(Refusal) as caught:
+        parsed(r'f="\n"')
+    assert str(caught.value) == (
+        "predicate at offset 3: '\\n' is not an escape; a quoted string admits "
+        'only \\" and \\\\'
+    )
+
+
+def test_t3_missing_alias_overrides_replace_the_default() -> None:
+    source = graph(
+        (
+            ("q0", (xsd("f", XsdType.STRING, ""),)),
+            ("q1", ()),
+            ("q2", (xsd("f", XsdType.STRING, "x"),)),
+        ),
+        (("f", XsdType.STRING),),
+        tier_name="q",
+    )
+    dash = PredicateSyntax(SYN.namespaces, "ex", ("-",))
+    assert parsed("f=none", dash) == Equals(Cell(q("f")), (Bare("none"),))
+    missing = Not(Has(Cell(q("f")), alias="-"))
+    assert parsed("f=-", dash) == missing
+    assert selected(source, missing, "q") == ["q1"]
+    empty = PredicateSyntax(SYN.namespaces, "ex", ())
+    assert parsed("f=none", empty) == Equals(Cell(q("f")), (Bare("none"),))
+    with pytest.raises(ValueError) as caught:
+        format_predicate(Not(Has(Cell(q("f")), alias="none")), empty)
+    assert str(caught.value) == "alias 'none' is not declared in this syntax"
+
+
+def test_t4_inequality_is_whole_slot_negation() -> None:
+    source = stress6()
+    cases = (
+        ("stress!=primary", ["1", "2", "3", "4", "5"]),
+        ("stress!=primary|none", ["1", "3", "5"]),
+        ("stress!=none", ["0", "1", "3", "5"]),
+    )
+    for text, expected in cases:
+        assert selected(source, parsed(text)) == expected
+    assert parsed("stress!=primary") == Not(
+        Equals(Cell(q("stress")), (Bare("primary"),))
+    )
+    assert parsed("stress!=primary|none") == Not(
+        Or(
+            (
+                Equals(Cell(q("stress")), (Bare("primary"),)),
+                Not(Has(Cell(q("stress")), alias="none")),
+            )
+        )
+    )
+
+
+def test_t5_alias_collisions_survive_parse_bind_and_json() -> None:
+    collision = graph(
+        (
+            ("0", (xsd("stress", XsdType.STRING, "none"),)),
+            ("1", (xsd("stress", XsdType.STRING, "primary"),)),
+            ("2", ()),
+        ),
+        (("stress", XsdType.STRING),),
+    )
+    vocabulary = PredicateSyntax(
+        SYN.namespaces,
+        "ex",
+        vocabularies=((q("stress"), ("none", "primary")),),
+    )
+    with pytest.raises(Refusal) as caught:
+        parsed("stress=none", vocabulary)
+    assert str(caught.value) == (
+        "predicate at offset 7: stress=none: 'none' is both the missing-cell "
+        'alias and a declared value of stress; write stress="none" for the '
+        "value, or declare a different missing alias"
+    )
+    predicate = parsed("stress=none")
+    for routed in (
+        predicate,
+        predicate_loads(json.dumps(predicate_to_data(predicate))),
+    ):
+        with pytest.raises(Refusal) as caught:
+            compile_predicate(routed).bind(collision)
+        assert str(caught.value) == (
+            "stress=none: 'none' is both the missing-cell alias and a stored "
+            'value of stress; write stress="none" for the value, or declare '
+            "a different missing alias"
+        )
+    assert selected(collision, parsed('stress="none"')) == ["0"]
+    assert selected(stress6(), predicate) == ["2", "4"]
+
+    nested_collision = graph(
+        (("a0", (native("alts", [{"provenance": "none"}]),)),),
+        (("alts", JsonType.JSON),),
+        tier_name="alts",
+    )
+    nested = parsed("none(alts: ./provenance=none)")
+    with pytest.raises(Refusal, match="both the missing-cell alias"):
+        compile_predicate(nested).bind(nested_collision)
+
+
+def test_t6_parse_predicate_at_ignores_quoted_terminators() -> None:
+    text = 'a{stress="x\\"}"}'
+    assert parse_predicate_at(text, 2, SYN) == (
+        Equals(Cell(q("stress")), ('x"}',)),
+        15,
+    )
+    with pytest.raises(ValueError) as caught:
+        parse_predicate_at("a{f=x}", 2, SYN, terminator="|")
+    assert str(caught.value) == (
+        "terminator '|' is value-test notation; choose one of } ] ) ,"
+    )
+    with pytest.raises(Refusal) as caught:
+        parse_predicate_at("a{stress=x", 2, SYN)
+    assert str(caught.value) == (
+        "predicate at offset 10: predicate text has no closing '}'"
+    )
+
+
+def test_t7_canonical_format_and_round_trips() -> None:
+    examples: tuple[tuple[Predicate, str], ...] = (
+        (
+            And(
+                (
+                    Equals(Cell(q("class")), (Bare("vowel"),)),
+                    Or(
+                        (
+                            Equals(
+                                Cell(q("stress")),
+                                (Bare("primary"), Bare("secondary")),
+                            ),
+                            Not(Has(Cell(q("stress")), alias="none")),
+                        )
+                    ),
+                )
+            ),
+            "class=vowel & stress=primary|secondary|none",
+        ),
+        (Not(And((parsed("a=1"), parsed("b=2")))), "!(a=1 & b=2)"),
+        (And((Or((parsed("a=1"), parsed("b=2"))), parsed("c=3"))), "(a=1 | b=2) & c=3"),
+        (
+            Elements(
+                Cell(q("alternatives")),
+                Quantifier.ANY,
+                Equals(Current(("provenance",)), ("m",)),
+            ),
+            'any(alternatives: ./provenance="m")',
+        ),
+        (Equals(Cell(q("f")), ("",)), 'f=""'),
+        (Has(Cell(q("f")), alias="none"), "f!=none"),
+        (Compare(Cell(q("year")), Order.LT, Bare("1000")), "year<1000"),
+    )
+    for predicate, text in examples:
+        assert format_predicate(predicate, SYN) == text
+        assert parsed(text) == predicate
+
+    texts = (
+        "a=1 | b=2 & !c=3",
+        "f=a|b",
+        'f=""',
+        "stress!=primary|none",
+        "any(alternatives: ./provenance=none)",
+    )
+    for text in texts:
+        round_trip = parsed(text)
+        formatted = format_predicate(round_trip, SYN)
+        assert parsed(formatted) == round_trip
+        assert format_predicate(parsed(formatted), SYN) == formatted
+        assert predicate_loads(json.dumps(predicate_to_data(round_trip))) == round_trip
+
+    refusals: tuple[tuple[Predicate, str], ...] = (
+        (
+            Equals(Cell(q("year")), (1000,)),
+            'literal 1000 (int) has no text form; bare text is typed by the cell at bind, so write Bare("1000") or use JSON',
+        ),
+        (
+            Equals(Cell(q("f")), (Bare("none"),)),
+            "Bare('none') is spelled like the missing-cell alias; it has no text form under this syntax",
+        ),
+        (cast(Predicate, object()), "object has no value-test text; use JSON"),
+    )
+    for predicate, message in refusals:
+        with pytest.raises(ValueError) as caught:
+            format_predicate(predicate, SYN)
+        assert str(caught.value) == message
+
+
+@pytest.mark.parametrize(
+    "text,offset,message,syntax",
+    [
+        ("", 0, "empty predicate; write a test such as class=vowel", SYN),
+        (
+            "stress",
+            0,
+            "'stress' names a cell but tests nothing; write stress!=none to test that it is present",
+            SYN,
+        ),
+        (
+            r'f="\n"',
+            3,
+            r"'\n' is not an escape; a quoted string admits only \" and \\",
+            SYN,
+        ),
+        ('f="abc', 2, "quoted string is never closed", SYN),
+        (
+            "f=(a)",
+            2,
+            "a parenthesized value list needs at least two values; write the value without parentheses",
+            SYN,
+        ),
+        (
+            "year<none",
+            5,
+            "'none' is the missing-cell alias and has no order; ordered comparison needs a value",
+            SYN,
+        ),
+        (
+            "f~abc",
+            1,
+            "'~' needs a quoted regular expression, as in label~\"a.*\"",
+            SYN,
+        ),
+        ("?p(.)", 0, "'?' calls a declared predicate, which is reserved", SYN),
+        (
+            "a=1 || b=2",
+            4,
+            "'||' is reserved for ordered choice; write '|' for or",
+            SYN,
+        ),
+        (
+            "a=1 && b=2",
+            4,
+            "'&&' is reserved for short-circuit conjunction; write '&' for and",
+            SYN,
+        ),
+        (
+            "f=∅",
+            2,
+            "'∅' is reserved for the empty language; write the missing-cell alias none for a missing cell",
+            SYN,
+        ),
+        (
+            "f=.5",
+            2,
+            "a value cannot start with '.'; write 0.5 for a number",
+            SYN,
+        ),
+        ("%d{1}", 0, "'%' is reserved for typed literals", SYN),
+        ("(f=a", 0, "'(' is never closed", SYN),
+        ("f=a)", 3, "')' closes no group", SYN),
+        ("f=a|", 3, "'|' has no value or test after it", SYN),
+        (
+            "stress=none",
+            7,
+            "stress=none: 'none' is both the missing-cell alias and a declared value of stress; write stress=\"none\" for the value, or declare a different missing alias",
+            PredicateSyntax(
+                SYN.namespaces,
+                "ex",
+                vocabularies=((q("stress"), ("none", "primary")),),
+            ),
+        ),
+        (
+            "stress",
+            0,
+            "'stress' has no prefix, and this syntax declares no default prefix",
+            PredicateSyntax(SYN.namespaces),
+        ),
+        ("(" * 257 + "f=a" + ")" * 257, 256, "predicate nests deeper than 256", SYN),
+        ("#", 0, "unexpected '#'", SYN),
+        (
+            'label~"a*?"',
+            8,
+            "regex: '*?' is a lazy quantifier; every match is decided, so lazy and possessive quantifiers are refused",
+            SYN,
+        ),
+        ("f=a|a", 4, "'a' appears twice in one value list", SYN),
+        (
+            "f=none|none",
+            7,
+            "the missing-cell alias 'none' appears twice in one value list",
+            SYN,
+        ),
+    ],
+)
+def test_t8_text_refusals_are_literal_and_located(
+    text: str, offset: int, message: str, syntax: PredicateSyntax
+) -> None:
+    with pytest.raises(Refusal) as caught:
+        parsed(text, syntax)
+    assert caught.value.stage is RefusalStage.SYNTAX
+    assert str(caught.value) == f"predicate at offset {offset}: {message}"
+
+
+def test_t9_bare_xsd_typing_and_bind_refusals() -> None:
+    assert selected(years(), parsed("year=0900"), "year-items") == ["y0"]
+    flags = graph(
+        (
+            ("b0", (xsd("flag", XsdType.BOOLEAN, "true"),)),
+            ("b1", (xsd("flag", XsdType.BOOLEAN, "false"),)),
+        ),
+        (("flag", XsdType.BOOLEAN),),
+        tier_name="flags",
+    )
+    assert selected(flags, parsed("flag=1"), "flags") == ["b0"]
+    for text, message in (
+        ("year=abc", "year=abc: 'abc' is not an xsd:integer value"),
+        (
+            'year="1999"',
+            'year="1999": ex:year is xsd:integer and "1999" is a quoted string, so the test can never hold; write year=1999',
+        ),
+    ):
+        with pytest.raises(Refusal) as caught:
+            compile_predicate(parsed(text)).bind(years())
+        assert str(caught.value) == message
+
+
+def test_a_bar_before_a_not_equal_test_ends_the_value_choice() -> None:
+    assert parsed("f=a|b!=c") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Not(Equals(Cell(q("b")), (Bare("c"),))),
+        )
+    )
+    either = Or(
+        (
+            Equals(Cell(q("a")), (Bare("1"),)),
+            Not(Equals(Cell(q("b")), (Bare("2"),))),
+        )
+    )
+    assert parsed(format_predicate(either, SYN)) == either
+    assert parsed("(a=1 | b!=2) & c=3") == And(
+        (either, Equals(Cell(q("c")), (Bare("3"),)))
+    )
+    assert parsed("any(f: ./a!=1 | ./b!=2)") == Elements(
+        Cell(q("f")),
+        Quantifier.ANY,
+        Or(
+            (
+                Not(Equals(Current(("a",)), (Bare("1"),))),
+                Not(Equals(Current(("b",)), (Bare("2"),))),
+            )
+        ),
+    )
+
+
+def test_t11_bare_json_typing_uses_both_scalar_readings() -> None:
+    source = graph(
+        tuple(
+            (label, (native("value", {"start": {"y": value}}),))
+            for label, value in (
+                ("e0", 950),
+                ("e1", 950.0),
+                ("e2", True),
+                ("e3", 1),
+                ("e4", "0950"),
+            )
+        ),
+        (("value", JsonType.JSON),),
+        tier_name="data",
+    )
+    for text, expected in (
+        ("value/start/y=950", ["e0"]),
+        ("value/start/y=950.0", ["e1"]),
+        ("value/start/y=0950", ["e4"]),
+        ("value/start/y=true", ["e2"]),
+        ("value/start/y=1", ["e3"]),
+    ):
+        assert selected(source, parsed(text), "data") == expected
+
+
+def test_predicate_syntax_validates_aliases_and_namespaces() -> None:
+    assert PredicateSyntax.for_graph(stress6(), default_prefix="ex") == SYN
+    for aliases in (("none", "none"), ("∅",), ("0 1",)):
+        with pytest.raises(ValueError):
+            PredicateSyntax(SYN.namespaces, "ex", aliases)
+    with pytest.raises(ValueError, match="not declared"):
+        PredicateSyntax(SYN.namespaces, "missing")
+    with pytest.raises(ValueError, match="must be unique"):
+        PredicateSyntax((SYN.namespaces[0], SYN.namespaces[0]), "ex")
+
+
+def test_text_parser_covers_keys_regex_offsets_and_remaining_formats() -> None:
+    assert parsed('value/"two words"=x') == Equals(
+        Cell(q("value"), ("two words",)), (Bare("x"),)
+    )
+    assert (
+        format_predicate(Equals(Cell(q("value"), ("two words",)), (Bare("x"),)), SYN)
+        == 'value/"two words"=x'
+    )
+    assert parsed(r'label~"\\d+"') == Matches(Cell(q("label")), r"\d+")
+    for predicate, message in (
+        (And(()), "And has no value-test text; use JSON"),
+        (Or(()), "Or has no value-test text; use JSON"),
+        (
+            Has(Cell(q("f")), alias="-"),
+            "alias '-' is not declared in this syntax",
+        ),
+    ):
+        with pytest.raises(ValueError) as caught:
+            format_predicate(predicate, SYN)
+        assert str(caught.value) == message
+    with pytest.raises(ValueError, match="outside the text"):
+        parse_predicate_at("x}", -1, SYN)
+
+
+def test_text_parser_covers_remaining_grammar_edges() -> None:
+    assert parsed("ex:f=x") == Equals(Cell(q("f")), (Bare("x"),))
+    assert parsed("any (f: .=x)") == Elements(
+        Cell(q("f")), Quantifier.ANY, Equals(Current(), (Bare("x"),))
+    )
+    assert isinstance(parsed("all(f: .=x)"), Elements)
+    assert isinstance(parsed("none(f: .=x)"), Elements)
+    assert parsed('f=a|"b"') == Equals(Cell(q("f")), (Bare("a"), "b"))
+    assert parsed(r'f=a|"\\"') == Equals(Cell(q("f")), (Bare("a"), "\\"))
+    assert parsed("f=a|b   =x") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Equals(Cell(q("b")), (Bare("x"),)),
+        )
+    )
+    assert parsed("any =x") == Equals(Cell(q("any")), (Bare("x"),))
+    for text in (
+        "any(f .=x)",
+        "any(f: .=x",
+        "f=(a|b",
+        "bad:f=x",
+        "ex:.=x",
+        'f="x\\',
+        "f=a|?p(.)",
+        'f=a|"',
+        "f=(a||b)",
+        "f/||=x",
+        "f/&&=x",
+        "f/.=x",
+        "∅=x",
+    ):
+        with pytest.raises(Refusal):
+            parsed(text)
+
+    nested = "call((f=x)) rest"
+    assert parse_predicate_at(nested, 5, SYN, terminator=")") == (
+        Equals(Cell(q("f")), (Bare("x"),)),
+        10,
+    )
+    quoted = 'call(f="\\""),rest'
+    assert parse_predicate_at(quoted, 5, SYN, terminator=")") == (
+        Equals(Cell(q("f")), ('"',)),
+        11,
+    )
+
+    other = PredicateSyntax(SYN.namespaces)
+    assert format_predicate(Equals(Cell(q("f")), (Bare("x"),)), other) == "ex:f=x"
+    assert format_predicate(Matches(Cell(q("f")), "a.*"), SYN) == 'f~"a.*"'
+    assert (
+        format_predicate(
+            Not(Elements(Cell(q("f")), Quantifier.ANY, parsed(".=x"))), SYN
+        )
+        == "!any(f: .=x)"
+    )
+    with pytest.raises(ValueError, match="namespace 'urn:other'"):
+        format_predicate(
+            Equals(Cell(QualifiedName("urn:other", "f")), (Bare("x"),)), SYN
+        )
+    with pytest.raises(ValueError, match="local name 'two words'"):
+        format_predicate(
+            Equals(Cell(QualifiedName(NS, "two words")), (Bare("x"),)), SYN
+        )

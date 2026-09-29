@@ -46,6 +46,7 @@ from tests.test_clock import (
 from tests.test_clock import (
     fixture as clock_fixture,
 )
+from tests.test_predicate import f1_predicate, q, stress6
 from tests.test_spanview import fixture as span_fixture
 from tests.test_spanview import profile_data as span_profile_data
 from tiergraph import (
@@ -86,6 +87,7 @@ from tiergraph import (
 )
 from tiergraph.cli import build_parser, main
 from tiergraph.core import _scalar_attribute
+from tiergraph.predicate import predicate_to_data
 from tiergraph.schema import json_schema, shape_hash
 
 
@@ -196,6 +198,46 @@ def test_select_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "did not resolve to an item" in capsys.readouterr().err
 
 
+def test_t10_select_where_matches_the_json_selector(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "stress6.json"
+    selector = tmp_path / "selector.json"
+    source.write_bytes(tiergraph.dump_bytes(stress6()))
+    selector.write_text(
+        json.dumps(
+            {
+                "select": "where",
+                "base": {"select": "items", "tier": q("seg").to_data()},
+                "predicate": predicate_to_data(f1_predicate()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["select", str(source), "--selector", str(selector)]) == 0
+    from_json = capsys.readouterr().out
+    assert (
+        main(
+            [
+                "select",
+                str(source),
+                "--where",
+                "class=vowel & stress=primary|secondary|none",
+                "--prefix",
+                "ex",
+            ]
+        )
+        == 0
+    )
+    from_text = capsys.readouterr().out
+    assert from_text == from_json
+    assert [node["reference"]["index"] for node in json.loads(from_text)["nodes"]] == [
+        0,
+        1,
+        2,
+    ]
+
+
 def test_select_spells_the_library_concept(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -225,7 +267,7 @@ def test_select_spells_the_library_concept(
     assert raised.value.code == 2
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "required: --selector" in captured.err
+    assert "one of the arguments --selector --where is required" in captured.err
 
 
 def test_select_help_retires_the_query_spelling(
@@ -244,6 +286,8 @@ def test_select_help_retires_the_query_spelling(
     assert raised.value.code == 0
     select_help = capsys.readouterr().out
     assert "--selector FILE" in select_help
+    assert "--where TEXT" in select_help
+    assert "--prefix P" in select_help
     assert "query" not in select_help
 
 

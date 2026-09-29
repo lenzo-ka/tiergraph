@@ -159,6 +159,31 @@ stress primary: ['s0']
 stress missing: ['s1']
 ```
 
+The same predicates have a graph-free text form. Bare values take their type
+from the tested cell when the predicate binds; quoted values are strings.
+`none` is the default missing-cell alias, while `""` is a present empty string.
+`!` binds tighter than `&`, which binds tighter than `|`.
+
+```python
+from tiergraph.predicate import PredicateSyntax, parse_predicate
+
+syntax = PredicateSyntax.for_graph(graph, default_prefix="ex")
+text_selector = WhereSelector(
+    ItemsSelector(segments),
+    parse_predicate("stress=primary|none", syntax),
+)
+
+print("stress primary or missing:", labels(evaluate_selection(graph, text_selector)))
+```
+```text
+stress primary or missing: ['s0', 's1']
+```
+
+The command-line equivalent uses `--where` in place of a selector JSON file:
+`tiergraph select --where 'stress!=none' --prefix ex graph.json`. It evaluates
+the predicate over every item and writes the selected node references as JSON.
+`--selector` and `--where` are mutually exclusive.
+
 ## Matching complete outputs and folding alternatives
 
 `OutputPlan` matches complete emitted token sequences against a finite

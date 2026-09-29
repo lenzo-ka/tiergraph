@@ -6850,6 +6850,24 @@ __type_params__ attribute.
 
 See PEP 695 for more information.
 
+### `PredicateSyntax`
+
+```text
+PredicateSyntax(namespaces: 'tuple[NamespaceDeclaration, ...]', default_prefix: 'str | None' = None, missing_aliases: 'tuple[str, ...]' = ('none',), vocabularies: 'tuple[tuple[QualifiedName, tuple[str, ...]], ...]' = ()) -> None
+```
+
+Declare names, a default prefix, and missing-cell text spellings.
+
+#### `PredicateSyntax.for_graph`
+
+Class method.
+
+```text
+PredicateSyntax.for_graph(cls, graph: 'Graph', *, default_prefix: 'str | None' = None, missing_aliases: 'tuple[str, ...]' = ('none',), vocabularies: 'tuple[tuple[QualifiedName, tuple[str, ...]], ...]' = ()) -> 'PredicateSyntax'
+```
+
+Build syntax from a graph's namespace declarations.
+
 ### `Quantifier`
 
 ```text
@@ -6871,6 +6889,30 @@ compile_predicate(predicate: 'Predicate') -> 'CompiledPredicate'
 ```
 
 Compile one frozen predicate without consulting a graph.
+
+### `format_predicate`
+
+```text
+format_predicate(predicate: 'Predicate', syntax: 'PredicateSyntax') -> 'str'
+```
+
+Return the canonical value-test text for a representable predicate.
+
+### `parse_predicate`
+
+```text
+parse_predicate(text: 'str', syntax: 'PredicateSyntax') -> 'Predicate'
+```
+
+Parse one complete value-test predicate.
+
+### `parse_predicate_at`
+
+```text
+parse_predicate_at(text: 'str', start: 'int', syntax: 'PredicateSyntax', terminator: 'str' = '}') -> 'tuple[Predicate, int]'
+```
+
+Parse until one requested terminator outside quotes and parentheses.
 
 ### `predicate_loads`
 

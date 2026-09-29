@@ -20,6 +20,7 @@ from tiergraph.core import (
     ItemRef,
     JsonType,
     JsonValue,
+    NamespaceDeclaration,
     QualifiedName,
     Refusal,
     RefusalStage,
@@ -275,6 +276,46 @@ type Predicate = Has | Equals | Compare | Matches | Elements | And | Or | Not
 
 
 @dataclass(frozen=True, slots=True)
+class PredicateSyntax:
+    """Declare names, a default prefix, and missing-cell text spellings."""
+
+    namespaces: tuple[NamespaceDeclaration, ...]
+    default_prefix: str | None = None
+    missing_aliases: tuple[str, ...] = ("none",)
+    vocabularies: tuple[tuple[QualifiedName, tuple[str, ...]], ...] = ()
+
+    def __post_init__(self) -> None:
+        prefixes = [binding.prefix for binding in self.namespaces]
+        if len(prefixes) != len(set(prefixes)):
+            raise ValueError("PredicateSyntax namespace prefixes must be unique")
+        if self.default_prefix is not None and self.default_prefix not in prefixes:
+            raise ValueError(
+                f"default prefix {self.default_prefix!r} is not declared in this syntax"
+            )
+        seen: set[str] = set()
+        for alias in self.missing_aliases:
+            if not _is_bare(alias) or alias == "∅":
+                raise ValueError(
+                    f"missing alias {alias!r} is not a declarable missing-cell alias"
+                )
+            if alias in seen:
+                raise ValueError(f"missing alias {alias!r} is declared twice")
+            seen.add(alias)
+
+    @classmethod
+    def for_graph(
+        cls,
+        graph: Graph,
+        *,
+        default_prefix: str | None = None,
+        missing_aliases: tuple[str, ...] = ("none",),
+        vocabularies: tuple[tuple[QualifiedName, tuple[str, ...]], ...] = (),
+    ) -> PredicateSyntax:
+        """Build syntax from a graph's namespace declarations."""
+        return cls(graph.namespaces, default_prefix, missing_aliases, vocabularies)
+
+
+@dataclass(frozen=True, slots=True)
 class _EmptyRegex:
     pass
 
@@ -346,15 +387,46 @@ class _RegexParser:
     def __init__(self, source: str) -> None:
         self.source = source
         self.index = 0
-        self.nesting = 0
 
     def parse(self) -> _Regex:
         """Parse and validate the complete regular expression."""
         if len(self.source.encode("utf-8")) > _MAX_REGEX_BYTES:
             self.refuse(0, "regex source exceeds 65536 bytes")
-        result = self.alternation()
-        if self.index != len(self.source):
-            self.refuse(self.index, f"unexpected {self.source[self.index]!r} in regex")
+        # A group frame holds its completed alternatives and current sequence.
+        # Keeping those frames here rather than on Python's call stack makes the
+        # declared 256-level grammar bound independent of the interpreter's
+        # recursion limit.
+        frames: list[tuple[int, list[_Regex], list[_Regex]]] = [(-1, [], [])]
+        while self.index < len(self.source):
+            character = self.source[self.index]
+            if character == "|":
+                frames[-1][1].append(self._sequence(frames[-1][2]))
+                frames[-1][2].clear()
+                self.index += 1
+                continue
+            if character == ")":
+                if len(frames) == 1:
+                    self.refuse(self.index, "unexpected ')' in regex")
+                frames[-1][1].append(self._sequence(frames[-1][2]))
+                start, alternatives, _ = frames.pop()
+                del start
+                self.index += 1
+                body = self._alternatives(alternatives)
+                frames[-1][2].append(self._repeat_after(body))
+                continue
+            if character == "(":
+                start = self.index
+                self.index += 1
+                if len(frames) > _MAX_REGEX_NESTING:
+                    self.refuse(start, "regex nests deeper than 256")
+                self._group_prefix(start)
+                frames.append((start, [], []))
+                continue
+            frames[-1][2].append(self._repeat_after(self._atom()))
+        if len(frames) != 1:
+            self.refuse(frames[-1][0], "'(' is never closed")
+        frames[0][1].append(self._sequence(frames[0][2]))
+        result = self._alternatives(frames[0][1])
         positions = _regex_positions(result)
         if positions > _MAX_REGEX_POSITIONS:
             self.refuse(
@@ -363,30 +435,73 @@ class _RegexParser:
             )
         return result
 
-    def alternation(self) -> _Regex:
-        """Parse an alternation expression."""
-        alternatives: list[_Regex] = []
-        while True:
-            parts: list[_Regex] = []
-            while self.index < len(self.source) and self.source[self.index] not in ")|":
-                parts.append(self.repeated())
-            if not parts:
-                alternatives.append(_EmptyRegex())
-            elif len(parts) == 1:
-                alternatives.append(parts[0])
-            else:
-                alternatives.append(_SequenceRegex(tuple(parts)))
-            if not self.take("|"):
-                break
-        return (
-            alternatives[0]
-            if len(alternatives) == 1
-            else _AlternateRegex(tuple(alternatives))
-        )
+    @staticmethod
+    def _sequence(parts: list[_Regex]) -> _Regex:
+        """Make one sequence node from a frame's current parts."""
+        if not parts:
+            return _EmptyRegex()
+        if len(parts) == 1:
+            return parts[0]
+        return _SequenceRegex(tuple(parts))
 
-    def repeated(self) -> _Regex:
-        """Parse an atom followed by at most one quantifier."""
-        result = self.primary()
+    @staticmethod
+    def _alternatives(parts: list[_Regex]) -> _Regex:
+        """Make one alternation node from a frame's completed branches."""
+        if len(parts) == 1:
+            return parts[0]
+        return _AlternateRegex(tuple(parts))
+
+    def _group_prefix(self, start: int) -> None:
+        """Validate and consume a group extension after its opening parenthesis."""
+        if not self.take("?"):
+            return
+        if self.take(":"):
+            return
+        if self.source.startswith(("=", "!", "<=", "<!"), self.index):
+            token = (
+                "(?"
+                + self.source[
+                    self.index : self.index
+                    + (2 if self.source[self.index] == "<" else 1)
+                ]
+            )
+            self.refuse(start, f"{token!r} is lookaround, which the subset refuses")
+        if self.source.startswith("P<", self.index):
+            self.refuse(start, "'(?P<' is a named group; write (?:…)")
+        if self.source.startswith("<", self.index):
+            self.refuse(start, "'(?<' is a named group; write (?:…)")
+        flag = self.source[self.index : self.index + 1]
+        if flag:
+            self.refuse(
+                self.index,
+                f"flag {flag!r} is not defined; no regex flag is defined yet, "
+                "so write (?:…) for a plain group",
+            )
+        self.refuse(start, "regex group extension is incomplete")
+
+    def _atom(self) -> _Regex:
+        """Parse one non-group regex atom."""
+        start = self.index
+        character = self.source[self.index]
+        if character in "^$":
+            self.refuse(
+                start,
+                f"{character!r} is an anchor; '~' already matches the whole string",
+            )
+        if character == ".":
+            self.index += 1
+            return _AtomRegex(_Matcher("dot"))
+        if character == "[":
+            return _AtomRegex(self.character_class())
+        if character == "\\":
+            return _AtomRegex(self.escape())
+        if character in "*+?{":
+            self.refuse(start, f"{character!r} has nothing before it to repeat")
+        self.index += 1
+        return _AtomRegex(_Matcher("literal", character))
+
+    def _repeat_after(self, result: _Regex) -> _Regex:
+        """Consume at most one quantifier following an already parsed atom."""
         if self.index >= len(self.source):
             return result
         start = self.index
@@ -453,64 +568,6 @@ class _RegexParser:
             )
         return minimum, maximum, self.source[start : close + 1]
 
-    def primary(self) -> _Regex:
-        """Parse one regex atom or group."""
-        start = self.index
-        character = self.source[self.index]
-        if character in "^$":
-            self.refuse(
-                start,
-                f"{character!r} is an anchor; '~' already matches the whole string",
-            )
-        if character == ".":
-            self.index += 1
-            return _AtomRegex(_Matcher("dot"))
-        if character == "[":
-            return _AtomRegex(self.character_class())
-        if character == "\\":
-            return _AtomRegex(self.escape())
-        if character == "(":
-            self.index += 1
-            self.nesting += 1
-            if self.nesting > _MAX_REGEX_NESTING:
-                self.refuse(start, "regex nests deeper than 256")
-            if self.take("?"):
-                if self.take(":"):
-                    pass
-                elif self.source.startswith(("=", "!", "<=", "<!"), self.index):
-                    token = (
-                        "(?"
-                        + self.source[
-                            self.index : self.index
-                            + (2 if self.source[self.index] == "<" else 1)
-                        ]
-                    )
-                    self.refuse(
-                        start, f"{token!r} is lookaround, which the subset refuses"
-                    )
-                elif self.source.startswith("P<", self.index):
-                    self.refuse(start, "'(?P<' is a named group; write (?:…)")
-                elif self.source.startswith("<", self.index):
-                    self.refuse(start, "'(?<' is a named group; write (?:…)")
-                else:
-                    flag = self.source[self.index : self.index + 1]
-                    if flag:
-                        self.refuse(
-                            self.index,
-                            f"flag {flag!r} is not defined; no regex flag is defined yet, "
-                            "so write (?:…) for a plain group",
-                        )
-                    self.refuse(start, "regex group extension is incomplete")
-            body = self.alternation()
-            if not self.take(")"):
-                self.refuse(start, "'(' is never closed")
-            self.nesting -= 1
-            return body
-        if character in "*+?{":
-            self.refuse(start, f"{character!r} has nothing before it to repeat")
-        self.index += 1
-        return _AtomRegex(_Matcher("literal", character))
-
     def escape(self, *, in_class: bool = False) -> _Matcher:
         """Parse one supported escape sequence."""
         start = self.index
@@ -568,14 +625,16 @@ class _RegexParser:
         self.index += 1
         negated = self.take("^")
         members: list[_Matcher | tuple[str, str]] = []
-        if self.index < len(self.source) and self.source[self.index] == "]":
-            members.append(self.literal_class_character())
-        while self.index < len(self.source) and self.source[self.index] != "]":
+        first = True
+        while self.index < len(self.source) and (
+            first or self.source[self.index] != "]"
+        ):
             left = (
                 self.escape(in_class=True)
                 if self.source[self.index] == "\\"
                 else self.literal_class_character()
             )
+            first = False
             if (
                 self.index < len(self.source) - 1
                 and self.source[self.index] == "-"
@@ -583,6 +642,7 @@ class _RegexParser:
                 and left.kind == "literal"
             ):
                 self.index += 1
+                right_start = self.index
                 right = (
                     self.escape(in_class=True)
                     if self.source[self.index] == "\\"
@@ -595,7 +655,8 @@ class _RegexParser:
                 low, high = cast(str, left.value), cast(str, right.value)
                 if low > high:
                     self.refuse(
-                        self.index, f"character-class range {low}-{high} is reversed"
+                        right_start,
+                        f"character-class range {low}-{high} is reversed",
                     )
                 members.append((low, high))
             else:
@@ -1059,7 +1120,7 @@ class _Binder:
             return
         if declaration is None:
             if isinstance(predicate, Compare):
-                self.ordered_literal(predicate.value)
+                self.ordered_literal(predicate)
             return
         if isinstance(predicate, Equals):
             for value in predicate.values:
@@ -1165,17 +1226,20 @@ class _Binder:
                 "ordered comparison needs xsd:integer or xsd:decimal, and "
                 f"{_display_name(self.graph, declaration.name)} is xsd:{declaration.value_type.value}",
             )
-        self.ordered_literal(predicate.value)
+        self.ordered_literal(predicate)
 
     @staticmethod
-    def ordered_literal(value: Literal) -> None:
+    def ordered_literal(predicate: Compare) -> None:
         """Validate a literal independently of an operand declaration."""
         try:
-            _ordered_literal(value)
+            _ordered_literal(predicate.value)
         except (InvalidOperation, ValueError) as error:
             raise Refusal(
                 RefusalStage.SEMANTICS,
-                f"{_literal_text(value)!r} is not an exact numeric comparison value",
+                f"{_operand_text(predicate.operand)}{predicate.order.value}"
+                f"{_literal_text(predicate.value)}: "
+                f"{_literal_text(predicate.value)!r} is not an exact numeric "
+                "comparison value",
             ) from error
 
     def alias_collision(self, predicate: Has) -> None:
@@ -1515,6 +1579,15 @@ def _decode_literal(value: JsonValue, path: str) -> Literal:
         ) from error
 
 
+# The text layer imports the frozen AST above and is imported only after that AST
+# and its helpers exist, keeping the graph-free grammar separate from evaluation.
+from tiergraph.predicate_text import (  # noqa: E402, I001
+    format_predicate,
+    parse_predicate,
+    parse_predicate_at,
+)
+
+
 __all__ = [
     "And",
     "Bare",
@@ -1534,8 +1607,12 @@ __all__ = [
     "Or",
     "Order",
     "Predicate",
+    "PredicateSyntax",
     "Quantifier",
     "compile_predicate",
+    "format_predicate",
+    "parse_predicate",
+    "parse_predicate_at",
     "predicate_loads",
     "predicate_to_data",
 ]

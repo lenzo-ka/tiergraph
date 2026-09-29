@@ -329,6 +329,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -462,8 +464,12 @@
       "Or",
       "Order",
       "Predicate",
+      "PredicateSyntax",
       "Quantifier",
       "compile_predicate",
+      "format_predicate",
+      "parse_predicate",
+      "parse_predicate_at",
       "predicate_loads",
       "predicate_to_data"
     ],

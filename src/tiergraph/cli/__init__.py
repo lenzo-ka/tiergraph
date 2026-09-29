@@ -17,6 +17,7 @@ import tiergraph
 import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program, semiring
 from tiergraph import core as _core
+from tiergraph import predicate as _predicate
 from tiergraph import wire as _wire
 from tiergraph.schema import Refusal, RefusalStage, json_schema, shape_hash
 
@@ -227,7 +228,10 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     selection = subparsers.add_parser("select", help="evaluate a selector")
     selection.set_defaults(handler=_handle_select)
     selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    selection.add_argument("--selector", required=True, metavar="FILE")
+    selection_input = selection.add_mutually_exclusive_group(required=True)
+    selection_input.add_argument("--selector", metavar="FILE")
+    selection_input.add_argument("--where", metavar="TEXT")
+    selection.add_argument("--prefix", metavar="P")
     _output_argument(selection)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
@@ -595,9 +599,21 @@ def _handle_span(args: argparse.Namespace) -> None:
 
 def _handle_select(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    selector = tiergraph.selection_loads(_read_bytes(args.selector))
-    _check_distinct(args.selector, args.output)
-    result = tiergraph.evaluate_selection(graph, selector)
+    if args.where is not None:
+        syntax = _predicate.PredicateSyntax.for_graph(graph, default_prefix=args.prefix)
+        predicate = _predicate.parse_predicate(args.where, syntax)
+        candidates = tiergraph.NodeSet(
+            graph,
+            tuple(
+                tiergraph.Node(tiergraph.NodeKind.ITEM, reference)
+                for reference in graph.canonical_items()
+            ),
+        )
+        result = _predicate.compile_predicate(predicate).bind(graph).select(candidates)
+    else:
+        selector = tiergraph.selection_loads(_read_bytes(args.selector))
+        _check_distinct(args.selector, args.output)
+        result = tiergraph.evaluate_selection(graph, selector)
     _write_output(args.file, args.output, _json_bytes({"nodes": result.to_data()}))
 
 
