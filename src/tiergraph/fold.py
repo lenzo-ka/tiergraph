@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from functools import cmp_to_key
-from itertools import product
+from heapq import heappop, heappush
+from itertools import pairwise, product
 from typing import Protocol, TypeVar, cast
 
 from tiergraph.core import (
@@ -1144,6 +1145,155 @@ class FoldDeclaration[Value]:
                 )
         return tuple(sorted(distinct, key=cmp_to_key(compare))[: self.output_cap])
 
+    def _ranked_product(
+        self,
+        left: tuple[RankedWitness[Value], ...],
+        right: tuple[RankedWitness[Value], ...],
+        witness_operations: list[int],
+        ranked_additions: list[int],
+        *,
+        force_eager: bool = False,
+    ) -> tuple[tuple[RankedWitness[Value], ...], int]:
+        """Return a bounded ranked product and the products actually constructed.
+
+        Exact ``PathSemiring`` singleton values have an additive scalar rank.
+        Their structural witness path supplies the second rank component.  A
+        heap can therefore enumerate the Cartesian index grid from best to
+        worst without constructing the full grid, provided equal-cost paths on
+        the left are prefix-safe: prepending a fixed path always preserves the
+        right order, while appending a suffix can reverse two paths only when
+        the earlier path is a strict prefix of the later one.  Every other
+        carrier, aggregated PATH value, unsorted input, or unsafe tie shape
+        retains the eager implementation.
+
+        ``force_eager`` is an internal differential-test seam, not fold state.
+        """
+        if not force_eager:
+            lazy = self._lazy_ranked_product(
+                left, right, witness_operations, ranked_additions
+            )
+            if lazy is not None:
+                return lazy
+        products = len(left) * len(right)
+        return (
+            self._rank_candidates(
+                tuple(
+                    (
+                        self._ranked_multiply(left_value, right_value),
+                        left_path + right_path,
+                    )
+                    for left_value, left_path in left
+                    for right_value, right_path in right
+                ),
+                witness_operations,
+                ranked_additions,
+                values_validated=True,
+            ),
+            products,
+        )
+
+    def _lazy_ranked_product(  # noqa: PLR0915 -- guarded heap-grid enumeration
+        self,
+        left: tuple[RankedWitness[Value], ...],
+        right: tuple[RankedWitness[Value], ...],
+        witness_operations: list[int],
+        ranked_additions: list[int],
+    ) -> tuple[tuple[RankedWitness[Value], ...], int] | None:
+        """Enumerate a proven-monotone PATH product prefix, or decline it."""
+        del ranked_additions
+        if not (
+            isinstance(self.semiring, PathSemiring)
+            and type(self.semiring) is PathSemiring
+        ):
+            return None
+        if not left or not right:
+            return (), 0
+        path_semiring = cast(PathSemiring, self.semiring)
+        left_keys = tuple(
+            path_semiring._ranked_key(cast(PathValue, value), path)
+            for value, path in left
+        )
+        right_keys = tuple(
+            path_semiring._ranked_key(cast(PathValue, value), path)
+            for value, path in right
+        )
+        if any(key is None for key in (*left_keys, *right_keys)):
+            return None
+        trusted_left = cast(tuple[tuple[Decimal, Path], ...], left_keys)
+        trusted_right = cast(tuple[tuple[Decimal, Path], ...], right_keys)
+        if any(first > second for first, second in pairwise(trusted_left)):
+            return None
+        if any(first > second for first, second in pairwise(trusted_right)):
+            return None
+        for first, second in pairwise(trusted_left):
+            first_cost, first_path = first
+            second_cost, second_path = second
+            if (
+                first_cost == second_cost
+                and len(first_path) < len(second_path)
+                and second_path[: len(first_path)] == first_path
+            ):
+                return None
+
+        # A stable eager sort uses Cartesian row-major arrival order to break a
+        # completely equal key.  Carry that ordinal in the heap so label
+        # collisions retain the same deterministic order.
+        heap: list[
+            tuple[
+                tuple[Decimal, Path],
+                int,
+                int,
+                int,
+                RankedWitness[Value],
+            ]
+        ] = []
+        visited: set[tuple[int, int]] = set()
+        products = 0
+
+        def push(left_index: int, right_index: int) -> None:
+            """Construct one frontier product and insert it once."""
+            nonlocal products
+            index = (left_index, right_index)
+            if index in visited:
+                return
+            visited.add(index)
+            left_value, left_path = left[left_index]
+            right_value, right_path = right[right_index]
+            candidate = (
+                self._ranked_multiply(left_value, right_value),
+                left_path + right_path,
+            )
+            key = path_semiring._ranked_key(cast(PathValue, candidate[0]), candidate[1])
+            if key is None:  # pragma: no cover - singleton PATH is closed here
+                raise AssertionError("singleton PATH product lost its ranked key")
+            ordinal = left_index * len(right) + right_index
+            heappush(heap, (key, ordinal, left_index, right_index, candidate))
+            products += 1
+
+        push(0, 0)
+        distinct: list[RankedWitness[Value]] = []
+        group_key: tuple[Decimal, Path] | None = None
+        group_values: list[Value] = []
+        while heap and len(distinct) < self.output_cap:
+            key, _ordinal, left_index, right_index, candidate = heappop(heap)
+            if left_index + 1 < len(left):
+                push(left_index + 1, right_index)
+            if right_index + 1 < len(right):
+                push(left_index, right_index + 1)
+            if key != group_key:
+                group_key = key
+                group_values = []
+            duplicate = False
+            for existing in group_values:
+                witness_operations[0] += 1
+                if candidate[0] == existing:
+                    duplicate = True
+                    break
+            if not duplicate:
+                group_values.append(candidate[0])
+                distinct.append(candidate)
+        return tuple(distinct), products
+
     def _ranked_value(self, value: Value) -> Value:
         """Validate a PATH value once when it enters ranked internal work."""
         if (
@@ -1539,24 +1689,16 @@ class _CoordinatePass[Value]:
                         )
                         relation_count *= child_count
                         if self.fold.ranked_output:
-                            ranked_products = len(relation_ranked) * len(child_ranked)
+                            relation_ranked, ranked_products = (
+                                self.fold._ranked_product(
+                                    relation_ranked,
+                                    child_ranked,
+                                    self.accumulator.witness_operations,
+                                    self.accumulator.ranked_additions,
+                                )
+                            )
                             self.accumulator.multiplications += ranked_products
                             self.accumulator.ranked_multiplications += ranked_products
-                            relation_ranked = self.fold._rank_candidates(
-                                tuple(
-                                    (
-                                        self.fold._ranked_multiply(
-                                            left_value, right_value
-                                        ),
-                                        left_path + right_path,
-                                    )
-                                    for left_value, left_path in relation_ranked
-                                    for right_value, right_path in child_ranked
-                                ),
-                                self.accumulator.witness_operations,
-                                self.accumulator.ranked_additions,
-                                values_validated=True,
-                            )
                 else:
                     relation_value = child_results[0][0]
                     # The value accumulates, because that is what OR means,
@@ -1595,22 +1737,14 @@ class _CoordinatePass[Value]:
                 )
                 ranked_count *= relation_count
                 if self.fold.ranked_output:
-                    ranked_products = len(ranked) * len(relation_ranked)
-                    self.accumulator.multiplications += ranked_products
-                    self.accumulator.ranked_multiplications += ranked_products
-                    ranked = self.fold._rank_candidates(
-                        tuple(
-                            (
-                                self.fold._ranked_multiply(left_value, right_value),
-                                left_path + right_path,
-                            )
-                            for left_value, left_path in ranked
-                            for right_value, right_path in relation_ranked
-                        ),
+                    ranked, ranked_products = self.fold._ranked_product(
+                        ranked,
+                        relation_ranked,
                         self.accumulator.witness_operations,
                         self.accumulator.ranked_additions,
-                        values_validated=True,
                     )
+                    self.accumulator.multiplications += ranked_products
+                    self.accumulator.ranked_multiplications += ranked_products
             if not has_children:
                 value = self.fold.semiring.multiply(value, self.fold.semiring.one)
                 self.accumulator.multiplications += 1
