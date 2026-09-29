@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
 _BARE_FORBIDDEN = frozenset("!\"#%&'()*,/:<=>?@[\\]^{|}~∅")
 _MISSING = object()
 _MAX_REGEX_BYTES = 65_536
+_MAX_REGEX_NESTING = 256
 _MAX_REGEX_POSITIONS = 100_000
 _MAX_REPEAT_COUNT = 10_000
 _PAIR_SIZE = 2
@@ -346,6 +346,7 @@ class _RegexParser:
     def __init__(self, source: str) -> None:
         self.source = source
         self.index = 0
+        self.nesting = 0
 
     def parse(self) -> _Regex:
         """Parse and validate the complete regular expression."""
@@ -364,19 +365,24 @@ class _RegexParser:
 
     def alternation(self) -> _Regex:
         """Parse an alternation expression."""
-        parts = [self.sequence()]
-        while self.take("|"):
-            parts.append(self.sequence())
-        return parts[0] if len(parts) == 1 else _AlternateRegex(tuple(parts))
-
-    def sequence(self) -> _Regex:
-        """Parse a concatenated sequence."""
-        parts: list[_Regex] = []
-        while self.index < len(self.source) and self.source[self.index] not in ")|":
-            parts.append(self.repeated())
-        if not parts:
-            return _EmptyRegex()
-        return parts[0] if len(parts) == 1 else _SequenceRegex(tuple(parts))
+        alternatives: list[_Regex] = []
+        while True:
+            parts: list[_Regex] = []
+            while self.index < len(self.source) and self.source[self.index] not in ")|":
+                parts.append(self.repeated())
+            if not parts:
+                alternatives.append(_EmptyRegex())
+            elif len(parts) == 1:
+                alternatives.append(parts[0])
+            else:
+                alternatives.append(_SequenceRegex(tuple(parts)))
+            if not self.take("|"):
+                break
+        return (
+            alternatives[0]
+            if len(alternatives) == 1
+            else _AlternateRegex(tuple(alternatives))
+        )
 
     def repeated(self) -> _Regex:
         """Parse an atom followed by at most one quantifier."""
@@ -465,6 +471,9 @@ class _RegexParser:
             return _AtomRegex(self.escape())
         if character == "(":
             self.index += 1
+            self.nesting += 1
+            if self.nesting > _MAX_REGEX_NESTING:
+                self.refuse(start, "regex nests deeper than 256")
             if self.take("?"):
                 if self.take(":"):
                     pass
@@ -495,6 +504,7 @@ class _RegexParser:
             body = self.alternation()
             if not self.take(")"):
                 self.refuse(start, "'(' is never closed")
+            self.nesting -= 1
             return body
         if character in "*+?{":
             self.refuse(start, f"{character!r} has nothing before it to repeat")
@@ -558,6 +568,8 @@ class _RegexParser:
         self.index += 1
         negated = self.take("^")
         members: list[_Matcher | tuple[str, str]] = []
+        if self.index < len(self.source) and self.source[self.index] == "]":
+            members.append(self.literal_class_character())
         while self.index < len(self.source) and self.source[self.index] != "]":
             left = (
                 self.escape(in_class=True)
@@ -1046,6 +1058,8 @@ class _Binder:
             self.alias_collision(predicate)
             return
         if declaration is None:
+            if isinstance(predicate, Compare):
+                self.ordered_literal(predicate.value)
             return
         if isinstance(predicate, Equals):
             for value in predicate.values:
@@ -1151,12 +1165,17 @@ class _Binder:
                 "ordered comparison needs xsd:integer or xsd:decimal, and "
                 f"{_display_name(self.graph, declaration.name)} is xsd:{declaration.value_type.value}",
             )
+        self.ordered_literal(predicate.value)
+
+    @staticmethod
+    def ordered_literal(value: Literal) -> None:
+        """Validate a literal independently of an operand declaration."""
         try:
-            _ordered_literal(predicate.value)
+            _ordered_literal(value)
         except (InvalidOperation, ValueError) as error:
             raise Refusal(
                 RefusalStage.SEMANTICS,
-                f"{_literal_text(predicate.value)!r} is not an exact numeric comparison value",
+                f"{_literal_text(value)!r} is not an exact numeric comparison value",
             ) from error
 
     def alias_collision(self, predicate: Has) -> None:
@@ -1212,7 +1231,11 @@ def _ordered_literal(value: Literal) -> Decimal:
 
 def _bare_json(value: Bare) -> Literal:
     try:
-        parsed = json.loads(value.text)
+        parsed = json.loads(
+            value.text,
+            parse_float=Double,
+            parse_constant=str,
+        )
     except (json.JSONDecodeError, ValueError):
         return value.text
     if type(parsed) is int:
@@ -1221,8 +1244,8 @@ def _bare_json(value: Bare) -> Literal:
         return parsed
     if parsed is None:
         return None
-    if type(parsed) is float and math.isfinite(parsed):
-        return Double(repr(parsed))
+    if isinstance(parsed, Double):
+        return parsed
     return value.text
 
 

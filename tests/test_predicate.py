@@ -465,6 +465,35 @@ def test_f13_regex_refusals_are_literal(regex: str, offset: int, message: str) -
     assert str(caught.value) == f"regex at offset {offset}: {message}"
 
 
+def test_regex_nesting_is_bounded_before_recursive_parsing() -> None:
+    operand = Cell(q("label"))
+    Matches(operand, "(" * 256 + ")" * 256)
+    for depth in (257, 300):
+        with pytest.raises(ValueError) as caught:
+            Matches(operand, "(" * depth + ")" * depth)
+        assert str(caught.value) == ("regex at offset 256: regex nests deeper than 256")
+
+
+def test_character_classes_follow_perl_for_a_leading_close_bracket() -> None:
+    operand = Cell(q("label"))
+    for regex in ("[]", "[^]"):
+        with pytest.raises(ValueError) as caught:
+            Matches(operand, regex)
+        assert str(caught.value) == "regex at offset 0: '[' is never closed"
+
+    source = graph(
+        (
+            ("close", (xsd("label", XsdType.STRING, "]"),)),
+            ("a", (xsd("label", XsdType.STRING, "a"),)),
+            ("b", (xsd("label", XsdType.STRING, "b"),)),
+        ),
+        (("label", XsdType.STRING),),
+        tier_name="labels",
+    )
+    assert selected(source, Matches(operand, "[]a]"), "labels") == ["close", "a"]
+    assert selected(source, Matches(operand, "[^]a]"), "labels") == ["b"]
+
+
 def test_f14_every_atom_is_evaluated_before_boolean_combination() -> None:
     source = graph(
         (
@@ -895,10 +924,12 @@ def test_bare_literals_are_typed_by_xsd_and_json_cells() -> None:
             for label, value in (
                 ("i", 950),
                 ("d", 950.0),
+                ("e", 1000.0),
                 ("b", True),
                 ("n", None),
                 ("s", "0950"),
                 ("huge", "1e999"),
+                ("constant", "Infinity"),
             )
         ),
         (("value", JsonType.JSON),),
@@ -907,10 +938,13 @@ def test_bare_literals_are_typed_by_xsd_and_json_cells() -> None:
     for literal, expected in (
         (Bare("950"), ["i"]),
         (Bare("950.0"), ["d"]),
+        (Bare("1e3"), ["e"]),
         (Bare("true"), ["b"]),
         (Bare("null"), ["n"]),
         (Bare("0950"), ["s"]),
-        (Bare("1e999"), ["huge"]),
+        (Bare("1e999"), []),
+        ("1e999", ["huge"]),
+        (Bare("Infinity"), ["constant"]),
         (Decimal("950"), []),
     ):
         assert (
@@ -938,6 +972,23 @@ def test_bare_literals_are_typed_by_xsd_and_json_cells() -> None:
     with pytest.raises(Refusal, match="stores a JSON null") as caught:
         bound.holds(Node(NodeKind.DOCUMENT, None))
     assert "item 'None'" in str(caught.value)
+
+
+def test_compare_current_refuses_a_non_numeric_literal_at_bind() -> None:
+    source = graph(
+        (("a0", (native("alts", [{"y": 5}]),)),),
+        (("alts", JsonType.JSON),),
+        tier_name="t",
+    )
+    predicate = Elements(
+        Cell(q("alts")),
+        Quantifier.ANY,
+        Compare(Current(("y",)), Order.LT, "x"),
+    )
+    with pytest.raises(Refusal) as caught:
+        compile_predicate(predicate).bind(source)
+    assert caught.value.stage is RefusalStage.SEMANTICS
+    assert str(caught.value) == "'x' is not an exact numeric comparison value"
 
 
 def test_predicate_json_decoder_refuses_each_wrong_shape() -> None:
