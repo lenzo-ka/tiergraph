@@ -220,6 +220,9 @@ True
 - [Construction](guide/construction.md) records edits as a checked program.
 - [Selection and traversal](guide/selection-and-traversal.md) covers selectors,
   set algebra, and ordered containment.
+- [Matching with existing pieces](guide/matching-with-existing-pieces.md) adds
+  value predicates, one-step relation images, related-item quantifiers, and
+  complete-output matching.
 - [Folding](guide/folding.md) explains semirings, witnesses, and cost accounts.
 - [Serialization](guide/serialization.md) describes the wire format and the DOT
   view.

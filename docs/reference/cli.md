@@ -2,7 +2,7 @@
 
 The `tiergraph` command prints help when called without arguments. `--version` prints one JSON object and exits successfully.
 
-`tiergraph.cli.build_parser()` is importable and usable, but carries no API-stability promise at version 0.3.0.
+`tiergraph.cli.build_parser()` is importable and usable, but carries no API-stability promise at version 0.4.0.
 
 ## Contracts
 
@@ -19,6 +19,8 @@ Every command that reads an input document accepts `-` in place of that document
 `semirings` lists every algebra this shell can name, with its carrier boundary, its five declared law checks, and its declared properties. The listed names are exactly the values `fold --semiring` accepts.
 
 `fold` evaluates a finite dependency relation with one of those algebras and emits the public `FoldResult.to_data()` report. `--tier` and `--transition` are repeatable; `--root` is repeatable and, when omitted, the roots are the domain items nothing depends on. The valuation carries the attribute's local name, because that name only ever appears in a refusal. Two lifts are nameable: `value` embeds the read attribute value in the carrier, and `one` embeds the semiring's multiplicative identity regardless of the value. A general lift, a witness order, and an index product are caller code, so they stay in the Python API; without a witness order the report's `provenance` is always null, and `--ranked` is the shell's route to witnesses. `--ranked` needs an algebra that declares `multiply_preserves_witness_order` and supplies the tie policy the declaration requires but ranked selection never consults. `--output-cap` caps ranked witnesses and so requires `--ranked`.
+
+`select --selector FILE` evaluates a strict selector JSON document. `select --where TEXT` instead parses a value predicate with `PredicateSyntax.for_graph`; `--prefix` chooses the default namespace prefix for unqualified attribute names. The two input forms are mutually exclusive, and `--prefix` applies only to `--where`.
 
 `action` and `react` are library-only. `ActionDeclaration` binds its behavior as an `ActionFunction` Python callable, and `ReactDeclaration` also binds a `DeliveryYield` callable. Neither callable has a declarative or wire form for the CLI to read, so the shell cannot construct either declaration without inventing an executable callback format.
 

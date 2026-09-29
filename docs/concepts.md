@@ -8,15 +8,16 @@ selection, traversal, timing, and folds.
 ## One store, several views
 
 A tiergraph document is one `Graph`. A tier is a named, ordered sequence of
-items. Items may carry declared, XSD-typed scalar attributes. Relations connect
+items. Items may carry declared scalar or JSON attributes. Relations connect
 items or boundaries according to their declarations. That is the whole store.
 
 The views are computed, not stored. Selection reads tiers, items, and
-boundaries as nodes. Traversal follows declared relation incidence. Profiles
-interpret particular declarations as clocks, roots, choices, or recursive JSON
-values. Folds evaluate a finite dependency relation with a caller-supplied
-semiring. None of these views adds a new kind of stored node; each is a reading
-of the same graph.
+boundaries as nodes. Predicates filter selected nodes by typed values and can
+quantify over one relation step. Traversal follows declared relation incidence.
+Profiles interpret particular declarations as clocks, roots, choices, or
+recursive JSON values. Folds evaluate a finite dependency relation with a
+caller-supplied semiring. None of these views adds a new kind of stored node;
+each is a reading of the same graph.
 
 ## What a graph is built from
 
@@ -28,12 +29,13 @@ of the same graph.
 - **Items** are tier members. An item may hold typed attributes and may be
   promoted to a durable identifier when a reference must survive edits.
 - **Attributes** are optional and have at most one value per qualified name.
-  They are typed by a growable XSD subset (string, boolean, integer, decimal,
-  double) and are declared for one domain: document, tier, item, boundary,
-  relation declaration, or relation instance. A value's lexical form is
-  canonicalized when it is stored, so equal values have one spelling. Absence
-  means absent: there are deliberately no defaults that appear in a reading
-  without being present in the bytes.
+  Scalar attributes use a growable XSD subset (string, boolean, integer,
+  decimal, double); JSON attributes hold null, booleans, numbers, strings,
+  arrays, or objects. Both are declared for one domain: document, tier, item,
+  boundary, relation declaration, or relation instance. Scalar lexical forms
+  and JSON objects are canonicalized when stored. Absence means absent: there
+  are deliberately no defaults that appear in a reading without being present
+  in the bytes.
 - **Relations** come in three shapes. A simple relation gives every member of
   one tier a single item type. A bipartite relation links two typed endpoints,
   each an item or a boundary, and can promise acyclicity or a single parent. A
@@ -101,25 +103,18 @@ membership relation is what gives item 0 a type; a tier with no membership
 relation is untyped, and asking for its item type is refused rather than
 guessed.
 
-## Structured payloads in scalar attributes
+## Structured JSON attributes
 
-Attribute values are typed scalars (`XsdType`). When an application needs to
-attach non-scalar evidence, such as nested feature structures, scored
-alternatives, or provenance, tiergraph does not currently provide a first-class
-in-graph attachment mechanism. For now, the sanctioned pattern is a declared
-string attribute containing a JSON object with this canonical envelope:
+An `AttributeDeclaration` with `JsonType.JSON` stores a `JsonAttributeValue`
+directly on any attribute domain. It owns a snapshot of its input, preserves
+JSON primitive kinds and array order, sorts object keys canonically, and limits
+integers to the range a JSON peer can decode exactly. The graph validates the
+attribute's declared domain and JSON construction; an application remains
+responsible for the vocabulary and schema of the value it stores.
 
-`{"schema": "<stable versioned schema id>", "value": <the JSON value>}`
-
-The producing application serializes the whole envelope with
-`json.dumps(payload, ensure_ascii=False, allow_nan=False, sort_keys=True,
-separators=(",", ":"))`.
-
-tiergraph checks only that the attribute is declared as a string in the correct
-domain. It does not check whether the string is valid JSON; whether the envelope
-or schema is present or recognized; required fields or types inside `value`;
-numeric ranges; or canonical serialization. The producing and consuming
-applications must perform those validations.
+Use an `XsdType.STRING` attribute only when the string itself is the value or
+when compatibility with a string-valued vocabulary requires an encoded
+envelope. A JSON attribute is the native choice for structured data.
 
 Separately, `json_value_graph` and `JsonValueProfile` represent a JSON value as
 a checked, standalone graph. `embed_json_value(graph, value, namespace=...)`

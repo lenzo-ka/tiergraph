@@ -236,7 +236,7 @@ from tiergraph.wire import (
     to_data,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 _PATHOUTPUT_EXPORTS = frozenset(
     {"Emissions", "OutputItemMarginals", "OutputMasses", "OutputPlan"}

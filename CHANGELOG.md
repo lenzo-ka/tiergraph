@@ -7,15 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
 ### Added
 
 - Value predicates (`tiergraph.predicate`), their strict JSON form, and `WhereSelector`.
-- Text value predicates, missing-cell aliases, and `select --where`.
-- One-step relation images and quantified `Related` predicates.
+- Text predicates through `PredicateSyntax`, missing-cell aliases, and `select --where`.
+- One-step `relation_image` traversal and quantified `Related` predicates.
 
-### Fixed
+### Changed
 
-- Ranked folds deduplicate witnesses by hash and validate PATH values once, so ranking no longer grows quadratically with the kept prefix; ranked output is unchanged.
+- Ranked folds deduplicate by hashed paths and validate PATH values once, reducing operations without changing output.
+
+### Documentation
+
+- Added a guide to matching with selectors, traversal, predicates, and folds.
 
 ## [0.3.0] - 2026-09-22
 
@@ -1038,7 +1044,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/lenzo-ka/tiergraph/compare/v0.2.1...v0.2.2

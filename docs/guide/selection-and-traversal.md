@@ -12,6 +12,12 @@ sorts its nodes into the graph's canonical order and supports union (`|`),
 intersection (`&`), and difference (`-`) with another set from the same graph.
 Because the order is canonical, set algebra between selections is stable.
 
+`WhereSelector` filters one base selector with a typed value predicate from
+`tiergraph.predicate`. `PredicateSyntax` parses the graph-free text form used by
+`tiergraph select --where`; `Related` quantifies a target predicate over one
+relation step. The complete value, missing-cell, JSON, and related-item examples
+are in [Matching with existing pieces](matching-with-existing-pieces.md).
+
 Relation instances live in two collections -- bipartite pairs and polyadic
 instances -- that index separately, so index `0` names a different fact in each.
 They are two node kinds accordingly, `relation_instance` and
@@ -80,6 +86,10 @@ def names(nodes: NodeSet) -> list[str]:
 ```
 
 ## Walking a relation
+
+`tiergraph.traversal.relation_image(source, relation, direction)` returns one
+set-valued step without excluding nodes that were already in `source`. `Walk`
+repeats that operation transitively and excludes the source from its result.
 
 A `Walk` follows one relation transitively from a source `NodeSet` and returns
 the reachable set, not counting the source itself. The relation may be bipartite
