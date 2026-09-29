@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import Enum
 from functools import cmp_to_key
 from itertools import product
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 from tiergraph.core import (
     AttributeDomain,
@@ -21,7 +21,14 @@ from tiergraph.core import (
     XsdType,
     _scalar_attribute,
 )
-from tiergraph.semiring import LawCheck, Semiring, StarRefusal, inexact_laws
+from tiergraph.semiring import (
+    LawCheck,
+    PathSemiring,
+    PathValue,
+    Semiring,
+    StarRefusal,
+    inexact_laws,
+)
 
 Value = TypeVar("Value")
 OtherValue = TypeVar("OtherValue")
@@ -752,7 +759,10 @@ class FoldDeclaration[Value]:
             None
             if not self.ranked_output
             else self._rank_candidates(
-                tuple(ranked_roots), witness_operations, ranked_additions
+                tuple(ranked_roots),
+                witness_operations,
+                ranked_additions,
+                values_validated=True,
             )
         )
         additions += ranked_additions[0]
@@ -1066,6 +1076,8 @@ class FoldDeclaration[Value]:
         candidates: tuple[RankedWitness[Value], ...],
         witness_operations: list[int],
         ranked_additions: list[int],
+        *,
+        values_validated: bool = False,
     ) -> tuple[RankedWitness[Value], ...]:
         """Return distinct witnesses in declared value and canonical path order.
 
@@ -1093,16 +1105,67 @@ class FoldDeclaration[Value]:
             return (left[1] > right[1]) - (left[1] < right[1])
 
         distinct: list[RankedWitness[Value]] = []
-        for candidate in sorted(candidates, key=cmp_to_key(compare)):
+        values_by_path: dict[Path, list[Value]] = {}
+        for candidate in candidates:
+            values = values_by_path.setdefault(candidate[1], [])
             duplicate = False
-            for existing in distinct:
+            for existing in values:
                 witness_operations[0] += 1
-                if candidate == existing:
+                if candidate[0] == existing:
                     duplicate = True
                     break
             if not duplicate:
+                values.append(candidate[0])
                 distinct.append(candidate)
-        return tuple(distinct[: self.output_cap])
+        if (
+            isinstance(self.semiring, PathSemiring)
+            and type(self.semiring) is PathSemiring
+        ):
+            path_semiring = cast(PathSemiring, self.semiring)
+            if not values_validated:
+                for value, _path in distinct:
+                    path_semiring._ranked_value(cast(PathValue, value))
+            keyed = tuple(
+                (
+                    path_semiring._ranked_key(
+                        cast(PathValue, candidate[0]), candidate[1]
+                    ),
+                    candidate,
+                )
+                for candidate in distinct
+            )
+            if all(key is not None for key, _candidate in keyed):
+                witness_operations[0] += len(keyed)
+                return tuple(
+                    candidate
+                    for _key, candidate in sorted(keyed, key=lambda pair: pair[0])[
+                        : self.output_cap
+                    ]
+                )
+        return tuple(sorted(distinct, key=cmp_to_key(compare))[: self.output_cap])
+
+    def _ranked_value(self, value: Value) -> Value:
+        """Validate a PATH value once when it enters ranked internal work."""
+        if (
+            isinstance(self.semiring, PathSemiring)
+            and type(self.semiring) is PathSemiring
+        ):
+            return cast(Value, self.semiring._ranked_value(cast(PathValue, value)))
+        return value
+
+    def _ranked_multiply(self, left: Value, right: Value) -> Value:
+        """Multiply ranked PATH values whose entry validation already succeeded."""
+        if (
+            isinstance(self.semiring, PathSemiring)
+            and type(self.semiring) is PathSemiring
+        ):
+            return cast(
+                Value,
+                self.semiring._ranked_multiply(
+                    cast(PathValue, left), cast(PathValue, right)
+                ),
+            )
+        return self.semiring.multiply(left, right)
 
     def _select_paths(
         self,
@@ -1434,10 +1497,15 @@ class _CoordinatePass[Value]:
             local, label = prepared.pop(current)
             value = local
             paths: DerivationProvenance = ((label,),)
+            ranked_value = (
+                local
+                if not self.fold.ranked_output or local == self.fold.semiring.zero
+                else self.fold._ranked_value(local)
+            )
             ranked: tuple[RankedWitness[Value], ...] = (
                 ()
                 if not self.fold.ranked_output or local == self.fold.semiring.zero
-                else ((local, (label,)),)
+                else ((ranked_value, (label,)),)
             )
             ranked_count = len(ranked)
             has_children = False
@@ -1477,7 +1545,7 @@ class _CoordinatePass[Value]:
                             relation_ranked = self.fold._rank_candidates(
                                 tuple(
                                     (
-                                        self.fold.semiring.multiply(
+                                        self.fold._ranked_multiply(
                                             left_value, right_value
                                         ),
                                         left_path + right_path,
@@ -1487,6 +1555,7 @@ class _CoordinatePass[Value]:
                                 ),
                                 self.accumulator.witness_operations,
                                 self.accumulator.ranked_additions,
+                                values_validated=True,
                             )
                 else:
                     relation_value = child_results[0][0]
@@ -1517,6 +1586,7 @@ class _CoordinatePass[Value]:
                             ),
                             self.accumulator.witness_operations,
                             self.accumulator.ranked_additions,
+                            values_validated=True,
                         )
                 value = self.fold.semiring.multiply(value, relation_value)
                 self.accumulator.multiplications += 1
@@ -1531,7 +1601,7 @@ class _CoordinatePass[Value]:
                     ranked = self.fold._rank_candidates(
                         tuple(
                             (
-                                self.fold.semiring.multiply(left_value, right_value),
+                                self.fold._ranked_multiply(left_value, right_value),
                                 left_path + right_path,
                             )
                             for left_value, left_path in ranked
@@ -1539,6 +1609,7 @@ class _CoordinatePass[Value]:
                         ),
                         self.accumulator.witness_operations,
                         self.accumulator.ranked_additions,
+                        values_validated=True,
                     )
             if not has_children:
                 value = self.fold.semiring.multiply(value, self.fold.semiring.one)
