@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import fields, replace
 from decimal import Decimal
 from typing import cast
@@ -35,6 +36,7 @@ from tiergraph.fold import (
     FoldCost,
     FoldDeclaration,
     FoldHomomorphism,
+    FoldResult,
     FoldTransition,
     Lift,
     TiePolicy,
@@ -422,7 +424,7 @@ def test_ranked_path_ties_preserve_witness_order_and_operation_counts() -> None:
         result.cost.carrier_multiplications,
         result.cost.witness_operations,
         result.cost.ranked_multiplications,
-    ) == (2, 8, 10, 4)
+    ) == (2, 8, 6, 4)
 
 
 def ranked_tie() -> FoldDeclaration[object]:
@@ -1318,6 +1320,313 @@ def test_ranked_chain_keeps_the_exact_bounded_prefix_without_quadratic_deduplica
     )
     assert result.cost.witness_operations < 1_000
     assert result.cost.carrier_additions < 100
+
+
+def _without_operation_counters(
+    result: FoldResult[object], semiring: Semiring[object]
+) -> object:
+    """Return public fold data without implementation-dependent operation counts."""
+    data = result.to_data(semiring)
+    cost = cast(dict[str, object], data["cost"])
+    for name in (
+        "carrier_additions",
+        "carrier_multiplications",
+        "carrier_work",
+        "measured_work",
+        "witness_operations",
+        "ranked_multiplications",
+    ):
+        cost.pop(name, None)
+    return data
+
+
+def wide_ranked_product() -> FoldDeclaration[PathValue]:
+    """Build two independent 64-way alternatives required by one root."""
+    tier_name = FIXTURE.name("wide-rank-nodes")
+    item_type = FIXTURE.name("wide-rank-node")
+    weight = FIXTURE.name("wide-rank-weight")
+    requirements = BipartiteRelationDeclaration(
+        FIXTURE.name("wide-rank-requirements"), item_type, item_type, acyclic=True
+    )
+    alternatives = BipartiteRelationDeclaration(
+        FIXTURE.name("wide-rank-alternatives"), item_type, item_type, acyclic=True
+    )
+    labels = (
+        "root",
+        "left",
+        "right",
+        *(f"l{i:03}" for i in range(64)),
+        *(f"r{i:03}" for i in range(64)),
+    )
+    values = (0, 0, 0, *(i * 1000 for i in range(64)), *range(64))
+    tier = Tier(
+        TierDeclaration(tier_name, "Wide ranked nodes"),
+        tuple(
+            Item(label, (AttributeValue(weight, XsdType.DECIMAL, str(value)),))
+            for label, value in zip(labels, values, strict=True)
+        ),
+    )
+    relations = (
+        RelationInstance(
+            requirements.name, ItemRef(tier_name, 0), ItemRef(tier_name, 1)
+        ),
+        RelationInstance(
+            requirements.name, ItemRef(tier_name, 0), ItemRef(tier_name, 2)
+        ),
+        *(
+            RelationInstance(
+                alternatives.name, ItemRef(tier_name, 1), ItemRef(tier_name, index)
+            )
+            for index in range(3, 67)
+        ),
+        *(
+            RelationInstance(
+                alternatives.name, ItemRef(tier_name, 2), ItemRef(tier_name, index)
+            )
+            for index in range(67, 131)
+        ),
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (tier,),
+        (
+            SimpleRelationDeclaration(
+                FIXTURE.name("wide-rank-members"), tier_name, item_type
+            ),
+            requirements,
+            alternatives,
+        ),
+        relations,
+        (AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    return FoldDeclaration(
+        "wide-ranked-product",
+        graph,
+        AttributeValuation("wide-rank-weight", weight, (tier_name,)),
+        PATH,
+        path_lift,
+        (
+            FoldTransition(requirements.name, ChildCombination.AND),
+            FoldTransition(alternatives.name, ChildCombination.OR),
+        ),
+        roots=(ItemRef(tier_name, 0),),
+        output_cap=64,
+        ranked_output=True,
+    )
+
+
+def test_lazy_ranked_product_keeps_the_exact_prefix_and_avoids_the_full_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A neutral 64x64 product builds a small frontier, not all 4,096 pairs."""
+    declared = wide_ranked_product()
+    lazy = declared.run()
+    expected_paths = tuple(
+        ("root", "left", "l000", "right", f"r{index:03}") for index in range(64)
+    )
+    assert lazy.ranked_witnesses == tuple(
+        ((Decimal(index), (path,)), path) for index, path in enumerate(expected_paths)
+    )
+
+    with monkeypatch.context() as eager_patch:
+        eager_patch.setattr(
+            FoldDeclaration,
+            "_lazy_ranked_product",
+            lambda self, left, right, witness_operations, ranked_additions: None,
+        )
+        eager = declared.run()
+
+    assert _without_operation_counters(
+        cast(FoldResult[object], lazy), cast(Semiring[object], PATH)
+    ) == _without_operation_counters(
+        cast(FoldResult[object], eager), cast(Semiring[object], PATH)
+    )
+    assert lazy.cost.ranked_multiplications < 400
+    assert eager.cost.ranked_multiplications > 4_000
+
+
+def test_lazy_ranked_product_matches_eager_products_and_declines_unsafe_inputs() -> (
+    None
+):
+    """Random singleton products agree; unproved carriers and tie shapes fall back."""
+    generator = random.Random(198)
+    for cap in (1, 2, 7, 19):
+        declared = replace(ranked_tie(), output_cap=cap)
+        for _case in range(20):
+            raw_left = tuple(
+                (
+                    (Decimal(generator.randrange(5)), ((f"lv{index}",),)),
+                    (f"l{generator.randrange(4)}", f"x{index}"),
+                )
+                for index in range(generator.randrange(1, 9))
+            )
+            raw_right = tuple(
+                (
+                    (Decimal(generator.randrange(5)), ((f"rv{index}",),)),
+                    (f"r{generator.randrange(4)}", f"y{index}"),
+                )
+                for index in range(generator.randrange(1, 9))
+            )
+            left = declared._rank_candidates(raw_left, [0], [0])
+            right = declared._rank_candidates(raw_right, [0], [0])
+            lazy, _lazy_products = declared._ranked_product(left, right, [0], [0])
+            eager, eager_products = declared._ranked_product(
+                left, right, [0], [0], force_eager=True
+            )
+            assert lazy == eager
+            assert eager_products == len(left) * len(right)
+
+    declared = replace(ranked_tie(), output_cap=3)
+    singleton = ((PATH.one, ("z",)),)
+    assert declared._lazy_ranked_product((), singleton, [0], [0]) == ((), 0)
+    aggregated = ((Decimal(0), (("a",), ("b",))), ("a",))
+    assert declared._lazy_ranked_product((aggregated,), singleton, [0], [0]) is None
+    assert (
+        declared._lazy_ranked_product(
+            ((PATH.one, ("z",)), (PATH.one, ("a",))), singleton, [0], [0]
+        )
+        is None
+    )
+    assert (
+        declared._lazy_ranked_product(
+            singleton, ((PATH.one, ("z",)), (PATH.one, ("a",))), [0], [0]
+        )
+        is None
+    )
+    prefix_tie = ((PATH.one, ("a",)), (PATH.one, ("a", "z")))
+    assert declared._lazy_ranked_product(prefix_tie, singleton, [0], [0]) is None
+
+    tropical = replace(
+        declaration("cost", cast(Semiring[object], DECIMAL_TROPICAL)), output_cap=2
+    )
+    product, built = tropical._ranked_product(
+        ((Decimal(1), ("a",)),), ((Decimal(2), ("b",)),), [0], [0]
+    )
+    assert product == ((Decimal(3), ("a", "b")),)
+    assert built == 1
+
+    duplicate = ((PATH.one, ("same",)), (PATH.one, ("same",)))
+    product, _built = declared._ranked_product(duplicate, singleton, [0], [0])
+    assert product == ((PATH.one, ("same", "z")),)
+
+    same_key = (
+        ((Decimal(0), (("first",),)), ("same",)),
+        ((Decimal(0), (("second",),)), ("same",)),
+    )
+    product, _built = declared._ranked_product(same_key, singleton, [0], [0])
+    assert product == (
+        ((Decimal(0), (("first",),)), ("same", "z")),
+        ((Decimal(0), (("second",),)), ("same", "z")),
+    )
+
+
+def random_dag_fold(seed: int, cap: int) -> FoldDeclaration[PathValue]:
+    """Build one small deterministic random OR DAG with tied PATH costs."""
+    generator = random.Random(seed)
+    tier_name = FIXTURE.name(f"random-rank-nodes-{seed}")
+    item_type = FIXTURE.name(f"random-rank-node-{seed}")
+    weight = FIXTURE.name(f"random-rank-weight-{seed}")
+    depends = BipartiteRelationDeclaration(
+        FIXTURE.name(f"random-rank-depends-{seed}"),
+        item_type,
+        item_type,
+        acyclic=True,
+    )
+    size = generator.randrange(5, 9)
+    tier = Tier(
+        TierDeclaration(tier_name, "Random ranked nodes"),
+        tuple(
+            Item(
+                f"n{index}",
+                (AttributeValue(weight, XsdType.DECIMAL, str(generator.randrange(3))),),
+            )
+            for index in range(size)
+        ),
+    )
+    edge_indices = {(index, index + 1) for index in range(size - 1)}
+    edge_indices.update(
+        (left, right)
+        for left in range(size)
+        for right in range(left + 2, size)
+        if generator.random() < 0.35
+    )
+    graph = Graph(
+        FIXTURE.graph().namespaces,
+        (tier,),
+        (
+            SimpleRelationDeclaration(
+                FIXTURE.name(f"random-rank-members-{seed}"), tier_name, item_type
+            ),
+            depends,
+        ),
+        tuple(
+            RelationInstance(
+                depends.name, ItemRef(tier_name, left), ItemRef(tier_name, right)
+            )
+            for left, right in sorted(edge_indices)
+        ),
+        (AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DECIMAL),),
+    )
+    return FoldDeclaration(
+        f"random-ranked-{seed}",
+        graph,
+        AttributeValuation("random-rank-weight", weight, (tier_name,)),
+        PATH,
+        path_lift,
+        (FoldTransition(depends.name, ChildCombination.OR),),
+        roots=(ItemRef(tier_name, 0),),
+        output_cap=cap,
+        ranked_output=True,
+    )
+
+
+def test_random_dag_folds_match_forced_eager_across_caps_semirings_and_ties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Differentially compare lazy and eager schedules over varied fold policies."""
+    for seed in range(8):
+        for cap in (1, 3, 8):
+            ranked = random_dag_fold(seed, cap)
+            generic_ranked = cast(FoldDeclaration[object], ranked)
+            configurations: tuple[FoldDeclaration[object], ...] = (
+                generic_ranked,
+                replace(
+                    generic_ranked,
+                    semiring=cast(Semiring[object], DECIMAL_TROPICAL),
+                    lift=cast(Lift[object], decimal_lift),
+                    ranked_output=False,
+                    witness_order=minimum_order,
+                    tie_policy=TiePolicy.ALL,
+                ),
+                replace(
+                    generic_ranked,
+                    semiring=cast(Semiring[object], DECIMAL_TROPICAL),
+                    lift=cast(Lift[object], decimal_lift),
+                    ranked_output=False,
+                    witness_order=minimum_order,
+                    tie_policy=TiePolicy.CHOOSE_FIRST,
+                ),
+                replace(
+                    generic_ranked,
+                    semiring=cast(Semiring[object], COUNTING),
+                    lift=cast(Lift[object], lambda value, label: 1),
+                    ranked_output=False,
+                ),
+            )
+            for configured in configurations:
+                lazy = configured.run()
+                with monkeypatch.context() as eager_patch:
+                    eager_patch.setattr(
+                        FoldDeclaration,
+                        "_lazy_ranked_product",
+                        lambda self, left, right, witness_operations, ranked_additions: (
+                            None
+                        ),
+                    )
+                    eager = configured.run()
+                assert _without_operation_counters(
+                    lazy, configured.semiring
+                ) == _without_operation_counters(eager, configured.semiring)
 
 
 def test_fold_selects_the_winning_payload_through_semiring_addition() -> None:

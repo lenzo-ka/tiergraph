@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Ranked PATH folds enumerate bounded products lazily instead of materializing every candidate.
 - Ranked folds deduplicate by hashed paths and validate PATH values once, reducing operations without changing output.
 
 ### Documentation

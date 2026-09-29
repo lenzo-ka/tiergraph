@@ -130,6 +130,7 @@ _STDLIB_IMPORTS = {
     "functools",
     "getpass",
     "hashlib",
+    "heapq",
     "html",
     "importlib",
     "inspect",
