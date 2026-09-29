@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Value predicates (`tiergraph.predicate`), their strict JSON form, and `WhereSelector`.
+- Text value predicates, missing-cell aliases, and `select --where`.
 
 ## [0.3.0] - 2026-09-22
 

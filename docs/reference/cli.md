@@ -531,7 +531,9 @@ options:
 ### `tiergraph select`
 
 ```text
-usage: tiergraph select [-h] --selector FILE [-o FILE] GRAPH
+usage: tiergraph select [-h] (--selector FILE | --where TEXT) [--prefix P]
+                        [-o FILE]
+                        GRAPH
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
@@ -539,6 +541,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --selector FILE
+  --where TEXT
+  --prefix P
   -o FILE, --output FILE
                         output file (default: -)
 ```
