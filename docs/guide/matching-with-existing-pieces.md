@@ -184,6 +184,31 @@ The command-line equivalent uses `--where` in place of a selector JSON file:
 the predicate over every item and writes the selected node references as JSON.
 `--selector` and `--where` are mutually exclusive.
 
+## Quantifying related items
+
+`Related` tests one relation step from each candidate. `ANY` needs a related
+item that satisfies the target, while `NONE` and `ALL` are true when the
+candidate has no related items. The direction is read from the candidate to
+the target; here segments use the inverse of the stored annotation-to-segment
+relation.
+
+```python
+from tiergraph.predicate import And, Quantifier, Related, compile_predicate
+
+unhosted_predicate = Related(
+    host,
+    WalkDirection.INVERSE,
+    Quantifier.NONE,
+    And(()),
+)
+unhosted = compile_predicate(unhosted_predicate).bind(graph).select(all_segments)
+
+print("segments with no annotation:", labels(unhosted))
+```
+```text
+segments with no annotation: ['s1']
+```
+
 ## Matching complete outputs and folding alternatives
 
 `OutputPlan` matches complete emitted token sequences against a finite

@@ -30,6 +30,40 @@ class WalkDirection(StrEnum):
     INVERSE = "inverse"
 
 
+def relation_image(
+    source: NodeSet, relation: QualifiedName, direction: WalkDirection
+) -> NodeSet:
+    """Return the one-step image of a set without excluding its source.
+
+    Bipartite incidence follows the stored pair in the requested direction.
+    Polyadic incidence reaches every endpoint on the far side when any endpoint
+    on the near side is selected. The result is a canonical set in the source
+    graph, so repeated incidence contributes a node once.
+    """
+    if not isinstance(direction, WalkDirection):
+        raise ValueError(
+            f"relation image {str(relation)!r} has invalid direction {direction!r}"
+        )
+    declaration = next(
+        (
+            candidate
+            for candidate in source.graph.relation_declarations
+            if candidate.name == relation
+        ),
+        None,
+    )
+    if not isinstance(
+        declaration, BipartiteRelationDeclaration | PolyadicRelationDeclaration
+    ):
+        raise ValueError(
+            f"relation image {str(relation)!r} is not a declared bipartite "
+            "or polyadic relation"
+        )
+    if isinstance(declaration, PolyadicRelationDeclaration):
+        return _polyadic_relation_image(source, relation, direction)
+    return _bipartite_relation_image(source, relation, direction)
+
+
 @dataclass(frozen=True, slots=True)
 class WalkResult:
     """Return reached nodes and a one-sided report of the step cap.
@@ -667,50 +701,47 @@ class Walk:
 
     def _step(self, source: NodeSet) -> NodeSet:
         """Follow one step of the declared shape, forward or as an inverse fiber."""
-        if isinstance(self._declaration, PolyadicRelationDeclaration):
-            return self._polyadic_step(source)
-        return self._bipartite_step(source)
+        return relation_image(source, self.relation, self.direction)
 
-    def _polyadic_step(self, source: NodeSet) -> NodeSet:
-        """Reach the whole far side of every incidence the near side is selected in.
 
-        Set-valued, so an incidence offering one node along several of its edges
-        contributes it once, and a step that reaches nothing new is what ends an
-        unbounded walk. Both are the same behavior the bipartite step has.
-        """
-        graph = source.graph
-        admitted = set(source.nodes)
-        targets: list[Node] = []
-        for instance in graph.polyadic_relations:
-            if instance.declaration != self.relation:
-                continue
-            near, far = (
-                (instance.sources, instance.targets)
-                if self.direction is WalkDirection.FORWARD
-                else (instance.targets, instance.sources)
-            )
-            if any(_endpoint_node(graph, endpoint) in admitted for endpoint in near):
-                targets.extend(_endpoint_node(graph, endpoint) for endpoint in far)
-        return NodeSet(graph, tuple(targets))
+def _polyadic_relation_image(
+    source: NodeSet, relation: QualifiedName, direction: WalkDirection
+) -> NodeSet:
+    """Return the set-valued far side of matching polyadic incidence."""
+    graph = source.graph
+    admitted = set(source.nodes)
+    targets: list[Node] = []
+    for instance in graph.polyadic_relations:
+        if instance.declaration != relation:
+            continue
+        near, far = (
+            (instance.sources, instance.targets)
+            if direction is WalkDirection.FORWARD
+            else (instance.targets, instance.sources)
+        )
+        if any(_endpoint_node(graph, endpoint) in admitted for endpoint in near):
+            targets.extend(_endpoint_node(graph, endpoint) for endpoint in far)
+    return NodeSet(graph, tuple(targets))
 
-    def _bipartite_step(self, source: NodeSet) -> NodeSet:
-        """Follow stored pair incidence forward or compute its inverse fiber."""
-        graph = source.graph
-        admitted = set(source.nodes)
-        targets: list[Node] = []
-        for instance in graph.relations:
-            if instance.declaration != self.relation:
-                continue
-            left = _endpoint_node(graph, instance.left)
-            right = _endpoint_node(graph, instance.right)
-            origin, target = (
-                (left, right)
-                if self.direction is WalkDirection.FORWARD
-                else (right, left)
-            )
-            if origin in admitted:
-                targets.append(target)
-        return NodeSet(graph, tuple(targets))
+
+def _bipartite_relation_image(
+    source: NodeSet, relation: QualifiedName, direction: WalkDirection
+) -> NodeSet:
+    """Return the set-valued far side of matching bipartite incidence."""
+    graph = source.graph
+    admitted = set(source.nodes)
+    targets: list[Node] = []
+    for instance in graph.relations:
+        if instance.declaration != relation:
+            continue
+        left = _endpoint_node(graph, instance.left)
+        right = _endpoint_node(graph, instance.right)
+        origin, target = (
+            (left, right) if direction is WalkDirection.FORWARD else (right, left)
+        )
+        if origin in admitted:
+            targets.append(target)
+    return NodeSet(graph, tuple(targets))
 
 
 def _endpoint_node(graph: Graph, reference: RelationEndpointRef) -> Node:

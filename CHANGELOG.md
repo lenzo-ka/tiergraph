@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Value predicates (`tiergraph.predicate`), their strict JSON form, and `WhereSelector`.
 - Text value predicates, missing-cell aliases, and `select --where`.
+- One-step relation images and quantified `Related` predicates.
 
 ### Fixed
 

@@ -33,6 +33,7 @@ from tiergraph.wire import _object, _parsed_json, _string
 
 if TYPE_CHECKING:
     from tiergraph.selection import Node, NodeSet
+    from tiergraph.traversal import WalkDirection
 
 _BARE_FORBIDDEN = frozenset("!\"#%&'()*,/:<=>?@[\\]^{|}~∅")
 _MISSING = object()
@@ -232,6 +233,16 @@ class Elements:
 
 
 @dataclass(frozen=True, slots=True)
+class Related:
+    """Quantify a target predicate over one relation step."""
+
+    relation: QualifiedName
+    direction: WalkDirection
+    quantifier: Quantifier
+    target: Predicate
+
+
+@dataclass(frozen=True, slots=True)
 class And:
     """Intersect zero or at least two predicate decisions."""
 
@@ -272,7 +283,7 @@ class Not:
     arg: Predicate
 
 
-type Predicate = Has | Equals | Compare | Matches | Elements | And | Or | Not
+type Predicate = Has | Equals | Compare | Matches | Elements | Related | And | Or | Not
 
 
 @dataclass(frozen=True, slots=True)
@@ -976,7 +987,10 @@ class BoundPredicate:
 
     def holds(self, node: Node) -> bool:
         """Decide one graph node after evaluating every atom it can reach."""
-        return self._decision(self.predicate, _Context(node))
+        from tiergraph.selection import NodeSet  # noqa: PLC0415 -- cycle breaker
+
+        candidates = NodeSet(self.graph, (node,))
+        return bool(self._selection_decision(self.predicate, candidates).nodes)
 
     def select(self, candidates: NodeSet) -> NodeSet:
         """Return candidates that hold, retaining the candidate set's domain."""
@@ -985,10 +999,61 @@ class BoundPredicate:
                 RefusalStage.SEMANTICS,
                 "predicate selection requires candidates from the bound graph",
             )
-        selected = tuple(node for node in candidates.nodes if self.holds(node))
+        return self._selection_decision(self.predicate, candidates)
+
+    def _selection_decision(self, predicate: Predicate, candidates: NodeSet) -> NodeSet:
+        lowered = _lower_related_quantifiers(predicate)
+        cache: dict[Predicate, NodeSet] = {}
+        for atom in _atoms(lowered):
+            cache[atom] = self._selection_atom(atom, candidates)
+        return self._combine_selection(lowered, cache, candidates)
+
+    def _selection_atom(self, atom: Predicate, candidates: NodeSet) -> NodeSet:
+        if isinstance(atom, Related):
+            from tiergraph.traversal import (  # noqa: PLC0415 -- cycle breaker
+                WalkDirection,
+                relation_image,
+            )
+
+            assert atom.quantifier is Quantifier.ANY
+            targets = relation_image(candidates, atom.relation, atom.direction)
+            matching = self._selection_decision(atom.target, targets)
+            reverse = (
+                WalkDirection.INVERSE
+                if atom.direction is WalkDirection.FORWARD
+                else WalkDirection.FORWARD
+            )
+            origins = relation_image(matching, atom.relation, reverse)
+            return candidates & origins
+        selected = tuple(
+            node for node in candidates.nodes if self._atom(atom, _Context(node))
+        )
         return candidates.__class__(self.graph, selected)
 
+    def _combine_selection(
+        self,
+        predicate: Predicate,
+        cache: dict[Predicate, NodeSet],
+        candidates: NodeSet,
+    ) -> NodeSet:
+        if isinstance(predicate, And):
+            result = candidates
+            for argument in predicate.args:
+                result = result & self._combine_selection(argument, cache, candidates)
+            return result
+        if isinstance(predicate, Or):
+            result = candidates.__class__(self.graph, ())
+            for argument in predicate.args:
+                result = result | self._combine_selection(argument, cache, candidates)
+            return result
+        if isinstance(predicate, Not):
+            return candidates - self._combine_selection(
+                predicate.arg, cache, candidates
+            )
+        return cache[predicate]
+
     def _decision(self, predicate: Predicate, context: _Context) -> bool:
+        predicate = _lower_related_quantifiers(predicate)
         cache: dict[Predicate, bool] = {}
         for atom in _atoms(predicate):
             cache[atom] = self._atom(atom, context)
@@ -1021,6 +1086,14 @@ class BoundPredicate:
                 and type(reading.value) is str
                 and _compile_regex(atom.regex).fullmatch(reading.value)
             )
+        if isinstance(atom, Related):
+            from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
+                Node,
+                NodeSet,
+            )
+
+            candidates = NodeSet(self.graph, (cast(Node, context.node),))
+            return bool(self._selection_atom(atom, candidates).nodes)
         assert isinstance(atom, Elements)
         reading = self._read(atom.operand, context)
         if not reading.present:
@@ -1099,6 +1172,9 @@ class _Binder:
             return
         if isinstance(predicate, Not):
             self.check(predicate.arg, current_allowed=current_allowed)
+            return
+        if isinstance(predicate, Related):
+            self.check(predicate.target, current_allowed=False)
             return
         if isinstance(predicate, Elements):
             self.operand(predicate.operand, current_allowed=current_allowed)
@@ -1354,6 +1430,32 @@ def _atoms(predicate: Predicate) -> Iterator[Predicate]:
         yield predicate
 
 
+def _lower_related_quantifiers(predicate: Predicate) -> Predicate:
+    """Express Related NONE and ALL only through the generic complement."""
+    if isinstance(predicate, And):
+        return And(tuple(_lower_related_quantifiers(arg) for arg in predicate.args))
+    if isinstance(predicate, Or):
+        return Or(tuple(_lower_related_quantifiers(arg) for arg in predicate.args))
+    if isinstance(predicate, Not):
+        return Not(_lower_related_quantifiers(predicate.arg))
+    if isinstance(predicate, Elements):
+        return Elements(
+            predicate.operand,
+            predicate.quantifier,
+            _lower_related_quantifiers(predicate.body),
+        )
+    if not isinstance(predicate, Related):
+        return predicate
+    target = _lower_related_quantifiers(predicate.target)
+    any_related = Related(
+        predicate.relation,
+        predicate.direction,
+        Quantifier.ANY,
+        target if predicate.quantifier is not Quantifier.ALL else Not(target),
+    )
+    return any_related if predicate.quantifier is Quantifier.ANY else Not(any_related)
+
+
 def _combine(predicate: Predicate, cache: dict[Predicate, bool]) -> bool:
     if isinstance(predicate, And):
         return all(_combine(argument, cache) for argument in predicate.args)
@@ -1423,6 +1525,14 @@ def predicate_to_data(predicate: Predicate) -> JsonValue:
             "quantifier": predicate.quantifier.value,
             "body": predicate_to_data(predicate.body),
         }
+    if isinstance(predicate, Related):
+        return {
+            "test": "related",
+            "relation": predicate.relation.to_data(),
+            "direction": predicate.direction.value,
+            "quantifier": predicate.quantifier.value,
+            "target": predicate_to_data(predicate.target),
+        }
     if isinstance(predicate, And | Or):
         return {
             "test": "and" if isinstance(predicate, And) else "or",
@@ -1454,6 +1564,10 @@ def _decode_predicate(value: JsonValue, path: str) -> Predicate:
         "elements": (
             {"test", "operand", "quantifier", "body"},
             {"test", "operand", "quantifier", "body"},
+        ),
+        "related": (
+            {"test", "relation", "direction", "quantifier", "target"},
+            {"test", "relation", "direction", "quantifier", "target"},
         ),
         "and": ({"test", "args"}, {"test", "args"}),
         "or": ({"test", "args"}, {"test", "args"}),
@@ -1514,6 +1628,33 @@ def _decode_predicate(value: JsonValue, path: str) -> Predicate:
             _decode_operand(node["operand"], f"{path}.operand"),
             quantifier,
             _decode_predicate(node["body"], f"{path}.body"),
+        )
+    if kind == "related":
+        from tiergraph.traversal import (  # noqa: PLC0415 -- cycle breaker
+            WalkDirection,
+        )
+
+        direction_text = _string(node["direction"], f"{path}.direction")
+        try:
+            direction = WalkDirection(direction_text)
+        except ValueError as error:
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"{path}.direction has invalid walk direction {direction_text!r}",
+            ) from error
+        quantifier_text = _string(node["quantifier"], f"{path}.quantifier")
+        try:
+            quantifier = Quantifier(quantifier_text)
+        except ValueError as error:
+            raise Refusal(
+                RefusalStage.VALUE,
+                f"{path}.quantifier has invalid quantifier {quantifier_text!r}",
+            ) from error
+        return Related(
+            _decode_qname(node["relation"], f"{path}.relation"),
+            direction,
+            quantifier,
+            _decode_predicate(node["target"], f"{path}.target"),
         )
     if kind in {"and", "or"}:
         raw_args = node["args"]
@@ -1609,6 +1750,7 @@ __all__ = [
     "Predicate",
     "PredicateSyntax",
     "Quantifier",
+    "Related",
     "compile_predicate",
     "format_predicate",
     "parse_predicate",
