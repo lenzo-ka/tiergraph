@@ -331,6 +331,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -466,6 +468,7 @@
       "Predicate",
       "PredicateSyntax",
       "Quantifier",
+      "Related",
       "compile_predicate",
       "format_predicate",
       "parse_predicate",

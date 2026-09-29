@@ -6882,6 +6882,14 @@ Quantify a predicate over the elements of a JSON array.
 - `ALL` = `all`
 - `NONE` = `none`
 
+### `Related`
+
+```text
+Related(relation: 'QualifiedName', direction: 'WalkDirection', quantifier: 'Quantifier', target: 'Predicate') -> None
+```
+
+Quantify a target predicate over one relation step.
+
 ### `compile_predicate`
 
 ```text
