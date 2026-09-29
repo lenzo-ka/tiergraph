@@ -47,6 +47,8 @@ annotations = q("annotations")
 annotation_type = q("annotation")
 stress = q("stress")
 host = q("host")
+start = q("start")
+end = q("end")
 
 segment_refs = tuple(ItemRef(segments, index) for index in range(3))
 annotation_refs = tuple(ItemRef(annotations, index) for index in range(2))
@@ -58,15 +60,47 @@ graph = Graph(
             (
                 Item(
                     "s0",
-                    (AttributeValue(stress, XsdType.STRING, "primary"),),
+                    (
+                        AttributeValue(stress, XsdType.STRING, "primary"),
+                        AttributeValue(start, XsdType.INTEGER, "0"),
+                        AttributeValue(end, XsdType.INTEGER, "4"),
+                    ),
                 ),
-                Item("s1"),
-                Item("s2", (AttributeValue(stress, XsdType.STRING, ""),)),
+                Item(
+                    "s1",
+                    (
+                        AttributeValue(start, XsdType.INTEGER, "4"),
+                        AttributeValue(end, XsdType.INTEGER, "8"),
+                    ),
+                ),
+                Item(
+                    "s2",
+                    (
+                        AttributeValue(stress, XsdType.STRING, ""),
+                        AttributeValue(start, XsdType.INTEGER, "0"),
+                        AttributeValue(end, XsdType.INTEGER, "8"),
+                    ),
+                ),
             ),
         ),
         Tier(
             TierDeclaration(annotations, "Annotations"),
-            (Item("a0"), Item("a1")),
+            (
+                Item(
+                    "a0",
+                    (
+                        AttributeValue(start, XsdType.INTEGER, "0"),
+                        AttributeValue(end, XsdType.INTEGER, "4"),
+                    ),
+                ),
+                Item(
+                    "a1",
+                    (
+                        AttributeValue(start, XsdType.INTEGER, "4"),
+                        AttributeValue(end, XsdType.INTEGER, "8"),
+                    ),
+                ),
+            ),
         ),
     ),
     (
@@ -80,7 +114,11 @@ graph = Graph(
         RelationInstance(host, annotation_refs[0], segment_refs[0]),
         RelationInstance(host, annotation_refs[1], segment_refs[2]),
     ),
-    (AttributeDeclaration(stress, AttributeDomain.ITEM, XsdType.STRING),),
+    (
+        AttributeDeclaration(stress, AttributeDomain.ITEM, XsdType.STRING),
+        AttributeDeclaration(start, AttributeDomain.ITEM, XsdType.INTEGER),
+        AttributeDeclaration(end, AttributeDomain.ITEM, XsdType.INTEGER),
+    ),
 )
 
 
@@ -208,6 +246,44 @@ print("segments with no annotation:", labels(unhosted))
 ```text
 segments with no annotation: ['s1']
 ```
+
+## Joining items by offsets
+
+`OffsetProfile` names item attributes rather than tiers. `span_pairs` applies
+one directed half-open interval relation to the items selected on its left and
+right. It excludes a node paired with itself and preserves left-major declared
+order. A limit truncates only the returned witnesses and reports that cut in
+the result's `extent`.
+
+```python
+from tiergraph.match import span_pairs
+from tiergraph.predicate import IntervalRelation, OffsetProfile
+
+equal_offsets = span_pairs(
+    graph,
+    ItemsSelector(segments),
+    ItemsSelector(annotations),
+    IntervalRelation.EQUAL,
+    OffsetProfile(start, end=end),
+)
+print(
+    "equal offsets:",
+    [
+        (labels(NodeSet(graph, (left,)))[0], labels(NodeSet(graph, (right,)))[0])
+        for left, right in equal_offsets.pairs
+    ],
+)
+print("extent:", equal_offsets.extent.value)
+```
+```text
+equal offsets: [('s0', 'a0'), ('s1', 'a1')]
+extent: exhaustive
+```
+
+An origin, end, extent, or partition missing from an item that the operation
+reads is a semantic refusal. An extent must be nonnegative, and an end cannot
+precede its origin. Supplying `extent=` in place of `end=` gives the same
+intervals when the stored extent is `end - origin`.
 
 ## Matching complete outputs and folding alternatives
 

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 from tiergraph.core import (
     Attribute,
     AttributeDeclaration,
+    AttributeDomain,
     AttributeValue,
     BoundaryRef,
     Graph,
@@ -132,6 +133,33 @@ class Quantifier(StrEnum):
     NONE = "none"
 
 
+class IntervalRelation(StrEnum):
+    """Name one directed relation between half-open integer intervals."""
+
+    EQUAL = "equal"
+    CONTAINS = "contains"
+    WITHIN = "within"
+    PROPER_CONTAINS = "proper-contains"
+    PROPER_WITHIN = "proper-within"
+    OVERLAPS = "overlaps"
+    MEETS = "meets"
+    MET_BY = "met-by"
+
+
+@dataclass(frozen=True, slots=True)
+class OffsetProfile:
+    """Name an origin and exactly one integer measure, with a partition."""
+
+    origin: QualifiedName
+    extent: QualifiedName | None = None
+    end: QualifiedName | None = None
+    partition: QualifiedName | None = None
+
+    def __post_init__(self) -> None:
+        if (self.extent is None) == (self.end is None):
+            raise ValueError("OffsetProfile needs exactly one of extent or end")
+
+
 def _literal_key(value: Literal) -> tuple[type[object], object]:
     if not _is_literal(value):
         raise TypeError(
@@ -243,6 +271,17 @@ class Related:
 
 
 @dataclass(frozen=True, slots=True)
+class Spans:
+    """Quantify a target predicate over items in an interval relation."""
+
+    offsets: OffsetProfile
+    relation: IntervalRelation
+    quantifier: Quantifier
+    other: QualifiedName
+    target: Predicate
+
+
+@dataclass(frozen=True, slots=True)
 class And:
     """Intersect zero or at least two predicate decisions."""
 
@@ -283,7 +322,9 @@ class Not:
     arg: Predicate
 
 
-type Predicate = Has | Equals | Compare | Matches | Elements | Related | And | Or | Not
+type Predicate = (
+    Has | Equals | Compare | Matches | Elements | Related | Spans | And | Or | Not
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -886,6 +927,15 @@ def _operand_text(operand: Operand) -> str:
     return "/".join((root, *operand.pointer))
 
 
+def _node_label(graph: Graph, node: _NodeLike) -> str:
+    if _kind(node) == "item" and isinstance(node.reference, ItemRef):
+        tier = next(
+            tier for tier in graph.tiers if tier.declaration.name == node.reference.tier
+        )
+        return tier.items[node.reference.index].durable_id or str(node.reference.index)
+    return str(node.reference)
+
+
 class _NodeLike(Protocol):
     @property
     def kind(self) -> object:
@@ -967,6 +1017,194 @@ class _Read:
 
 
 @dataclass(frozen=True, slots=True)
+class _OffsetSpan:
+    node: _NodeLike
+    origin: int
+    end: int
+    partition: str | None
+
+
+def _required_offset(
+    graph: Graph,
+    node: _NodeLike,
+    values: dict[QualifiedName, AttributeValue],
+    name: QualifiedName,
+) -> AttributeValue:
+    value = values.get(name)
+    if value is None:
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"item {_node_label(graph, node)!r} has no {_display_name(graph, name)}; "
+            "Spans and span_pairs need offsets on every item they read",
+        )
+    return value
+
+
+def _validate_offset_profile(graph: Graph, profile: OffsetProfile) -> None:
+    measured = (profile.origin, profile.extent or profile.end)
+    for name in measured:
+        assert name is not None
+        declaration = _find_declaration(graph, name)
+        if declaration is None:
+            raise Refusal(
+                RefusalStage.REFERENCE,
+                f"offset profile names undeclared attribute {_display_name(graph, name)}",
+            )
+        if (
+            declaration.domain is not AttributeDomain.ITEM
+            or declaration.value_type is not XsdType.INTEGER
+        ):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"offset attribute {_display_name(graph, name)} must be an "
+                "xsd:integer item attribute",
+            )
+    if profile.partition is None:
+        return
+    partition = _find_declaration(graph, profile.partition)
+    if partition is None:
+        raise Refusal(
+            RefusalStage.REFERENCE,
+            "offset profile names undeclared attribute "
+            f"{_display_name(graph, profile.partition)}",
+        )
+    if partition.domain is not AttributeDomain.ITEM or not isinstance(
+        partition.value_type, XsdType
+    ):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"partition attribute {_display_name(graph, profile.partition)} must be "
+            "a scalar item attribute",
+        )
+
+
+def _offset_spans(
+    graph: Graph, nodes: tuple[_NodeLike, ...], profile: OffsetProfile
+) -> tuple[_OffsetSpan, ...]:
+    result: list[_OffsetSpan] = []
+    measure = profile.extent or profile.end
+    assert measure is not None
+    for node in nodes:
+        if _kind(node) != "item" or not isinstance(node.reference, ItemRef):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "Spans and span_pairs read offsets only from items",
+            )
+        values = {
+            value.name: value
+            for value in _carrier_attributes(graph, node)
+            if isinstance(value, AttributeValue)
+        }
+        label = _node_label(graph, node)
+        origin = int(_required_offset(graph, node, values, profile.origin).lexical)
+        amount = int(_required_offset(graph, node, values, measure).lexical)
+        if profile.extent is not None:
+            if amount < 0:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"item {label!r} has negative extent {amount}",
+                )
+            end = origin + amount
+        else:
+            end = amount
+            if end < origin:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"item {label!r} has end {end} before origin {origin}",
+                )
+        partition = (
+            _required_offset(graph, node, values, profile.partition).lexical
+            if profile.partition is not None
+            else None
+        )
+        result.append(_OffsetSpan(node, origin, end, partition))
+    return tuple(result)
+
+
+def _interval_holds(
+    relation: IntervalRelation, left: _OffsetSpan, right: _OffsetSpan
+) -> bool:
+    if left.partition != right.partition:
+        return False
+    a, b, c, d = left.origin, left.end, right.origin, right.end
+    if relation is IntervalRelation.EQUAL:
+        return a == c and b == d
+    if relation is IntervalRelation.CONTAINS:
+        return a <= c and d <= b
+    if relation is IntervalRelation.WITHIN:
+        return c <= a and b <= d
+    if relation is IntervalRelation.PROPER_CONTAINS:
+        return a <= c and d <= b and (a, b) != (c, d)
+    if relation is IntervalRelation.PROPER_WITHIN:
+        return c <= a and b <= d and (a, b) != (c, d)
+    if relation is IntervalRelation.OVERLAPS:
+        return max(a, c) < min(b, d)
+    if relation is IntervalRelation.MEETS:
+        return b == c
+    return d == a
+
+
+def _interval_pairs(
+    left: tuple[_OffsetSpan, ...],
+    right: tuple[_OffsetSpan, ...],
+    relation: IntervalRelation,
+) -> Iterator[tuple[_OffsetSpan, _OffsetSpan]]:
+    if relation in {
+        IntervalRelation.EQUAL,
+        IntervalRelation.MEETS,
+        IntervalRelation.MET_BY,
+    }:
+        index: dict[tuple[str | None, int, int | None], list[_OffsetSpan]] = {}
+        for candidate in right:
+            key = {
+                IntervalRelation.EQUAL: (
+                    candidate.partition,
+                    candidate.origin,
+                    candidate.end,
+                ),
+                IntervalRelation.MEETS: (
+                    candidate.partition,
+                    candidate.origin,
+                    None,
+                ),
+                IntervalRelation.MET_BY: (
+                    candidate.partition,
+                    candidate.end,
+                    None,
+                ),
+            }[relation]
+            index.setdefault(key, []).append(candidate)
+        for candidate in left:
+            key = {
+                IntervalRelation.EQUAL: (
+                    candidate.partition,
+                    candidate.origin,
+                    candidate.end,
+                ),
+                IntervalRelation.MEETS: (
+                    candidate.partition,
+                    candidate.end,
+                    None,
+                ),
+                IntervalRelation.MET_BY: (
+                    candidate.partition,
+                    candidate.origin,
+                    None,
+                ),
+            }[relation]
+            for target in index.get(key, ()):
+                if candidate.node != target.node:
+                    yield candidate, target
+        return
+    for candidate in left:
+        for target in right:
+            if candidate.node != target.node and _interval_holds(
+                relation, candidate, target
+            ):
+                yield candidate, target
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledPredicate:
     """Hold a validated graph-free predicate ready to bind."""
 
@@ -1025,6 +1263,23 @@ class BoundPredicate:
             )
             origins = relation_image(matching, atom.relation, reverse)
             return candidates & origins
+        if isinstance(atom, Spans):
+            from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
+                ItemsSelector,
+                evaluate_selection,
+            )
+
+            assert atom.quantifier is Quantifier.ANY
+            targets = evaluate_selection(self.graph, ItemsSelector(atom.other))
+            matching = self._selection_decision(atom.target, targets)
+            left = _offset_spans(self.graph, candidates.nodes, atom.offsets)
+            right = _offset_spans(self.graph, matching.nodes, atom.offsets)
+            related = {
+                pair[0].node for pair in _interval_pairs(left, right, atom.relation)
+            }
+            return candidates.__class__(
+                self.graph, tuple(node for node in candidates.nodes if node in related)
+            )
         selected = tuple(
             node for node in candidates.nodes if self._atom(atom, _Context(node))
         )
@@ -1086,7 +1341,7 @@ class BoundPredicate:
                 and type(reading.value) is str
                 and _compile_regex(atom.regex).fullmatch(reading.value)
             )
-        if isinstance(atom, Related):
+        if isinstance(atom, Related | Spans):
             from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
                 Node,
                 NodeSet,
@@ -1148,16 +1403,7 @@ class BoundPredicate:
         )
 
     def _node_label(self, node: _NodeLike) -> str:
-        if _kind(node) == "item" and isinstance(node.reference, ItemRef):
-            tier = next(
-                tier
-                for tier in self.graph.tiers
-                if tier.declaration.name == node.reference.tier
-            )
-            return tier.items[node.reference.index].durable_id or str(
-                node.reference.index
-            )
-        return str(node.reference)
+        return _node_label(self.graph, node)
 
 
 class _Binder:
@@ -1174,6 +1420,10 @@ class _Binder:
             self.check(predicate.arg, current_allowed=current_allowed)
             return
         if isinstance(predicate, Related):
+            self.check(predicate.target, current_allowed=False)
+            return
+        if isinstance(predicate, Spans):
+            _validate_offset_profile(self.graph, predicate.offsets)
             self.check(predicate.target, current_allowed=False)
             return
         if isinstance(predicate, Elements):
@@ -1431,7 +1681,7 @@ def _atoms(predicate: Predicate) -> Iterator[Predicate]:
 
 
 def _lower_related_quantifiers(predicate: Predicate) -> Predicate:
-    """Express Related NONE and ALL only through the generic complement."""
+    """Express Related and Spans NONE and ALL through generic complement."""
     if isinstance(predicate, And):
         return And(tuple(_lower_related_quantifiers(arg) for arg in predicate.args))
     if isinstance(predicate, Or):
@@ -1443,6 +1693,20 @@ def _lower_related_quantifiers(predicate: Predicate) -> Predicate:
             predicate.operand,
             predicate.quantifier,
             _lower_related_quantifiers(predicate.body),
+        )
+    if isinstance(predicate, Spans):
+        target = _lower_related_quantifiers(predicate.target)
+        any_spanning = Spans(
+            predicate.offsets,
+            predicate.relation,
+            Quantifier.ANY,
+            predicate.other,
+            target if predicate.quantifier is not Quantifier.ALL else Not(target),
+        )
+        return (
+            any_spanning
+            if predicate.quantifier is Quantifier.ANY
+            else Not(any_spanning)
         )
     if not isinstance(predicate, Related):
         return predicate
@@ -1533,6 +1797,15 @@ def predicate_to_data(predicate: Predicate) -> JsonValue:
             "quantifier": predicate.quantifier.value,
             "target": predicate_to_data(predicate.target),
         }
+    if isinstance(predicate, Spans):
+        return {
+            "test": "spans",
+            "offsets": _offset_profile_to_data(predicate.offsets),
+            "relation": predicate.relation.value,
+            "quantifier": predicate.quantifier.value,
+            "other": predicate.other.to_data(),
+            "target": predicate_to_data(predicate.target),
+        }
     if isinstance(predicate, And | Or):
         return {
             "test": "and" if isinstance(predicate, And) else "or",
@@ -1568,6 +1841,10 @@ def _decode_predicate(value: JsonValue, path: str) -> Predicate:
         "related": (
             {"test", "relation", "direction", "quantifier", "target"},
             {"test", "relation", "direction", "quantifier", "target"},
+        ),
+        "spans": (
+            {"test", "offsets", "relation", "quantifier", "other", "target"},
+            {"test", "offsets", "relation", "quantifier", "other", "target"},
         ),
         "and": ({"test", "args"}, {"test", "args"}),
         "or": ({"test", "args"}, {"test", "args"}),
@@ -1656,6 +1933,8 @@ def _decode_predicate(value: JsonValue, path: str) -> Predicate:
             quantifier,
             _decode_predicate(node["target"], f"{path}.target"),
         )
+    if kind == "spans":
+        return _decode_spans(node, path)
     if kind in {"and", "or"}:
         raw_args = node["args"]
         if not isinstance(raw_args, list):
@@ -1666,6 +1945,32 @@ def _decode_predicate(value: JsonValue, path: str) -> Predicate:
         )
         return And(args) if kind == "and" else Or(args)
     return Not(_decode_predicate(node["arg"], f"{path}.arg"))
+
+
+def _decode_spans(node: dict[str, JsonValue], path: str) -> Spans:
+    relation_text = _string(node["relation"], f"{path}.relation")
+    try:
+        relation = IntervalRelation(relation_text)
+    except ValueError as error:
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"{path}.relation has invalid interval relation {relation_text!r}",
+        ) from error
+    quantifier_text = _string(node["quantifier"], f"{path}.quantifier")
+    try:
+        quantifier = Quantifier(quantifier_text)
+    except ValueError as error:
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"{path}.quantifier has invalid quantifier {quantifier_text!r}",
+        ) from error
+    return Spans(
+        _decode_offset_profile(node["offsets"], f"{path}.offsets"),
+        relation,
+        quantifier,
+        _decode_qname(node["other"], f"{path}.other"),
+        _decode_predicate(node["target"], f"{path}.target"),
+    )
 
 
 def _decode_operand(value: JsonValue, path: str) -> Operand:
@@ -1680,6 +1985,34 @@ def _decode_operand(value: JsonValue, path: str) -> Operand:
     raise Refusal(
         RefusalStage.DISCRIMINATOR,
         f"{path} must contain exactly one of 'cell' or 'current'",
+    )
+
+
+def _offset_profile_to_data(profile: OffsetProfile) -> dict[str, JsonValue]:
+    result: dict[str, JsonValue] = {"origin": profile.origin.to_data()}
+    if profile.extent is not None:
+        result["extent"] = profile.extent.to_data()
+    else:
+        assert profile.end is not None
+        result["end"] = profile.end.to_data()
+    if profile.partition is not None:
+        result["partition"] = profile.partition.to_data()
+    return result
+
+
+def _decode_offset_profile(value: JsonValue, path: str) -> OffsetProfile:
+    node = cast(dict[str, JsonValue], _object(value, path))
+    allowed = {"origin", "extent", "end", "partition"}
+    _refuse_field_set(node.keys(), allowed, {"origin"}, path)
+    return OffsetProfile(
+        _decode_qname(node["origin"], f"{path}.origin"),
+        (_decode_qname(node["extent"], f"{path}.extent") if "extent" in node else None),
+        _decode_qname(node["end"], f"{path}.end") if "end" in node else None,
+        (
+            _decode_qname(node["partition"], f"{path}.partition")
+            if "partition" in node
+            else None
+        ),
     )
 
 
@@ -1741,9 +2074,11 @@ __all__ = [
     "Elements",
     "Equals",
     "Has",
+    "IntervalRelation",
     "Literal",
     "Matches",
     "Not",
+    "OffsetProfile",
     "Operand",
     "Or",
     "Order",
@@ -1751,6 +2086,7 @@ __all__ = [
     "PredicateSyntax",
     "Quantifier",
     "Related",
+    "Spans",
     "compile_predicate",
     "format_predicate",
     "parse_predicate",

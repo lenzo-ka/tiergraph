@@ -6614,6 +6614,48 @@ shape_hash() -> 'str'
 ```
 
 Hash the declaration independently of JSON Schema presentation.
+### `tiergraph.match`
+
+This module is importable and usable, but carries no API-stability promise at version 0.4.2.
+
+### `Extent`
+
+```text
+Extent(*values)
+```
+
+State whether an output witness list was truncated.
+
+#### `Extent` members
+
+- `EXHAUSTIVE` = `exhaustive`
+- `CUT_AT_BOUND` = `cut-at-bound`
+
+### `SpanPairs`
+
+```text
+SpanPairs(pairs: 'tuple[tuple[Node, Node], ...]', extent: 'Extent') -> None
+```
+
+Carry interval-related node pairs in declared order and their extent.
+
+#### `SpanPairs.to_data`
+
+Method.
+
+```text
+SpanPairs.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return pairs and extent as strict JSON data.
+
+### `span_pairs`
+
+```text
+span_pairs(graph: 'Graph', left: 'Selector', right: 'Selector', relation: 'IntervalRelation', offsets: 'OffsetProfile', *, limit: 'int | None' = None) -> 'SpanPairs'
+```
+
+Return related item pairs in left-major declared order.
 ### `tiergraph.predicate`
 
 This module is importable and usable, but carries no API-stability promise at version 0.4.2.
@@ -6736,6 +6778,25 @@ Has(operand: 'Operand', alias: 'str') -> None
 
 Test whether an operand is present, carrying its missing-cell spelling.
 
+### `IntervalRelation`
+
+```text
+IntervalRelation(*values)
+```
+
+Name one directed relation between half-open integer intervals.
+
+#### `IntervalRelation` members
+
+- `EQUAL` = `equal`
+- `CONTAINS` = `contains`
+- `WITHIN` = `within`
+- `PROPER_CONTAINS` = `proper-contains`
+- `PROPER_WITHIN` = `proper-within`
+- `OVERLAPS` = `overlaps`
+- `MEETS` = `meets`
+- `MET_BY` = `met-by`
+
 ### `Literal`
 
 Type alias.
@@ -6776,6 +6837,14 @@ Not(arg: 'Predicate') -> None
 ```
 
 Complement one completed two-valued predicate decision.
+
+### `OffsetProfile`
+
+```text
+OffsetProfile(origin: 'QualifiedName', extent: 'QualifiedName | None' = None, end: 'QualifiedName | None' = None, partition: 'QualifiedName | None' = None) -> None
+```
+
+Name an origin and exactly one integer measure, with a partition.
 
 ### `Operand`
 
@@ -6889,6 +6958,14 @@ Related(relation: 'QualifiedName', direction: 'WalkDirection', quantifier: 'Quan
 ```
 
 Quantify a target predicate over one relation step.
+
+### `Spans`
+
+```text
+Spans(offsets: 'OffsetProfile', relation: 'IntervalRelation', quantifier: 'Quantifier', other: 'QualifiedName', target: 'Predicate') -> None
+```
+
+Quantify a target predicate over items in an interval relation.
 
 ### `compile_predicate`
 
