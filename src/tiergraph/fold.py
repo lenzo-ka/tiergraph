@@ -644,7 +644,11 @@ class FoldDeclaration[Value]:
 
     def _dependency_graph(self) -> _DependencyGraph:
         """Return the canonical topology, roots, order, and merged child adjacency."""
-        key = (self.valuation.tiers, self.transitions, self.roots)
+        key = (
+            tuple(self.valuation.tiers),
+            tuple(self.transitions),
+            tuple(self.roots),
+        )
         cached = self.graph._fold_dependencies.get(key)
         if cached is not None:
             return cast(_DependencyGraph, cached)

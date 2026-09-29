@@ -1193,6 +1193,14 @@ class _GraphIndexes(NamedTuple):
     items: dict[str, ItemRef]
 
 
+class _FoldDependencyCache(dict[object, object]):
+    """Keep derived fold plans out of copied and serialized graph state."""
+
+    def __reduce__(self) -> tuple[type[_FoldDependencyCache], tuple[()]]:
+        """Recreate an empty cache instead of traversing derived plans."""
+        return type(self), ()
+
+
 @dataclass(frozen=True, slots=True)
 class Graph:
     """Hold a validated immutable graph and derive order and empty boundaries.
@@ -1226,12 +1234,18 @@ class Graph:
     )
     _items_by_id: dict[str, ItemRef] = field(init=False, repr=False, compare=False)
     # Derived fold structure is safe to retain here: every semantic collection
-    # above is an immutable tuple of frozen values, and a replacement Graph gets
-    # a fresh cache.  Keeping it on the owning graph also prevents cross-graph
-    # reuse without making the cache part of equality or the wire form.
-    _fold_dependencies: dict[object, object] = field(
-        init=False, repr=False, compare=False, default_factory=dict
+    # above is an immutable tuple of frozen values, and a replacement, copied,
+    # or unpickled Graph gets a fresh cache. Keeping it on the owning graph also
+    # prevents cross-graph reuse without making the cache part of equality,
+    # repr, copied or pickled state, or the wire form. The per-graph cache is
+    # bounded by the distinct fold structures used against that graph.
+    _fold_dependencies: _FoldDependencyCache = field(
+        init=False, repr=False, compare=False, default_factory=_FoldDependencyCache
     )
+
+    def __copy__(self) -> Graph:
+        """Copy semantic fields while starting with empty derived indexes."""
+        return replace(self)
 
     def __post_init__(self) -> None:
         """Canonicalize keyed collections and validate the complete graph."""

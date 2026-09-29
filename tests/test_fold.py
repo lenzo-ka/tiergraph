@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import random
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import fields, replace
 from decimal import ROUND_DOWN, Context, Decimal, Inexact, localcontext
+from importlib import import_module
 from typing import cast
 
 import pytest
@@ -233,6 +235,86 @@ def test_one_graph_reuses_one_dependency_topology(
     ranked.run()
 
     assert topology_calls == 1
+
+
+@pytest.mark.parametrize("run_first", [False, True], ids=("constructed", "run"))
+def test_fold_cache_is_absent_from_copied_and_pickled_state(
+    run_first: bool,
+) -> None:
+    """Graph-derived plans rebuild independently after copy or serialization."""
+    pickle_module = import_module("pickle")
+    declared = declaration()
+    expected = declared.run().to_data(declared.semiring)
+    if not run_first:
+        declared = declaration()
+    graph = declared.graph
+    assert graph._fold_dependencies
+
+    shallow_graph = copy.copy(graph)
+    deep_graph = copy.deepcopy(graph)
+    pickled_graph = pickle_module.loads(pickle_module.dumps(graph))
+    shallow_declaration = copy.copy(declared)
+    deep_declaration = copy.deepcopy(declared)
+    pickled_declaration = pickle_module.loads(pickle_module.dumps(declared))
+
+    assert shallow_graph == deep_graph == pickled_graph == graph
+    assert repr(shallow_graph) == repr(deep_graph) == repr(pickled_graph) == repr(graph)
+    assert hash(shallow_graph) == hash(deep_graph) == hash(pickled_graph) == hash(graph)
+    assert shallow_graph._fold_dependencies == {}
+    assert deep_graph._fold_dependencies == {}
+    assert pickled_graph._fold_dependencies == {}
+    assert shallow_declaration == declared
+    assert shallow_declaration.graph is graph
+    for copied in (deep_declaration, pickled_declaration):
+        assert copied.graph is not graph
+        assert copied.graph == graph
+        assert copied.graph._fold_dependencies == {}
+
+    copied_declarations = (
+        replace(declared, graph=shallow_graph),
+        replace(declared, graph=deep_graph),
+        replace(declared, graph=pickled_graph),
+        shallow_declaration,
+        deep_declaration,
+        pickled_declaration,
+    )
+    for copied in copied_declarations:
+        assert copied.run().to_data(copied.semiring) == expected
+
+    assert shallow_graph._fold_dependencies
+    assert deep_graph._fold_dependencies
+    assert pickled_graph._fold_dependencies
+    assert deep_declaration.graph._fold_dependencies
+    assert pickled_declaration.graph._fold_dependencies
+
+
+@pytest.mark.parametrize("as_list", ["tiers", "roots", "transitions"])
+def test_fold_sequence_inputs_accept_lists(as_list: str) -> None:
+    """Sequence-valued declaration inputs retain their accepted concrete forms."""
+    tuple_declaration = declaration()
+    list_valuation = tuple_declaration.valuation
+    list_roots = tuple_declaration.roots
+    list_transitions = tuple_declaration.transitions
+    if as_list == "tiers":
+        list_valuation = replace(
+            list_valuation,
+            tiers=cast(tuple[QualifiedName, ...], list(list_valuation.tiers)),
+        )
+    elif as_list == "roots":
+        list_roots = cast(tuple[ItemRef, ...], list(list_roots))
+    else:
+        list_transitions = cast(tuple[FoldTransition, ...], list(list_transitions))
+
+    list_declaration = replace(
+        tuple_declaration,
+        valuation=list_valuation,
+        roots=list_roots,
+        transitions=list_transitions,
+    )
+
+    assert list_declaration.run().to_data(list_declaration.semiring) == (
+        tuple_declaration.run().to_data(tuple_declaration.semiring)
+    )
 
 
 def test_fold_hoists_decimal_setup_without_changing_ambient_context(
