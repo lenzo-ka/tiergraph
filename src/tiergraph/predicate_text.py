@@ -398,6 +398,8 @@ class _PredicateParser:
                 return False
         while cursor < self.end and self.text[cursor].isspace():
             cursor += 1
+        if self.text.startswith("!=", cursor):
+            return False
         return cursor >= self.end or self.text[cursor] not in "=<>~/:("
 
     def check_duplicates(self, options: list[_TextOption]) -> None:

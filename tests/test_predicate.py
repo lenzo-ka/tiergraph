@@ -1440,6 +1440,35 @@ def test_t9_bare_xsd_typing_and_bind_refusals() -> None:
         assert str(caught.value) == message
 
 
+def test_a_bar_before_a_not_equal_test_ends_the_value_choice() -> None:
+    assert parsed("f=a|b!=c") == Or(
+        (
+            Equals(Cell(q("f")), (Bare("a"),)),
+            Not(Equals(Cell(q("b")), (Bare("c"),))),
+        )
+    )
+    either = Or(
+        (
+            Equals(Cell(q("a")), (Bare("1"),)),
+            Not(Equals(Cell(q("b")), (Bare("2"),))),
+        )
+    )
+    assert parsed(format_predicate(either, SYN)) == either
+    assert parsed("(a=1 | b!=2) & c=3") == And(
+        (either, Equals(Cell(q("c")), (Bare("3"),)))
+    )
+    assert parsed("any(f: ./a!=1 | ./b!=2)") == Elements(
+        Cell(q("f")),
+        Quantifier.ANY,
+        Or(
+            (
+                Not(Equals(Current(("a",)), (Bare("1"),))),
+                Not(Equals(Current(("b",)), (Bare("2"),))),
+            )
+        ),
+    )
+
+
 def test_t11_bare_json_typing_uses_both_scalar_readings() -> None:
     source = graph(
         tuple(
