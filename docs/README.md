@@ -10,6 +10,8 @@ immutable API.
   [Construction](guide/construction.md).
 - **Find items or follow their links?** See
   [Selection and traversal](guide/selection-and-traversal.md).
+- **Match stored values, related items, or complete outputs?** See
+  [Matching with existing pieces](guide/matching-with-existing-pieces.md).
 - **Attach physical times to boundaries?** Use [Timing](guide/timing.md).
 - **Compute a cost, count, or recognition result?** Read
   [Folding](guide/folding.md) and
@@ -25,6 +27,7 @@ The guides cover work by concern:
 
 - [Construction](guide/construction.md)
 - [Selection and traversal](guide/selection-and-traversal.md)
+- [Matching with existing pieces](guide/matching-with-existing-pieces.md)
 - [Folding](guide/folding.md)
 - [Recognize and act](guide/recognize-and-act.md), including the advanced mixing
   example

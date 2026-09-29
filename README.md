@@ -86,9 +86,11 @@ model and a versioned interchange format.
 case and covers most use. Build a graph directly, or record an ordered edit stream
 as a `Program` and run it — see [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md).
 
-**Answer structural questions by traversal.** Selection with set algebra, `Walk`
-over declared relation incidence, ordered containment. Replaces hand-written index
-arithmetic — see [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md).
+**Match values and structure.** Selection with set algebra, `WhereSelector`
+value predicates, one-step relation images, `Related` quantifiers, `Walk` over
+declared relation incidence, and ordered containment replace hand-written index
+arithmetic. See [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md)
+and [matching with existing pieces](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/matching-with-existing-pieces.md).
 
 **Measure and recognize by fold.** A fold evaluates a finite dependency relation
 with a semiring you supply: min-plus for least cost, counting for path counts,
@@ -121,6 +123,7 @@ same span-view and folding machinery as the Python API. For example:
 ```console
 tiergraph validate graph.json
 tiergraph render graph.json -o graph.dot
+tiergraph select graph.json --where 'score>=0.5' --prefix ex
 tiergraph span render graph.json --profile span-profile.json --format text
 tiergraph semirings
 ```
@@ -133,7 +136,7 @@ its options.
 Start with the [documentation map](https://github.com/lenzo-ka/tiergraph/blob/main/docs/README.md), then
 [concepts](https://github.com/lenzo-ka/tiergraph/blob/main/docs/concepts.md) for the data model and [getting
 started](https://github.com/lenzo-ka/tiergraph/blob/main/docs/getting-started.md) for a worked walkthrough. The [API
-reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/api.md) covers every top-level export; the [CLI
+reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/api.md) covers every top-level export and the documented secondary surfaces; the [CLI
 reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) is generated from the parser.
 
 The companion `tiergraph_dot` package renders any `Graph` as deterministic
@@ -192,15 +195,15 @@ would refuse a document the previous release accepted without changing a schema
 byte. A second gate replays a frozen corpus of accepted documents through the
 current decoder, and fails on any refusal the corpus entry's disposition does not
 already account for. Each entry records the version its capture ran under, and
-every entry the corpus holds today was captured from the development tree rather
-than from a published release: what this gate catches is a decoder that has
-tightened since that capture, and it enforces nothing about cross-release
-compatibility yet. Capture belongs at a release, and once entries taken there are
-frozen in the corpus the same gate covers the span since that release. So the
-semantic half of *only grows* is partly enforced as well — over the documents that
-corpus holds, which are the ones this repository's own test suite happened to
-construct rather than a survey of the format. A reader deciding whether an
-existing document still loads should read the changelog, not the version alone.
+every entry the corpus holds today was captured from the development tree
+rather than from a published release: what this gate catches is a decoder that
+has tightened since that capture, and it enforces nothing about cross-release
+compatibility yet. The semantic half of *only grows* is therefore partly
+enforced — over the documents the corpus holds, which are the ones this
+repository's own test suite happened to construct rather than a survey of the
+format. Corpus capture is a separate, reviewed change rather than a release
+step; the release runbook records why. A reader deciding whether an existing
+document still loads should read the changelog, not the version alone.
 
 ## License
 
