@@ -204,6 +204,7 @@
       "TierSelector",
       "TypeSelector",
       "UnionSelector",
+      "WhereSelector",
       "evaluate_selection",
       "selection_loads"
     ],
@@ -326,6 +327,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -439,6 +442,30 @@
       "RefusalStage",
       "json_schema",
       "shape_hash"
+    ],
+    "tiergraph.predicate": [
+      "And",
+      "Bare",
+      "BoundPredicate",
+      "Cell",
+      "Compare",
+      "CompiledPredicate",
+      "Current",
+      "Double",
+      "Elements",
+      "Equals",
+      "Has",
+      "Literal",
+      "Matches",
+      "Not",
+      "Operand",
+      "Or",
+      "Order",
+      "Predicate",
+      "Quantifier",
+      "compile_predicate",
+      "predicate_loads",
+      "predicate_to_data"
     ],
     "tiergraph.cli": [
       "build_parser",

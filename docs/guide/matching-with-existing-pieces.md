@@ -127,11 +127,37 @@ unhosted segments: ['s1']
 
 The first result is presence matching: the empty string is a stored value, so
 `s2` is selected. The second result compares values in ordinary Python after
-selection. There is no selector value predicate, so that comparison is not a
-portable selector expression. The last result is relation matching: it
-subtracts the one-step image of the annotation tier from the segment tier.
-Inverse relation matching uses the same construction with
-`WalkDirection.INVERSE`.
+selection. For a portable value comparison, use a `WhereSelector`, as below.
+The last result is relation matching: it subtracts the one-step image of the
+annotation tier from the segment tier. Inverse relation matching uses the same
+construction with `WalkDirection.INVERSE`.
+
+## Selecting by a stored value
+
+A `WhereSelector` applies a frozen predicate only to the nodes produced by its
+base selector. `Has` is the presence primitive; negating it selects a missing
+cell, while an empty stored string remains present.
+
+```python
+from tiergraph import WhereSelector
+from tiergraph.predicate import Cell, Equals, Has, Not
+
+primary_selector = WhereSelector(
+    ItemsSelector(segments),
+    Equals(Cell(stress), ("primary",)),
+)
+missing_selector = WhereSelector(
+    ItemsSelector(segments),
+    Not(Has(Cell(stress), alias="none")),
+)
+
+print("stress primary:", labels(evaluate_selection(graph, primary_selector)))
+print("stress missing:", labels(evaluate_selection(graph, missing_selector)))
+```
+```text
+stress primary: ['s0']
+stress missing: ['s1']
+```
 
 ## Matching complete outputs and folding alternatives
 

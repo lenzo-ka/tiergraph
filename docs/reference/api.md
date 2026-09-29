@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 210 top-level `tiergraph` exports exactly once.
+It covers 211 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -4418,6 +4418,24 @@ UnionSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 
 
 Evaluate and union the operands from left to right.
 
+### `WhereSelector`
+
+```text
+WhereSelector(base: 'Selector', predicate: 'Predicate') -> None
+```
+
+Retain base-selection nodes on which one bound predicate holds.
+
+#### `WhereSelector.evaluate`
+
+Method.
+
+```text
+WhereSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Evaluate the base first, then mask only that finite candidate domain.
+
 ### `evaluate_selection`
 
 ```text
@@ -6596,6 +6614,279 @@ shape_hash() -> 'str'
 ```
 
 Hash the declaration independently of JSON Schema presentation.
+### `tiergraph.predicate`
+
+This module is importable and usable, but carries no API-stability promise at version 0.3.0.
+
+### `And`
+
+```text
+And(args: 'tuple[Predicate, ...]') -> None
+```
+
+Intersect zero or at least two predicate decisions.
+
+### `Bare`
+
+```text
+Bare(text: 'str') -> None
+```
+
+Carry an unquoted token until its cell supplies a type at bind.
+
+### `BoundPredicate`
+
+```text
+BoundPredicate(predicate: 'Predicate', graph: 'Graph') -> None
+```
+
+Evaluate one predicate against nodes of its bound graph.
+
+#### `BoundPredicate.holds`
+
+Method.
+
+```text
+BoundPredicate.holds(self, node: 'Node') -> 'bool'
+```
+
+Decide one graph node after evaluating every atom it can reach.
+
+#### `BoundPredicate.select`
+
+Method.
+
+```text
+BoundPredicate.select(self, candidates: 'NodeSet') -> 'NodeSet'
+```
+
+Return candidates that hold, retaining the candidate set's domain.
+
+### `Cell`
+
+```text
+Cell(attribute: 'QualifiedName', pointer: 'tuple[str, ...]' = ()) -> None
+```
+
+Name one declared attribute and an optional JSON pointer beneath it.
+
+### `Compare`
+
+```text
+Compare(operand: 'Operand', order: 'Order', value: 'Literal') -> None
+```
+
+Apply one exact numeric ordering relation.
+
+### `CompiledPredicate`
+
+```text
+CompiledPredicate(predicate: 'Predicate') -> None
+```
+
+Hold a validated graph-free predicate ready to bind.
+
+#### `CompiledPredicate.bind`
+
+Method.
+
+```text
+CompiledPredicate.bind(self, graph: 'Graph') -> 'BoundPredicate'
+```
+
+Validate names and type-impossible operations against one graph.
+
+### `Current`
+
+```text
+Current(pointer: 'tuple[str, ...]' = ()) -> None
+```
+
+Name the current JSON element and an optional pointer beneath it.
+
+### `Double`
+
+```text
+Double(lexical: 'str') -> None
+```
+
+Carry one xsd:double by canonical lexical identity.
+
+### `Elements`
+
+```text
+Elements(operand: 'Operand', quantifier: 'Quantifier', body: 'Predicate') -> None
+```
+
+Quantify a predicate over one JSON array operand.
+
+### `Equals`
+
+```text
+Equals(operand: 'Operand', values: 'tuple[Literal, ...]') -> None
+```
+
+Test exact typed membership in a nonempty literal tuple.
+
+### `Has`
+
+```text
+Has(operand: 'Operand', alias: 'str') -> None
+```
+
+Test whether an operand is present, carrying its missing-cell spelling.
+
+### `Literal`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `Matches`
+
+```text
+Matches(operand: 'Operand', regex: 'str') -> None
+```
+
+Fullmatch a string with the facility's regular-language subset.
+
+### `Not`
+
+```text
+Not(arg: 'Predicate') -> None
+```
+
+Complement one completed two-valued predicate decision.
+
+### `Operand`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `Or`
+
+```text
+Or(args: 'tuple[Predicate, ...]') -> None
+```
+
+Union zero or at least two predicate decisions.
+
+### `Order`
+
+```text
+Order(*values)
+```
+
+Name an exact ordered comparison.
+
+#### `Order` members
+
+- `LT` = `<`
+- `LE` = `<=`
+- `GT` = `>`
+- `GE` = `>=`
+
+### `Predicate`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `Quantifier`
+
+```text
+Quantifier(*values)
+```
+
+Quantify a predicate over the elements of a JSON array.
+
+#### `Quantifier` members
+
+- `ANY` = `any`
+- `ALL` = `all`
+- `NONE` = `none`
+
+### `compile_predicate`
+
+```text
+compile_predicate(predicate: 'Predicate') -> 'CompiledPredicate'
+```
+
+Compile one frozen predicate without consulting a graph.
+
+### `predicate_loads`
+
+```text
+predicate_loads(source: 'str | bytes') -> 'Predicate'
+```
+
+Decode one strict predicate JSON document.
+
+### `predicate_to_data`
+
+```text
+predicate_to_data(predicate: 'Predicate') -> 'JsonValue'
+```
+
+Return strict JSON data for one predicate AST.
 ### `tiergraph.cli`
 
 This module is importable and usable, but carries no API-stability promise at version 0.3.0.

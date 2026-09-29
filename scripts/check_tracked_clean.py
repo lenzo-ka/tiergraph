@@ -152,6 +152,7 @@ _STDLIB_IMPORTS = {
     "tomllib",
     "types",
     "typing",
+    "unicodedata",
     "urllib",
 }
 # This distribution's packages and its in-repository runnable/test modules.
