@@ -61,7 +61,7 @@ packages = ["src/tiergraph", "src/tiergraph_dot"]
 # speed is a requirement, and a slow test usually exposes a slow library path.
 console_output_style = "times"
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-v"
 
 [tool.coverage.run]
 branch = true
