@@ -57,6 +57,9 @@ path = "src/tiergraph/__init__.py"
 packages = ["src/tiergraph", "src/tiergraph_dot"]
 
 [tool.pytest.ini_options]
+# Print each test's duration beside its result, in run order, locally and in CI:
+# speed is a requirement, and a slow test usually exposes a slow library path.
+console_output_style = "times"
 testpaths = ["tests"]
 addopts = "-q"
 
