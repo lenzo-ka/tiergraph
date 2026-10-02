@@ -818,3 +818,188 @@ def test_pair_request_dispatches_through_match_cli_reader() -> None:
         "pairs": [],
         "extent": "exhaustive",
     }
+
+
+def test_compiled_pattern_max_width_is_exact() -> None:
+    a = atom("seg", "a")
+    cases = (
+        (StartPattern(), 0),
+        (a, 1),
+        (FocusPattern(a), 1),
+        (AltPattern((a, SeqPattern((a, a)))), 2),
+        (RepeatPattern(a, 2, 3), 3),
+        (SeqPattern((StartPattern(), RepeatPattern(a, 0, 2), EndPattern())), 2),
+        (RepeatPattern(a, 0, None), None),
+        (SeqPattern((a, RepeatPattern(a, 1, None))), None),
+        (RepeatPattern(RepeatPattern(a, 1, None), 1, 2), None),
+    )
+    for pattern, expected in cases:
+        assert compile_pattern(pattern).max_width == expected
+
+    for pattern, expected in (cases[1], cases[3], cases[4]):
+        spans = compile_pattern(pattern).spans(chain("aaaa"), TierOrder(q("seg")))
+        observed = max(end - start for start, end in span_bounds(spans))
+        assert observed == expected
+
+
+def test_open_right_reports_settled_results_and_watermarks() -> None:
+    ordering = TierOrder(q("seg"))
+    a, b = atom("seg", "a"), atom("seg", "b")
+    partial = compile_pattern(SeqPattern((a, b)))
+    graph = chain("a")
+    spans = partial.spans(graph, ordering, open_right=True)
+    assert spans.pending_from == (0,)
+    assert spans.result.matches == ()
+    assert partial.count(graph, ordering, open_right=True).result == 0
+    assert partial.exists(graph, ordering, open_right=True).result is False
+
+    settled = compile_pattern(a)
+    open_spans = settled.spans(graph, ordering, open_right=True)
+    assert open_spans.pending_from == (1,)
+    assert span_bounds(open_spans.result) == [(0, 1)]
+    assert settled.count(graph, ordering, open_right=True).result == 1
+    focused = compile_pattern(FocusPattern(a)).focus(graph, ordering, open_right=True)
+    assert focused.pending_from == (1,)
+    assert labels(graph, focused.result.nodes) == ["0"]
+
+    end_dependent = compile_pattern(SeqPattern((a, EndPattern())))
+    assert end_dependent.exists(graph, ordering) is True
+    open_end = end_dependent.exists(graph, ordering, open_right=True)
+    assert open_end.result is False
+    assert open_end.pending_from == (0,)
+
+    dead = compile_pattern(SeqPattern((StartPattern(), a)))
+    dead_open = dead.exists(chain("b"), ordering, open_right=True)
+    assert dead_open.result is False
+    assert dead_open.pending_from == (None,)
+
+    unbounded = compile_pattern(RepeatPattern(a, 1, None))
+    live = unbounded.spans(chain("aaa"), ordering, open_right=True)
+    assert live.pending_from == (0,)
+    assert live.result.matches == ()
+
+    accepting = settled.exists(graph, ordering, open_right=True)
+    assert accepting.result is True
+    assert accepting.pending_from == (1,)
+    empty_accepting = compile_pattern(StartPattern()).exists(
+        graph, ordering, open_right=True
+    )
+    assert empty_accepting.result is True
+    assert empty_accepting.pending_from == (None,)
+    intermediate = partial.exists(chain("ac"), ordering, open_right=True)
+    assert intermediate.result is False
+    assert intermediate.pending_from == (2,)
+
+
+def test_open_right_settled_span_prefix_is_extension_invariant() -> None:
+    ordering = TierOrder(q("seg"))
+    a, b = atom("seg", "a"), atom("seg", "b")
+    patterns = (
+        a,
+        SeqPattern((a, b)),
+        RepeatPattern(a, 1, 2),
+        SeqPattern((a, EndPattern())),
+        SeqPattern((StartPattern(), a)),
+    )
+    for pattern in patterns:
+        compiled = compile_pattern(pattern)
+        for prefix in ("", "a", "b", "aa", "ab"):
+            opened = compiled.spans(chain(prefix), ordering, open_right=True)
+            cutoff = (
+                len(prefix) + 1
+                if opened.pending_from[0] is None
+                else opened.pending_from[0]
+            )
+            settled = span_bounds(opened.result)
+            for continuation in ("", "a", "b", "ab", "ba"):
+                closed = compiled.spans(chain(prefix + continuation), ordering)
+                before = [
+                    bounds for bounds in span_bounds(closed) if bounds[0] < cutoff
+                ]
+                assert before == settled
+
+
+def test_match_cli_pattern_text_equals_json_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graph = ch_k()
+    source = tmp_path / "graph.json"
+    source.write_bytes(tiergraph.dump_bytes(graph))
+    ordering = ContainerOrder(q("parts"), ItemsSelector(q("syl")))
+    ordering_text = json.dumps(ordering_to_data(ordering))
+    assert (
+        main(
+            [
+                "match",
+                str(source),
+                "--pattern",
+                "{class=vowel} / _ {class=nasal}",
+                "--ordering",
+                ordering_text,
+                "--prefix",
+                "ex",
+                "focus",
+            ]
+        )
+        == 0
+    )
+    text_result = json.loads(capsys.readouterr().out)
+    pattern = SeqPattern((FocusPattern(atom("class", "vowel")), atom("class", "nasal")))
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "match": "focus",
+                "ordering": ordering_to_data(ordering),
+                "pattern": pattern_to_data(pattern),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["match", str(source), "--request", str(request)]) == 0
+    assert json.loads(capsys.readouterr().out) == text_result
+
+
+def test_match_cli_refuses_incompatible_text_options(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "graph.json"
+    request = tmp_path / "request.json"
+    source.write_bytes(tiergraph.dump_bytes(chain("a")))
+    request.write_text("{}", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "match",
+                str(source),
+                "--request",
+                str(request),
+                "--ordering",
+                "{}",
+            ]
+        )
+        == 1
+    )
+    assert "--request does not take text-pattern options" in capsys.readouterr().err
+
+    assert main(["match", str(source), "--pattern", "."]) == 1
+    assert "--pattern requires --ordering and an operation" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "match",
+                str(source),
+                "--pattern",
+                ".",
+                "--ordering",
+                "{}",
+                "--limit",
+                "1",
+                "count",
+            ]
+        )
+        == 1
+    )
+    assert "--limit is available only for spans" in capsys.readouterr().err

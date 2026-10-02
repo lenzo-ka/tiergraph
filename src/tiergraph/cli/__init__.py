@@ -36,6 +36,7 @@ _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
     "path": semiring.PATH,
     "tropical": semiring.TROPICAL,
 }
+_MATCH_MIN_ARGS = 3
 
 
 def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabulary
@@ -238,7 +239,15 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     match = subparsers.add_parser("match", help="match a regular item sequence")
     match.set_defaults(handler=_handle_match)
     match.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    match.add_argument("--request", required=True, metavar="FILE")
+    match_input = match.add_mutually_exclusive_group(required=True)
+    match_input.add_argument("--request", metavar="FILE")
+    match_input.add_argument("--pattern", metavar="TEXT")
+    match.add_argument("--ordering", metavar="JSON")
+    match.add_argument("--prefix", metavar="P")
+    match.add_argument("--limit", type=int)
+    match.add_argument(
+        "match_operation", nargs="?", choices=("exists", "focus", "spans", "count")
+    )
     _output_argument(match)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
@@ -626,8 +635,29 @@ def _handle_select(args: argparse.Namespace) -> None:
 
 def _handle_match(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    _check_distinct(args.request, args.output)
-    result = _match._evaluate_match_request(graph, _read_bytes(args.request))
+    if args.request is not None:
+        if any(
+            value is not None
+            for value in (args.ordering, args.match_operation, args.prefix, args.limit)
+        ):
+            raise ValueError("--request does not take text-pattern options")
+        _check_distinct(args.request, args.output)
+        result = _match._evaluate_match_request(graph, _read_bytes(args.request))
+    else:
+        if args.ordering is None or args.match_operation is None:
+            raise ValueError("--pattern requires --ordering and an operation")
+        if args.limit is not None and args.match_operation != "spans":
+            raise ValueError("--limit is available only for spans")
+        syntax = _predicate.PredicateSyntax.for_graph(graph, default_prefix=args.prefix)
+        request = _match._MatchRequest(
+            args.match_operation,
+            _match._decode_ordering(
+                cast(_core.JsonValue, json.loads(args.ordering)), "$.ordering"
+            ),
+            _match.parse_pattern(args.pattern, syntax),
+            args.limit,
+        )
+        result = request.evaluate(graph)
     _write_output(args.file, args.output, _json_bytes(result))
 
 
@@ -670,6 +700,15 @@ def _handle_step(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command line. Returns the process exit status."""
+    operations = {"exists", "focus", "spans", "count"}
+    if (
+        argv is not None
+        and len(argv) >= _MATCH_MIN_ARGS
+        and argv[0] == "match"
+        and argv[-1] in operations
+        and argv[2] not in operations
+    ):
+        argv = (argv[0], argv[1], argv[-1], *argv[2:-1])
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.version:

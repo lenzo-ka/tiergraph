@@ -475,6 +475,7 @@
       "EndPattern",
       "Extent",
       "FocusPattern",
+      "OpenPatternResult",
       "Ordering",
       "Pattern",
       "RepeatPattern",
@@ -485,7 +486,10 @@
       "StartPattern",
       "TierOrder",
       "compile_pattern",
+      "format_pattern",
       "ordering_to_data",
+      "parse_pattern",
+      "parse_pattern_at",
       "pattern_loads",
       "pattern_to_data",
       "span_pairs"
