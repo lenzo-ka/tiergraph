@@ -41,11 +41,11 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
+                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings}
                  ...
 
 positional arguments:
-  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,fold,semirings}
+  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings}
     validate            validate a graph document
     discharge           discharge a declaration against its inputs
     render              render a graph as DOT
@@ -60,6 +60,7 @@ positional arguments:
     clock               query declarative clock timing
     span                render declarative span views
     select              evaluate a selector
+    match               match a regular item sequence
     fold                fold a dependency relation
     semirings           list the semirings this shell can name
 
@@ -545,6 +546,21 @@ options:
   --selector FILE
   --where TEXT
   --prefix P
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph match`
+
+```text
+usage: tiergraph match [-h] --request FILE [-o FILE] GRAPH
+
+positional arguments:
+  GRAPH                 graph file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --request FILE
   -o FILE, --output FILE
                         output file (default: -)
 ```

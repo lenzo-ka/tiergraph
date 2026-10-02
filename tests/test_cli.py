@@ -1642,7 +1642,7 @@ def test_version_default_help_and_every_command_help(
     assert main([]) == 0
     assert (
         "{validate,discharge,render,inspect,convert,schema,run,step,walk,path,"
-        "grammar,clock,span,select,fold,semirings}" in capsys.readouterr().out
+        "grammar,clock,span,select,match,fold,semirings}" in capsys.readouterr().out
     )
     for command in (
         "validate",
@@ -1659,6 +1659,7 @@ def test_version_default_help_and_every_command_help(
         "clock",
         "span",
         "select",
+        "match",
         "fold",
         "semirings",
     ):
@@ -1686,6 +1687,7 @@ def test_version_default_help_and_every_command_help(
         "clock",
         "span",
         "select",
+        "match",
         "fold",
         "semirings",
     ]

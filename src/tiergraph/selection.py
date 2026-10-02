@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from tiergraph.core import (
     AttributeDomain,
@@ -29,6 +29,9 @@ from tiergraph.path import (
 from tiergraph.predicate import Predicate, _decode_predicate, compile_predicate
 from tiergraph.schema import Refusal, RefusalStage, _refuse_field_set
 from tiergraph.wire import _object, _parsed_json, _string
+
+if TYPE_CHECKING:
+    from tiergraph.match import Ordering, Pattern
 
 
 class NodeKind(StrEnum):
@@ -431,6 +434,34 @@ class WhereSelector:
 
 
 @dataclass(frozen=True, slots=True)
+class SequenceSelector:
+    """Select the focus of one regular pattern over a declared ordering."""
+
+    ordering: Ordering
+    pattern: Pattern
+
+    def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
+        """Compile the pattern and return its focus over the ordering scopes."""
+        del path_profile
+        from tiergraph.match import compile_pattern  # noqa: PLC0415 -- cycle breaker
+
+        return compile_pattern(self.pattern).focus(graph, self.ordering)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the strict selector JSON form."""
+        from tiergraph.match import (  # noqa: PLC0415 -- cycle breaker
+            ordering_to_data,
+            pattern_to_data,
+        )
+
+        return {
+            "select": "sequence",
+            "ordering": ordering_to_data(self.ordering),
+            "pattern": pattern_to_data(self.pattern),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class UnionSelector:
     """Union one or more selectors."""
 
@@ -497,6 +528,7 @@ type Selector = (
     | BoundaryPathSelector
     | AttributeSelector
     | WhereSelector
+    | SequenceSelector
     | UnionSelector
     | IntersectionSelector
     | DifferenceSelector
@@ -601,6 +633,17 @@ def _decode_selector(value: JsonValue, path: str) -> Selector:
         return WhereSelector(
             _decode_selector(node["base"], f"{path}.base"),
             _decode_predicate(node["predicate"], f"{path}.predicate"),
+        )
+    if kind == "sequence":
+        _keys(node, {"select", "ordering", "pattern"}, path)
+        from tiergraph.match import (  # noqa: PLC0415 -- cycle breaker
+            _decode_ordering,
+            _decode_pattern,
+        )
+
+        return SequenceSelector(
+            _decode_ordering(node["ordering"], f"{path}.ordering"),
+            _decode_pattern(node["pattern"], f"{path}.pattern"),
         )
     raise Refusal(
         RefusalStage.DISCRIMINATOR, f"{path}.select has unknown selector {kind!r}"
