@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added experimental keep-all and bounded n-best synchronous-grammar target
-  materialization with declared rule and input provenance.
+  materialization with declared provenance, graph-bound absolute spans, and
+  stable sub-span lattice roots.
 - Added regular sequence patterns over declared graph orderings.
 
 ## [0.5.0] - 2026-10-01

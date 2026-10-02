@@ -14,6 +14,8 @@ from typing import cast
 import pytest
 
 from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
     AttributeValue,
     BestDerivation,
     GeneratedDerivation,
@@ -23,14 +25,23 @@ from tiergraph import (
     GrammarInputToken,
     GrammarRule,
     GrammarTerminal,
+    Graph,
+    Item,
     ItemRef,
+    ItemsSelector,
+    JsonAttributeValue,
+    JsonType,
+    NamespaceDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
     Realization,
     RuleApplication,
+    SimpleRelationDeclaration,
     SourceSpan,
     TargetLattice,
     TargetPiece,
+    Tier,
+    TierDeclaration,
     XsdType,
     best,
     count,
@@ -44,6 +55,7 @@ from tiergraph import grammar as grammar_module
 from tiergraph.core import _scalar_attribute
 from tiergraph.fold import ChildCombination, FoldTransition, TiePolicy
 from tiergraph.grammar import _best_fold
+from tiergraph.predicate import OffsetProfile
 from tiergraph.semiring import COUNTING, PATH, PathValue, Semiring
 
 NAMESPACE = "urn:test:grammar"
@@ -165,6 +177,65 @@ def reordered_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
         )
     )
     return declaration, input_tokens
+
+
+def graph_input_fixture(
+    *,
+    shift: int = 0,
+    starts: tuple[int, int, int] = (0, 1, 3),
+    partitions: tuple[str, str, str] = ("raw", "raw", "raw"),
+    missing_end: int | None = None,
+    scalar_realizations: bool = False,
+) -> tuple[Graph, OffsetProfile]:
+    """Return the three declared money tokens with raw source coordinates."""
+    symbols = ("CUR:USD", "AMOUNT_MAJOR", "AMOUNT_MINOR")
+    realizations = (("dollars",), ("three",), ("fifty", "cents"))
+    ends = (1, 2, 5)
+    items: list[Item] = []
+    for index, (symbol, realization) in enumerate(
+        zip(symbols, realizations, strict=True)
+    ):
+        attributes: list[AttributeValue | JsonAttributeValue] = [
+            string("symbol", symbol),
+            AttributeValue(name("origin"), XsdType.INTEGER, str(starts[index] + shift)),
+            string("partition", partitions[index]),
+        ]
+        if scalar_realizations:
+            attributes.append(string("realization", " ".join(realization)))
+        else:
+            attributes.append(
+                JsonAttributeValue(name("realization"), list(realization))
+            )
+        if missing_end != index:
+            attributes.append(
+                AttributeValue(name("end"), XsdType.INTEGER, str(ends[index] + shift))
+            )
+        items.append(Item(f"token-{index}", tuple(attributes)))
+    graph = Graph(
+        (NamespaceDeclaration("test", NAMESPACE),),
+        (Tier(TierDeclaration(name("input"), "Input tokens"), tuple(items)),),
+        (
+            SimpleRelationDeclaration(
+                name("input-membership"), name("input"), name("input-token")
+            ),
+        ),
+        attribute_declarations=(
+            AttributeDeclaration(name("symbol"), AttributeDomain.ITEM, XsdType.STRING),
+            AttributeDeclaration(
+                name("realization"),
+                AttributeDomain.ITEM,
+                XsdType.STRING if scalar_realizations else JsonType.JSON,
+            ),
+            AttributeDeclaration(name("origin"), AttributeDomain.ITEM, XsdType.INTEGER),
+            AttributeDeclaration(name("end"), AttributeDomain.ITEM, XsdType.INTEGER),
+            AttributeDeclaration(
+                name("partition"), AttributeDomain.ITEM, XsdType.STRING
+            ),
+        ),
+    )
+    return graph, OffsetProfile(
+        name("origin"), end=name("end"), partition=name("partition")
+    )
 
 
 def provenance_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
@@ -525,6 +596,18 @@ def test_xsd_carriers_are_checked_at_construction() -> None:
             lambda: GrammarInputToken("x", (Realization(("x",)),), (cast(str, 1),)),
             "provenance",
         ),
+        (
+            lambda: GrammarInputToken(
+                "x", (Realization(("x",)),), source=cast(ItemRef, "item")
+            ),
+            "source",
+        ),
+        (
+            lambda: GrammarInputToken(
+                "x", (Realization(("x",)),), span=cast(SourceSpan, "span")
+            ),
+            "span",
+        ),
         (lambda: GrammarInput(cast(tuple[GrammarInputToken, ...], [])), "tokens"),
         (
             lambda: GrammarInput(
@@ -701,6 +784,343 @@ def test_experimental_generation_materializes_declared_target_order() -> None:
     assert all(isinstance(piece, TargetPiece) for piece in derivation.pieces)
     assert result.truncated is False
     assert result.cost.relation_incidence > 0
+
+
+def test_graph_input_retains_sources_and_output_spans_through_reordering() -> None:
+    """Graph-bound tokens keep raw spans when target order differs from source."""
+    declaration, _ = reordered_tokens()
+    graph, offsets = graph_input_fixture()
+    grammar_input = GrammarInput.from_graph(
+        graph,
+        ItemsSelector(name("input")),
+        name("symbol"),
+        name("realization"),
+        offsets,
+    )
+
+    assert [token.source for token in grammar_input.tokens] == [
+        ItemRef(name("input"), 0),
+        ItemRef(name("input"), 1),
+        ItemRef(name("input"), 2),
+    ]
+    assert [token.span for token in grammar_input.tokens] == [
+        SourceSpan("raw", 0, 1),
+        SourceSpan("raw", 1, 2),
+        SourceSpan("raw", 3, 5),
+    ]
+    derivation = generate(lower_grammar(declaration), grammar_input).derivations[0]
+    assert [(piece.token, piece.span, piece.source) for piece in derivation.pieces] == [
+        ("three", SourceSpan("raw", 1, 2), ItemRef(name("input"), 1)),
+        ("dollars", SourceSpan("raw", 0, 1), ItemRef(name("input"), 0)),
+        ("and", SourceSpan("raw", 0, 5), None),
+        ("fifty", SourceSpan("raw", 3, 5), ItemRef(name("input"), 2)),
+        ("cents", SourceSpan("raw", 3, 5), ItemRef(name("input"), 2)),
+    ]
+    assert all(piece.spans == (piece.span,) for piece in derivation.pieces)
+    assert {
+        application.source_span.partition for application in derivation.applications
+    } == {"raw"}
+
+    assigned_by_target_position = tuple(
+        replace(
+            piece,
+            spans=(cast(SourceSpan, grammar_input.tokens[index].span),),
+        )
+        for index, piece in enumerate(derivation.pieces[:2])
+    )
+    assert [piece.span for piece in assigned_by_target_position] == [
+        SourceSpan("raw", 0, 1),
+        SourceSpan("raw", 1, 2),
+    ]
+    assert [piece.span for piece in assigned_by_target_position] != [
+        piece.span for piece in derivation.pieces[:2]
+    ]
+
+
+def test_graph_input_offsets_remain_absolute() -> None:
+    """Large graph origins are not rebased to token positions."""
+    declaration, _ = reordered_tokens()
+    graph, offsets = graph_input_fixture(shift=100_000)
+    grammar_input = GrammarInput.from_graph(
+        graph,
+        ItemsSelector(name("input")),
+        name("symbol"),
+        name("realization"),
+        offsets,
+    )
+    pieces = generate(lower_grammar(declaration), grammar_input).derivations[0].pieces
+    assert [(piece.token, piece.span) for piece in pieces] == [
+        ("three", SourceSpan("raw", 100_001, 100_002)),
+        ("dollars", SourceSpan("raw", 100_000, 100_001)),
+        ("and", SourceSpan("raw", 100_000, 100_005)),
+        ("fifty", SourceSpan("raw", 100_003, 100_005)),
+        ("cents", SourceSpan("raw", 100_003, 100_005)),
+    ]
+
+
+def test_output_piece_exposes_only_contiguous_coverage_as_one_span() -> None:
+    """A literal retains a discontiguous coverage set without inventing a hull."""
+    sentence = name("S")
+    declaration = GrammarDeclaration(
+        (sentence,),
+        sentence,
+        (
+            GrammarRule(
+                sentence,
+                (terminal("x"), terminal("y")),
+                (terminal("literal"),),
+            ),
+        ),
+    )
+    grammar_input = GrammarInput(
+        (
+            GrammarInputToken(
+                "x", (Realization(("x",)),), span=SourceSpan("left", 10, 11)
+            ),
+            GrammarInputToken(
+                "y", (Realization(("y",)),), span=SourceSpan("right", 20, 21)
+            ),
+        )
+    )
+
+    piece = generate(lower_grammar(declaration), grammar_input).derivations[0].pieces[0]
+
+    assert piece.spans == (
+        SourceSpan("left", 10, 11),
+        SourceSpan("right", 20, 21),
+    )
+    assert piece.span is None
+
+
+def test_empty_chart_coverage_uses_absolute_boundary_anchors() -> None:
+    """Zero-token spans anchor to the nearest retained absolute boundary."""
+    positioned = GrammarInput.from_symbols(("x",))
+    assert grammar_module._source_coverage(positioned, 0, 0) == (
+        SourceSpan(None, 0, 0),
+    )
+    assert grammar_module._source_coverage(positioned, 1, 1) == (
+        SourceSpan(None, 1, 1),
+    )
+    assert grammar_module._source_coverage(GrammarInput(()), 0, 0) == (
+        SourceSpan(None, 0, 0),
+    )
+
+
+def test_target_lattice_can_root_a_chart_subspan() -> None:
+    """A named chart item projects only that token span's derivations."""
+    declaration, _ = reordered_tokens()
+    graph, offsets = graph_input_fixture()
+    grammar_input = GrammarInput.from_graph(
+        graph,
+        ItemsSelector(name("input")),
+        name("symbol"),
+        name("realization"),
+        offsets,
+    )
+    forest = recognize(lower_grammar(declaration), grammar_input, collapse_units=False)
+
+    lattice = target_lattice(forest, root=(name("M"), 1, 2))
+
+    assert lattice.fold.roots == (lattice.root,)
+    assert lattice.best().derivations[0].text == "three"
+    assert lattice.best().derivations[0].pieces[0].span == SourceSpan("raw", 1, 2)
+
+
+def test_target_lattice_refuses_input_mismatch_and_unknown_roots() -> None:
+    """A retained forest cannot be relabeled with another input or chart root."""
+    declaration, input_tokens = reordered_tokens()
+    forest = recognize(lower_grammar(declaration), input_tokens, collapse_units=False)
+    changed = replace(
+        input_tokens,
+        tokens=(
+            replace(input_tokens.tokens[0], symbol="OTHER"),
+            *input_tokens.tokens[1:],
+        ),
+    )
+    with pytest.raises(ValueError, match="input disagrees"):
+        target_lattice(forest, changed)
+    invalid_roots: tuple[object, ...] = (
+        [name("S"), 0, 1],
+        (name("S"), 0),
+        ("S", 0, 1),
+        (name("S"), True, 1),
+        (name("S"), 0, False),
+        (name("S"), -1, 1),
+        (name("S"), 2, 1),
+    )
+    for invalid_root in invalid_roots:
+        with pytest.raises(ValueError, match="must be a .* chart key"):
+            target_lattice(forest, root=invalid_root)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="is not a chart item"):
+        target_lattice(forest, root=(name("missing"), 0, 1))
+
+
+def test_graph_input_validates_order_partition_offsets_and_rendering() -> None:
+    """Graph binding reuses offset checks and validates its two data attributes."""
+    declaration, _ = reordered_tokens()
+    scalar_graph, scalar_offsets = graph_input_fixture(scalar_realizations=True)
+    scalar_input = GrammarInput.from_graph(
+        scalar_graph,
+        ItemsSelector(name("input")),
+        name("symbol"),
+        name("realization"),
+        scalar_offsets,
+    )
+    assert generate(lower_grammar(declaration), scalar_input).derivations[0].text == (
+        "three dollars and fifty cents"
+    )
+
+    different, different_offsets = graph_input_fixture(
+        partitions=("raw", "other", "raw")
+    )
+    with pytest.raises(ValueError, match="one offset partition"):
+        GrammarInput.from_graph(
+            different,
+            ItemsSelector(name("input")),
+            name("symbol"),
+            name("realization"),
+            different_offsets,
+        )
+    descending, descending_offsets = graph_input_fixture(starts=(1, 0, 3))
+    with pytest.raises(ValueError, match="origins must be nondecreasing"):
+        GrammarInput.from_graph(
+            descending,
+            ItemsSelector(name("input")),
+            name("symbol"),
+            name("realization"),
+            descending_offsets,
+        )
+    incomplete, incomplete_offsets = graph_input_fixture(missing_end=1)
+    with pytest.raises(ValueError, match="offsets on every item"):
+        GrammarInput.from_graph(
+            incomplete,
+            ItemsSelector(name("input")),
+            name("symbol"),
+            name("realization"),
+            incomplete_offsets,
+        )
+
+
+def test_graph_input_requires_typed_symbol_and_realization_attributes() -> None:
+    """Missing and ill-typed lexical attributes are refused at graph binding."""
+    graph, offsets = graph_input_fixture()
+
+    def bind(candidate: Graph) -> GrammarInput:
+        return GrammarInput.from_graph(
+            candidate,
+            ItemsSelector(name("input")),
+            name("symbol"),
+            name("realization"),
+            offsets,
+        )
+
+    def without(candidate: Graph, attribute: QualifiedName) -> Graph:
+        tier = candidate.tiers[0]
+        first = replace(
+            tier.items[0],
+            attributes=tuple(
+                value for value in tier.items[0].attributes if value.name != attribute
+            ),
+        )
+        return replace(
+            candidate, tiers=(replace(tier, items=(first, *tier.items[1:])),)
+        )
+
+    with pytest.raises(ValueError, match="has no symbol attribute"):
+        bind(without(graph, name("symbol")))
+    with pytest.raises(ValueError, match="has no realization attribute"):
+        bind(without(graph, name("realization")))
+
+    symbol_tier = graph.tiers[0]
+    json_symbol_items = tuple(
+        replace(
+            item,
+            attributes=tuple(
+                JsonAttributeValue(name("symbol"), "symbol")
+                if value.name == name("symbol")
+                else value
+                for value in item.attributes
+            ),
+        )
+        for item in symbol_tier.items
+    )
+    json_symbol = replace(
+        graph,
+        tiers=(replace(symbol_tier, items=json_symbol_items),),
+        attribute_declarations=tuple(
+            replace(value, value_type=JsonType.JSON)
+            if value.name == name("symbol")
+            else value
+            for value in graph.attribute_declarations
+        ),
+    )
+    with pytest.raises(ValueError, match="symbol attribute.*xsd:string"):
+        bind(json_symbol)
+
+    integer_tier = graph.tiers[0]
+    integer_realizations = tuple(
+        replace(
+            item,
+            attributes=tuple(
+                AttributeValue(name("realization"), XsdType.INTEGER, "1")
+                if value.name == name("realization")
+                else value
+                for value in item.attributes
+            ),
+        )
+        for item in integer_tier.items
+    )
+    integer_graph = replace(
+        graph,
+        tiers=(replace(integer_tier, items=integer_realizations),),
+        attribute_declarations=tuple(
+            replace(value, value_type=XsdType.INTEGER)
+            if value.name == name("realization")
+            else value
+            for value in graph.attribute_declarations
+        ),
+    )
+    with pytest.raises(ValueError, match="xsd:string or JSON token arrays"):
+        bind(integer_graph)
+
+    scalar_graph, _ = graph_input_fixture(scalar_realizations=True)
+    scalar_tier = scalar_graph.tiers[0]
+    bad_scalar = replace(
+        scalar_tier.items[0],
+        attributes=tuple(
+            string("realization", "two  tokens")
+            if value.name == name("realization")
+            else value
+            for value in scalar_tier.items[0].attributes
+        ),
+    )
+    with pytest.raises(ValueError, match="nonempty ASCII-space tokens"):
+        bind(
+            replace(
+                scalar_graph,
+                tiers=(
+                    replace(scalar_tier, items=(bad_scalar, *scalar_tier.items[1:])),
+                ),
+            )
+        )
+
+    json_tier = graph.tiers[0]
+    bad_json = replace(
+        json_tier.items[0],
+        attributes=tuple(
+            JsonAttributeValue(name("realization"), {"token": "dollars"})
+            if value.name == name("realization")
+            else value
+            for value in json_tier.items[0].attributes
+        ),
+    )
+    with pytest.raises(ValueError, match="nonempty array of nonempty strings"):
+        bind(
+            replace(
+                graph,
+                tiers=(replace(json_tier, items=(bad_json, *json_tier.items[1:])),),
+            )
+        )
 
 
 def test_experimental_generation_recovers_declared_and_leaf_provenance() -> None:
