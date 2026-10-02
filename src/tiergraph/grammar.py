@@ -161,7 +161,7 @@ class TargetPiece:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedDerivation:
-    """Carry one experimental best target materialization and exact derivation cost."""
+    """Carry one experimental ranked target materialization and exact derivation cost."""
 
     weight: str
     pieces: tuple[TargetPiece, ...]
@@ -180,7 +180,7 @@ class GeneratedDerivation:
 
 @dataclass(frozen=True, slots=True)
 class GenerationResult:
-    """Report the experimental one-best target projection and its fold account."""
+    """Report experimental bounded target projections and their fold account."""
 
     derivations: tuple[GeneratedDerivation, ...]
     truncated: bool
@@ -1572,8 +1572,10 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
     )
 
 
-def _generation_fold(forest: ParseForest) -> FoldDeclaration[PathValue]:
-    """Build the experimental one-best fold over retained target expansions."""
+def _generation_fold(
+    forest: ParseForest, output_cap: int
+) -> FoldDeclaration[PathValue]:
+    """Build an experimental bounded fold over retained target expansions."""
     names = _forest_names(forest)
     tiers = (
         names["chart-items"],
@@ -1608,7 +1610,7 @@ def _generation_fold(forest: ParseForest) -> FoldDeclaration[PathValue]:
             FoldTransition(names["realization-expansion"], ChildCombination.AND),
         ),
         roots=(forest.root,),
-        output_cap=1,
+        output_cap=output_cap,
         ranked_output=True,
     )
 
@@ -1681,18 +1683,12 @@ def generate(
     *,
     count: int = 1,
 ) -> GenerationResult:
-    """Return the experimental one-best target materialization.
-
-    This first slice deliberately accepts only ``count=1``; bounded n-best is
-    a separate generation contract.
-    """
-    if count != 1:
-        raise ValueError(
-            f"experimental generation count {count!r} must be 1 in this release"
-        )
+    """Return up to ``count`` experimental target materializations."""
+    if count < 1:
+        raise ValueError(f"experimental generation count {count!r} must be positive")
     forest = _forest(grammar, input_tokens, "generate")
     _validate_generation(forest.declaration)
-    result = _generation_fold(forest).run()
+    result = _generation_fold(forest, count).run()
     ranked = cast(
         tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
     )

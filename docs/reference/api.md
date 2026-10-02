@@ -1627,7 +1627,7 @@ Return the result as JSON-serializable data.
 GeneratedDerivation(weight: 'str', pieces: 'tuple[TargetPiece, ...]', witness: 'tuple[str, ...]') -> None
 ```
 
-Carry one experimental best target materialization and exact derivation cost.
+Carry one experimental ranked target materialization and exact derivation cost.
 
 #### `GeneratedDerivation.tokens`
 
@@ -1655,7 +1655,7 @@ Join emitted tokens with the experimental one-ASCII-space profile.
 GenerationResult(derivations: 'tuple[GeneratedDerivation, ...]', truncated: 'bool', cost: 'FoldCost') -> None
 ```
 
-Report the experimental one-best target projection and its fold account.
+Report experimental bounded target projections and their fold account.
 
 ### `GrammarChartProfile`
 
@@ -1968,10 +1968,7 @@ Return the derivation count from a new or previously built forest.
 generate(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, *, count: 'int' = 1) -> 'GenerationResult'
 ```
 
-Return the experimental one-best target materialization.
-
-This first slice deliberately accepts only ``count=1``; bounded n-best is
-a separate generation contract.
+Return up to ``count`` experimental target materializations.
 
 ### `grammar_loads`
 
