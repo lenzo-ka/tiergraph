@@ -359,6 +359,8 @@ class TargetLattice:
             raise ValueError(
                 f"experimental generation count {count!r} must be positive"
             )
+        if self.cyclic:
+            raise ValueError("target materialization requires a finite derivation")
         result = replace(self.fold, output_cap=count).run()
         ranked = cast(
             tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
@@ -2201,8 +2203,27 @@ def target_lattice(
         fold,
         grammar_input,
         forest.declaration,
-        bool(fold._dependency_graph().cyclic_components),
+        _has_reachable_cycle(fold),
     )
+
+
+def _has_reachable_cycle(fold: FoldDeclaration[PathValue]) -> bool:
+    """Report whether a fold root reaches one of its already-computed cyclic SCCs."""
+    dependency_graph = fold._dependency_graph()
+    cyclic_items = {
+        item for component in dependency_graph.cyclic_components for item in component
+    }
+    pending = list(dependency_graph.roots)
+    reached: set[ItemRef] = set()
+    while pending:
+        item = pending.pop()
+        if item in reached:
+            continue
+        if item in cyclic_items:
+            return True
+        reached.add(item)
+        pending.extend(dependency_graph.adjacency[item])
+    return False
 
 
 def _resolve_chart_root(forest: ParseForest, root: _ChartKey) -> ItemRef:
