@@ -41,7 +41,8 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings} ...
+                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings}
+                 ...
 
 positional arguments:
   {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings}
@@ -104,13 +105,14 @@ usage: tiergraph discharge seals [-h] --result FILE [--name NAME] [-o FILE]
                                  SOURCE
 
 positional arguments:
-  SOURCE             source graph file, or - for stdin
+  SOURCE                source graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
-  --result FILE      result graph file
-  --name NAME        name used in refusals
-  -o, --output FILE  output file (default: -)
+  -h, --help            show this help message and exit
+  --result FILE         result graph file
+  --name NAME           name used in refusals
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph discharge rewrite`
@@ -131,7 +133,8 @@ options:
   --effect {decorate,revise,collapse}
                         the claim to discharge; omitted, the library refuses
                         UNDECLARED
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph discharge fold`
@@ -139,10 +142,11 @@ options:
 ```text
 usage: tiergraph discharge fold [-h] [--name NAME] --attribute-namespace NS
                                 --attribute-local LOCAL --tier NS LOCAL
-                                --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
-                                --lift {one,value}
-                                --transition NS LOCAL COMBINATION
-                                [--root TGPATH] [--ranked] [--output-cap N]
+                                --semiring
+                                {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
+                                --lift {one,value} --transition NS LOCAL
+                                COMBINATION [--root TGPATH] [--ranked]
+                                [--output-cap N]
                                 [--exactness {distributive,approximate,structural}]
                                 [-o FILE]
                                 GRAPH
@@ -170,7 +174,8 @@ options:
   --exactness {distributive,approximate,structural}
                         the claim to discharge; omitted, the library refuses
                         UNDECLARED
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph render`
@@ -183,7 +188,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
   --include-empty-tiers
                         include empty tiers
 ```
@@ -194,11 +200,12 @@ options:
 usage: tiergraph inspect [-h] [-o FILE] FILE
 
 positional arguments:
-  FILE               graph file, or - for stdin
+  FILE                  graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
-  -o, --output FILE  output file (default: -)
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph convert`
@@ -211,7 +218,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
   --to {json,json-compact,bytes}
 ```
 
@@ -224,7 +232,8 @@ options:
   -h, --help            show this help message and exit
   --format-version VERSION
   --hash                print the shape hash
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph run`
@@ -239,7 +248,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
   --to {json,json-compact,bytes,dot}
   --include-empty-tiers
                         include empty tiers in DOT output
@@ -251,13 +261,14 @@ options:
 usage: tiergraph step [-h] [-o FILE] [--interactive] FILE
 
 positional arguments:
-  FILE               JSONL program file, or - for stdin
+  FILE                  JSONL program file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
-  -o, --output FILE  output file (default: -)
-  --interactive      use the interactive debugger (also enabled when stdin is
-                     a TTY)
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
+  --interactive         use the interactive debugger (also enabled when stdin
+                        is a TTY)
 ```
 
 ### `tiergraph walk`
@@ -278,7 +289,8 @@ options:
   --relation-local LOCAL
   --direction {forward,inverse}
   --cap N
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph path`
@@ -301,12 +313,13 @@ options:
 usage: tiergraph path resolve [-h] [-o FILE] GRAPH TGPATH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
-  TGPATH             tiergraph path to resolve
+  GRAPH                 graph file, or - for stdin
+  TGPATH                tiergraph path to resolve
 
 options:
-  -h, --help         show this help message and exit
-  -o, --output FILE  output file (default: -)
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph path spell`
@@ -333,7 +346,8 @@ options:
   --anchor-tier-namespace NS
   --anchor-tier-local LOCAL
   --side {before,after}
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph grammar`
@@ -357,12 +371,13 @@ options:
 usage: tiergraph grammar recognize [-h] --tokens-json JSON [-o FILE] GRAMMAR
 
 positional arguments:
-  GRAMMAR             grammar JSON file, or - for stdin
+  GRAMMAR               grammar JSON file, or - for stdin
 
 options:
-  -h, --help          show this help message and exit
+  -h, --help            show this help message and exit
   --tokens-json JSON
-  -o, --output FILE   output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph grammar count`
@@ -371,12 +386,13 @@ options:
 usage: tiergraph grammar count [-h] --tokens-json JSON [-o FILE] GRAMMAR
 
 positional arguments:
-  GRAMMAR             grammar JSON file, or - for stdin
+  GRAMMAR               grammar JSON file, or - for stdin
 
 options:
-  -h, --help          show this help message and exit
+  -h, --help            show this help message and exit
   --tokens-json JSON
-  -o, --output FILE   output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph grammar best`
@@ -386,13 +402,14 @@ usage: tiergraph grammar best [-h] --tokens-json JSON [--count N] [-o FILE]
                               GRAMMAR
 
 positional arguments:
-  GRAMMAR             grammar JSON file, or - for stdin
+  GRAMMAR               grammar JSON file, or - for stdin
 
 options:
-  -h, --help          show this help message and exit
+  -h, --help            show this help message and exit
   --tokens-json JSON
   --count N
-  -o, --output FILE   output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph clock`
@@ -417,12 +434,13 @@ options:
 usage: tiergraph clock coordinates [-h] --profile FILE [-o FILE] GRAPH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
   --profile FILE
-  -o, --output FILE  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph clock boundary`
@@ -432,13 +450,14 @@ usage: tiergraph clock boundary [-h] --profile FILE --boundary PATH [-o FILE]
                                 GRAPH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
   --profile FILE
   --boundary PATH
-  -o, --output FILE  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph clock extent`
@@ -449,14 +468,15 @@ usage: tiergraph clock extent [-h] --profile FILE --tier-namespace NS
                               GRAPH
 
 positional arguments:
-  GRAPH                graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help           show this help message and exit
+  -h, --help            show this help message and exit
   --profile FILE
   --tier-namespace NS
   --tier-local LOCAL
-  -o, --output FILE    output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph clock item`
@@ -465,13 +485,14 @@ options:
 usage: tiergraph clock item [-h] --profile FILE --item PATH [-o FILE] GRAPH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
   --profile FILE
   --item PATH
-  -o, --output FILE  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph span`
@@ -490,8 +511,8 @@ options:
 ### `tiergraph span render`
 
 ```text
-usage: tiergraph span render [-h] --profile FILE
-                             --format {text,json,jsonl,html,dot,textgrid}
+usage: tiergraph span render [-h] --profile FILE --format
+                             {text,json,jsonl,html,dot,textgrid}
                              [--alternatives] [--jsonl-record {input,span}]
                              [--include-empty-tiers] [-o FILE]
                              GRAPH
@@ -506,7 +527,8 @@ options:
   --alternatives
   --jsonl-record {input,span}
   --include-empty-tiers
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph select`
@@ -517,14 +539,15 @@ usage: tiergraph select [-h] (--selector FILE | --where TEXT) [--prefix P]
                         GRAPH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
   --selector FILE
   --where TEXT
   --prefix P
-  -o, --output FILE  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph match`
@@ -533,20 +556,21 @@ options:
 usage: tiergraph match [-h] --request FILE [-o FILE] GRAPH
 
 positional arguments:
-  GRAPH              graph file, or - for stdin
+  GRAPH                 graph file, or - for stdin
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
   --request FILE
-  -o, --output FILE  output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph fold`
 
 ```text
 usage: tiergraph fold [-h] [--name NAME] --attribute-namespace NS
-                      --attribute-local LOCAL --tier NS LOCAL
-                      --semiring {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
+                      --attribute-local LOCAL --tier NS LOCAL --semiring
+                      {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
                       --lift {one,value} --transition NS LOCAL COMBINATION
                       [--root TGPATH] [--ranked] [--output-cap N] [-o FILE]
                       GRAPH
@@ -571,7 +595,8 @@ options:
   --ranked              also report witnesses ranked by the semiring's own
                         order
   --output-cap N        witness cap; requires --ranked
-  -o, --output FILE     output file (default: -)
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
 
 ### `tiergraph semirings`
@@ -580,6 +605,7 @@ options:
 usage: tiergraph semirings [-h] [-o FILE]
 
 options:
-  -h, --help         show this help message and exit
-  -o, --output FILE  output file (default: -)
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output file (default: -)
 ```
