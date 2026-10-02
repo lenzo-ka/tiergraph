@@ -426,8 +426,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --input-json INPUT
-  --count N
+  --input-json INPUT    typed grammar input as JSON
+  --count N             maximum target derivations to emit
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -442,7 +442,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --input-json INPUT
+  --input-json INPUT    typed grammar input as JSON
   -o FILE, --output FILE
                         output file (default: -)
 ```

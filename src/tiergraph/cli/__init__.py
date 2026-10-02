@@ -196,9 +196,20 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         grammar_parser.add_argument(
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
         )
-        grammar_parser.add_argument("--input-json", required=True, metavar="INPUT")
+        grammar_parser.add_argument(
+            "--input-json",
+            required=True,
+            metavar="INPUT",
+            help="typed grammar input as JSON",
+        )
         if grammar_command == "generate":
-            grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
+            grammar_parser.add_argument(
+                "--count",
+                type=int,
+                default=1,
+                metavar="N",
+                help="maximum target derivations to emit",
+            )
         _output_argument(grammar_parser)
 
     clock = subparsers.add_parser("clock", help="query declarative clock timing")

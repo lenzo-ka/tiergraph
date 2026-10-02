@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from itertools import pairwise
 from typing import cast
 
@@ -31,6 +31,7 @@ from tiergraph.core import (
     SimpleRelationDeclaration,
     TierDeclaration,
     XsdType,
+    _canonical_lexical,
     _scalar_attribute,
 )
 from tiergraph.fold import (
@@ -86,9 +87,13 @@ TARGET_LATTICE_ENVELOPE = "tiergraph.grammar.target-lattice/1"
 def _decode_optional_object(
     value: object, path: str, required: set[str], optional: set[str]
 ) -> dict[str, object]:
-    """Decode an exact object while permitting explicitly named optional fields."""
+    """Decode an exact object, requiring optional fields to be absent or non-null."""
     present = set(value).intersection(optional) if isinstance(value, dict) else set()
-    return _decode_object(value, path, required | present)
+    obj = _decode_object(value, path, required | present)
+    null_field = next((name for name in present if obj[name] is None), None)
+    if null_field is not None:
+        raise ValueError(f"{path}.{null_field} must not be null")
+    return obj
 
 
 def _decode_strings(value: object, path: str) -> tuple[str, ...]:
@@ -139,6 +144,8 @@ class Realization:
             raise ValueError("realization provenance must be a tuple of strings")
         if self.weight is not None and not isinstance(self.weight, Decimal):
             raise ValueError("realization weight must be a Decimal or None")
+        if self.weight is not None and not self.weight.is_finite():
+            raise ValueError("realization weight must be a finite Decimal or None")
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this experimental realization as strict JSON data."""
@@ -146,7 +153,9 @@ class Realization:
         if self.provenance:
             data["provenance"] = list(self.provenance)
         if self.weight is not None:
-            data["weight"] = str(self.weight)
+            data["weight"] = _canonical_lexical(
+                XsdType.DECIMAL, format(self.weight, "f")
+            )
         return data
 
     @classmethod
@@ -158,14 +167,23 @@ class Realization:
         if weight is not None and not isinstance(weight, str):
             raise ValueError(f"{path}.weight must be a decimal string")
         try:
-            decoded_weight = None if weight is None else Decimal(weight)
-        except InvalidOperation as error:
+            decoded_weight = (
+                None if weight is None else Decimal(_strict_decimal_lexical(weight))
+            )
+        except ValueError as error:
             raise ValueError(f"{path}.weight must be a decimal string") from error
         return cls(
             _decode_strings(obj["tokens"], f"{path}.tokens"),
             _decode_strings(obj.get("provenance", []), f"{path}.provenance"),
             decoded_weight,
         )
+
+
+def _strict_decimal_lexical(lexical: str) -> str:
+    """Canonicalize one unpadded xsd:decimal lexical string."""
+    if lexical != lexical.strip(" \t\r\n"):
+        raise ValueError(lexical)
+    return _canonical_lexical(XsdType.DECIMAL, lexical)
 
 
 @dataclass(frozen=True, slots=True)
@@ -730,6 +748,8 @@ def _generation_declaration_data(
     fold: FoldDeclaration[PathValue],
 ) -> dict[str, JsonValue]:
     """Return the data-only part of the target fold declaration."""
+    if fold.witness_order is not None:
+        raise ValueError("target lattice cannot encode a custom witness order")
     return {
         "name": fold.name,
         "valuation": {
@@ -745,9 +765,13 @@ def _generation_declaration_data(
             }
             for transition in fold.transitions
         ],
+        "index_axes": [list(axis) for axis in fold.index_axes],
         "roots": [root.to_data() for root in fold.roots],
+        "witness_order": None,
+        "tie_policy": None if fold.tie_policy is None else fold.tie_policy.value,
         "output_cap": fold.output_cap,
         "ranked_output": fold.ranked_output,
+        "exactness": fold.exactness.value,
     }
 
 

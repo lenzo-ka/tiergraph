@@ -940,6 +940,44 @@ def test_grammar_generation_commands_match_python_envelopes(
     )
 
 
+@pytest.mark.parametrize("command", ("generate", "lattice"))
+def test_grammar_generation_help_describes_typed_input(
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    """The experimental commands explain their shared typed-input option."""
+    with pytest.raises(SystemExit) as raised:
+        main(["grammar", command, "--help"])
+    assert raised.value.code == 0
+    rendered = capsys.readouterr().out
+    assert "--input-json INPUT" in rendered
+    assert "typed grammar input as JSON" in rendered
+    if command == "generate":
+        assert "maximum target derivations to emit" in rendered
+
+
+def test_grammar_generate_reports_bad_weight_as_an_input_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A malformed realization weight is refused before chart construction."""
+    source = tmp_path / "grammar.json"
+    _grammar(source)
+    input_json = json.dumps(
+        {
+            "tokens": [
+                {
+                    "symbol": "x",
+                    "realization": [{"tokens": ["x"], "weight": "NaN"}],
+                }
+            ]
+        }
+    )
+
+    assert main(["grammar", "generate", str(source), "--input-json", input_json]) == 1
+    diagnostic = capsys.readouterr().err
+    assert "grammar input realization.weight must be a decimal string" in diagnostic
+    assert "attribute '{urn:tiergraph:grammar:chart}weight'" not in diagnostic
+
+
 def test_grammar_generate_prints_the_api_envelope(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
