@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 221 top-level `tiergraph` exports exactly once.
+It covers 223 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1624,7 +1624,7 @@ Return the result as JSON-serializable data.
 ### `GeneratedDerivation`
 
 ```text
-GeneratedDerivation(weight: 'str', pieces: 'tuple[TargetPiece, ...]', witness: 'tuple[str, ...]') -> None
+GeneratedDerivation(weight: 'str', pieces: 'tuple[TargetPiece, ...]', applications: 'tuple[RuleApplication, ...]', witness: 'tuple[str, ...]') -> None
 ```
 
 Carry one experimental ranked target materialization and exact derivation cost.
@@ -1785,7 +1785,7 @@ Carry one experimental typed source symbol and its target alternatives.
 ### `GrammarRule`
 
 ```text
-GrammarRule(left: 'QualifiedName', source: 'GrammarPattern', target: 'GrammarPattern', boundary: 'AttributeValue' = AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete'), awaited_variables: 'tuple[AttributeValue, ...]' = (), weight: 'AttributeValue | None' = None) -> None
+GrammarRule(left: 'QualifiedName', source: 'GrammarPattern', target: 'GrammarPattern', boundary: 'AttributeValue' = AttributeValue(name=QualifiedName(namespace='urn:tiergraph:grammar', local_name='boundary'), value_type=<XsdType.STRING: 'string'>, lexical='complete'), awaited_variables: 'tuple[AttributeValue, ...]' = (), weight: 'AttributeValue | None' = None, provenance: 'tuple[AttributeValue, ...]' = ()) -> None
 ```
 
 Declare one directional pairing of source and target patterns.
@@ -1938,10 +1938,26 @@ Realization(tokens: 'tuple[str, ...]', provenance: 'tuple[str, ...]' = (), weigh
 
 Carry one experimental target-token alternative for a typed input token.
 
+### `RuleApplication`
+
+```text
+RuleApplication(rule_index: 'int', provenance: 'tuple[AttributeValue, ...]', source_span: 'SourceSpan', witness: 'str') -> None
+```
+
+Carry one experimental generated rule application in witness order.
+
+### `SourceSpan`
+
+```text
+SourceSpan(partition: 'str | None', origin: 'int', end: 'int') -> None
+```
+
+Carry one experimental half-open source span.
+
 ### `TargetLattice`
 
 ```text
-TargetLattice(graph: 'Graph', root: 'ItemRef', fold: 'FoldDeclaration[PathValue]', input: 'GrammarInput', cyclic: 'bool') -> None
+TargetLattice(graph: 'Graph', root: 'ItemRef', fold: 'FoldDeclaration[PathValue]', input: 'GrammarInput', declaration: 'GrammarDeclaration', cyclic: 'bool') -> None
 ```
 
 View an experimental keep-all target graph without enumerating paths.
@@ -1959,10 +1975,10 @@ Project up to ``count`` ranked targets from the retained graph.
 ### `TargetPiece`
 
 ```text
-TargetPiece(token: 'str', witness: 'str') -> None
+TargetPiece(token: 'str', witness: 'str', application: 'RuleApplication', input_provenance: 'tuple[str, ...]' = ()) -> None
 ```
 
-Carry one emitted token and the target-piece witness that introduced it.
+Carry one experimental emitted token and its introducing provenance.
 
 ### `best`
 

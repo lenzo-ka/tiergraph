@@ -72,6 +72,8 @@
       "LoweredGrammar",
       "ParseForest",
       "Realization",
+      "RuleApplication",
+      "SourceSpan",
       "TargetLattice",
       "TargetPiece",
       "best",

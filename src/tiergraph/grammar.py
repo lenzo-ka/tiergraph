@@ -152,11 +152,41 @@ class GrammarInput:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceSpan:
+    """Carry one experimental half-open source span."""
+
+    partition: str | None
+    origin: int
+    end: int
+
+    def __post_init__(self) -> None:
+        """Require an optional partition and ordered integer coordinates."""
+        if self.partition is not None and not isinstance(self.partition, str):
+            raise ValueError("source span partition must be a string or None")
+        if type(self.origin) is not int or type(self.end) is not int:
+            raise ValueError("source span coordinates must be integers")
+        if self.origin > self.end:
+            raise ValueError("source span origin must not follow its end")
+
+
+@dataclass(frozen=True, slots=True)
+class RuleApplication:
+    """Carry one experimental generated rule application in witness order."""
+
+    rule_index: int
+    provenance: tuple[AttributeValue, ...]
+    source_span: SourceSpan
+    witness: str
+
+
+@dataclass(frozen=True, slots=True)
 class TargetPiece:
-    """Carry one emitted token and the target-piece witness that introduced it."""
+    """Carry one experimental emitted token and its introducing provenance."""
 
     token: str
     witness: str
+    application: RuleApplication
+    input_provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +195,7 @@ class GeneratedDerivation:
 
     weight: str
     pieces: tuple[TargetPiece, ...]
+    applications: tuple[RuleApplication, ...]
     witness: tuple[str, ...]
 
     @property
@@ -195,6 +226,7 @@ class TargetLattice:
     root: ItemRef
     fold: FoldDeclaration[PathValue]
     input: GrammarInput
+    declaration: GrammarDeclaration
     cyclic: bool
 
     def best(self, count: int = 1) -> GenerationResult:
@@ -329,6 +361,7 @@ class GrammarRule:
     boundary: AttributeValue = COMPLETE_BOUNDARY
     awaited_variables: tuple[AttributeValue, ...] = ()
     weight: AttributeValue | None = None
+    provenance: tuple[AttributeValue, ...] = ()
 
     def __post_init__(self) -> None:
         """Canonicalize set-like awaited variables and validate XSD carriers."""
@@ -342,6 +375,18 @@ class GrammarRule:
                 f"rule {str(self.left)!r} weight {self.weight.lexical!r} "
                 "must be carried as an xsd:decimal value"
             )
+        if type(self.provenance) is not tuple:
+            raise ValueError(f"rule {str(self.left)!r} provenance must be a tuple")
+        for value in self.provenance:
+            if not isinstance(value, AttributeValue):
+                raise ValueError(
+                    f"rule {str(self.left)!r} provenance must contain "
+                    "AttributeValue values"
+                )
+            _string_value(value, f"rule {str(self.left)!r} provenance")
+        provenance_names = [value.name for value in self.provenance]
+        if len(set(provenance_names)) != len(provenance_names):
+            raise ValueError(f"rule {str(self.left)!r} has duplicate provenance names")
         ordered = tuple(sorted(self.awaited_variables, key=lambda value: value.lexical))
         if len({value.lexical for value in ordered}) != len(ordered):
             raise ValueError(f"rule {str(self.left)!r} has duplicate awaited variables")
@@ -358,6 +403,7 @@ class GrammarRule:
                 variable.to_data() for variable in self.awaited_variables
             ],
             "weight": None if self.weight is None else self.weight.to_data(),
+            "provenance": [value.to_data() for value in self.provenance],
         }
 
     @classmethod
@@ -374,6 +420,7 @@ class GrammarRule:
                 "boundary",
                 "awaited_variables",
                 "weight",
+                "provenance",
             },
         )
         awaited = obj["awaited_variables"]
@@ -382,6 +429,9 @@ class GrammarRule:
         weight = obj["weight"]
         if weight is not None and not isinstance(weight, dict):
             raise ValueError(f"{path}.weight must be an attribute value or null")
+        provenance = obj["provenance"]
+        if not isinstance(provenance, list):
+            raise ValueError(f"{path}.provenance must be an array")
         return cls(
             _decode_qname(obj["left"], f"{path}.left"),
             _decode_pattern(obj["source"], f"{path}.source"),
@@ -394,6 +444,10 @@ class GrammarRule:
             None
             if weight is None
             else _decode_attribute_value(weight, f"{path}.weight"),
+            tuple(
+                _decode_attribute_value(value, f"{path}.provenance[{index}]")
+                for index, value in enumerate(provenance)
+            ),
         )
 
     @property
@@ -524,6 +578,44 @@ def _name(namespace: str, local: str) -> QualifiedName:
     return QualifiedName(namespace, local)
 
 
+def _provenance_names(declaration: GrammarDeclaration) -> tuple[QualifiedName, ...]:
+    """Return each declared rule-provenance name once in canonical order."""
+    return tuple(
+        sorted(
+            {value.name for rule in declaration.rules for value in rule.provenance},
+            key=str,
+        )
+    )
+
+
+def _provenance_namespace_opcodes(
+    declaration: GrammarDeclaration, namespace: str
+) -> tuple[DeclareNamespace, ...]:
+    """Declare external provenance namespaces with deterministic local prefixes."""
+    namespaces = sorted(
+        {name.namespace for name in _provenance_names(declaration)} - {namespace}
+    )
+    return tuple(
+        DeclareNamespace(NamespaceDeclaration(f"provenance{index}", value))
+        for index, value in enumerate(namespaces)
+    )
+
+
+def _check_provenance_name_conflicts(
+    declaration: GrammarDeclaration,
+    reserved: set[QualifiedName],
+    subject: str,
+) -> None:
+    """Refuse a client provenance name already owned by the generated graph."""
+    conflict = next(
+        (name for name in _provenance_names(declaration) if name in reserved), None
+    )
+    if conflict is not None:
+        raise ValueError(
+            f"rule provenance name {str(conflict)!r} conflicts with {subject} attribute"
+        )
+
+
 def lower_grammar(
     declaration: GrammarDeclaration, namespace: str = GRAMMAR_NAMESPACE
 ) -> LoweredGrammar:
@@ -544,8 +636,12 @@ def lower_grammar(
             "weight",
         )
     }
+    _check_provenance_name_conflicts(
+        declaration, set(names.values()), "grammar lowering"
+    )
     opcodes: list[Opcode] = [
-        DeclareNamespace(NamespaceDeclaration("grammar", namespace))
+        DeclareNamespace(NamespaceDeclaration("grammar", namespace)),
+        *_provenance_namespace_opcodes(declaration, namespace),
     ]
     for local, long_name in (
         ("productions", "Grammar productions"),
@@ -589,6 +685,12 @@ def lower_grammar(
             AttributeDeclaration(names["weight"], AttributeDomain.ITEM, XsdType.DECIMAL)
         )
     )
+    opcodes.extend(
+        DeclareAttribute(
+            AttributeDeclaration(name, AttributeDomain.ITEM, XsdType.STRING)
+        )
+        for name in _provenance_names(declaration)
+    )
     slot_index = 0
     element_index = 0
     for rule_index, rule in enumerate(declaration.rules):
@@ -614,6 +716,10 @@ def lower_grammar(
                     names["weight"], XsdType.DECIMAL, rule.effective_weight.lexical
                 ),
             )
+        )
+        opcodes.extend(
+            AttachValue(AttributeDomain.ITEM, production, value)
+            for value in rule.provenance
         )
         slots: list[ItemRef] = []
         for role, pattern in (("source", rule.source), ("target", rule.target)):
@@ -1146,12 +1252,15 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
             "input-tokens",
             "realizations",
             "target-pieces",
+            "provenance-values",
             "alternatives",
             "children",
             "production-application",
             "target-expansion",
             "realization-alternatives",
             "realization-expansion",
+            "input-provenance",
+            "realization-provenance",
             "local-factor",
             "weight",
             "kind",
@@ -1163,7 +1272,11 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
             "end",
         )
     }
-    opcodes: list[Opcode] = [DeclareNamespace(NamespaceDeclaration("chart", namespace))]
+    _check_provenance_name_conflicts(declaration, set(names.values()), "parse-forest")
+    opcodes: list[Opcode] = [
+        DeclareNamespace(NamespaceDeclaration("chart", namespace)),
+        *_provenance_namespace_opcodes(declaration, namespace),
+    ]
     opcodes.extend(
         (
             DeclareTier(TierDeclaration(names["chart-items"], "Chart items")),
@@ -1173,6 +1286,9 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
             DeclareTier(TierDeclaration(names["input-tokens"], "Input tokens")),
             DeclareTier(TierDeclaration(names["realizations"], "Realizations")),
             DeclareTier(TierDeclaration(names["target-pieces"], "Target pieces")),
+            DeclareTier(
+                TierDeclaration(names["provenance-values"], "Provenance values")
+            ),
             DeclareRelation(
                 SimpleRelationDeclaration(
                     _name(namespace, "chart-membership"),
@@ -1195,7 +1311,12 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
                         _name(namespace, f"{local}-type"),
                     )
                 )
-                for local in ("input-tokens", "realizations", "target-pieces")
+                for local in (
+                    "input-tokens",
+                    "realizations",
+                    "target-pieces",
+                    "provenance-values",
+                )
             ),
         )
     )
@@ -1246,6 +1367,18 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
             (names["target-pieces"],),
             True,
         ),
+        (
+            "input-provenance",
+            (names["input-tokens"],),
+            (names["provenance-values"],),
+            True,
+        ),
+        (
+            "realization-provenance",
+            (names["realizations"],),
+            (names["provenance-values"],),
+            True,
+        ),
     ):
         opcodes.append(
             DeclareRelation(
@@ -1275,6 +1408,12 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
                 AttributeDeclaration(names[local], AttributeDomain.ITEM, value_type)
             )
         )
+    opcodes.extend(
+        DeclareAttribute(
+            AttributeDeclaration(name, AttributeDomain.ITEM, XsdType.STRING)
+        )
+        for name in _provenance_names(declaration)
+    )
 
     def add_item(
         reference: ItemRef,
@@ -1293,6 +1432,32 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
 
     piece_index = 0
     realization_index = 0
+    provenance_index = 0
+
+    def add_ordered_provenance(
+        owner: ItemRef,
+        relation: QualifiedName,
+        values: tuple[str, ...],
+        kind: str,
+    ) -> None:
+        """Retain one ordered plain-string provenance list in the graph."""
+        nonlocal provenance_index
+        references: list[ItemRef] = []
+        for value in values:
+            reference = ItemRef(names["provenance-values"], provenance_index)
+            provenance_index += 1
+            references.append(reference)
+            add_item(
+                reference,
+                (
+                    ("kind", XsdType.STRING, kind),
+                    ("text", XsdType.STRING, value),
+                ),
+            )
+        opcodes.append(
+            Relate(PolyadicRelationInstance(relation, (owner,), tuple(references)))
+        )
+
     input_references: list[ItemRef] = []
     for input_index, token in enumerate(grammar_input.tokens):
         token_reference = ItemRef(names["input-tokens"], input_index)
@@ -1306,6 +1471,12 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
                 ("text", XsdType.STRING, token.symbol),
                 ("input-index", XsdType.INTEGER, str(input_index)),
             ),
+        )
+        add_ordered_provenance(
+            token_reference,
+            names["input-provenance"],
+            token.provenance,
+            "input-provenance",
         )
         for realization in token.realization:
             realization_reference = ItemRef(names["realizations"], realization_index)
@@ -1322,6 +1493,12 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
                     ("kind", XsdType.STRING, "realization"),
                     ("input-index", XsdType.INTEGER, str(input_index)),
                 ),
+            )
+            add_ordered_provenance(
+                realization_reference,
+                names["realization-provenance"],
+                realization.provenance,
+                "realization-provenance",
             )
             pieces: list[ItemRef] = []
             for text in realization.tokens:
@@ -1391,6 +1568,11 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
                 ("rule-index", XsdType.INTEGER, str(rule_index)),
             ),
         )
+        if rule_index >= 0:
+            opcodes.extend(
+                AttachValue(AttributeDomain.ITEM, app, value)
+                for value in declaration.rules[rule_index].provenance
+            )
         child_refs = tuple(references[child] for child in children)
         opcodes.append(
             Relate(RelationInstance(names["alternatives"], references[parent], app))
@@ -1498,12 +1680,15 @@ def _forest_names(forest: ParseForest | TargetLattice) -> dict[str, QualifiedNam
             "input-tokens",
             "realizations",
             "target-pieces",
+            "provenance-values",
             "alternatives",
             "children",
             "production-application",
             "target-expansion",
             "realization-alternatives",
             "realization-expansion",
+            "input-provenance",
+            "realization-provenance",
             "local-factor",
             "weight",
             "kind",
@@ -1542,6 +1727,25 @@ def _item_attribute(graph: Graph, reference: ItemRef, local: str) -> AttributeVa
     return _scalar_attribute(
         next(value for value in item.attributes if value.name.local_name == local)
     )
+
+
+def _item_named_attribute(
+    graph: Graph, reference: ItemRef, name: QualifiedName
+) -> AttributeValue:
+    """Read one scalar item attribute by its complete qualified name."""
+    item = next(
+        tier.items[reference.index]
+        for tier in graph.tiers
+        if tier.declaration.name == reference.tier
+    )
+    return _scalar_attribute(
+        next(value for value in item.attributes if value.name == name)
+    )
+
+
+def _item_label(reference: ItemRef) -> str:
+    """Return the structural label used by fold witnesses."""
+    return f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
 
 
 def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:
@@ -1646,22 +1850,109 @@ def _generated_derivation(
     value: PathValue,
     witness: tuple[str, ...],
 ) -> GeneratedDerivation:
-    """Materialize target-piece labels from one ranked structural witness."""
+    """Materialize target pieces and applications from one structural witness."""
     names = _forest_names(forest)
-    pieces_by_label: dict[str, TargetPiece] = {}
-    for reference in forest.graph.canonical_items():
+    references_by_label = {
+        _item_label(reference): reference
+        for reference in forest.graph.canonical_items()
+    }
+    parent_by_application = {
+        cast(ItemRef, relation.right): cast(ItemRef, relation.left)
+        for relation in forest.graph.relations
+        if relation.declaration == names["alternatives"]
+    }
+    applications: list[RuleApplication] = []
+    applications_by_label: dict[str, RuleApplication] = {}
+    for label in witness:
+        reference = references_by_label[label]
+        if reference.tier != names["applications"]:
+            continue
+        rule_index = int(_item_attribute(forest.graph, reference, "rule-index").lexical)
+        parent = parent_by_application[reference]
+        declared = forest.declaration.rules[rule_index].provenance
+        application = RuleApplication(
+            rule_index,
+            tuple(
+                _item_named_attribute(forest.graph, reference, item.name)
+                for item in declared
+            ),
+            SourceSpan(
+                None,
+                int(_item_attribute(forest.graph, parent, "start").lexical),
+                int(_item_attribute(forest.graph, parent, "end").lexical),
+            ),
+            label,
+        )
+        applications.append(application)
+        applications_by_label[label] = application
+
+    expansion_sources: dict[ItemRef, tuple[ItemRef, ...]] = {}
+    realization_by_piece: dict[ItemRef, ItemRef] = {}
+    provenance_by_owner: dict[tuple[QualifiedName, ItemRef], tuple[str, ...]] = {}
+    for relation in forest.graph.polyadic_relations:
+        source = cast(ItemRef, relation.sources[0])
+        targets = tuple(cast(ItemRef, target) for target in relation.targets)
+        if relation.declaration == names["target-expansion"]:
+            expansion_sources[source] = targets
+        elif relation.declaration == names["realization-expansion"]:
+            realization_by_piece.update((piece, source) for piece in targets)
+        elif relation.declaration in (
+            names["input-provenance"],
+            names["realization-provenance"],
+        ):
+            provenance_by_owner[(relation.declaration, source)] = tuple(
+                _item_attribute(forest.graph, target, "text").lexical
+                for target in targets
+            )
+    input_by_realization = {
+        cast(ItemRef, relation.right): cast(ItemRef, relation.left)
+        for relation in forest.graph.relations
+        if relation.declaration == names["realization-alternatives"]
+    }
+    introducing_candidates: dict[ItemRef, set[str]] = {}
+    for application_reference, targets in expansion_sources.items():
+        label = _item_label(application_reference)
+        for target in targets:
+            introducing_candidates.setdefault(target, set()).add(label)
+    witness_positions = {label: index for index, label in enumerate(witness)}
+    pieces: list[TargetPiece] = []
+    for position, label in enumerate(witness):
+        reference = references_by_label[label]
         if reference.tier != names["target-pieces"]:
             continue
-        label = (
-            f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
+        realization = realization_by_piece.get(reference)
+        input_provenance: tuple[str, ...] = ()
+        owner = reference
+        if realization is not None:
+            token = input_by_realization[realization]
+            owner = token
+            input_provenance = provenance_by_owner.get(
+                (names["input-provenance"], token), ()
+            ) + provenance_by_owner.get(
+                (names["realization-provenance"], realization), ()
+            )
+        candidates = introducing_candidates.get(owner, set())
+        introducing_label = max(
+            (
+                candidate
+                for candidate in candidates
+                if candidate in applications_by_label
+                and witness_positions[candidate] < position
+            ),
+            key=witness_positions.__getitem__,
         )
-        pieces_by_label[label] = TargetPiece(
-            _item_attribute(forest.graph, reference, "text").lexical,
-            label,
+        pieces.append(
+            TargetPiece(
+                _item_attribute(forest.graph, reference, "text").lexical,
+                label,
+                applications_by_label[introducing_label],
+                input_provenance,
+            )
         )
     return GeneratedDerivation(
         str(value[0]),
-        tuple(pieces_by_label[label] for label in witness if label in pieces_by_label),
+        tuple(pieces),
+        tuple(applications),
         witness,
     )
 
@@ -1723,6 +2014,7 @@ def target_lattice(
         forest.root,
         fold,
         grammar_input,
+        forest.declaration,
         bool(fold._dependency_graph().cyclic_components),
     )
 

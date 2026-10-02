@@ -27,6 +27,8 @@ from tiergraph import (
     PolyadicRelationInstance,
     QualifiedName,
     Realization,
+    RuleApplication,
+    SourceSpan,
     TargetLattice,
     TargetPiece,
     XsdType,
@@ -163,6 +165,31 @@ def reordered_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
         )
     )
     return declaration, input_tokens
+
+
+def provenance_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
+    """Return the money fixture with rule and leaf-rendering provenance."""
+    declaration, input_tokens = reordered_tokens()
+    rule_labels = ("money", "currency", "major", "minor")
+    rules = tuple(
+        replace(rule, provenance=(string("rule-provenance", label),))
+        for rule, label in zip(declaration.rules, rule_labels, strict=True)
+    )
+    tokens = tuple(
+        replace(
+            token,
+            provenance=(f"input-{index}",),
+            realization=tuple(
+                replace(
+                    realization,
+                    provenance=(f"realization-{index}-{alternative}",),
+                )
+                for alternative, realization in enumerate(token.realization)
+            ),
+        )
+        for index, token in enumerate(input_tokens.tokens)
+    )
+    return replace(declaration, rules=rules), GrammarInput(tokens)
 
 
 def three_way_targets() -> tuple[GrammarDeclaration, GrammarInput]:
@@ -324,6 +351,8 @@ def test_component_decoders_refuse_every_malformed_branch() -> None:
         GrammarRule.from_data({**rule_data, "awaited_variables": None})
     with refuses("weight must be an attribute value or null", reached):
         GrammarRule.from_data({**rule_data, "weight": "1"})
+    with refuses("provenance must be an array", reached):
+        GrammarRule.from_data({**rule_data, "provenance": None})
     with refuses("weight.*xsd:decimal", reached):
         GrammarRule.from_data({**rule_data, "weight": string("weight", "1").to_data()})
     with refuses("value_type has unsupported value 'wat'", reached):
@@ -420,7 +449,7 @@ def test_declaration_refuses_variable_set_disagreement() -> None:
 
 
 def test_xsd_carriers_are_checked_at_construction() -> None:
-    """Terminal, hole, boundary, and awaited values require XSD strings."""
+    """Grammar scalar carriers enforce their declared XSD types and identities."""
     integer = AttributeValue(name("value"), XsdType.INTEGER, "1")
     with pytest.raises(ValueError, match="terminal text"):
         GrammarTerminal(integer)
@@ -432,6 +461,25 @@ def test_xsd_carriers_are_checked_at_construction() -> None:
         GrammarRule(name("S"), (), (), awaited_variables=(integer,))
     with pytest.raises(ValueError, match=r"rule .* weight '1'.*xsd:decimal"):
         GrammarRule(name("S"), (), (), weight=integer)
+    with pytest.raises(ValueError, match="provenance.*xsd:string"):
+        GrammarRule(name("S"), (), (), provenance=(integer,))
+    provenance = string("provenance", "one")
+    with pytest.raises(ValueError, match="duplicate provenance names"):
+        GrammarRule(name("S"), (), (), provenance=(provenance, provenance))
+    with pytest.raises(ValueError, match="provenance must be a tuple"):
+        GrammarRule(
+            name("S"),
+            (),
+            (),
+            provenance=cast(tuple[AttributeValue, ...], [provenance]),
+        )
+    with pytest.raises(ValueError, match="must contain AttributeValue"):
+        GrammarRule(
+            name("S"),
+            (),
+            (),
+            provenance=(cast(AttributeValue, "not-an-attribute"),),
+        )
     with pytest.raises(ValueError, match="duplicate nonterminal"):
         GrammarDeclaration((name("S"), name("S")), name("S"), ())
 
@@ -484,6 +532,57 @@ def test_experimental_input_carriers_refuse_mutable_or_untyped_values(
     assert callable(build)
     with pytest.raises(ValueError, match=message):
         build()
+
+
+@pytest.mark.parametrize(
+    ("span", "message"),
+    (
+        (lambda: SourceSpan(cast(str | None, 1), 0, 1), "partition"),
+        (lambda: SourceSpan(None, cast(int, "0"), 1), "coordinates"),
+        (lambda: SourceSpan(None, 2, 1), "origin"),
+    ),
+)
+def test_experimental_source_span_refuses_invalid_coordinates(
+    span: object, message: str
+) -> None:
+    """Experimental source spans require a typed half-open interval."""
+    assert callable(span)
+    with pytest.raises(ValueError, match=message):
+        span()
+
+
+def test_rule_provenance_refuses_generated_attribute_name_conflicts() -> None:
+    """Client provenance names cannot overwrite lowering or forest attributes."""
+    sentence = name("S")
+    for namespace, message in (
+        ("urn:tiergraph:grammar", "grammar lowering"),
+        ("urn:tiergraph:grammar:chart", "parse-forest"),
+    ):
+        declaration = GrammarDeclaration(
+            (sentence,),
+            sentence,
+            (
+                GrammarRule(
+                    sentence,
+                    (terminal("x"),),
+                    (terminal("x"),),
+                    provenance=(
+                        AttributeValue(
+                            QualifiedName(namespace, "kind"),
+                            XsdType.STRING,
+                            "sentinel",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        if message == "grammar lowering":
+            with pytest.raises(ValueError, match=message):
+                lower_grammar(declaration)
+        else:
+            lowered = lower_grammar(declaration)
+            with pytest.raises(ValueError, match=message):
+                recognize(lowered, ("x",), collapse_units=False)
 
 
 def test_declaration_refuses_malformed_pattern_shapes() -> None:
@@ -590,6 +689,127 @@ def test_experimental_generation_materializes_declared_target_order() -> None:
     assert all(isinstance(piece, TargetPiece) for piece in derivation.pieces)
     assert result.truncated is False
     assert result.cost.relation_incidence > 0
+
+
+def test_experimental_generation_recovers_declared_and_leaf_provenance() -> None:
+    """Rule applications and target pieces retain ordered generating provenance."""
+    declaration, input_tokens = provenance_tokens()
+    lowered = lower_grammar(declaration)
+    production_tier = next(
+        tier
+        for tier in lowered.as_built.graph.tiers
+        if tier.declaration.name.local_name == "productions"
+    )
+    assert [
+        next(
+            _scalar_attribute(value).lexical
+            for value in production.attributes
+            if value.name == name("rule-provenance")
+        )
+        for production in production_tier.items
+    ] == ["money", "currency", "major", "minor"]
+
+    lattice = target_lattice(recognize(lowered, input_tokens, collapse_units=False))
+    application_tier = next(
+        tier
+        for tier in lattice.graph.tiers
+        if tier.declaration.name.local_name == "applications"
+    )
+    for application in application_tier.items:
+        rule_index = int(
+            next(
+                _scalar_attribute(value).lexical
+                for value in application.attributes
+                if value.name.local_name == "rule-index"
+            )
+        )
+        if rule_index < 0:
+            continue
+        assert (
+            next(
+                _scalar_attribute(value).lexical
+                for value in application.attributes
+                if value.name == name("rule-provenance")
+            )
+            == ("money", "currency", "major", "minor")[rule_index]
+        )
+    provenance_relations = [
+        relation
+        for relation in lattice.graph.polyadic_relations
+        if relation.declaration.local_name
+        in {"input-provenance", "realization-provenance"}
+        and relation.targets
+    ]
+    assert len(provenance_relations) == 6
+
+    derivation = lattice.best().derivations[0]
+    assert all(
+        isinstance(application, RuleApplication)
+        for application in derivation.applications
+    )
+    assert all(
+        isinstance(application.source_span, SourceSpan)
+        for application in derivation.applications
+    )
+    assert (
+        "+".join(
+            value.lexical
+            for application in derivation.applications
+            for value in application.provenance
+        )
+        == "money+major+currency+minor"
+    )
+    assert [application.rule_index for application in derivation.applications] == [
+        0,
+        2,
+        1,
+        3,
+    ]
+    assert [
+        (application.source_span.origin, application.source_span.end)
+        for application in derivation.applications
+    ] == [(0, 3), (1, 2), (0, 1), (2, 3)]
+    assert [piece.application.provenance[0].lexical for piece in derivation.pieces] == [
+        "major",
+        "currency",
+        "money",
+        "minor",
+        "minor",
+    ]
+    assert [piece.input_provenance for piece in derivation.pieces] == [
+        ("input-1", "realization-1-0"),
+        ("input-0", "realization-0-0"),
+        (),
+        ("input-2", "realization-2-0"),
+        ("input-2", "realization-2-0"),
+    ]
+
+
+def test_application_label_drop_mutation_loses_rule_provenance() -> None:
+    """Dropping a parent or leaf label from the witness scan loses its sentinel."""
+    declaration, input_tokens = provenance_tokens()
+    derivation = generate(lower_grammar(declaration), input_tokens).derivations[0]
+    by_witness = {
+        application.witness: application for application in derivation.applications
+    }
+
+    def scan_without(dropped: str) -> str:
+        return "+".join(
+            value.lexical
+            for label in derivation.witness
+            if label != dropped and label in by_witness
+            for value in by_witness[label].provenance
+        )
+
+    assert scan_without(derivation.applications[0].witness) == ("major+currency+minor")
+    assert scan_without(derivation.applications[-1].witness) == ("money+major+currency")
+    assert all(
+        scan_without(application.witness) != "money+major+currency+minor"
+        for application in (
+            derivation.applications[0],
+            derivation.applications[-1],
+        )
+    )
 
 
 def test_experimental_generation_retains_equal_text_derivations() -> None:
