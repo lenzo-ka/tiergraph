@@ -16,16 +16,22 @@ import pytest
 from tiergraph import (
     AttributeValue,
     BestDerivation,
+    GeneratedDerivation,
     GrammarDeclaration,
     GrammarHole,
+    GrammarInput,
+    GrammarInputToken,
     GrammarRule,
     GrammarTerminal,
     ItemRef,
     PolyadicRelationInstance,
     QualifiedName,
+    Realization,
+    TargetPiece,
     XsdType,
     best,
     count,
+    generate,
     grammar_loads,
     lower_grammar,
     recognize,
@@ -107,6 +113,54 @@ def oracle() -> GrammarDeclaration:
             GrammarRule(sentence, (terminal("written"),), (spoken,)),
         ),
     )
+
+
+def reordered_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
+    """Return a typed four-rule grammar whose target reorders three leaves."""
+    sentence = name("S")
+    currency = name("C")
+    major = name("M")
+    minor = name("m")
+    declaration = GrammarDeclaration(
+        (sentence, currency, major, minor),
+        sentence,
+        (
+            GrammarRule(
+                sentence,
+                (hole("c", currency), hole("M", major), hole("m", minor)),
+                (
+                    hole("M", major),
+                    hole("c", currency),
+                    terminal("and"),
+                    hole("m", minor),
+                ),
+            ),
+            GrammarRule(currency, (terminal("CUR:USD"),), (terminal("CUR:USD"),)),
+            GrammarRule(
+                major, (terminal("AMOUNT_MAJOR"),), (terminal("AMOUNT_MAJOR"),)
+            ),
+            GrammarRule(
+                minor, (terminal("AMOUNT_MINOR"),), (terminal("AMOUNT_MINOR"),)
+            ),
+        ),
+    )
+    input_tokens = GrammarInput(
+        (
+            GrammarInputToken(
+                "CUR:USD", (Realization(("dollars",), weight=Decimal("0")),)
+            ),
+            GrammarInputToken("AMOUNT_MAJOR", (Realization(("three",)),)),
+            GrammarInputToken(
+                "AMOUNT_MINOR",
+                (
+                    Realization(
+                        ("fifty", "cents"),
+                    ),
+                ),
+            ),
+        )
+    )
+    return declaration, input_tokens
 
 
 def test_declaration_is_directional_and_json_serializable() -> None:
@@ -358,6 +412,56 @@ def test_xsd_carriers_are_checked_at_construction() -> None:
         GrammarDeclaration((name("S"), name("S")), name("S"), ())
 
 
+@pytest.mark.parametrize(
+    ("build", "message"),
+    (
+        (lambda: Realization(cast(tuple[str, ...], ["x"])), "tokens"),
+        (lambda: Realization((cast(str, 1),)), "tokens"),
+        (lambda: Realization(("x",), cast(tuple[str, ...], ["p"])), "provenance"),
+        (lambda: Realization(("x",), (cast(str, 1),)), "provenance"),
+        (lambda: Realization(("x",), weight=cast(Decimal, 1)), "weight"),
+        (
+            lambda: GrammarInputToken(cast(str, 1), (Realization(("x",)),)),
+            "symbol",
+        ),
+        (lambda: GrammarInputToken("x", ()), "nonempty tuple"),
+        (
+            lambda: GrammarInputToken(
+                "x", cast(tuple[Realization, ...], (cast(Realization, "x"),))
+            ),
+            "contain Realization",
+        ),
+        (
+            lambda: GrammarInputToken(
+                "x", (Realization(("x",)),), cast(tuple[str, ...], ["p"])
+            ),
+            "provenance",
+        ),
+        (
+            lambda: GrammarInputToken("x", (Realization(("x",)),), (cast(str, 1),)),
+            "provenance",
+        ),
+        (lambda: GrammarInput(cast(tuple[GrammarInputToken, ...], [])), "tokens"),
+        (
+            lambda: GrammarInput(
+                cast(
+                    tuple[GrammarInputToken, ...],
+                    (cast(GrammarInputToken, "x"),),
+                )
+            ),
+            "tokens",
+        ),
+    ),
+)
+def test_experimental_input_carriers_refuse_mutable_or_untyped_values(
+    build: object, message: str
+) -> None:
+    """Typed generation input refuses every mutable or wrongly typed field."""
+    assert callable(build)
+    with pytest.raises(ValueError, match=message):
+        build()
+
+
 def test_declaration_refuses_malformed_pattern_shapes() -> None:
     """Mutable containers and foreign elements name their rule, role, and value."""
     sentence = name("S")
@@ -447,6 +551,131 @@ def test_oracle_recognizes_ambiguity_and_refuses_other_input() -> None:
         for item in tier.items
         for value in item.attributes
     )
+
+
+def test_experimental_generation_materializes_declared_target_order() -> None:
+    """Typed leaf realizations and a literal compose in declared target order."""
+    declaration, input_tokens = reordered_tokens()
+    result = generate(lower_grammar(declaration), input_tokens)
+    assert len(result.derivations) == 1
+    derivation = result.derivations[0]
+    assert isinstance(derivation, GeneratedDerivation)
+    assert derivation.text == "three dollars and fifty cents"
+    assert derivation.tokens == ("three", "dollars", "and", "fifty", "cents")
+    assert derivation.weight == "4.0"
+    assert all(isinstance(piece, TargetPiece) for piece in derivation.pieces)
+    assert result.truncated is False
+    assert result.cost.relation_incidence > 0
+
+
+def test_source_order_mutation_fails_declared_target_literal() -> None:
+    """Reading source children instead changes the required target materialization."""
+    declaration, input_tokens = reordered_tokens()
+    forest = recognize(lower_grammar(declaration), input_tokens, collapse_units=False)
+    source_children = {
+        relation.sources[0]: relation.targets
+        for relation in forest.graph.polyadic_relations
+        if relation.declaration.local_name == "production-application"
+    }
+    mutated_relations = tuple(
+        replace(
+            relation,
+            targets=(
+                source_children[relation.sources[0]][0],
+                source_children[relation.sources[0]][1],
+                relation.targets[2],
+                source_children[relation.sources[0]][2],
+            ),
+        )
+        if relation.declaration.local_name == "target-expansion"
+        and len(relation.targets) == 4
+        else relation
+        for relation in forest.graph.polyadic_relations
+    )
+    mutated = replace(
+        forest,
+        graph=replace(forest.graph, polyadic_relations=mutated_relations),
+    )
+    text = generate(mutated).derivations[0].text
+    assert text == "dollars three and fifty cents"
+    assert text != "three dollars and fifty cents"
+
+
+def test_experimental_generation_refuses_undefined_copying_and_echoes() -> None:
+    """Generation names repeated holes, awaited holes, and ambiguous echoes."""
+    sentence = name("S")
+    atom = name("A")
+    nullable = GrammarRule(atom, (), ())
+    cases = (
+        (
+            GrammarDeclaration(
+                (sentence, atom),
+                sentence,
+                (
+                    GrammarRule(
+                        sentence,
+                        (hole("x", atom), hole("x", atom)),
+                        (hole("x", atom),),
+                    ),
+                    nullable,
+                ),
+            ),
+            GrammarInput(()),
+            "repeated source hole variable 'x'",
+        ),
+        (
+            GrammarDeclaration(
+                (sentence, atom),
+                sentence,
+                (
+                    GrammarRule(
+                        sentence,
+                        (hole("x", atom),),
+                        (hole("x", atom), hole("x", atom)),
+                    ),
+                    nullable,
+                ),
+            ),
+            GrammarInput(()),
+            "repeated target hole variable 'x'",
+        ),
+        (
+            GrammarDeclaration(
+                (sentence, atom),
+                sentence,
+                (
+                    GrammarRule(
+                        sentence,
+                        (),
+                        (hole("x", atom),),
+                        awaited_variables=(string("variable", "x"),),
+                    ),
+                ),
+            ),
+            GrammarInput(()),
+            "does not materialize awaited variables",
+        ),
+        (
+            GrammarDeclaration(
+                (sentence,),
+                sentence,
+                (
+                    GrammarRule(
+                        sentence,
+                        (terminal("x"), terminal("x")),
+                        (terminal("x"),),
+                    ),
+                ),
+            ),
+            GrammarInput.from_symbols(("x", "x")),
+            "could echo more than one source occurrence",
+        ),
+    )
+    for declaration, input_tokens, message in cases:
+        with pytest.raises(ValueError, match=message):
+            generate(lower_grammar(declaration), input_tokens)
+    with pytest.raises(ValueError, match="count 2.*must be 1"):
+        generate(lower_grammar(oracle()), ("written",), count=2)
 
 
 def test_unit_closure_and_nullable_rules_recognize() -> None:

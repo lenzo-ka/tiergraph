@@ -25,6 +25,7 @@ from tiergraph import (
     Item,
     ItemRef,
     PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -46,6 +47,7 @@ from tiergraph.fold import (
     Lift,
     TiePolicy,
 )
+from tiergraph.pathplan import PathPlan
 from tiergraph.semiring import (
     COUNTING,
     DECIMAL_ARCTIC,
@@ -413,6 +415,80 @@ def test_relation_incidence_declares_and_or_meaning() -> None:
     )
     assert disjunction.run().value == Decimal(2)
     assert conjunction.run().value == Decimal(1)
+
+
+def test_ordered_polyadic_transition_preserves_target_sequence() -> None:
+    """A unique one-source hyperedge folds every target in stored order."""
+    graph = FIXTURE.graph()
+    references = tuple(reference for reference, _coordinate in FIXTURE.states(graph))
+    placement = FIXTURE.name("placement")
+    outside = FIXTURE.name("ordered-fold-outside")
+    outside_reference = ItemRef(outside, 0)
+    relation = FIXTURE.name("ordered-requirements")
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), (placement, outside), 1, 1
+    )
+    declared_relation = PolyadicRelationDeclaration(
+        relation,
+        side,
+        replace(side, maximum=None),
+        unique_sources=True,
+        acyclic=True,
+    )
+    graph = replace(
+        graph,
+        tiers=(
+            *graph.tiers,
+            Tier(
+                TierDeclaration(outside, "Outside fold domain"),
+                (
+                    Item(
+                        "outside",
+                        (AttributeValue(FIXTURE.name("tie"), XsdType.DECIMAL, "0"),),
+                    ),
+                ),
+            ),
+        ),
+        relation_declarations=(
+            *graph.relation_declarations,
+            SimpleRelationDeclaration(
+                FIXTURE.name("ordered-fold-outside-members"),
+                outside,
+                FIXTURE.name("ordered-fold-outside-type"),
+            ),
+            declared_relation,
+        ),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                relation, (references[0],), (references[2], references[1])
+            ),
+            PolyadicRelationInstance(relation, (outside_reference,), (references[2],)),
+            PolyadicRelationInstance(relation, (references[3],), (outside_reference,)),
+        ),
+    )
+    declared = FoldDeclaration(
+        "ordered-polyadic",
+        graph,
+        valuation("tie"),
+        PATH,
+        path_lift,
+        (FoldTransition(relation, ChildCombination.AND),),
+        roots=(references[0],),
+        output_cap=1,
+        ranked_output=True,
+    )
+    result = declared.run()
+    assert result.ranked_witnesses is not None
+    assert result.ranked_witnesses[0][1] == ("start", "sting", "bed")
+    assert result.cost.relation_incidence == 2
+    with pytest.raises(ValueError, match="not bipartite.*hypergraph"):
+        PathPlan.prepare(
+            replace(
+                declared,
+                transitions=(FoldTransition(relation, ChildCombination.OR),),
+                ranked_output=False,
+            )
+        )
 
 
 def test_deep_dependency_chain_folds_without_python_recursion() -> None:
