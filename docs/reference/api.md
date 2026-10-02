@@ -1649,6 +1649,26 @@ GeneratedDerivation.text(self) -> 'str'
 
 Join emitted tokens with the experimental one-ASCII-space profile.
 
+#### `GeneratedDerivation.to_data`
+
+Method.
+
+```text
+GeneratedDerivation.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental generated derivation as strict JSON data.
+
+#### `GeneratedDerivation.from_data`
+
+Class method.
+
+```text
+GeneratedDerivation.from_data(cls, data: 'object') -> 'GeneratedDerivation'
+```
+
+Decode one strict experimental generated derivation.
+
 ### `GenerationResult`
 
 ```text
@@ -1656,6 +1676,26 @@ GenerationResult(derivations: 'tuple[GeneratedDerivation, ...]', truncated: 'boo
 ```
 
 Report experimental bounded target projections and their fold account.
+
+#### `GenerationResult.to_data`
+
+Method.
+
+```text
+GenerationResult.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the versioned experimental generation-result envelope.
+
+#### `GenerationResult.from_data`
+
+Class method.
+
+```text
+GenerationResult.from_data(cls, data: 'object') -> 'GenerationResult'
+```
+
+Decode one strict versioned experimental generation-result envelope.
 
 ### `GrammarChartProfile`
 
@@ -1764,6 +1804,26 @@ GrammarInput(tokens: 'tuple[GrammarInputToken, ...]') -> None
 
 Hold the experimental typed token sequence retained by a parse forest.
 
+#### `GrammarInput.to_data`
+
+Method.
+
+```text
+GrammarInput.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental typed grammar input as strict JSON data.
+
+#### `GrammarInput.from_data`
+
+Class method.
+
+```text
+GrammarInput.from_data(cls, data: 'object') -> 'GrammarInput'
+```
+
+Decode one strict experimental typed grammar input.
+
 #### `GrammarInput.from_symbols`
 
 Class method.
@@ -1791,6 +1851,26 @@ GrammarInputToken(symbol: 'str', realization: 'tuple[Realization, ...]', provena
 ```
 
 Carry one experimental typed source symbol and its target alternatives.
+
+#### `GrammarInputToken.to_data`
+
+Method.
+
+```text
+GrammarInputToken.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental typed input token as strict JSON data.
+
+#### `GrammarInputToken.from_data`
+
+Class method.
+
+```text
+GrammarInputToken.from_data(cls, data: 'object') -> 'GrammarInputToken'
+```
+
+Decode one strict experimental typed input token.
 
 ### `GrammarRule`
 
@@ -1948,6 +2028,26 @@ Realization(tokens: 'tuple[str, ...]', provenance: 'tuple[str, ...]' = (), weigh
 
 Carry one experimental target-token alternative for a typed input token.
 
+#### `Realization.to_data`
+
+Method.
+
+```text
+Realization.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental realization as strict JSON data.
+
+#### `Realization.from_data`
+
+Class method.
+
+```text
+Realization.from_data(cls, data: 'object') -> 'Realization'
+```
+
+Decode one strict experimental target realization.
+
 ### `RuleApplication`
 
 ```text
@@ -1956,6 +2056,26 @@ RuleApplication(rule_index: 'int', provenance: 'tuple[AttributeValue, ...]', sou
 
 Carry one experimental generated rule application in witness order.
 
+#### `RuleApplication.to_data`
+
+Method.
+
+```text
+RuleApplication.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental application record as strict JSON data.
+
+#### `RuleApplication.from_data`
+
+Class method.
+
+```text
+RuleApplication.from_data(cls, data: 'object') -> 'RuleApplication'
+```
+
+Decode one strict experimental application record.
+
 ### `SourceSpan`
 
 ```text
@@ -1963,6 +2083,26 @@ SourceSpan(partition: 'str | None', origin: 'int', end: 'int') -> None
 ```
 
 Carry one experimental half-open source span.
+
+#### `SourceSpan.to_data`
+
+Method.
+
+```text
+SourceSpan.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental half-open source span as strict JSON data.
+
+#### `SourceSpan.from_data`
+
+Class method.
+
+```text
+SourceSpan.from_data(cls, data: 'object', path: 'str' = 'source span') -> 'SourceSpan'
+```
+
+Decode one strict experimental half-open source span.
 
 ### `TargetLattice`
 
@@ -1982,6 +2122,16 @@ TargetLattice.best(self, count: 'int' = 1) -> 'GenerationResult'
 
 Project up to ``count`` ranked targets from the retained graph.
 
+#### `TargetLattice.to_data`
+
+Method.
+
+```text
+TargetLattice.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the versioned experimental keep-all lattice envelope.
+
 ### `TargetPiece`
 
 ```text
@@ -1999,6 +2149,26 @@ TargetPiece.span(self) -> 'SourceSpan | None'
 ```
 
 Return the single source interval when the coverage lies in one partition.
+
+#### `TargetPiece.to_data`
+
+Method.
+
+```text
+TargetPiece.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this experimental target piece as strict JSON data.
+
+#### `TargetPiece.from_data`
+
+Class method.
+
+```text
+TargetPiece.from_data(cls, data: 'object') -> 'TargetPiece'
+```
+
+Decode one strict experimental emitted target piece.
 
 ### `best`
 

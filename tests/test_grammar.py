@@ -18,7 +18,9 @@ from tiergraph import (
     AttributeDomain,
     AttributeValue,
     BestDerivation,
+    FoldCost,
     GeneratedDerivation,
+    GenerationResult,
     GrammarDeclaration,
     GrammarHole,
     GrammarInput,
@@ -1300,6 +1302,156 @@ def test_experimental_generation_retains_equal_text_derivations() -> None:
     assert result.truncated is False
 
 
+def test_experimental_grammar_input_strict_json_round_trip() -> None:
+    """Typed input preserves all fields while older omissions recover defaults."""
+    _, input_tokens = provenance_tokens()
+    positioned = GrammarInput(
+        tuple(
+            replace(
+                token,
+                source=ItemRef(name("input"), index),
+                span=SourceSpan("raw", index, index + 1),
+            )
+            for index, token in enumerate(input_tokens.tokens)
+        )
+    )
+
+    assert GrammarInput.from_data(positioned.to_data()) == positioned
+    assert GrammarInput.from_data(
+        {"tokens": [{"symbol": "x", "realization": [{"tokens": ["x"]}]}]}
+    ) == GrammarInput((GrammarInputToken("x", (Realization(("x",)),)),))
+
+    for path in (
+        (),
+        ("tokens", 0),
+        ("tokens", 0, "realization", 0),
+        ("tokens", 0, "source"),
+        ("tokens", 0, "span"),
+    ):
+        candidate = json.loads(json.dumps(positioned.to_data()))
+        target = candidate
+        for part in path:
+            target = target[part]
+        target["unknown"] = True
+        with pytest.raises(ValueError, match="fields"):
+            GrammarInput.from_data(candidate)
+
+
+def test_experimental_grammar_input_decoder_refusals() -> None:
+    """Every typed-input field keeps its declared JSON kind and value domain."""
+    qname = name("input").to_data()
+    span = {"partition": "raw", "origin": 0, "end": 1}
+    cases = (
+        lambda: Realization.from_data("x"),
+        lambda: Realization.from_data({"tokens": "x"}),
+        lambda: Realization.from_data({"tokens": [1]}),
+        lambda: Realization.from_data({"tokens": ["x"], "weight": 1}),
+        lambda: Realization.from_data({"tokens": ["x"], "weight": "wat"}),
+        lambda: GrammarInputToken.from_data(
+            {"symbol": 1, "realization": [{"tokens": ["x"]}]}
+        ),
+        lambda: GrammarInputToken.from_data({"symbol": "x", "realization": "x"}),
+        lambda: GrammarInputToken.from_data(
+            {
+                "symbol": "x",
+                "realization": [{"tokens": ["x"]}],
+                "source": {"tier": qname, "index": "0"},
+            }
+        ),
+        lambda: GrammarInput.from_data({"tokens": "x"}),
+        lambda: SourceSpan.from_data({**span, "partition": 1}),
+        lambda: SourceSpan.from_data({**span, "origin": "0"}),
+    )
+    for decode in cases:
+        with pytest.raises(ValueError):
+            decode()
+
+
+def test_experimental_generation_result_strict_json_round_trip() -> None:
+    """The result envelope carries every nested record and rejects shape drift."""
+    declaration, input_tokens = provenance_tokens()
+    positioned = GrammarInput(
+        tuple(
+            replace(
+                token,
+                source=ItemRef(name("input"), index),
+                span=SourceSpan("raw", index, index + 1),
+            )
+            for index, token in enumerate(input_tokens.tokens)
+        )
+    )
+    result = generate(lower_grammar(declaration), positioned)
+    data = result.to_data()
+
+    assert data["experimental"] == "tiergraph.grammar.generate/1"
+    derivations = cast(list[dict[str, object]], data["derivations"])
+    assert derivations[0]["text"] == "three dollars and fifty cents"
+    assert GenerationResult.from_data(data) == result
+
+    unknown = cast(dict[str, object], json.loads(json.dumps(data)))
+    unknown["unknown"] = True
+    with pytest.raises(ValueError, match="fields"):
+        GenerationResult.from_data(unknown)
+
+    changed = cast(dict[str, object], json.loads(json.dumps(data)))
+    changed_derivations = cast(list[dict[str, object]], changed["derivations"])
+    changed_derivations[0]["text"] = "assembled elsewhere"
+    with pytest.raises(ValueError, match="must match"):
+        GenerationResult.from_data(changed)
+
+
+def test_experimental_generation_result_decoder_refusals() -> None:
+    """Every generation-result field keeps its declared JSON kind and account."""
+    span = SourceSpan("raw", 0, 1)
+    application = RuleApplication(0, (), span, "application")
+    piece = TargetPiece("x", "piece", application, spans=(span,))
+    derivation = GeneratedDerivation(
+        "1", (piece,), (application,), ("application", "piece")
+    )
+    cost = FoldCost(1, 2, 1, 3, 4, 1, 1, 1, 1)
+    result = GenerationResult((derivation,), False, cost)
+    assert GenerationResult.from_data(result.to_data()) == result
+
+    application_data = application.to_data()
+    piece_data = piece.to_data()
+    derivation_data = derivation.to_data()
+    cases = (
+        lambda: RuleApplication.from_data({**application_data, "rule_index": False}),
+        lambda: RuleApplication.from_data({**application_data, "provenance": {}}),
+        lambda: RuleApplication.from_data({**application_data, "witness": 1}),
+        lambda: TargetPiece.from_data({**piece_data, "token": 1}),
+        lambda: TargetPiece.from_data({**piece_data, "witness": 1}),
+        lambda: TargetPiece.from_data({**piece_data, "spans": {}}),
+        lambda: TargetPiece.from_data(
+            {**piece_data, "span": SourceSpan("raw", 0, 2).to_data()}
+        ),
+        lambda: GeneratedDerivation.from_data({**derivation_data, "weight": 1}),
+        lambda: GeneratedDerivation.from_data({**derivation_data, "text": 1}),
+        lambda: GeneratedDerivation.from_data({**derivation_data, "pieces": {}}),
+        lambda: GeneratedDerivation.from_data({**derivation_data, "applications": {}}),
+        lambda: GeneratedDerivation.from_data(
+            {**derivation_data, "tokens": ["changed"]}
+        ),
+        lambda: GenerationResult.from_data(
+            {**result.to_data(), "experimental": "unknown"}
+        ),
+        lambda: GenerationResult.from_data({**result.to_data(), "derivations": {}}),
+        lambda: GenerationResult.from_data({**result.to_data(), "truncated": 0}),
+    )
+    for decode in cases:
+        with pytest.raises(ValueError):
+            decode()
+
+    bad_cost = result.to_data()
+    cast(dict[str, object], bad_cost["cost"])["document_size"] = "1"
+    with pytest.raises(ValueError, match="integers"):
+        GenerationResult.from_data(bad_cost)
+    bad_account = result.to_data()
+    cast(dict[str, object], bad_account["cost"])["carrier_work"] = -1
+    with pytest.raises(ValueError, match="measured account"):
+        GenerationResult.from_data(bad_account)
+
+
 def test_experimental_target_lattice_keeps_every_application_identity() -> None:
     """The keep-all view retains tied and different target applications."""
     declaration, input_tokens = three_way_targets()
@@ -1353,6 +1505,14 @@ def test_experimental_target_lattice_keeps_every_application_identity() -> None:
         "three dollars and fifty cents",
         "three dollars plus fifty cents",
     ]
+    envelope = lattice.to_data()
+    assert envelope["experimental"] == "tiergraph.grammar.target-lattice/1"
+    assert envelope["graph"] == forest.graph.to_data()
+    assert envelope["root"] == forest.root.to_data()
+    generation = cast(dict[str, object], envelope["generation"])
+    assert generation["semiring"] == "path"
+    assert len(cast(str, envelope["input_fingerprint"])) == 64
+    assert envelope["cyclic"] is False
 
 
 def test_target_lattice_keeps_a_reachable_cycle_and_refuses_materialization() -> None:
@@ -1364,6 +1524,7 @@ def test_target_lattice_keeps_a_reachable_cycle_and_refuses_materialization() ->
 
     assert lattice.graph is forest.graph
     assert lattice.cyclic is True
+    assert lattice.to_data()["cyclic"] is True
     assert best(forest)[0].weight == "2.0"
     with pytest.raises(
         ValueError, match="^target materialization requires a finite derivation$"

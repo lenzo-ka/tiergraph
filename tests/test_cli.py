@@ -46,6 +46,7 @@ from tests.test_clock import (
 from tests.test_clock import (
     fixture as clock_fixture,
 )
+from tests.test_grammar import reordered_tokens
 from tests.test_predicate import f1_predicate, q, stress6
 from tests.test_spanview import fixture as span_fixture
 from tests.test_spanview import profile_data as span_profile_data
@@ -911,6 +912,65 @@ def test_grammar_commands_recognize_count_and_best(
             },
         ]
     }
+
+
+def test_grammar_generation_commands_match_python_envelopes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Money generation and lattice commands are byte-equivalent API clients."""
+    source = tmp_path / "money.json"
+    declaration, grammar_input = reordered_tokens()
+    source.write_text(json.dumps(declaration.to_data()), encoding="utf-8")
+    input_json = json.dumps(grammar_input.to_data())
+    lowered = tiergraph.lower_grammar(declaration)
+    expected_generation = tiergraph.generate(lowered, grammar_input).to_data()
+
+    assert main(["grammar", "generate", str(source), "--input-json", input_json]) == 0
+    cli_generation = json.loads(capsys.readouterr().out)
+    assert json.dumps(cli_generation, sort_keys=True, separators=(",", ":")) == (
+        json.dumps(expected_generation, sort_keys=True, separators=(",", ":"))
+    )
+
+    forest = tiergraph.recognize(lowered, grammar_input, collapse_units=False)
+    expected_lattice = tiergraph.target_lattice(forest).to_data()
+    assert main(["grammar", "lattice", str(source), "--input-json", input_json]) == 0
+    cli_lattice = json.loads(capsys.readouterr().out)
+    assert json.dumps(cli_lattice, sort_keys=True, separators=(",", ":")) == (
+        json.dumps(expected_lattice, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def test_grammar_generate_prints_the_api_envelope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A patched API sentinel reaches output without CLI target assembly."""
+    source = tmp_path / "money.json"
+    declaration, grammar_input = reordered_tokens()
+    source.write_text(json.dumps(declaration.to_data()), encoding="utf-8")
+
+    class Sentinel:
+        def to_data(self) -> dict[str, str]:
+            return {"api": "sentinel target"}
+
+    def sentinel_generate(*args: object, **kwargs: object) -> Sentinel:
+        return Sentinel()
+
+    monkeypatch.setattr(tiergraph, "generate", sentinel_generate)
+    assert (
+        main(
+            [
+                "grammar",
+                "generate",
+                str(source),
+                "--input-json",
+                json.dumps(grammar_input.to_data()),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {"api": "sentinel target"}
 
 
 @pytest.mark.parametrize("tokens", ("wat", "{}", '["x", 1]'))

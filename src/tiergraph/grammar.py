@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from itertools import pairwise
 from typing import cast
 
@@ -77,6 +79,44 @@ COMPLETE_BOUNDARY = AttributeValue(
 UNIT_WEIGHT = AttributeValue(
     QualifiedName(GRAMMAR_NAMESPACE, "weight"), XsdType.DECIMAL, "1"
 )
+GENERATION_ENVELOPE = "tiergraph.grammar.generate/1"
+TARGET_LATTICE_ENVELOPE = "tiergraph.grammar.target-lattice/1"
+
+
+def _decode_optional_object(
+    value: object, path: str, required: set[str], optional: set[str]
+) -> dict[str, object]:
+    """Decode an exact object while permitting explicitly named optional fields."""
+    present = set(value).intersection(optional) if isinstance(value, dict) else set()
+    return _decode_object(value, path, required | present)
+
+
+def _decode_strings(value: object, path: str) -> tuple[str, ...]:
+    """Decode one strict JSON array of strings."""
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{path} must be an array of strings")
+    return tuple(value)
+
+
+def _decode_item_ref(value: object, path: str) -> ItemRef:
+    """Decode one strict structural item reference."""
+    obj = _decode_object(value, path, {"tier", "index"})
+    index = obj["index"]
+    if type(index) is not int:
+        raise ValueError(f"{path}.index must be an integer")
+    return ItemRef(_decode_qname(obj["tier"], f"{path}.tier"), index)
+
+
+def _data_fingerprint(value: JsonValue) -> str:
+    """Return a SHA-256 digest of canonical strict-JSON data."""
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +139,33 @@ class Realization:
             raise ValueError("realization provenance must be a tuple of strings")
         if self.weight is not None and not isinstance(self.weight, Decimal):
             raise ValueError("realization weight must be a Decimal or None")
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental realization as strict JSON data."""
+        data: dict[str, JsonValue] = {"tokens": list(self.tokens)}
+        if self.provenance:
+            data["provenance"] = list(self.provenance)
+        if self.weight is not None:
+            data["weight"] = str(self.weight)
+        return data
+
+    @classmethod
+    def from_data(cls, data: object) -> Realization:
+        """Decode one strict experimental target realization."""
+        path = "grammar input realization"
+        obj = _decode_optional_object(data, path, {"tokens"}, {"provenance", "weight"})
+        weight = obj.get("weight")
+        if weight is not None and not isinstance(weight, str):
+            raise ValueError(f"{path}.weight must be a decimal string")
+        try:
+            decoded_weight = None if weight is None else Decimal(weight)
+        except InvalidOperation as error:
+            raise ValueError(f"{path}.weight must be a decimal string") from error
+        return cls(
+            _decode_strings(obj["tokens"], f"{path}.tokens"),
+            _decode_strings(obj.get("provenance", []), f"{path}.provenance"),
+            decoded_weight,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +199,48 @@ class GrammarInputToken:
         if self.span is not None and not isinstance(self.span, SourceSpan):
             raise ValueError("grammar input token span must be a SourceSpan or None")
 
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental typed input token as strict JSON data."""
+        data: dict[str, JsonValue] = {
+            "symbol": self.symbol,
+            "realization": [value.to_data() for value in self.realization],
+        }
+        if self.provenance:
+            data["provenance"] = list(self.provenance)
+        if self.source is not None:
+            data["source"] = self.source.to_data()
+        if self.span is not None:
+            data["span"] = self.span.to_data()
+        return data
+
+    @classmethod
+    def from_data(cls, data: object) -> GrammarInputToken:
+        """Decode one strict experimental typed input token."""
+        path = "grammar input token"
+        obj = _decode_optional_object(
+            data,
+            path,
+            {"symbol", "realization"},
+            {"provenance", "source", "span"},
+        )
+        symbol = obj["symbol"]
+        realizations = obj["realization"]
+        if not isinstance(symbol, str):
+            raise ValueError(f"{path}.symbol must be a string")
+        if not isinstance(realizations, list):
+            raise ValueError(f"{path}.realization must be an array")
+        return cls(
+            symbol,
+            tuple(Realization.from_data(value) for value in realizations),
+            _decode_strings(obj.get("provenance", []), f"{path}.provenance"),
+            None
+            if "source" not in obj
+            else _decode_item_ref(obj["source"], f"{path}.source"),
+            None
+            if "span" not in obj
+            else SourceSpan.from_data(obj["span"], f"{path}.span"),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class GrammarInput:
@@ -147,6 +256,19 @@ class GrammarInput:
             raise ValueError(
                 "grammar input tokens must be a tuple of GrammarInputToken values"
             )
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental typed grammar input as strict JSON data."""
+        return {"tokens": [token.to_data() for token in self.tokens]}
+
+    @classmethod
+    def from_data(cls, data: object) -> GrammarInput:
+        """Decode one strict experimental typed grammar input."""
+        obj = _decode_object(data, "grammar input", {"tokens"})
+        tokens = obj["tokens"]
+        if not isinstance(tokens, list):
+            raise ValueError("grammar input.tokens must be an array")
+        return cls(tuple(GrammarInputToken.from_data(value) for value in tokens))
 
     @classmethod
     def from_symbols(cls, symbols: Sequence[str]) -> GrammarInput:
@@ -228,6 +350,27 @@ class SourceSpan:
         if self.origin > self.end:
             raise ValueError("source span origin must not follow its end")
 
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental half-open source span as strict JSON data."""
+        return {
+            "partition": self.partition,
+            "origin": self.origin,
+            "end": self.end,
+        }
+
+    @classmethod
+    def from_data(cls, data: object, path: str = "source span") -> SourceSpan:
+        """Decode one strict experimental half-open source span."""
+        obj = _decode_object(data, path, {"partition", "origin", "end"})
+        partition = obj["partition"]
+        origin = obj["origin"]
+        end = obj["end"]
+        if partition is not None and not isinstance(partition, str):
+            raise ValueError(f"{path}.partition must be a string or null")
+        if type(origin) is not int or type(end) is not int:
+            raise ValueError(f"{path} coordinates must be integers")
+        return cls(partition, origin, end)
+
 
 def _graph_item_attributes(graph: Graph, reference: ItemRef) -> tuple[Attribute, ...]:
     """Return one resolved graph item's declared attributes."""
@@ -295,6 +438,41 @@ class RuleApplication:
     source_span: SourceSpan
     witness: str
 
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental application record as strict JSON data."""
+        return {
+            "rule_index": self.rule_index,
+            "provenance": [value.to_data() for value in self.provenance],
+            "source_span": self.source_span.to_data(),
+            "witness": self.witness,
+        }
+
+    @classmethod
+    def from_data(cls, data: object) -> RuleApplication:
+        """Decode one strict experimental application record."""
+        path = "generated rule application"
+        obj = _decode_object(
+            data, path, {"rule_index", "provenance", "source_span", "witness"}
+        )
+        rule_index = obj["rule_index"]
+        provenance = obj["provenance"]
+        witness = obj["witness"]
+        if type(rule_index) is not int:
+            raise ValueError(f"{path}.rule_index must be an integer")
+        if not isinstance(provenance, list):
+            raise ValueError(f"{path}.provenance must be an array")
+        if not isinstance(witness, str):
+            raise ValueError(f"{path}.witness must be a string")
+        return cls(
+            rule_index,
+            tuple(
+                _decode_attribute_value(value, f"{path}.provenance[{index}]")
+                for index, value in enumerate(provenance)
+            ),
+            SourceSpan.from_data(obj["source_span"], f"{path}.source_span"),
+            witness,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TargetPiece:
@@ -311,6 +489,61 @@ class TargetPiece:
     def span(self) -> SourceSpan | None:
         """Return the single source interval when the coverage lies in one partition."""
         return self.spans[0] if len(self.spans) == 1 else None
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental target piece as strict JSON data."""
+        data: dict[str, JsonValue] = {
+            "token": self.token,
+            "witness": self.witness,
+            "application": self.application.to_data(),
+            "spans": [span.to_data() for span in self.spans],
+        }
+        if self.input_provenance:
+            data["input_provenance"] = list(self.input_provenance)
+        if self.source is not None:
+            data["source"] = self.source.to_data()
+        if self.span is not None:
+            data["span"] = self.span.to_data()
+        return data
+
+    @classmethod
+    def from_data(cls, data: object) -> TargetPiece:
+        """Decode one strict experimental emitted target piece."""
+        path = "generated target piece"
+        obj = _decode_optional_object(
+            data,
+            path,
+            {"token", "witness", "application", "spans"},
+            {"input_provenance", "source", "span"},
+        )
+        token = obj["token"]
+        witness = obj["witness"]
+        spans = obj["spans"]
+        if not isinstance(token, str) or not isinstance(witness, str):
+            raise ValueError(f"{path}.token and .witness must be strings")
+        if not isinstance(spans, list):
+            raise ValueError(f"{path}.spans must be an array")
+        result = cls(
+            token,
+            witness,
+            RuleApplication.from_data(obj["application"]),
+            _decode_strings(
+                obj.get("input_provenance", []), f"{path}.input_provenance"
+            ),
+            None
+            if "source" not in obj
+            else _decode_item_ref(obj["source"], f"{path}.source"),
+            tuple(
+                SourceSpan.from_data(value, f"{path}.spans[{index}]")
+                for index, value in enumerate(spans)
+            ),
+        )
+        if (
+            "span" in obj
+            and SourceSpan.from_data(obj["span"], f"{path}.span") != result.span
+        ):
+            raise ValueError(f"{path}.span does not match its coverage set")
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +565,45 @@ class GeneratedDerivation:
         """Join emitted tokens with the experimental one-ASCII-space profile."""
         return " ".join(self.tokens)
 
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this experimental generated derivation as strict JSON data."""
+        return {
+            "weight": self.weight,
+            "tokens": list(self.tokens),
+            "text": self.text,
+            "pieces": [piece.to_data() for piece in self.pieces],
+            "applications": [item.to_data() for item in self.applications],
+            "witness": list(self.witness),
+        }
+
+    @classmethod
+    def from_data(cls, data: object) -> GeneratedDerivation:
+        """Decode one strict experimental generated derivation."""
+        path = "generated derivation"
+        obj = _decode_object(
+            data,
+            path,
+            {"weight", "tokens", "text", "pieces", "applications", "witness"},
+        )
+        weight = obj["weight"]
+        text = obj["text"]
+        pieces = obj["pieces"]
+        applications = obj["applications"]
+        if not isinstance(weight, str) or not isinstance(text, str):
+            raise ValueError(f"{path}.weight and .text must be strings")
+        if not isinstance(pieces, list) or not isinstance(applications, list):
+            raise ValueError(f"{path}.pieces and .applications must be arrays")
+        tokens = _decode_strings(obj["tokens"], f"{path}.tokens")
+        result = cls(
+            weight,
+            tuple(TargetPiece.from_data(value) for value in pieces),
+            tuple(RuleApplication.from_data(value) for value in applications),
+            _decode_strings(obj["witness"], f"{path}.witness"),
+        )
+        if result.tokens != tokens or result.text != text:
+            raise ValueError(f"{path} text and tokens must match its target pieces")
+        return result
+
 
 @dataclass(frozen=True, slots=True)
 class GenerationResult:
@@ -340,6 +612,36 @@ class GenerationResult:
     derivations: tuple[GeneratedDerivation, ...]
     truncated: bool
     cost: FoldCost
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the versioned experimental generation-result envelope."""
+        return {
+            "experimental": GENERATION_ENVELOPE,
+            "derivations": [item.to_data() for item in self.derivations],
+            "truncated": self.truncated,
+            "cost": cast(dict[str, JsonValue], self.cost.to_data()),
+        }
+
+    @classmethod
+    def from_data(cls, data: object) -> GenerationResult:
+        """Decode one strict versioned experimental generation-result envelope."""
+        path = "generation result"
+        obj = _decode_object(
+            data, path, {"experimental", "derivations", "truncated", "cost"}
+        )
+        if obj["experimental"] != GENERATION_ENVELOPE:
+            raise ValueError("generation result has an unknown experimental version")
+        derivations = obj["derivations"]
+        truncated = obj["truncated"]
+        if not isinstance(derivations, list):
+            raise ValueError(f"{path}.derivations must be an array")
+        if type(truncated) is not bool:
+            raise ValueError(f"{path}.truncated must be a boolean")
+        return cls(
+            tuple(GeneratedDerivation.from_data(value) for value in derivations),
+            truncated,
+            _decode_fold_cost(obj["cost"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +671,84 @@ class TargetLattice:
             _generated_derivation(self, value, witness) for value, witness in ranked
         )
         return GenerationResult(derivations, result.truncated, result.cost)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the versioned experimental keep-all lattice envelope."""
+        return {
+            "experimental": TARGET_LATTICE_ENVELOPE,
+            "graph": self.graph.to_data(),
+            "root": self.root.to_data(),
+            "generation": _generation_declaration_data(self.fold),
+            "input_fingerprint": _data_fingerprint(self.input.to_data()),
+            "cyclic": self.cyclic,
+        }
+
+
+def _decode_fold_cost(data: object) -> FoldCost:
+    """Decode and verify the strict public cost account in a generation result."""
+    path = "generation result.cost"
+    stored = (
+        "document_size",
+        "relation_incidence",
+        "index_product_size",
+        "carrier_additions",
+        "carrier_multiplications",
+        "carrier_operation_cost",
+        "witness_count",
+        "emitted_count",
+        "output_cap",
+    )
+    derived = ("carrier_work", "bound", "measured_work")
+    obj = _decode_optional_object(
+        data,
+        path,
+        set(stored + derived),
+        {"witness_operations", "ranked_multiplications"},
+    )
+    if any(type(value) is not int for value in obj.values()):
+        raise ValueError(f"{path} fields must be integers")
+    result = FoldCost(
+        document_size=cast(int, obj["document_size"]),
+        relation_incidence=cast(int, obj["relation_incidence"]),
+        index_product_size=cast(int, obj["index_product_size"]),
+        carrier_additions=cast(int, obj["carrier_additions"]),
+        carrier_multiplications=cast(int, obj["carrier_multiplications"]),
+        carrier_operation_cost=cast(int, obj["carrier_operation_cost"]),
+        witness_count=cast(int, obj["witness_count"]),
+        emitted_count=cast(int, obj["emitted_count"]),
+        output_cap=cast(int, obj["output_cap"]),
+        witness_operations=cast(int, obj.get("witness_operations", 0)),
+        ranked_multiplications=cast(int, obj.get("ranked_multiplications", 0)),
+    )
+    for name in derived:
+        if obj[name] != getattr(result, name):
+            raise ValueError(f"{path}.{name} does not match the measured account")
+    return result
+
+
+def _generation_declaration_data(
+    fold: FoldDeclaration[PathValue],
+) -> dict[str, JsonValue]:
+    """Return the data-only part of the target fold declaration."""
+    return {
+        "name": fold.name,
+        "valuation": {
+            "name": fold.valuation.name,
+            "attribute": fold.valuation.attribute.to_data(),
+            "tiers": [tier.to_data() for tier in fold.valuation.tiers],
+        },
+        "semiring": "path",
+        "transitions": [
+            {
+                "relation": transition.relation.to_data(),
+                "combination": transition.combination.value,
+            }
+            for transition in fold.transitions
+        ],
+        "roots": [root.to_data() for root in fold.roots],
+        "output_cap": fold.output_cap,
+        "ranked_output": fold.ranked_output,
+    }
 
 
 def _decode_qname(value: object, path: str) -> QualifiedName:

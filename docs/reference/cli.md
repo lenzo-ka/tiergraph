@@ -56,7 +56,7 @@ positional arguments:
     step                step through a JSONL machine program
     walk                traverse a transitive relation
     path                resolve and spell tiergraph paths
-    grammar             recognize with tiergraph grammars
+    grammar             work with tiergraph grammars
     clock               query declarative clock timing
     span                render declarative span views
     select              evaluate a selector
@@ -353,13 +353,15 @@ options:
 ### `tiergraph grammar`
 
 ```text
-usage: tiergraph grammar [-h] {recognize,count,best} ...
+usage: tiergraph grammar [-h] {recognize,count,best,generate,lattice} ...
 
 positional arguments:
-  {recognize,count,best}
+  {recognize,count,best,generate,lattice}
     recognize           recognize a token sequence
     count               count token-sequence derivations
     best                find best token-sequence derivations
+    generate            generate experimental target derivations
+    lattice             emit an experimental target lattice
 
 options:
   -h, --help            show this help message and exit
@@ -408,6 +410,39 @@ options:
   -h, --help            show this help message and exit
   --tokens-json JSON
   --count N
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph grammar generate`
+
+```text
+usage: tiergraph grammar generate [-h] --input-json INPUT [--count N]
+                                  [-o FILE]
+                                  GRAMMAR
+
+positional arguments:
+  GRAMMAR               grammar JSON file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --input-json INPUT
+  --count N
+  -o FILE, --output FILE
+                        output file (default: -)
+```
+
+### `tiergraph grammar lattice`
+
+```text
+usage: tiergraph grammar lattice [-h] --input-json INPUT [-o FILE] GRAMMAR
+
+positional arguments:
+  GRAMMAR               grammar JSON file, or - for stdin
+
+options:
+  -h, --help            show this help message and exit
+  --input-json INPUT
   -o FILE, --output FILE
                         output file (default: -)
 ```
