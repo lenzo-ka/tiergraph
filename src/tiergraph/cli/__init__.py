@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     spell.add_argument("--side", choices=("before", "after"))
     _output_argument(spell)
 
-    grammar = subparsers.add_parser("grammar", help="recognize with tiergraph grammars")
+    grammar = subparsers.add_parser("grammar", help="work with tiergraph grammars")
     grammar_subparsers = grammar.add_subparsers(dest="grammar_command", required=True)
     for grammar_command, help_text in (
         ("recognize", "recognize a token sequence"),
@@ -186,6 +186,30 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
         if grammar_command == "best":
             grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
+        _output_argument(grammar_parser)
+    for grammar_command, help_text in (
+        ("generate", "generate experimental target derivations"),
+        ("lattice", "emit an experimental target lattice"),
+    ):
+        grammar_parser = grammar_subparsers.add_parser(grammar_command, help=help_text)
+        grammar_parser.set_defaults(handler=_handle_grammar)
+        grammar_parser.add_argument(
+            "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
+        )
+        grammar_parser.add_argument(
+            "--input-json",
+            required=True,
+            metavar="INPUT",
+            help="typed grammar input as JSON",
+        )
+        if grammar_command == "generate":
+            grammar_parser.add_argument(
+                "--count",
+                type=int,
+                default=1,
+                metavar="N",
+                help="maximum target derivations to emit",
+            )
         _output_argument(grammar_parser)
 
     clock = subparsers.add_parser("clock", help="query declarative clock timing")
@@ -574,11 +598,22 @@ def _handle_path(args: argparse.Namespace) -> None:
 def _handle_grammar(args: argparse.Namespace) -> None:
     declaration = tiergraph.grammar_loads(_read_bytes(args.file))
     lowered = tiergraph.lower_grammar(declaration)
+    if args.grammar_command in {"generate", "lattice"}:
+        grammar_input = tiergraph.GrammarInput.from_data(
+            _wire._parsed_json(args.input_json)
+        )
+        if args.grammar_command == "generate":
+            value: object = tiergraph.generate(
+                lowered, grammar_input, count=args.count
+            ).to_data()
+        else:
+            forest = tiergraph.recognize(lowered, grammar_input, collapse_units=False)
+            value = tiergraph.target_lattice(forest).to_data()
+        _write_output(args.file, args.output, _json_bytes(value))
+        return
     tokens = _tokens_json(args.tokens_json)
     if args.grammar_command == "recognize":
-        value: object = {
-            "recognized": tiergraph.recognize(lowered, tokens).recognized()
-        }
+        value = {"recognized": tiergraph.recognize(lowered, tokens).recognized()}
     elif args.grammar_command == "count":
         value = {"count": tiergraph.count(lowered, tokens)}
     else:
