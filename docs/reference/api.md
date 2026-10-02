@@ -1774,10 +1774,20 @@ GrammarInput.from_symbols(cls, symbols: 'Sequence[str]') -> 'GrammarInput'
 
 Wrap raw source symbols with one identity realization apiece.
 
+#### `GrammarInput.from_graph`
+
+Class method.
+
+```text
+GrammarInput.from_graph(cls, graph: 'Graph', selector: 'Selector', symbol_attribute: 'QualifiedName', realization_attribute: 'QualifiedName', offsets: 'OffsetProfile') -> 'GrammarInput'
+```
+
+Bind declared graph items to typed grammar tokens with raw offsets.
+
 ### `GrammarInputToken`
 
 ```text
-GrammarInputToken(symbol: 'str', realization: 'tuple[Realization, ...]', provenance: 'tuple[str, ...]' = ()) -> None
+GrammarInputToken(symbol: 'str', realization: 'tuple[Realization, ...]', provenance: 'tuple[str, ...]' = (), source: 'ItemRef | None' = None, span: 'SourceSpan | None' = None) -> None
 ```
 
 Carry one experimental typed source symbol and its target alternatives.
@@ -1975,10 +1985,20 @@ Project up to ``count`` ranked targets from the retained graph.
 ### `TargetPiece`
 
 ```text
-TargetPiece(token: 'str', witness: 'str', application: 'RuleApplication', input_provenance: 'tuple[str, ...]' = ()) -> None
+TargetPiece(token: 'str', witness: 'str', application: 'RuleApplication', input_provenance: 'tuple[str, ...]' = (), source: 'ItemRef | None' = None, spans: 'tuple[SourceSpan, ...]' = ()) -> None
 ```
 
 Carry one experimental emitted token and its introducing provenance.
+
+#### `TargetPiece.span`
+
+Property.
+
+```text
+TargetPiece.span(self) -> 'SourceSpan | None'
+```
+
+Return the single source interval when the coverage lies in one partition.
 
 ### `best`
 
@@ -2039,7 +2059,7 @@ space in input length ``n``.
 ### `target_lattice`
 
 ```text
-target_lattice(forest: 'ParseForest', input: 'GrammarInput | None' = None) -> 'TargetLattice'
+target_lattice(forest: 'ParseForest', input: 'GrammarInput | None' = None, *, root: '_ChartKey | None' = None) -> 'TargetLattice'
 ```
 
 Return an experimental keep-all target view over one retained forest.

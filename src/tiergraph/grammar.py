@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
+from itertools import pairwise
 from typing import cast
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -15,6 +17,7 @@ from tiergraph.core import (
     Graph,
     Item,
     ItemRef,
+    JsonAttributeValue,
     JsonValue,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
@@ -61,6 +64,8 @@ from tiergraph.path import (
     PathRefusal,
     PathRefusalCode,
 )
+from tiergraph.predicate import OffsetProfile, _offset_spans, _validate_offset_profile
+from tiergraph.selection import Selector, evaluate_selection
 from tiergraph.semiring import BOOLEAN, COUNTING, PATH, PathValue
 from tiergraph.wire import _parsed_json
 
@@ -103,6 +108,8 @@ class GrammarInputToken:
     symbol: str
     realization: tuple[Realization, ...]
     provenance: tuple[str, ...] = ()
+    source: ItemRef | None = None
+    span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
         """Require a source symbol and at least one immutable realization."""
@@ -120,6 +127,10 @@ class GrammarInputToken:
             raise ValueError(
                 "grammar input token provenance must be a tuple of strings"
             )
+        if self.source is not None and not isinstance(self.source, ItemRef):
+            raise ValueError("grammar input token source must be an ItemRef or None")
+        if self.span is not None and not isinstance(self.span, SourceSpan):
+            raise ValueError("grammar input token span must be a SourceSpan or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,10 +156,59 @@ class GrammarInput:
             raise ValueError("grammar input token must be a string")
         return cls(
             tuple(
-                GrammarInputToken(symbol, (Realization((symbol,)),))
-                for symbol in tokens
+                GrammarInputToken(
+                    symbol,
+                    (Realization((symbol,)),),
+                    span=SourceSpan(None, index, index + 1),
+                )
+                for index, symbol in enumerate(tokens)
             )
         )
+
+    @classmethod
+    def from_graph(
+        cls,
+        graph: Graph,
+        selector: Selector,
+        symbol_attribute: QualifiedName,
+        realization_attribute: QualifiedName,
+        offsets: OffsetProfile,
+    ) -> GrammarInput:
+        """Bind declared graph items to typed grammar tokens with raw offsets."""
+        _validate_offset_profile(graph, offsets)
+        selected = evaluate_selection(graph, selector)
+        spans = _offset_spans(graph, selected.nodes, offsets)
+        partitions = {span.partition for span in spans}
+        if len(partitions) > 1:
+            raise ValueError("grammar input items must belong to one offset partition")
+        for previous, current in pairwise(spans):
+            if current.origin < previous.origin:
+                raise ValueError(
+                    "grammar input item origins must be nondecreasing in declared order"
+                )
+        tokens: list[GrammarInputToken] = []
+        for node, offset in zip(selected.nodes, spans, strict=True):
+            reference = cast(ItemRef, node.reference)
+            attributes = {
+                value.name: value for value in _graph_item_attributes(graph, reference)
+            }
+            symbol = _grammar_input_symbol(
+                attributes.get(symbol_attribute), reference, symbol_attribute
+            )
+            realization = _grammar_input_realizations(
+                attributes.get(realization_attribute),
+                reference,
+                realization_attribute,
+            )
+            tokens.append(
+                GrammarInputToken(
+                    symbol,
+                    realization,
+                    source=reference,
+                    span=SourceSpan(offset.partition, offset.origin, offset.end),
+                )
+            )
+        return cls(tuple(tokens))
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +229,63 @@ class SourceSpan:
             raise ValueError("source span origin must not follow its end")
 
 
+def _graph_item_attributes(graph: Graph, reference: ItemRef) -> tuple[Attribute, ...]:
+    """Return one resolved graph item's declared attributes."""
+    return next(
+        tier.items[reference.index].attributes
+        for tier in graph.tiers
+        if tier.declaration.name == reference.tier
+    )
+
+
+def _grammar_input_symbol(
+    value: Attribute | None, reference: ItemRef, name: QualifiedName
+) -> str:
+    """Read one required scalar string source symbol from a selected item."""
+    if value is None:
+        raise ValueError(
+            f"grammar input item {reference!r} has no symbol attribute {str(name)!r}"
+        )
+    if not isinstance(value, AttributeValue) or value.value_type is not XsdType.STRING:
+        raise ValueError(
+            f"grammar input symbol attribute {str(name)!r} must be xsd:string"
+        )
+    return value.lexical
+
+
+def _realization_tokens(value: object, subject: str) -> tuple[str, ...]:
+    """Validate one nonempty target-token array."""
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(token, str) or not token for token in value)
+    ):
+        raise ValueError(f"{subject} must be a nonempty array of nonempty strings")
+    return tuple(value)
+
+
+def _grammar_input_realizations(
+    value: Attribute | None, reference: ItemRef, name: QualifiedName
+) -> tuple[Realization, ...]:
+    """Read one or more target-token alternatives from a selected item."""
+    subject = f"grammar input realization attribute {str(name)!r}"
+    if value is None:
+        raise ValueError(
+            f"grammar input item {reference!r} has no realization attribute "
+            f"{str(name)!r}"
+        )
+    if isinstance(value, AttributeValue):
+        if value.value_type is not XsdType.STRING:
+            raise ValueError(f"{subject} must be xsd:string or JSON token arrays")
+        tokens = value.lexical.split(" ")
+        if not tokens or any(not token for token in tokens):
+            raise ValueError(f"{subject} must contain nonempty ASCII-space tokens")
+        return (Realization(tuple(tokens)),)
+    assert isinstance(value, JsonAttributeValue)
+    realized = value.to_value()
+    return (Realization(_realization_tokens(realized, subject)),)
+
+
 @dataclass(frozen=True, slots=True)
 class RuleApplication:
     """Carry one experimental generated rule application in witness order."""
@@ -187,6 +304,13 @@ class TargetPiece:
     witness: str
     application: RuleApplication
     input_provenance: tuple[str, ...] = ()
+    source: ItemRef | None = None
+    spans: tuple[SourceSpan, ...] = ()
+
+    @property
+    def span(self) -> SourceSpan | None:
+        """Return the single source interval when the coverage lies in one partition."""
+        return self.spans[0] if len(self.spans) == 1 else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1812,7 +1936,7 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
 
 
 def _generation_fold(
-    forest: ParseForest, output_cap: int
+    forest: ParseForest, output_cap: int, root: ItemRef | None = None
 ) -> FoldDeclaration[PathValue]:
     """Build an experimental bounded fold over retained target expansions."""
     names = _forest_names(forest)
@@ -1848,18 +1972,54 @@ def _generation_fold(
             FoldTransition(names["realization-alternatives"], ChildCombination.OR),
             FoldTransition(names["realization-expansion"], ChildCombination.AND),
         ),
-        roots=(forest.root,),
+        roots=(forest.root if root is None else root,),
         output_cap=output_cap,
         ranked_output=True,
     )
 
 
-def _generated_derivation(
-    forest: ParseForest | TargetLattice,
+def _source_coverage(
+    grammar_input: GrammarInput, start: int, end: int
+) -> tuple[SourceSpan, ...]:
+    """Return the raw coverage set for one half-open chart token span."""
+    selected = grammar_input.tokens[start:end]
+    spans = tuple(token.span for token in selected if token.span is not None)
+    if len(spans) != len(selected):
+        return (SourceSpan(None, start, end),)
+    if not spans:
+        if grammar_input.tokens and all(
+            token.span is not None for token in grammar_input.tokens
+        ):
+            neighbor = (
+                grammar_input.tokens[start].span
+                if start < len(grammar_input.tokens)
+                else grammar_input.tokens[-1].span
+            )
+            assert neighbor is not None
+            anchor = (
+                neighbor.origin if start < len(grammar_input.tokens) else neighbor.end
+            )
+            return (SourceSpan(neighbor.partition, anchor, anchor),)
+        return (SourceSpan(None, start, end),)
+    partitions = {span.partition for span in spans}
+    if len(partitions) == 1:
+        return (
+            SourceSpan(
+                spans[0].partition,
+                min(span.origin for span in spans),
+                max(span.end for span in spans),
+            ),
+        )
+    return spans
+
+
+def _generated_derivation(  # noqa: PLR0915 -- one structural witness scan
+    forest: TargetLattice,
     value: PathValue,
     witness: tuple[str, ...],
 ) -> GeneratedDerivation:
     """Materialize target pieces and applications from one structural witness."""
+    grammar_input = forest.input
     names = _forest_names(forest)
     references_by_label = {
         _item_label(reference): reference
@@ -1872,6 +2032,7 @@ def _generated_derivation(
     }
     applications: list[RuleApplication] = []
     applications_by_label: dict[str, RuleApplication] = {}
+    coverage_by_label: dict[str, tuple[SourceSpan, ...]] = {}
     for label in witness:
         reference = references_by_label[label]
         if reference.tier != names["applications"]:
@@ -1879,21 +2040,21 @@ def _generated_derivation(
         rule_index = int(_item_attribute(forest.graph, reference, "rule-index").lexical)
         parent = parent_by_application[reference]
         declared = forest.declaration.rules[rule_index].provenance
+        start = int(_item_attribute(forest.graph, parent, "start").lexical)
+        end = int(_item_attribute(forest.graph, parent, "end").lexical)
+        coverage = _source_coverage(grammar_input, start, end)
         application = RuleApplication(
             rule_index,
             tuple(
                 _item_named_attribute(forest.graph, reference, item.name)
                 for item in declared
             ),
-            SourceSpan(
-                None,
-                int(_item_attribute(forest.graph, parent, "start").lexical),
-                int(_item_attribute(forest.graph, parent, "end").lexical),
-            ),
+            coverage[0] if len(coverage) == 1 else SourceSpan(None, start, end),
             label,
         )
         applications.append(application)
         applications_by_label[label] = application
+        coverage_by_label[label] = coverage
 
     expansion_sources: dict[ItemRef, tuple[ItemRef, ...]] = {}
     realization_by_piece: dict[ItemRef, ItemRef] = {}
@@ -1931,6 +2092,8 @@ def _generated_derivation(
             continue
         realization = realization_by_piece.get(reference)
         input_provenance: tuple[str, ...] = ()
+        source_reference: ItemRef | None = None
+        spans: tuple[SourceSpan, ...] = ()
         owner = reference
         if realization is not None:
             token = input_by_realization[realization]
@@ -1940,6 +2103,12 @@ def _generated_derivation(
             ) + provenance_by_owner.get(
                 (names["realization-provenance"], realization), ()
             )
+            input_index = int(
+                _item_attribute(forest.graph, token, "input-index").lexical
+            )
+            input_token = grammar_input.tokens[input_index]
+            source_reference = input_token.source
+            spans = () if input_token.span is None else (input_token.span,)
         candidates = introducing_candidates.get(owner, set())
         introducing_label = max(
             (
@@ -1956,6 +2125,8 @@ def _generated_derivation(
                 label,
                 applications_by_label[introducing_label],
                 input_provenance,
+                source_reference,
+                coverage_by_label[introducing_label] if realization is None else spans,
             )
         )
     return GeneratedDerivation(
@@ -2006,7 +2177,10 @@ def _validate_generation(declaration: GrammarDeclaration) -> None:
 
 
 def target_lattice(
-    forest: ParseForest, input: GrammarInput | None = None
+    forest: ParseForest,
+    input: GrammarInput | None = None,
+    *,
+    root: _ChartKey | None = None,
 ) -> TargetLattice:
     """Return an experimental keep-all target view over one retained forest."""
     if forest.collapsed:
@@ -2014,18 +2188,55 @@ def target_lattice(
             "target_lattice requires a parse forest built with collapse_units=False"
         )
     _validate_generation(forest.declaration)
+    if forest.input is not None and input is not None and input != forest.input:
+        raise ValueError("target_lattice input disagrees with the parse forest input")
     grammar_input = forest.input if input is None else input
     if grammar_input is None:
         raise ValueError("target_lattice requires the parse forest's grammar input")
-    fold = _generation_fold(forest, 1)
+    root_reference = forest.root if root is None else _resolve_chart_root(forest, root)
+    fold = _generation_fold(forest, 1, root_reference)
     return TargetLattice(
         forest.graph,
-        forest.root,
+        root_reference,
         fold,
         grammar_input,
         forest.declaration,
         bool(fold._dependency_graph().cyclic_components),
     )
+
+
+def _resolve_chart_root(forest: ParseForest, root: _ChartKey) -> ItemRef:
+    """Resolve one nonterminal and token span to its retained chart item."""
+    chart_key_size = 3
+    if (
+        type(root) is not tuple
+        or len(root) != chart_key_size
+        or not isinstance(root[0], QualifiedName)
+        or type(root[1]) is not int
+        or type(root[2]) is not int
+        or root[1] < 0
+        or root[2] < root[1]
+    ):
+        raise ValueError(
+            "target_lattice root must be a (QualifiedName, start, end) chart key"
+        )
+    names = _forest_names(forest)
+    found = next(
+        (
+            reference
+            for reference in forest.graph.canonical_items()
+            if reference.tier == names["chart-items"]
+            and _item_attribute(forest.graph, reference, "nonterminal").lexical
+            == str(root[0])
+            and _item_attribute(forest.graph, reference, "start").lexical
+            == str(root[1])
+            and _item_attribute(forest.graph, reference, "end").lexical == str(root[2])
+        ),
+        None,
+    )
+    if found is None:
+        raise ValueError(f"target_lattice root {root!r} is not a chart item")
+    return found
 
 
 def generate(
