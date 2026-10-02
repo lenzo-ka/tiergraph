@@ -179,6 +179,21 @@ def reordered_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
     return declaration, input_tokens
 
 
+def cyclic_targets() -> GrammarDeclaration:
+    """Return a productive unit cycle admitted by the path star warrant."""
+    sentence = name("S")
+    atom = name("A")
+    return GrammarDeclaration(
+        (sentence, atom),
+        sentence,
+        (
+            GrammarRule(sentence, (hole("a", atom),), (hole("a", atom),)),
+            GrammarRule(atom, (hole("s", sentence),), (hole("s", sentence),)),
+            GrammarRule(atom, (terminal("x"),), (terminal("x"),)),
+        ),
+    )
+
+
 def graph_input_fixture(
     *,
     shift: int = 0,
@@ -1338,6 +1353,86 @@ def test_experimental_target_lattice_keeps_every_application_identity() -> None:
         "three dollars and fifty cents",
         "three dollars plus fifty cents",
     ]
+
+
+def test_target_lattice_keeps_a_reachable_cycle_and_refuses_materialization() -> None:
+    """A finite keep-all graph does not invent a finite witness for a cyclic SCC."""
+    declaration = cyclic_targets()
+    forest = recognize(lower_grammar(declaration), ("x",), collapse_units=False)
+
+    lattice = target_lattice(forest)
+
+    assert lattice.graph is forest.graph
+    assert lattice.cyclic is True
+    assert best(forest)[0].weight == "2.0"
+    with pytest.raises(
+        ValueError, match="^target materialization requires a finite derivation$"
+    ):
+        lattice.best()
+    with pytest.raises(
+        ValueError, match="^target materialization requires a finite derivation$"
+    ):
+        generate(lower_grammar(declaration), ("x",))
+
+
+def test_unreported_cycle_traversal_does_not_count_as_materialization() -> None:
+    """Bypassing the cycle guard exposes the incomplete starred witness mutation."""
+    forest = recognize(lower_grammar(cyclic_targets()), ("x",), collapse_units=False)
+    lattice = target_lattice(forest)
+
+    mutated = replace(lattice, cyclic=False).best().derivations[0]
+
+    assert mutated.text == ""
+    assert mutated.applications == ()
+    assert mutated.text != "x"
+
+
+def test_target_lattice_ignores_a_cycle_unreachable_from_its_root() -> None:
+    """An unrelated SCC neither marks nor refuses a finite whole-span root."""
+    sentence = name("S")
+    orphan = name("A")
+    declaration = GrammarDeclaration(
+        (sentence, orphan),
+        sentence,
+        (
+            GrammarRule(sentence, (terminal("x"),), (terminal("x"),)),
+            GrammarRule(orphan, (hole("a", orphan),), (hole("a", orphan),)),
+            GrammarRule(orphan, (terminal("y"),), (terminal("y"),)),
+        ),
+    )
+    lattice = target_lattice(
+        recognize(lower_grammar(declaration), ("x",), collapse_units=False)
+    )
+
+    assert lattice.cyclic is False
+    assert lattice.best().derivations[0].text == "x"
+
+
+def test_subspan_lattice_excludes_a_cycle_elsewhere() -> None:
+    """Selecting a finite child root excludes a cyclic sibling from its lattice."""
+    outer = name("R")
+    prefix = name("P")
+    suffix = name("C")
+    declaration = GrammarDeclaration(
+        (outer, prefix, suffix),
+        outer,
+        (
+            GrammarRule(
+                outer,
+                (hole("p", prefix), hole("c", suffix)),
+                (hole("p", prefix), hole("c", suffix)),
+            ),
+            GrammarRule(prefix, (terminal("x"),), (terminal("x"),)),
+            GrammarRule(suffix, (hole("c", suffix),), (hole("c", suffix),)),
+            GrammarRule(suffix, (terminal("y"),), (terminal("y"),)),
+        ),
+    )
+    forest = recognize(lower_grammar(declaration), ("x", "y"), collapse_units=False)
+
+    assert target_lattice(forest).cyclic is True
+    subspan = target_lattice(forest, root=(prefix, 0, 1))
+    assert subspan.cyclic is False
+    assert subspan.best().derivations[0].text == "x"
 
 
 def test_output_cap_mutation_loses_target_lattice_application() -> None:
