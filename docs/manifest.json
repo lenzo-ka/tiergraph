@@ -72,13 +72,15 @@
       "LoweredGrammar",
       "ParseForest",
       "Realization",
+      "TargetLattice",
       "TargetPiece",
       "best",
       "count",
       "generate",
       "grammar_loads",
       "lower_grammar",
-      "recognize"
+      "recognize",
+      "target_lattice"
     ],
     "kernel": [
       "AttributeDeclaration",

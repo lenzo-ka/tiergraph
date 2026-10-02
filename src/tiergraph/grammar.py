@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import cast
 
@@ -185,6 +185,32 @@ class GenerationResult:
     derivations: tuple[GeneratedDerivation, ...]
     truncated: bool
     cost: FoldCost
+
+
+@dataclass(frozen=True, slots=True)
+class TargetLattice:
+    """View an experimental keep-all target graph without enumerating paths."""
+
+    graph: Graph
+    root: ItemRef
+    fold: FoldDeclaration[PathValue]
+    input: GrammarInput
+    cyclic: bool
+
+    def best(self, count: int = 1) -> GenerationResult:
+        """Project up to ``count`` ranked targets from the retained graph."""
+        if count < 1:
+            raise ValueError(
+                f"experimental generation count {count!r} must be positive"
+            )
+        result = replace(self.fold, output_cap=count).run()
+        ranked = cast(
+            tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
+        )
+        derivations = tuple(
+            _generated_derivation(self, value, witness) for value, witness in ranked
+        )
+        return GenerationResult(derivations, result.truncated, result.cost)
 
 
 def _decode_qname(value: object, path: str) -> QualifiedName:
@@ -1463,7 +1489,7 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
     )
 
 
-def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
+def _forest_names(forest: ParseForest | TargetLattice) -> dict[str, QualifiedName]:
     return {
         local: _name(forest.root.tier.namespace, local)
         for local in (
@@ -1616,7 +1642,9 @@ def _generation_fold(
 
 
 def _generated_derivation(
-    forest: ParseForest, value: PathValue, witness: tuple[str, ...]
+    forest: ParseForest | TargetLattice,
+    value: PathValue,
+    witness: tuple[str, ...],
 ) -> GeneratedDerivation:
     """Materialize target-piece labels from one ranked structural witness."""
     names = _forest_names(forest)
@@ -1677,6 +1705,28 @@ def _validate_generation(declaration: GrammarDeclaration) -> None:
                 )
 
 
+def target_lattice(
+    forest: ParseForest, input: GrammarInput | None = None
+) -> TargetLattice:
+    """Return an experimental keep-all target view over one retained forest."""
+    if forest.collapsed:
+        raise ValueError(
+            "target_lattice requires a parse forest built with collapse_units=False"
+        )
+    _validate_generation(forest.declaration)
+    grammar_input = forest.input if input is None else input
+    if grammar_input is None:
+        raise ValueError("target_lattice requires the parse forest's grammar input")
+    fold = _generation_fold(forest, 1)
+    return TargetLattice(
+        forest.graph,
+        forest.root,
+        fold,
+        grammar_input,
+        bool(fold._dependency_graph().cyclic_components),
+    )
+
+
 def generate(
     grammar: LoweredGrammar | ParseForest,
     input_tokens: Sequence[str] | GrammarInput | None = None,
@@ -1684,18 +1734,8 @@ def generate(
     count: int = 1,
 ) -> GenerationResult:
     """Return up to ``count`` experimental target materializations."""
-    if count < 1:
-        raise ValueError(f"experimental generation count {count!r} must be positive")
     forest = _forest(grammar, input_tokens, "generate")
-    _validate_generation(forest.declaration)
-    result = _generation_fold(forest, count).run()
-    ranked = cast(
-        tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
-    )
-    derivations = tuple(
-        _generated_derivation(forest, value, witness) for value, witness in ranked
-    )
-    return GenerationResult(derivations, result.truncated, result.cost)
+    return target_lattice(forest).best(count)
 
 
 def _forest(
@@ -1764,6 +1804,7 @@ __all__ = [
     "LoweredGrammar",
     "ParseForest",
     "Realization",
+    "TargetLattice",
     "TargetPiece",
     "best",
     "count",
@@ -1771,4 +1812,5 @@ __all__ = [
     "grammar_loads",
     "lower_grammar",
     "recognize",
+    "target_lattice",
 ]

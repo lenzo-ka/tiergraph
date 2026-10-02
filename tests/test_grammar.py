@@ -27,6 +27,7 @@ from tiergraph import (
     PolyadicRelationInstance,
     QualifiedName,
     Realization,
+    TargetLattice,
     TargetPiece,
     XsdType,
     best,
@@ -35,6 +36,7 @@ from tiergraph import (
     grammar_loads,
     lower_grammar,
     recognize,
+    target_lattice,
 )
 from tiergraph import grammar as grammar_module
 from tiergraph.core import _scalar_attribute
@@ -161,6 +163,28 @@ def reordered_tokens() -> tuple[GrammarDeclaration, GrammarInput]:
         )
     )
     return declaration, input_tokens
+
+
+def three_way_targets() -> tuple[GrammarDeclaration, GrammarInput]:
+    """Return tied target text plus one structurally different target."""
+    declaration, input_tokens = reordered_tokens()
+    parent = declaration.rules[0]
+    different = replace(
+        parent,
+        target=(
+            parent.target[0],
+            parent.target[1],
+            terminal("plus"),
+            parent.target[3],
+        ),
+    )
+    return (
+        replace(
+            declaration,
+            rules=(parent, parent, different, *declaration.rules[1:]),
+        ),
+        input_tokens,
+    )
 
 
 def test_declaration_is_directional_and_json_serializable() -> None:
@@ -589,6 +613,95 @@ def test_experimental_generation_retains_equal_text_derivations() -> None:
     assert result.derivations[0].witness != result.derivations[1].witness
     assert result.derivations[0].witness < result.derivations[1].witness
     assert result.truncated is False
+
+
+def test_experimental_target_lattice_keeps_every_application_identity() -> None:
+    """The keep-all view retains tied and different target applications."""
+    declaration, input_tokens = three_way_targets()
+    forest = recognize(lower_grammar(declaration), input_tokens, collapse_units=False)
+
+    lattice = target_lattice(forest)
+
+    assert isinstance(lattice, TargetLattice)
+    assert lattice.graph is forest.graph
+    assert lattice.root == forest.root
+    assert lattice.input is input_tokens
+    assert lattice.fold.graph is forest.graph
+    assert lattice.cyclic is False
+    root_applications = tuple(
+        cast(ItemRef, relation.right)
+        for relation in lattice.graph.relations
+        if relation.declaration.local_name == "alternatives"
+        and relation.left == lattice.root
+    )
+    application_tier = next(
+        tier
+        for tier in lattice.graph.tiers
+        if tier.declaration.name.local_name == "applications"
+    )
+    rule_indices = tuple(
+        next(
+            _scalar_attribute(value).lexical
+            for value in application_tier.items[application.index].attributes
+            if value.name.local_name == "rule-index"
+        )
+        for application in root_applications
+    )
+    assert len(root_applications) == len(set(root_applications)) == 30
+    assert {index: rule_indices.count(index) for index in set(rule_indices)} == {
+        "0": 10,
+        "1": 10,
+        "2": 10,
+    }
+    all_applications = {
+        ItemRef(application_tier.declaration.name, index)
+        for index in range(len(application_tier.items))
+    }
+    expansions = {
+        cast(ItemRef, relation.sources[0])
+        for relation in lattice.graph.polyadic_relations
+        if relation.declaration.local_name == "target-expansion"
+    }
+    assert expansions == all_applications
+    assert [derivation.text for derivation in lattice.best(3).derivations] == [
+        "three dollars and fifty cents",
+        "three dollars and fifty cents",
+        "three dollars plus fifty cents",
+    ]
+
+
+def test_output_cap_mutation_loses_target_lattice_application() -> None:
+    """Applying the ranked output cap to construction drops required identity."""
+    declaration, input_tokens = three_way_targets()
+    lattice = target_lattice(
+        recognize(lower_grammar(declaration), input_tokens, collapse_units=False)
+    )
+    applications = tuple(
+        cast(ItemRef, relation.right)
+        for relation in lattice.graph.relations
+        if relation.declaration.local_name == "alternatives"
+        and relation.left == lattice.root
+    )
+
+    projection = lattice.best(1)
+    mutated_applications = applications[: projection.cost.output_cap]
+
+    assert len(applications) == 30
+    assert len(projection.derivations) == 1
+    assert set(mutated_applications) != set(applications)
+
+
+def test_target_lattice_reuses_or_requires_retained_input() -> None:
+    """A forest carries input once, with an explicit compatibility fallback."""
+    declaration, input_tokens = reordered_tokens()
+    forest = recognize(lower_grammar(declaration), input_tokens, collapse_units=False)
+    without_input = replace(forest, input=None)
+
+    assert target_lattice(without_input, input_tokens).input is input_tokens
+    with pytest.raises(ValueError, match="requires the parse forest's grammar input"):
+        target_lattice(without_input)
+    with pytest.raises(ValueError, match="collapse_units=False"):
+        target_lattice(replace(forest, collapsed=True))
 
 
 def test_text_deduplication_mutation_loses_equal_derivation() -> None:

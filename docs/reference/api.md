@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 219 top-level `tiergraph` exports exactly once.
+It covers 221 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1938,6 +1938,24 @@ Realization(tokens: 'tuple[str, ...]', provenance: 'tuple[str, ...]' = (), weigh
 
 Carry one experimental target-token alternative for a typed input token.
 
+### `TargetLattice`
+
+```text
+TargetLattice(graph: 'Graph', root: 'ItemRef', fold: 'FoldDeclaration[PathValue]', input: 'GrammarInput', cyclic: 'bool') -> None
+```
+
+View an experimental keep-all target graph without enumerating paths.
+
+#### `TargetLattice.best`
+
+Method.
+
+```text
+TargetLattice.best(self, count: 'int' = 1) -> 'GenerationResult'
+```
+
+Project up to ``count`` ranked targets from the retained graph.
+
 ### `TargetPiece`
 
 ```text
@@ -2001,6 +2019,14 @@ Build a chart forest for token input using polynomial span deduction.
 For a fixed grammar whose longest source pattern has length ``m``, the
 exhaustive boundary discipline takes ``O(n^(m+1))`` time and polynomial
 space in input length ``n``.
+
+### `target_lattice`
+
+```text
+target_lattice(forest: 'ParseForest', input: 'GrammarInput | None' = None) -> 'TargetLattice'
+```
+
+Return an experimental keep-all target view over one retained forest.
 
 ## Kernel
 
