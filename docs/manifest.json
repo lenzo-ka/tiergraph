@@ -208,6 +208,7 @@
       "NodeKind",
       "NodeSet",
       "Selector",
+      "SequenceSelector",
       "TierSelector",
       "TypeSelector",
       "UnionSelector",
@@ -344,6 +345,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -459,8 +462,28 @@
       "shape_hash"
     ],
     "tiergraph.match": [
+      "MAX_PATTERN_POSITIONS",
+      "AdjacentRuns",
+      "AltPattern",
+      "AtomPattern",
+      "CompiledPattern",
+      "ContainerOrder",
+      "EndPattern",
       "Extent",
+      "FocusPattern",
+      "Ordering",
+      "Pattern",
+      "RepeatPattern",
+      "SeqPattern",
+      "SpanMatch",
+      "SpanMatches",
       "SpanPairs",
+      "StartPattern",
+      "TierOrder",
+      "compile_pattern",
+      "ordering_to_data",
+      "pattern_loads",
+      "pattern_to_data",
       "span_pairs"
     ],
     "tiergraph.predicate": [

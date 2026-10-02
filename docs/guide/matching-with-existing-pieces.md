@@ -405,5 +405,37 @@ candidate masses: (1, 1) residual: 0
 ```
 
 `OutputPlan` compares whole outputs only with the candidates it is given. The
-residual accounts for every other output, but it does not search for a sequence
-pattern. Tiergraph has no sequence-pattern query language.
+residual accounts for every other output. Regular sequence patterns answer a
+different question over graph items in a declared order. An `AtomPattern`
+consumes one item when its predicate holds, and a `FocusPattern` marks the items
+returned by `focus` or a `SequenceSelector`.
+
+```python
+from tiergraph.match import (
+    AtomPattern,
+    FocusPattern,
+    SeqPattern,
+    TierOrder,
+    compile_pattern,
+)
+from tiergraph.predicate import Cell, Equals, Has, Not
+
+primary_then_missing = SeqPattern(
+    (
+        FocusPattern(AtomPattern(Equals(Cell(stress), ("primary",)))),
+        AtomPattern(Not(Has(Cell(stress), alias="none"))),
+    )
+)
+focused = compile_pattern(primary_then_missing).focus(graph, TierOrder(segments))
+
+print("primary before a missing stress:", labels(focused))
+```
+```text
+primary before a missing stress: ['s0']
+```
+
+`TierOrder` treats a tier as one scope. `ContainerOrder` makes one scope from
+each selected container's direct children, and `AdjacentRuns` splits selected
+items where their declared offsets are not adjacent. Matches never cross a
+scope. `exists` and `focus` admit nullable patterns; `spans` and `count` refuse
+them because an empty match has no item span.

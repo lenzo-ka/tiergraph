@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 218 top-level `tiergraph` exports exactly once.
+It covers 219 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -4453,6 +4453,34 @@ __type_params__ attribute.
 
 See PEP 695 for more information.
 
+### `SequenceSelector`
+
+```text
+SequenceSelector(ordering: 'Ordering', pattern: 'Pattern') -> None
+```
+
+Select the focus of one regular pattern over a declared ordering.
+
+#### `SequenceSelector.evaluate`
+
+Method.
+
+```text
+SequenceSelector.evaluate(self, graph: 'Graph', *, path_profile: 'PathProfile') -> 'NodeSet'
+```
+
+Compile the pattern and return its focus over the ordering scopes.
+
+#### `SequenceSelector.to_data`
+
+Method.
+
+```text
+SequenceSelector.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the strict selector JSON form.
+
 ### `TierSelector`
 
 ```text
@@ -6707,6 +6735,112 @@ Hash the declaration independently of JSON Schema presentation.
 
 This module is importable and usable, but carries no API-stability promise at version 0.5.0.
 
+### `MAX_PATTERN_POSITIONS`
+
+int([x]) -> integer
+int(x, base=10) -> integer
+
+Convert a number or string to an integer, or return 0 if no arguments
+are given.  If x is a number, return x.__int__().  For floating-point
+numbers, this truncates towards zero.
+
+If x is not a number or if base is given, then x must be a string,
+bytes, or bytearray instance representing an integer literal in the
+given base.  The literal can be preceded by '+' or '-' and be surrounded
+by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
+Base 0 means to interpret the base from the string as an integer
+iteral.
+>>> int('0b100', base=0)
+4
+
+### `AdjacentRuns`
+
+```text
+AdjacentRuns(source: 'Selector', offsets: 'OffsetProfile') -> None
+```
+
+Split selected offset items where consecutive half-open spans do not meet.
+
+### `AltPattern`
+
+```text
+AltPattern(parts: 'tuple[Pattern, ...]') -> None
+```
+
+Match any one part, without preserving run multiplicity.
+
+### `AtomPattern`
+
+```text
+AtomPattern(predicate: 'Predicate') -> None
+```
+
+Consume one item when a value predicate holds on it.
+
+### `CompiledPattern`
+
+```text
+CompiledPattern(pattern: 'Pattern', start: 'int', accept: 'int', epsilon: 'tuple[tuple[_Epsilon, ...], ...]', atom_edges: 'tuple[tuple[_AtomEdge, ...], ...]', predicates: 'tuple[Predicate, ...]') -> None
+```
+
+Hold one Thompson epsilon-NFA and its deduplicated atom table.
+
+#### `CompiledPattern.exists`
+
+Method.
+
+```text
+CompiledPattern.exists(self, graph: 'Graph', ordering: 'Ordering') -> 'bool'
+```
+
+Return whether any scope contains an accepting span.
+
+#### `CompiledPattern.focus`
+
+Method.
+
+```text
+CompiledPattern.focus(self, graph: 'Graph', ordering: 'Ordering') -> 'NodeSet'
+```
+
+Return every item consumed by a focus edge on an accepting run.
+
+#### `CompiledPattern.spans`
+
+Method.
+
+```text
+CompiledPattern.spans(self, graph: 'Graph', ordering: 'Ordering', *, limit: 'int | None' = None) -> 'SpanMatches'
+```
+
+Return each distinct accepting span once in scope-major order.
+
+#### `CompiledPattern.count`
+
+Method.
+
+```text
+CompiledPattern.count(self, graph: 'Graph', ordering: 'Ordering') -> 'int'
+```
+
+Count distinct accepting scope spans, never NFA runs.
+
+### `ContainerOrder`
+
+```text
+ContainerOrder(relation: 'QualifiedName', containers: 'Selector') -> None
+```
+
+Read each selected container's direct children as a separate scope.
+
+### `EndPattern`
+
+```text
+EndPattern() -> None
+```
+
+Match the position at the end of one ordering scope.
+
 ### `Extent`
 
 ```text
@@ -6719,6 +6853,116 @@ State whether an output witness list was truncated.
 
 - `EXHAUSTIVE` = `exhaustive`
 - `CUT_AT_BOUND` = `cut-at-bound`
+
+### `FocusPattern`
+
+```text
+FocusPattern(body: 'Pattern') -> None
+```
+
+Mark consumed items that a sequence selector returns.
+
+### `Ordering`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `Pattern`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
+### `RepeatPattern`
+
+```text
+RepeatPattern(body: 'Pattern', min: 'int', max: 'int | None') -> None
+```
+
+Repeat one pattern between inclusive minimum and maximum counts.
+
+### `SeqPattern`
+
+```text
+SeqPattern(parts: 'tuple[Pattern, ...]') -> None
+```
+
+Match every part in order.
+
+### `SpanMatch`
+
+```text
+SpanMatch(scope: 'int', start: 'int', end: 'int', items: 'tuple[Node, ...]', offsets: 'tuple[int, int] | None') -> None
+```
+
+Carry one distinct matching scope span and optional physical offsets.
+
+#### `SpanMatch.to_data`
+
+Method.
+
+```text
+SpanMatch.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return one match as strict JSON data.
+
+### `SpanMatches`
+
+```text
+SpanMatches(matches: 'tuple[SpanMatch, ...]', extent: 'Extent') -> None
+```
+
+Carry distinct matching spans and whether their witness list was cut.
+
+#### `SpanMatches.to_data`
+
+Method.
+
+```text
+SpanMatches.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return matches and extent as strict JSON data.
 
 ### `SpanPairs`
 
@@ -6737,6 +6981,54 @@ SpanPairs.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return pairs and extent as strict JSON data.
+
+### `StartPattern`
+
+```text
+StartPattern() -> None
+```
+
+Match the position at the start of one ordering scope.
+
+### `TierOrder`
+
+```text
+TierOrder(tier: 'QualifiedName') -> None
+```
+
+Read one tier as one scope in declared item order.
+
+### `compile_pattern`
+
+```text
+compile_pattern(pattern: 'Pattern') -> 'CompiledPattern'
+```
+
+Validate and compile one pattern to a Thompson epsilon-NFA.
+
+### `ordering_to_data`
+
+```text
+ordering_to_data(ordering: 'Ordering') -> 'JsonValue'
+```
+
+Return one declared chain ordering as strict JSON data.
+
+### `pattern_loads`
+
+```text
+pattern_loads(source: 'str | bytes') -> 'Pattern'
+```
+
+Decode one strict declarative pattern from JSON.
+
+### `pattern_to_data`
+
+```text
+pattern_to_data(pattern: 'Pattern') -> 'JsonValue'
+```
+
+Return one pattern as strict tagged JSON data.
 
 ### `span_pairs`
 

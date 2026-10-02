@@ -17,6 +17,7 @@ import tiergraph
 import tiergraph_dot
 from tiergraph import ExecutionError, Program, Step, load_program, semiring
 from tiergraph import core as _core
+from tiergraph import match as _match
 from tiergraph import predicate as _predicate
 from tiergraph import wire as _wire
 from tiergraph.schema import Refusal, RefusalStage, json_schema, shape_hash
@@ -233,6 +234,12 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     selection_input.add_argument("--where", metavar="TEXT")
     selection.add_argument("--prefix", metavar="P")
     _output_argument(selection)
+
+    match = subparsers.add_parser("match", help="match a regular item sequence")
+    match.set_defaults(handler=_handle_match)
+    match.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
+    match.add_argument("--request", required=True, metavar="FILE")
+    _output_argument(match)
 
     fold = subparsers.add_parser("fold", help="fold a dependency relation")
     fold.set_defaults(handler=_handle_fold, exactness=None)
@@ -615,6 +622,13 @@ def _handle_select(args: argparse.Namespace) -> None:
         _check_distinct(args.selector, args.output)
         result = tiergraph.evaluate_selection(graph, selector)
     _write_output(args.file, args.output, _json_bytes({"nodes": result.to_data()}))
+
+
+def _handle_match(args: argparse.Namespace) -> None:
+    graph = tiergraph.loads(_read_bytes(args.file))
+    _check_distinct(args.request, args.output)
+    result = _match._evaluate_match_request(graph, _read_bytes(args.request))
+    _write_output(args.file, args.output, _json_bytes(result))
 
 
 def _handle_fold(args: argparse.Namespace) -> None:
