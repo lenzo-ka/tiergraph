@@ -237,6 +237,18 @@ def test_declaration_strict_json_round_trip() -> None:
     assert GrammarHole.from_data(hole("x", name("S")).to_data()) == hole("x", name("S"))
 
 
+def test_rule_json_without_provenance_keeps_the_existing_wire_shape() -> None:
+    """Existing rule documents decode with empty provenance and encode unchanged."""
+    rule = GrammarRule(name("S"), (terminal("x"),), (terminal("x"),))
+    data = rule.to_data()
+    data.pop("provenance", None)
+    assert GrammarRule.from_data(data) == rule
+    assert "provenance" not in rule.to_data()
+    attributed = replace(rule, provenance=(string("source", "client"),))
+    assert GrammarRule.from_data(attributed.to_data()) == attributed
+    assert attributed.to_data()["provenance"] == [string("source", "client").to_data()]
+
+
 @pytest.mark.parametrize(
     ("data", "message"),
     (
@@ -1250,6 +1262,31 @@ def test_best_orders_exact_weights_and_resolves_ties_by_witness() -> None:
     }
     with pytest.raises(ValueError, match="derivation count 0.*positive"):
         best(lowered, ("x", "y"), count=0)
+
+
+@pytest.mark.parametrize("carrier", ("token", "realization"))
+def test_best_ignores_input_provenance_as_before(carrier: str) -> None:
+    """Input provenance does not enter the source derivation fold."""
+    declaration, input_tokens = reordered_tokens()
+    lowered = lower_grammar(declaration)
+    expected = best(lowered, input_tokens, count=2)
+    if carrier == "token":
+        changed = tuple(
+            replace(token, provenance=(f"input-{index}",))
+            for index, token in enumerate(input_tokens.tokens)
+        )
+    else:
+        changed = tuple(
+            replace(
+                token,
+                realization=tuple(
+                    replace(realization, provenance=(f"realization-{index}",))
+                    for realization in token.realization
+                ),
+            )
+            for index, token in enumerate(input_tokens.tokens)
+        )
+    assert best(lowered, GrammarInput(changed), count=2) == expected
 
 
 def test_public_api_reuses_one_forest_for_all_three_questions() -> None:

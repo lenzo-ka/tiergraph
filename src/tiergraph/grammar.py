@@ -394,7 +394,7 @@ class GrammarRule:
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the directional rule as JSON-serializable data."""
-        return {
+        data: dict[str, JsonValue] = {
             "left": self.left.to_data(),
             "source": [element.to_data() for element in self.source],
             "target": [element.to_data() for element in self.target],
@@ -403,25 +403,32 @@ class GrammarRule:
                 variable.to_data() for variable in self.awaited_variables
             ],
             "weight": None if self.weight is None else self.weight.to_data(),
-            "provenance": [value.to_data() for value in self.provenance],
         }
+        if self.provenance:
+            data["provenance"] = [value.to_data() for value in self.provenance]
+        return data
 
     @classmethod
     def from_data(cls, data: object) -> GrammarRule:
         """Decode one strict directional rule from JSON-compatible data."""
         path = "grammar rule"
+        required = {
+            "left",
+            "source",
+            "target",
+            "boundary",
+            "awaited_variables",
+            "weight",
+        }
         obj = _decode_object(
             data,
             path,
-            {
-                "left",
-                "source",
-                "target",
-                "boundary",
-                "awaited_variables",
-                "weight",
-                "provenance",
-            },
+            required
+            | (
+                {"provenance"}
+                if isinstance(data, dict) and "provenance" in data
+                else set()
+            ),
         )
         awaited = obj["awaited_variables"]
         if not isinstance(awaited, list):
@@ -429,7 +436,7 @@ class GrammarRule:
         weight = obj["weight"]
         if weight is not None and not isinstance(weight, dict):
             raise ValueError(f"{path}.weight must be an attribute value or null")
-        provenance = obj["provenance"]
+        provenance = obj.get("provenance", [])
         if not isinstance(provenance, list):
             raise ValueError(f"{path}.provenance must be an array")
         return cls(
@@ -1770,10 +1777,12 @@ def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:
 
 def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValue]:
     names = _forest_names(forest)
+    tiers = (names["chart-items"], names["applications"])
     valid_labels = {
         f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
         for reference in forest.graph.canonical_items()
-        if _item_attribute(forest.graph, reference, "local-factor").lexical == "true"
+        if reference.tier in tiers
+        and _item_attribute(forest.graph, reference, "local-factor").lexical == "true"
     }
 
     def lift(value: object, label: str) -> PathValue:
@@ -1788,7 +1797,7 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
         AttributeValuation(
             "rule weight",
             names["weight"],
-            (names["chart-items"], names["applications"]),
+            tiers,
         ),
         PATH,
         lift,
@@ -2071,7 +2080,7 @@ def _best_derivations(
 
 def best(
     grammar: LoweredGrammar | ParseForest,
-    input_tokens: Sequence[str] | None = None,
+    input_tokens: Sequence[str] | GrammarInput | None = None,
     count: int = 1,
 ) -> tuple[BestDerivation, ...]:
     """Return folded derivations by exact cost, choosing canonical paths on ties."""

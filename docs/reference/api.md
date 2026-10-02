@@ -1983,7 +1983,7 @@ Carry one experimental emitted token and its introducing provenance.
 ### `best`
 
 ```text
-best(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | None' = None, count: 'int' = 1) -> 'tuple[BestDerivation, ...]'
+best(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, count: 'int' = 1) -> 'tuple[BestDerivation, ...]'
 ```
 
 Return folded derivations by exact cost, choosing canonical paths on ties.
