@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 211 top-level `tiergraph` exports exactly once.
+It covers 218 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1335,7 +1335,7 @@ Return deterministic strict-JSON data.
 FoldTransition(relation: 'QualifiedName', combination: 'ChildCombination') -> None
 ```
 
-Give one dependency relation its local AND/OR incidence meaning.
+Give one bipartite or ordered polyadic dependency its AND/OR meaning.
 
 ### `Emissions`
 
@@ -1621,6 +1621,42 @@ BestDerivation.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the result as JSON-serializable data.
 
+### `GeneratedDerivation`
+
+```text
+GeneratedDerivation(weight: 'str', pieces: 'tuple[TargetPiece, ...]', witness: 'tuple[str, ...]') -> None
+```
+
+Carry one experimental best target materialization and exact derivation cost.
+
+#### `GeneratedDerivation.tokens`
+
+Property.
+
+```text
+GeneratedDerivation.tokens(self) -> 'tuple[str, ...]'
+```
+
+Return emitted tokens in declared target order.
+
+#### `GeneratedDerivation.text`
+
+Property.
+
+```text
+GeneratedDerivation.text(self) -> 'str'
+```
+
+Join emitted tokens with the experimental one-ASCII-space profile.
+
+### `GenerationResult`
+
+```text
+GenerationResult(derivations: 'tuple[GeneratedDerivation, ...]', truncated: 'bool', cost: 'FoldCost') -> None
+```
+
+Report the experimental one-best target projection and its fold account.
+
 ### `GrammarChartProfile`
 
 ```text
@@ -1720,6 +1756,32 @@ GrammarHole.from_data(cls, data: 'object') -> 'GrammarHole'
 
 Decode one strict hole declaration from JSON-compatible data.
 
+### `GrammarInput`
+
+```text
+GrammarInput(tokens: 'tuple[GrammarInputToken, ...]') -> None
+```
+
+Hold the experimental typed token sequence retained by a parse forest.
+
+#### `GrammarInput.from_symbols`
+
+Class method.
+
+```text
+GrammarInput.from_symbols(cls, symbols: 'Sequence[str]') -> 'GrammarInput'
+```
+
+Wrap raw source symbols with one identity realization apiece.
+
+### `GrammarInputToken`
+
+```text
+GrammarInputToken(symbol: 'str', realization: 'tuple[Realization, ...]', provenance: 'tuple[str, ...]' = ()) -> None
+```
+
+Carry one experimental typed source symbol and its target alternatives.
+
 ### `GrammarRule`
 
 ```text
@@ -1807,7 +1869,7 @@ Return the declaration, graph, and construction fingerprint.
 ### `ParseForest`
 
 ```text
-ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]', declaration: 'GrammarDeclaration', collapsed: 'bool' = True) -> None
+ParseForest(graph: 'Graph', program: 'Program', root: 'ItemRef', fold: 'FoldDeclaration[bool]', declaration: 'GrammarDeclaration', collapsed: 'bool' = True, input: 'GrammarInput | None' = None) -> None
 ```
 
 Carry a machine-built parse forest and its Boolean interpretation.
@@ -1868,6 +1930,22 @@ ParseForest.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the forest, root, fingerprint, and Boolean answer as JSON data.
 
+### `Realization`
+
+```text
+Realization(tokens: 'tuple[str, ...]', provenance: 'tuple[str, ...]' = (), weight: 'Decimal | None' = None) -> None
+```
+
+Carry one experimental target-token alternative for a typed input token.
+
+### `TargetPiece`
+
+```text
+TargetPiece(token: 'str', witness: 'str') -> None
+```
+
+Carry one emitted token and the target-piece witness that introduced it.
+
 ### `best`
 
 ```text
@@ -1883,6 +1961,17 @@ count(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | No
 ```
 
 Return the derivation count from a new or previously built forest.
+
+### `generate`
+
+```text
+generate(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, *, count: 'int' = 1) -> 'GenerationResult'
+```
+
+Return the experimental one-best target materialization.
+
+This first slice deliberately accepts only ``count=1``; bounded n-best is
+a separate generation contract.
 
 ### `grammar_loads`
 
@@ -1907,7 +1996,7 @@ Lower a grammar through machine opcodes to an ordered hedge.
 ### `recognize`
 
 ```text
-recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str]', namespace: 'str' = 'urn:tiergraph:grammar:chart', *, collapse_units: 'bool' = True) -> 'ParseForest'
+recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str] | GrammarInput', namespace: 'str' = 'urn:tiergraph:grammar:chart', *, collapse_units: 'bool' = True) -> 'ParseForest'
 ```
 
 Build a chart forest for token input using polynomial span deduction.

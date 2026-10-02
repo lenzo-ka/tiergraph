@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from itertools import repeat
 from typing import Any, cast
 
-from tiergraph.core import Graph, ItemRef, QualifiedName
+from tiergraph.core import BipartiteRelationDeclaration, Graph, ItemRef, QualifiedName
 from tiergraph.fold import (
     ChildCombination,
     DerivationProvenance,
@@ -231,6 +231,16 @@ class PathPlan[Value]:
                 "make a hypergraph rather than a path graph"
             )
         graph = declaration.graph
+        relation_declaration = next(
+            candidate
+            for candidate in graph.relation_declarations
+            if candidate.name == transition.relation
+        )
+        if not isinstance(relation_declaration, BipartiteRelationDeclaration):
+            raise ValueError(
+                f"path plan {name!r} relation {str(transition.relation)!r} is not "
+                "bipartite; ordered polyadic dependencies form a hypergraph"
+            )
         tiers = set(declaration.valuation.tiers)
         items = tuple(
             reference

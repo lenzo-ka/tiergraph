@@ -19,7 +19,9 @@ from tiergraph.core import (
     Graph,
     Item,
     ItemRef,
+    PolyadicRelationDeclaration,
     QualifiedName,
+    RelationEndpointKind,
     XsdType,
     _scalar_attribute,
 )
@@ -107,7 +109,7 @@ class ChildCombination(Enum):
 
 @dataclass(frozen=True, slots=True)
 class FoldTransition:
-    """Give one dependency relation its local AND/OR incidence meaning."""
+    """Give one bipartite or ordered polyadic dependency its AND/OR meaning."""
 
     relation: QualifiedName
     combination: ChildCombination
@@ -559,17 +561,36 @@ class FoldDeclaration[Value]:
             declaration = declarations.get(transition.relation)
             if declaration is None:
                 raise ValueError(
-                    f"fold {self.name!r} names undeclared bipartite relation "
+                    f"fold {self.name!r} names undeclared dependency relation "
                     f"{str(transition.relation)!r}"
                 )
-            if not isinstance(declaration, BipartiteRelationDeclaration):
-                kind = declaration.to_data()["kind"]
+            if isinstance(declaration, BipartiteRelationDeclaration):
+                continue
+            if isinstance(declaration, PolyadicRelationDeclaration):
+                source = declaration.sources
+                targets = declaration.targets
+                item_only = (RelationEndpointKind.ITEM,)
+                if (
+                    declaration.unique_sources
+                    and source.endpoint_kinds == item_only
+                    and source.minimum == 1
+                    and source.maximum == 1
+                    and not source.allow_empty
+                    and targets.endpoint_kinds == item_only
+                ):
+                    continue
                 raise ValueError(
                     f"fold {self.name!r} dependency relation "
-                    f"{str(transition.relation)!r} is declared {kind}; a fold "
-                    "reads one parent and one child per incidence and requires "
-                    f"a bipartite declaration, so it cannot fold a {kind} relation"
+                    f"{str(transition.relation)!r} is declared polyadic but must "
+                    "declare unique_sources=True, exactly one item source, and "
+                    "item-only targets"
                 )
+            kind = declaration.to_data()["kind"]
+            raise ValueError(
+                f"fold {self.name!r} dependency relation "
+                f"{str(transition.relation)!r} is declared {kind}; a fold "
+                "requires a bipartite relation or an ordered polyadic relation"
+            )
         admitted = set(self._references())
         for root in self.roots:
             if root not in admitted:
@@ -615,9 +636,17 @@ class FoldDeclaration[Value]:
             for reference in references
         }
         incoming = dict.fromkeys(references, 0)
+        declarations = {
+            declaration.name: declaration
+            for declaration in self.graph.relation_declarations
+        }
         for relation in self.graph.relations:
             if (
                 relation.declaration in selected
+                and isinstance(
+                    declarations[relation.declaration],
+                    BipartiteRelationDeclaration,
+                )
                 and isinstance(relation.left, ItemRef)
                 and isinstance(relation.right, ItemRef)
                 and relation.left in admitted
@@ -627,10 +656,25 @@ class FoldDeclaration[Value]:
                     relation.right
                 )
                 incoming[relation.right] += 1
+        for polyadic in self.graph.polyadic_relations:
+            if polyadic.declaration not in selected:
+                continue
+            source = cast(ItemRef, polyadic.sources[0])
+            if source not in admitted:
+                continue
+            for target in polyadic.targets:
+                child = cast(ItemRef, target)
+                if child in admitted:
+                    outgoing_lists[source][polyadic.declaration].append(child)
+                    incoming[child] += 1
         order = {reference: index for index, reference in enumerate(references)}
         outgoing = {
             reference: {
-                relation: tuple(sorted(children, key=order.__getitem__))
+                relation: (
+                    tuple(sorted(children, key=order.__getitem__))
+                    if isinstance(declarations[relation], BipartiteRelationDeclaration)
+                    else tuple(children)
+                )
                 for relation, children in by_relation.items()
             }
             for reference, by_relation in outgoing_lists.items()

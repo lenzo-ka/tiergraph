@@ -31,6 +31,7 @@ from tiergraph.core import (
 from tiergraph.fold import (
     AttributeValuation,
     ChildCombination,
+    FoldCost,
     FoldDeclaration,
     FoldResult,
     FoldTransition,
@@ -71,6 +72,119 @@ COMPLETE_BOUNDARY = AttributeValue(
 UNIT_WEIGHT = AttributeValue(
     QualifiedName(GRAMMAR_NAMESPACE, "weight"), XsdType.DECIMAL, "1"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Realization:
+    """Carry one experimental target-token alternative for a typed input token."""
+
+    tokens: tuple[str, ...]
+    provenance: tuple[str, ...] = ()
+    weight: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        """Require immutable token and ordered-provenance strings."""
+        if type(self.tokens) is not tuple or any(
+            not isinstance(token, str) for token in self.tokens
+        ):
+            raise ValueError("realization tokens must be a tuple of strings")
+        if type(self.provenance) is not tuple or any(
+            not isinstance(value, str) for value in self.provenance
+        ):
+            raise ValueError("realization provenance must be a tuple of strings")
+        if self.weight is not None and not isinstance(self.weight, Decimal):
+            raise ValueError("realization weight must be a Decimal or None")
+
+
+@dataclass(frozen=True, slots=True)
+class GrammarInputToken:
+    """Carry one experimental typed source symbol and its target alternatives."""
+
+    symbol: str
+    realization: tuple[Realization, ...]
+    provenance: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require a source symbol and at least one immutable realization."""
+        if not isinstance(self.symbol, str):
+            raise ValueError("grammar input token symbol must be a string")
+        if type(self.realization) is not tuple or not self.realization:
+            raise ValueError("grammar input token realization must be a nonempty tuple")
+        if any(not isinstance(value, Realization) for value in self.realization):
+            raise ValueError(
+                "grammar input token realization must contain Realization values"
+            )
+        if type(self.provenance) is not tuple or any(
+            not isinstance(value, str) for value in self.provenance
+        ):
+            raise ValueError(
+                "grammar input token provenance must be a tuple of strings"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GrammarInput:
+    """Hold the experimental typed token sequence retained by a parse forest."""
+
+    tokens: tuple[GrammarInputToken, ...]
+
+    def __post_init__(self) -> None:
+        """Require an immutable sequence of typed tokens."""
+        if type(self.tokens) is not tuple or any(
+            not isinstance(token, GrammarInputToken) for token in self.tokens
+        ):
+            raise ValueError(
+                "grammar input tokens must be a tuple of GrammarInputToken values"
+            )
+
+    @classmethod
+    def from_symbols(cls, symbols: Sequence[str]) -> GrammarInput:
+        """Wrap raw source symbols with one identity realization apiece."""
+        tokens = tuple(symbols)
+        if any(not isinstance(token, str) for token in tokens):
+            raise ValueError("grammar input token must be a string")
+        return cls(
+            tuple(
+                GrammarInputToken(symbol, (Realization((symbol,)),))
+                for symbol in tokens
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TargetPiece:
+    """Carry one emitted token and the target-piece witness that introduced it."""
+
+    token: str
+    witness: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedDerivation:
+    """Carry one experimental best target materialization and exact derivation cost."""
+
+    weight: str
+    pieces: tuple[TargetPiece, ...]
+    witness: tuple[str, ...]
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """Return emitted tokens in declared target order."""
+        return tuple(piece.token for piece in self.pieces)
+
+    @property
+    def text(self) -> str:
+        """Join emitted tokens with the experimental one-ASCII-space profile."""
+        return " ".join(self.tokens)
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationResult:
+    """Report the experimental one-best target projection and its fold account."""
+
+    derivations: tuple[GeneratedDerivation, ...]
+    truncated: bool
+    cost: FoldCost
 
 
 def _decode_qname(value: object, path: str) -> QualifiedName:
@@ -539,6 +653,7 @@ class ParseForest:
     fold: FoldDeclaration[bool]
     declaration: GrammarDeclaration
     collapsed: bool = True
+    input: GrammarInput | None = None
 
     def recognized(self) -> bool:
         """Return whether the designated start span has a derivation."""
@@ -889,7 +1004,7 @@ def _source_rules(
 
 def recognize(
     grammar: LoweredGrammar,
-    input_tokens: Sequence[str],
+    input_tokens: Sequence[str] | GrammarInput,
     namespace: str = CHART_NAMESPACE,
     *,
     collapse_units: bool = True,
@@ -900,9 +1015,12 @@ def recognize(
     exhaustive boundary discipline takes ``O(n^(m+1))`` time and polynomial
     space in input length ``n``.
     """
-    tokens = tuple(input_tokens)
-    if any(not isinstance(token, str) for token in tokens):
-        raise ValueError("grammar input token must be a string")
+    grammar_input = (
+        input_tokens
+        if isinstance(input_tokens, GrammarInput)
+        else GrammarInput.from_symbols(input_tokens)
+    )
+    tokens = tuple(token.symbol for token in grammar_input.tokens)
     declaration = grammar.declaration
     source_rules = _source_rules(grammar)
     recognition_rules = (
@@ -934,6 +1052,7 @@ def recognize(
         root_key,
         references,
         app_rows,
+        grammar_input,
     )
 
 
@@ -981,7 +1100,7 @@ def _deduce_chart(
     return keys, applications
 
 
-def _build_parse_forest(
+def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
     grammar: LoweredGrammar,
     namespace: str,
     collapse_units: bool,
@@ -989,6 +1108,7 @@ def _build_parse_forest(
     root_key: _ChartKey,
     references: dict[_ChartKey, ItemRef],
     app_rows: list[tuple[_ChartKey, int, tuple[_ChartKey, ...], bool]],
+    grammar_input: GrammarInput,
 ) -> ParseForest:
     """Construct the opcode program and bound recognition fold for a chart."""
     declaration = grammar.declaration
@@ -997,12 +1117,21 @@ def _build_parse_forest(
         for local in (
             "chart-items",
             "applications",
+            "input-tokens",
+            "realizations",
+            "target-pieces",
             "alternatives",
             "children",
             "production-application",
+            "target-expansion",
+            "realization-alternatives",
+            "realization-expansion",
             "local-factor",
             "weight",
             "kind",
+            "text",
+            "input-index",
+            "rule-index",
             "nonterminal",
             "start",
             "end",
@@ -1015,6 +1144,9 @@ def _build_parse_forest(
             DeclareTier(
                 TierDeclaration(names["applications"], "Production applications")
             ),
+            DeclareTier(TierDeclaration(names["input-tokens"], "Input tokens")),
+            DeclareTier(TierDeclaration(names["realizations"], "Realizations")),
+            DeclareTier(TierDeclaration(names["target-pieces"], "Target pieces")),
             DeclareRelation(
                 SimpleRelationDeclaration(
                     _name(namespace, "chart-membership"),
@@ -1028,6 +1160,16 @@ def _build_parse_forest(
                     names["applications"],
                     _name(namespace, "application-type"),
                 )
+            ),
+            *(
+                DeclareRelation(
+                    SimpleRelationDeclaration(
+                        _name(namespace, f"{local}-membership"),
+                        names[local],
+                        _name(namespace, f"{local}-type"),
+                    )
+                )
+                for local in ("input-tokens", "realizations", "target-pieces")
             ),
         )
     )
@@ -1044,6 +1186,12 @@ def _build_parse_forest(
             _name(namespace, "chart-item-type"),
             True,
         ),
+        (
+            "realization-alternatives",
+            _name(namespace, "input-tokens-type"),
+            _name(namespace, "realizations-type"),
+            True,
+        ),
     ):
         opcodes.append(
             DeclareRelation(
@@ -1053,24 +1201,46 @@ def _build_parse_forest(
             )
         )
     item_side = (RelationEndpointKind.ITEM,)
-    opcodes.append(
-        DeclareRelation(
-            PolyadicRelationDeclaration(
-                names["production-application"],
-                RelationSideDeclaration(item_side, (names["applications"],), 1, 1),
-                RelationSideDeclaration(
-                    item_side, (names["chart-items"],), 0, None, True
-                ),
-                unique_sources=True,
-                acyclic=True,
+    for relation, sources, targets, distinct_targets in (
+        (
+            "production-application",
+            (names["applications"],),
+            (names["chart-items"],),
+            False,
+        ),
+        (
+            "target-expansion",
+            (names["applications"],),
+            (names["chart-items"], names["input-tokens"], names["target-pieces"]),
+            False,
+        ),
+        (
+            "realization-expansion",
+            (names["realizations"],),
+            (names["target-pieces"],),
+            True,
+        ),
+    ):
+        opcodes.append(
+            DeclareRelation(
+                PolyadicRelationDeclaration(
+                    names[relation],
+                    RelationSideDeclaration(item_side, sources, 1, 1),
+                    RelationSideDeclaration(item_side, targets, 0, None, True),
+                    unique_sources=True,
+                    distinct_targets=distinct_targets,
+                    acyclic=True,
+                )
             )
         )
-    )
     for local, value_type in (
         ("local-factor", XsdType.BOOLEAN),
         ("weight", XsdType.DECIMAL),
         ("kind", XsdType.STRING),
+        ("text", XsdType.STRING),
         ("nonterminal", XsdType.STRING),
+        ("input-index", XsdType.INTEGER),
+        ("rule-index", XsdType.INTEGER),
         ("start", XsdType.INTEGER),
         ("end", XsdType.INTEGER),
     ):
@@ -1079,9 +1249,89 @@ def _build_parse_forest(
                 AttributeDeclaration(names[local], AttributeDomain.ITEM, value_type)
             )
         )
+
+    def add_item(
+        reference: ItemRef,
+        values: tuple[tuple[str, XsdType, str], ...],
+    ) -> None:
+        """Append one item and its scalar values to the chart program."""
+        opcodes.append(AddItem(reference.tier, Item()))
+        opcodes.extend(
+            AttachValue(
+                AttributeDomain.ITEM,
+                reference,
+                AttributeValue(names[local], value_type, lexical),
+            )
+            for local, value_type, lexical in values
+        )
+
+    piece_index = 0
+    realization_index = 0
+    input_references: list[ItemRef] = []
+    for input_index, token in enumerate(grammar_input.tokens):
+        token_reference = ItemRef(names["input-tokens"], input_index)
+        input_references.append(token_reference)
+        add_item(
+            token_reference,
+            (
+                ("local-factor", XsdType.BOOLEAN, "true"),
+                ("weight", XsdType.DECIMAL, "0"),
+                ("kind", XsdType.STRING, "input-token"),
+                ("text", XsdType.STRING, token.symbol),
+                ("input-index", XsdType.INTEGER, str(input_index)),
+            ),
+        )
+        for realization in token.realization:
+            realization_reference = ItemRef(names["realizations"], realization_index)
+            realization_index += 1
+            add_item(
+                realization_reference,
+                (
+                    ("local-factor", XsdType.BOOLEAN, "true"),
+                    (
+                        "weight",
+                        XsdType.DECIMAL,
+                        "0" if realization.weight is None else str(realization.weight),
+                    ),
+                    ("kind", XsdType.STRING, "realization"),
+                    ("input-index", XsdType.INTEGER, str(input_index)),
+                ),
+            )
+            pieces: list[ItemRef] = []
+            for text in realization.tokens:
+                piece = ItemRef(names["target-pieces"], piece_index)
+                piece_index += 1
+                pieces.append(piece)
+                add_item(
+                    piece,
+                    (
+                        ("local-factor", XsdType.BOOLEAN, "true"),
+                        ("weight", XsdType.DECIMAL, "0"),
+                        ("kind", XsdType.STRING, "realization-piece"),
+                        ("text", XsdType.STRING, text),
+                        ("input-index", XsdType.INTEGER, str(input_index)),
+                    ),
+                )
+            opcodes.append(
+                Relate(
+                    RelationInstance(
+                        names["realization-alternatives"],
+                        token_reference,
+                        realization_reference,
+                    )
+                )
+            )
+            opcodes.append(
+                Relate(
+                    PolyadicRelationInstance(
+                        names["realization-expansion"],
+                        (realization_reference,),
+                        tuple(pieces),
+                    )
+                )
+            )
     for key in keys:
         reference = references[key]
-        opcodes.append(AddItem(names["chart-items"], Item()))
         values = (
             ("local-factor", XsdType.BOOLEAN, "true"),
             ("weight", XsdType.DECIMAL, "0"),
@@ -1090,42 +1340,31 @@ def _build_parse_forest(
             ("start", XsdType.INTEGER, str(key[1])),
             ("end", XsdType.INTEGER, str(key[2])),
         )
-        for local, value_type, lexical in values:
-            opcodes.append(
-                AttachValue(
-                    AttributeDomain.ITEM,
-                    reference,
-                    AttributeValue(names[local], value_type, lexical),
-                )
-            )
+        add_item(reference, values)
     for app_index, (parent, rule_index, children, terminals_match) in enumerate(
         app_rows
     ):
         app = ItemRef(names["applications"], app_index)
-        opcodes.append(AddItem(names["applications"], Item()))
-        for local, value_type, lexical in (
+        add_item(
+            app,
             (
-                "local-factor",
-                XsdType.BOOLEAN,
-                "true" if terminals_match else "false",
+                (
+                    "local-factor",
+                    XsdType.BOOLEAN,
+                    "true" if terminals_match else "false",
+                ),
+                (
+                    "weight",
+                    XsdType.DECIMAL,
+                    "0"
+                    if rule_index < 0
+                    else declaration.rules[rule_index].effective_weight.lexical,
+                ),
+                ("kind", XsdType.STRING, "production-application"),
+                ("start", XsdType.INTEGER, str(rule_index)),
+                ("rule-index", XsdType.INTEGER, str(rule_index)),
             ),
-            (
-                "weight",
-                XsdType.DECIMAL,
-                "0"
-                if rule_index < 0
-                else declaration.rules[rule_index].effective_weight.lexical,
-            ),
-            ("kind", XsdType.STRING, "production-application"),
-            ("start", XsdType.INTEGER, str(rule_index)),
-        ):
-            opcodes.append(
-                AttachValue(
-                    AttributeDomain.ITEM,
-                    app,
-                    AttributeValue(names[local], value_type, lexical),
-                )
-            )
+        )
         child_refs = tuple(references[child] for child in children)
         opcodes.append(
             Relate(RelationInstance(names["alternatives"], references[parent], app))
@@ -1138,6 +1377,65 @@ def _build_parse_forest(
             Relate(
                 PolyadicRelationInstance(
                     names["production-application"], (app,), child_refs
+                )
+            )
+        )
+        target_references: list[ItemRef] = []
+        if rule_index >= 0 and not collapse_units:
+            rule = declaration.rules[rule_index]
+            source_holes = [
+                element for element in rule.source if isinstance(element, GrammarHole)
+            ]
+            source_variables = [element.variable.lexical for element in source_holes]
+            target_variables = [
+                element.variable.lexical
+                for element in rule.target
+                if isinstance(element, GrammarHole)
+            ]
+            if (
+                len(set(source_variables)) == len(source_variables)
+                and len(set(target_variables)) == len(target_variables)
+                and not rule.awaited_variables
+            ):
+                bindings = {
+                    hole.variable.lexical: child
+                    for hole, child in zip(source_holes, child_refs, strict=True)
+                }
+                cursor = parent[1]
+                terminal_positions: dict[str, list[int]] = {}
+                child_keys = iter(children)
+                for element in rule.source:
+                    if isinstance(element, GrammarTerminal):
+                        terminal_positions.setdefault(element.text.lexical, []).append(
+                            cursor
+                        )
+                        cursor += 1
+                    else:
+                        cursor = next(child_keys)[2]
+                for element in rule.target:
+                    if isinstance(element, GrammarHole):
+                        target_references.append(bindings[element.variable.lexical])
+                        continue
+                    positions = terminal_positions.get(element.text.lexical, [])
+                    if len(positions) == 1:
+                        target_references.append(input_references[positions[0]])
+                        continue
+                    piece = ItemRef(names["target-pieces"], piece_index)
+                    piece_index += 1
+                    target_references.append(piece)
+                    add_item(
+                        piece,
+                        (
+                            ("local-factor", XsdType.BOOLEAN, "true"),
+                            ("weight", XsdType.DECIMAL, "0"),
+                            ("kind", XsdType.STRING, "literal-piece"),
+                            ("text", XsdType.STRING, element.text.lexical),
+                        ),
+                    )
+        opcodes.append(
+            Relate(
+                PolyadicRelationInstance(
+                    names["target-expansion"], (app,), tuple(target_references)
                 )
             )
         )
@@ -1160,7 +1458,9 @@ def _build_parse_forest(
         ),
         roots=(root,),
     )
-    return ParseForest(graph, program, root, fold, declaration, collapse_units)
+    return ParseForest(
+        graph, program, root, fold, declaration, collapse_units, grammar_input
+    )
 
 
 def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
@@ -1169,14 +1469,24 @@ def _forest_names(forest: ParseForest) -> dict[str, QualifiedName]:
         for local in (
             "chart-items",
             "applications",
+            "input-tokens",
+            "realizations",
+            "target-pieces",
             "alternatives",
             "children",
             "production-application",
+            "target-expansion",
+            "realization-alternatives",
+            "realization-expansion",
             "local-factor",
             "weight",
+            "kind",
+            "text",
             "nonterminal",
             "start",
             "end",
+            "input-index",
+            "rule-index",
         )
     }
 
@@ -1262,9 +1572,139 @@ def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValu
     )
 
 
+def _generation_fold(forest: ParseForest) -> FoldDeclaration[PathValue]:
+    """Build the experimental one-best fold over retained target expansions."""
+    names = _forest_names(forest)
+    tiers = (
+        names["chart-items"],
+        names["applications"],
+        names["input-tokens"],
+        names["realizations"],
+        names["target-pieces"],
+    )
+    valid_labels = {
+        f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
+        for reference in forest.graph.canonical_items()
+        if reference.tier in tiers
+        and _item_attribute(forest.graph, reference, "local-factor").lexical == "true"
+    }
+
+    def lift(value: object, label: str) -> PathValue:
+        """Lift target weights while annihilating invalid chart applications."""
+        if label not in valid_labels:
+            return PATH.zero
+        return (cast(Decimal, value), ((label,),))
+
+    return FoldDeclaration(
+        "experimental-grammar-target-best",
+        forest.graph,
+        AttributeValuation("target weight", names["weight"], tiers),
+        PATH,
+        lift,
+        (
+            FoldTransition(names["alternatives"], ChildCombination.OR),
+            FoldTransition(names["target-expansion"], ChildCombination.AND),
+            FoldTransition(names["realization-alternatives"], ChildCombination.OR),
+            FoldTransition(names["realization-expansion"], ChildCombination.AND),
+        ),
+        roots=(forest.root,),
+        output_cap=1,
+        ranked_output=True,
+    )
+
+
+def _generated_derivation(
+    forest: ParseForest, value: PathValue, witness: tuple[str, ...]
+) -> GeneratedDerivation:
+    """Materialize target-piece labels from one ranked structural witness."""
+    names = _forest_names(forest)
+    pieces_by_label: dict[str, TargetPiece] = {}
+    for reference in forest.graph.canonical_items():
+        if reference.tier != names["target-pieces"]:
+            continue
+        label = (
+            f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
+        )
+        pieces_by_label[label] = TargetPiece(
+            _item_attribute(forest.graph, reference, "text").lexical,
+            label,
+        )
+    return GeneratedDerivation(
+        str(value[0]),
+        tuple(pieces_by_label[label] for label in witness if label in pieces_by_label),
+        witness,
+    )
+
+
+def _validate_generation(declaration: GrammarDeclaration) -> None:
+    """Refuse grammar shapes whose experimental target meaning is ambiguous."""
+    for rule_index, rule in enumerate(declaration.rules):
+        for role, pattern in (("source", rule.source), ("target", rule.target)):
+            variables = [
+                element.variable.lexical
+                for element in pattern
+                if isinstance(element, GrammarHole)
+            ]
+            repeated = next(
+                (variable for variable in variables if variables.count(variable) > 1),
+                None,
+            )
+            if repeated is not None:
+                raise ValueError(
+                    f"experimental generation refuses repeated {role} hole "
+                    f"variable {repeated!r} in rule {rule_index}"
+                )
+        if rule.awaited_variables:
+            raise ValueError(
+                "experimental generation does not materialize awaited variables "
+                f"in rule {rule_index}"
+            )
+        source_terminals = [
+            element.text.lexical
+            for element in rule.source
+            if isinstance(element, GrammarTerminal)
+        ]
+        for element in rule.target:
+            if (
+                isinstance(element, GrammarTerminal)
+                and source_terminals.count(element.text.lexical) > 1
+            ):
+                raise ValueError(
+                    f"experimental generation rule {rule_index} target terminal "
+                    f"{element.text.lexical!r} could echo more than one source occurrence"
+                )
+
+
+def generate(
+    grammar: LoweredGrammar | ParseForest,
+    input_tokens: Sequence[str] | GrammarInput | None = None,
+    *,
+    count: int = 1,
+) -> GenerationResult:
+    """Return the experimental one-best target materialization.
+
+    This first slice deliberately accepts only ``count=1``; bounded n-best is
+    a separate generation contract.
+    """
+    if count != 1:
+        raise ValueError(
+            f"experimental generation count {count!r} must be 1 in this release"
+        )
+    forest = _forest(grammar, input_tokens, "generate")
+    _validate_generation(forest.declaration)
+    result = _generation_fold(forest).run()
+    ranked = cast(
+        tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
+    )
+    derivations = tuple(
+        _generated_derivation(forest, value, witness) for value, witness in ranked
+    )
+    return GenerationResult(derivations, result.truncated, result.cost)
+
+
 def _forest(
     grammar: LoweredGrammar | ParseForest,
-    input_tokens: Sequence[str] | None,
+    input_tokens: Sequence[str] | GrammarInput | None,
     operation: str,
 ) -> ParseForest:
     if isinstance(grammar, ParseForest):
@@ -1316,15 +1756,22 @@ __all__ = [
     "COMPLETE_BOUNDARY",
     "GRAMMAR_NAMESPACE",
     "BestDerivation",
+    "GeneratedDerivation",
+    "GenerationResult",
     "GrammarChartProfile",
     "GrammarDeclaration",
     "GrammarHole",
+    "GrammarInput",
+    "GrammarInputToken",
     "GrammarRule",
     "GrammarTerminal",
     "LoweredGrammar",
     "ParseForest",
+    "Realization",
+    "TargetPiece",
     "best",
     "count",
+    "generate",
     "grammar_loads",
     "lower_grammar",
     "recognize",
