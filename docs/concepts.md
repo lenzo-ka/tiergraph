@@ -13,11 +13,13 @@ items or boundaries according to their declarations. That is the whole store.
 
 The views are computed, not stored. Selection reads tiers, items, and
 boundaries as nodes. Predicates filter selected nodes by typed values and can
-quantify over one relation step. Traversal follows declared relation incidence.
-Profiles interpret particular declarations as clocks, roots, choices, or
-recursive JSON values. Folds evaluate a finite dependency relation with a
-caller-supplied semiring. None of these views adds a new kind of stored node;
-each is a reading of the same graph.
+quantify over one relation step or over half-open intervals read from declared
+item attributes. Interval joins return matching node pairs without storing a
+new relation. Traversal follows declared relation incidence. Profiles interpret
+particular declarations as clocks, roots, choices, or recursive JSON values.
+Folds evaluate a finite dependency relation with a caller-supplied semiring.
+None of these views adds a new kind of stored node; each is a reading of the
+same graph.
 
 ## What a graph is built from
 

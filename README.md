@@ -87,9 +87,9 @@ case and covers most use. Build a graph directly, or record an ordered edit stre
 as a `Program` and run it — see [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md).
 
 **Match values and structure.** Selection with set algebra, `WhereSelector`
-value predicates, one-step relation images, `Related` quantifiers, `Walk` over
-declared relation incidence, and ordered containment replace hand-written index
-arithmetic. See [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md)
+value predicates, one-step relation images, `Related` quantifiers, half-open
+interval predicates and span-pair joins, `Walk` over declared relation incidence,
+and ordered containment replace hand-written index arithmetic. See [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md)
 and [matching with existing pieces](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/matching-with-existing-pieces.md).
 
 **Measure and recognize by fold.** A fold evaluates a finite dependency relation

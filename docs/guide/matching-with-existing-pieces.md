@@ -280,10 +280,35 @@ equal offsets: [('s0', 'a0'), ('s1', 'a1')]
 extent: exhaustive
 ```
 
+`Spans` uses the same interval relations inside a predicate. Its `other` tier
+supplies the items tested against each candidate, and its target predicate
+filters those items first. `ANY` requires one matching item; `NONE` and `ALL`
+use the same vacuous truth as `Related` when no interval-related item remains.
+
+```python
+from tiergraph.predicate import Spans
+
+aligned_with_an_annotation = Spans(
+    OffsetProfile(start, end=end),
+    IntervalRelation.EQUAL,
+    Quantifier.ANY,
+    annotations,
+    And(()),
+)
+aligned_segments = (
+    compile_predicate(aligned_with_an_annotation).bind(graph).select(all_segments)
+)
+print("segments aligned with an annotation:", labels(aligned_segments))
+```
+```text
+segments aligned with an annotation: ['s0', 's1']
+```
+
 An origin, end, extent, or partition missing from an item that the operation
 reads is a semantic refusal. An extent must be nonnegative, and an end cannot
 precede its origin. Supplying `extent=` in place of `end=` gives the same
-intervals when the stored extent is `end - origin`.
+intervals when the stored extent is `end - origin`. When `partition` is present,
+only items with equal partition values can match.
 
 ## Matching complete outputs and folding alternatives
 
