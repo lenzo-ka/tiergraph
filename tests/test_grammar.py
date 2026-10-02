@@ -858,8 +858,8 @@ def test_graph_input_offsets_remain_absolute() -> None:
     ]
 
 
-def test_output_piece_exposes_only_contiguous_coverage_as_one_span() -> None:
-    """A literal retains a discontiguous coverage set without inventing a hull."""
+def test_output_piece_exposes_one_span_only_within_one_partition() -> None:
+    """A literal covering two partitions keeps both spans and has no single span."""
     sentence = name("S")
     declaration = GrammarDeclaration(
         (sentence,),
@@ -890,6 +890,24 @@ def test_output_piece_exposes_only_contiguous_coverage_as_one_span() -> None:
         SourceSpan("right", 20, 21),
     )
     assert piece.span is None
+
+
+def test_coverage_within_one_partition_spans_every_token_in_any_order() -> None:
+    """Coverage in one partition is the hull of all tokens, not the first origin."""
+    grammar_input = GrammarInput(
+        (
+            GrammarInputToken(
+                "x", (Realization(("x",)),), span=SourceSpan("raw", 20, 21)
+            ),
+            GrammarInputToken(
+                "y", (Realization(("y",)),), span=SourceSpan("raw", 10, 11)
+            ),
+        )
+    )
+
+    assert grammar_module._source_coverage(grammar_input, 0, 2) == (
+        SourceSpan("raw", 10, 21),
+    )
 
 
 def test_empty_chart_coverage_uses_absolute_boundary_anchors() -> None:

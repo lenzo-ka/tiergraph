@@ -1998,7 +1998,7 @@ Property.
 TargetPiece.span(self) -> 'SourceSpan | None'
 ```
 
-Return the single contiguous source interval, when one exists.
+Return the single source interval when the coverage lies in one partition.
 
 ### `best`
 

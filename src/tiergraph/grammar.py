@@ -309,7 +309,7 @@ class TargetPiece:
 
     @property
     def span(self) -> SourceSpan | None:
-        """Return the single contiguous source interval, when one exists."""
+        """Return the single source interval when the coverage lies in one partition."""
         return self.spans[0] if len(self.spans) == 1 else None
 
 
@@ -2006,7 +2006,7 @@ def _source_coverage(
         return (
             SourceSpan(
                 spans[0].partition,
-                spans[0].origin,
+                min(span.origin for span in spans),
                 max(span.end for span in spans),
             ),
         )
