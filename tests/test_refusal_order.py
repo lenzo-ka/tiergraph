@@ -525,6 +525,7 @@ def grammar_document(**changes: object) -> str:
                 "boundary": text,
                 "awaited_variables": [],
                 "weight": None,
+                "provenance": [],
             }
         ],
     }
@@ -539,6 +540,7 @@ def grammar_document(**changes: object) -> str:
                 "boundary": text,
                 "awaited_variables": [],
                 "weight": None,
+                "provenance": [],
             }
         ],
     }
