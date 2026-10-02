@@ -6843,12 +6843,22 @@ CompiledPattern(pattern: 'Pattern', start: 'int', accept: 'int', epsilon: 'tuple
 
 Hold one Thompson epsilon-NFA and its deduplicated atom table.
 
+#### `CompiledPattern.max_width`
+
+Property.
+
+```text
+CompiledPattern.max_width(self) -> 'int | None'
+```
+
+Return the exact maximum consumed item count, or None if unbounded.
+
 #### `CompiledPattern.exists`
 
 Method.
 
 ```text
-CompiledPattern.exists(self, graph: 'Graph', ordering: 'Ordering') -> 'bool'
+CompiledPattern.exists(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'bool | OpenPatternResult[bool]'
 ```
 
 Return whether any scope contains an accepting span.
@@ -6858,7 +6868,7 @@ Return whether any scope contains an accepting span.
 Method.
 
 ```text
-CompiledPattern.focus(self, graph: 'Graph', ordering: 'Ordering') -> 'NodeSet'
+CompiledPattern.focus(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'NodeSet | OpenPatternResult[NodeSet]'
 ```
 
 Return every item consumed by a focus edge on an accepting run.
@@ -6868,7 +6878,7 @@ Return every item consumed by a focus edge on an accepting run.
 Method.
 
 ```text
-CompiledPattern.spans(self, graph: 'Graph', ordering: 'Ordering', *, limit: 'int | None' = None) -> 'SpanMatches'
+CompiledPattern.spans(self, graph: 'Graph', ordering: 'Ordering', *, limit: 'int | None' = None, open_right: 'bool' = False) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
 ```
 
 Return each distinct accepting span once in scope-major order.
@@ -6878,7 +6888,7 @@ Return each distinct accepting span once in scope-major order.
 Method.
 
 ```text
-CompiledPattern.count(self, graph: 'Graph', ordering: 'Ordering') -> 'int'
+CompiledPattern.count(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'int | OpenPatternResult[int]'
 ```
 
 Count distinct accepting scope spans, never NFA runs.
@@ -6919,6 +6929,14 @@ FocusPattern(body: 'Pattern') -> None
 ```
 
 Mark consumed items that a sequence selector returns.
+
+### `OpenPatternResult`
+
+```text
+OpenPatternResult(result: 'Result', pending_from: 'tuple[int | None, ...]') -> None
+```
+
+Carry a settled open-edge result and one watermark per ordering scope.
 
 ### `Ordering`
 
@@ -7064,6 +7082,14 @@ compile_pattern(pattern: 'Pattern') -> 'CompiledPattern'
 
 Validate and compile one pattern to a Thompson epsilon-NFA.
 
+### `format_pattern`
+
+```text
+format_pattern(pattern: 'Pattern', syntax: 'PredicateSyntax') -> 'str'
+```
+
+Return canonical text for one representable sequence pattern.
+
 ### `ordering_to_data`
 
 ```text
@@ -7071,6 +7097,22 @@ ordering_to_data(ordering: 'Ordering') -> 'JsonValue'
 ```
 
 Return one declared chain ordering as strict JSON data.
+
+### `parse_pattern`
+
+```text
+parse_pattern(text: 'str', syntax: 'PredicateSyntax') -> 'Pattern'
+```
+
+Parse one complete regular sequence pattern.
+
+### `parse_pattern_at`
+
+```text
+parse_pattern_at(text: 'str', start: 'int', syntax: 'PredicateSyntax', terminator: 'str | None' = None) -> 'tuple[Pattern, int]'
+```
+
+Parse until a requested terminator outside item tests and groups.
 
 ### `pattern_loads`
 

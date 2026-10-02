@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added experimental keep-all and bounded n-best synchronous-grammar target
   materialization with declared provenance, graph-bound absolute spans, and
-  stable sub-span lattice roots, with finite-string refusal for reachable cycles.
+  sub-span lattice roots, with finite-string refusal for reachable cycles.
+- Added pattern text parsing, formatting, and command-line matching.
+- Added exact pattern widths and open-right matching watermarks.
 - Added regular sequence patterns over declared graph orderings.
 
 ## [0.5.0] - 2026-10-01

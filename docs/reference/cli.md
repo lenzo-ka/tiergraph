@@ -553,14 +553,22 @@ options:
 ### `tiergraph match`
 
 ```text
-usage: tiergraph match [-h] --request FILE [-o FILE] GRAPH
+usage: tiergraph match [-h] (--request FILE | --pattern TEXT)
+                       [--ordering JSON] [--prefix P] [--limit LIMIT]
+                       [-o FILE]
+                       GRAPH [{exists,focus,spans,count}]
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
+  {exists,focus,spans,count}
 
 options:
   -h, --help            show this help message and exit
   --request FILE
+  --pattern TEXT
+  --ordering JSON
+  --prefix P
+  --limit LIMIT
   -o FILE, --output FILE
                         output file (default: -)
 ```

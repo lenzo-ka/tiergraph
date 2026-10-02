@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
+from typing import Literal, cast, overload
 
 from tiergraph.core import (
     Graph,
@@ -47,6 +47,8 @@ _MIN_PARTS = 2
 _GUARD_ALWAYS = 0
 _GUARD_START = 1
 _GUARD_END = 2
+_FUTURE_ATOM = 1
+_FUTURE_END = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +245,28 @@ def _position_count(pattern: Pattern) -> int:
     return _position_count(pattern.body) * multiplier
 
 
+def _max_width(pattern: Pattern) -> int | None:
+    if isinstance(pattern, AtomPattern):
+        return 1
+    if isinstance(pattern, (StartPattern, EndPattern)):
+        return 0
+    if isinstance(pattern, FocusPattern):
+        return _max_width(pattern.body)
+    if isinstance(pattern, SeqPattern):
+        widths = tuple(_max_width(part) for part in pattern.parts)
+        return None if None in widths else sum(cast(tuple[int, ...], widths))
+    if isinstance(pattern, AltPattern):
+        widths = tuple(_max_width(part) for part in pattern.parts)
+        return None if None in widths else max(cast(tuple[int, ...], widths))
+    width = _max_width(pattern.body)
+    if width is None:
+        return None
+
+    if pattern.max is None:
+        return 0 if width == 0 else None
+    return width * pattern.max
+
+
 def _pattern_node_count(pattern: Pattern) -> int:
     count = 0
     pending = [pattern]
@@ -348,6 +372,14 @@ class _Scope:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenPatternResult[Result]:
+    """Carry a settled open-edge result and one watermark per ordering scope."""
+
+    result: Result
+    pending_from: tuple[int | None, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SpanMatch:
     """Carry one distinct matching scope span and optional physical offsets."""
 
@@ -394,12 +426,26 @@ class CompiledPattern:
     atom_edges: tuple[tuple[_AtomEdge, ...], ...]
     predicates: tuple[Predicate, ...]
 
-    def _closure(self, states: set[int], position: int, length: int) -> set[int]:
+    @property
+    def max_width(self) -> int | None:
+        """Return the exact maximum consumed item count, or None if unbounded."""
+        return _max_width(self.pattern)
+
+    def _closure(
+        self,
+        states: set[int],
+        position: int,
+        length: int,
+        *,
+        open_right: bool = False,
+    ) -> set[int]:
         result = set(states)
         pending = list(states)
         while pending:
             state = pending.pop()
             for edge in self.epsilon[state]:
+                if edge.guard == _GUARD_END and open_right:
+                    continue
                 if edge.guard == _GUARD_START and position != 0:
                     continue
                 if edge.guard == _GUARD_END and position != length:
@@ -533,6 +579,8 @@ class CompiledPattern:
         truth: tuple[dict[Node, bool], ...],
         position: int,
         length: int,
+        *,
+        open_right: bool = False,
     ) -> set[int]:
         targets = {
             edge.target
@@ -540,11 +588,107 @@ class CompiledPattern:
             for edge in self.atom_edges[state]
             if truth[edge.atom][node]
         }
-        return self._closure(targets, position + 1, length)
+        return self._closure(targets, position + 1, length, open_right=open_right)
 
-    def exists(self, graph: Graph, ordering: Ordering) -> bool:
+    def _can_change_after_end(self, states: set[int], length: int) -> bool:
+        pending = [(state, 0) for state in states]
+        seen = set(pending)
+        while pending:
+            state, phase = pending.pop()
+            if state == self.accept and phase:
+                return True
+            for edge in self.epsilon[state]:
+                next_phase = phase
+                if edge.guard == _GUARD_START and (phase or length):
+                    continue
+                if edge.guard == _GUARD_END:
+                    next_phase = _FUTURE_END
+                candidate = (edge.target, next_phase)
+                if candidate not in seen:
+                    seen.add(candidate)
+                    pending.append(candidate)
+            if phase != _FUTURE_END:
+                for atom_edge in self.atom_edges[state]:
+                    candidate = (atom_edge.target, _FUTURE_ATOM)
+                    if candidate not in seen:
+                        seen.add(candidate)
+                        pending.append(candidate)
+        return False
+
+    def _pending_start(
+        self, scope: _Scope, truth: tuple[dict[Node, bool], ...]
+    ) -> int | None:
+        length = len(scope.nodes)
+        for start in range(length + 1):
+            active = self._closure({self.start}, start, length, open_right=True)
+            for position in range(start, length):
+                active = self._step(
+                    active,
+                    scope.nodes[position],
+                    truth,
+                    position,
+                    length,
+                    open_right=True,
+                )
+                if not active:
+                    break
+            if active and self._can_change_after_end(active, length):
+                return start
+        return None
+
+    def _scope_accepts(
+        self, scope: _Scope, truth: tuple[dict[Node, bool], ...], before: int
+    ) -> bool:
+        length = len(scope.nodes)
+        for start in range(before):
+            active = self._closure({self.start}, start, length, open_right=True)
+            if self.accept in active:
+                return True
+            for position in range(start, length):
+                active = self._step(
+                    active,
+                    scope.nodes[position],
+                    truth,
+                    position,
+                    length,
+                    open_right=True,
+                )
+                if self.accept in active:
+                    return True
+                if not active:
+                    break
+        return False
+
+    @overload
+    def exists(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
+    ) -> bool:
+        """Return whether a closed scope contains an accepting span."""
+        ...
+
+    @overload
+    def exists(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
+    ) -> OpenPatternResult[bool]:
+        """Return settled existence and open-right watermarks."""
+        ...
+
+    def exists(
+        self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    ) -> bool | OpenPatternResult[bool]:
         """Return whether any scope contains an accepting span."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.EXISTS)
+        if open_right:
+            pending = tuple(self._pending_start(scope, truth) for scope in scopes)
+            settled = any(
+                self._scope_accepts(
+                    scope,
+                    truth,
+                    len(scope.nodes) + 1 if mark is None else mark,
+                )
+                for scope, mark in zip(scopes, pending, strict=True)
+            )
+            return OpenPatternResult(settled, pending)
         for scope in scopes:
             length = len(scope.nodes)
             active: set[int] = set()
@@ -558,12 +702,33 @@ class CompiledPattern:
                     )
         return False
 
-    def focus(self, graph: Graph, ordering: Ordering) -> NodeSet:
+    @overload
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
+    ) -> NodeSet:
+        """Return focused items for closed scopes."""
+        ...
+
+    @overload
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
+    ) -> OpenPatternResult[NodeSet]:
+        """Return settled focused items and open-right watermarks."""
+        ...
+
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    ) -> NodeSet | OpenPatternResult[NodeSet]:
         """Return every item consumed by a focus edge on an accepting run."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.FOCUS)
         selected: list[Node] = []
+        pending = (
+            tuple(self._pending_start(scope, truth) for scope in scopes)
+            if open_right
+            else ()
+        )
         reverse = self._reverse_epsilon()
-        for scope in scopes:
+        for scope_index, scope in enumerate(scopes):
             length = len(scope.nodes)
             forward: list[set[int]] = []
             active: set[int] = set()
@@ -597,22 +762,38 @@ class CompiledPattern:
                     and edge.target in backward[position + 1]
                     for state in forward[position]
                     for edge in self.atom_edges[state]
+                ) and (
+                    not open_right
+                    or pending[scope_index] is None
+                    or position < cast(int, pending[scope_index])
                 ):
                     selected.append(node)
-        return NodeSet(graph, tuple(selected))
+        result = NodeSet(graph, tuple(selected))
+        return OpenPatternResult(result, pending) if open_right else result
 
     def _span_matches(
         self,
         scope_index: int,
         scope: _Scope,
         truth: tuple[dict[Node, bool], ...],
+        *,
+        open_right: bool = False,
+        before: int | None = None,
     ) -> tuple[SpanMatch, ...]:
         length = len(scope.nodes)
         result: list[SpanMatch] = []
-        for start in range(length + 1):
-            active = self._closure({self.start}, start, length)
+        stop = length + 1 if before is None else before
+        for start in range(stop):
+            active = self._closure({self.start}, start, length, open_right=open_right)
             for end in range(start, length):
-                active = self._step(active, scope.nodes[end], truth, end, length)
+                active = self._step(
+                    active,
+                    scope.nodes[end],
+                    truth,
+                    end,
+                    length,
+                    open_right=open_right,
+                )
                 if not active:
                     break
                 if self.accept in active:
@@ -628,32 +809,98 @@ class CompiledPattern:
         )
         return SpanMatch(scope_index, start, end, scope.nodes[start:end], offsets)
 
+    @overload
     def spans(
         self,
         graph: Graph,
         ordering: Ordering,
         *,
         limit: int | None = None,
+        open_right: Literal[False] = False,
     ) -> SpanMatches:
+        """Return accepting spans for closed scopes."""
+        ...
+
+    @overload
+    def spans(
+        self,
+        graph: Graph,
+        ordering: Ordering,
+        *,
+        limit: int | None = None,
+        open_right: Literal[True],
+    ) -> OpenPatternResult[SpanMatches]:
+        """Return settled spans and open-right watermarks."""
+        ...
+
+    def spans(
+        self,
+        graph: Graph,
+        ordering: Ordering,
+        *,
+        limit: int | None = None,
+        open_right: bool = False,
+    ) -> SpanMatches | OpenPatternResult[SpanMatches]:
         """Return each distinct accepting span once in scope-major order."""
         scopes, truth = self._prepare(
             graph, ordering, _PatternOperation.SPANS, limit=limit
         )
         result: list[SpanMatch] = []
+        pending = (
+            tuple(self._pending_start(scope, truth) for scope in scopes)
+            if open_right
+            else ()
+        )
         for scope_index, scope in enumerate(scopes):
-            for match in self._span_matches(scope_index, scope, truth):
+            before = pending[scope_index] if open_right else None
+            matches = self._span_matches(
+                scope_index, scope, truth, open_right=open_right, before=before
+            )
+            for match in matches:
                 if limit is not None and len(result) == limit:
-                    return SpanMatches(tuple(result), Extent.CUT_AT_BOUND)
+                    spans = SpanMatches(tuple(result), Extent.CUT_AT_BOUND)
+                    return OpenPatternResult(spans, pending) if open_right else spans
                 result.append(match)
-        return SpanMatches(tuple(result), Extent.EXHAUSTIVE)
+        spans = SpanMatches(tuple(result), Extent.EXHAUSTIVE)
+        return OpenPatternResult(spans, pending) if open_right else spans
 
-    def count(self, graph: Graph, ordering: Ordering) -> int:
+    @overload
+    def count(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
+    ) -> int:
+        """Count accepting spans in closed scopes."""
+        ...
+
+    @overload
+    def count(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
+    ) -> OpenPatternResult[int]:
+        """Return settled counts and open-right watermarks."""
+        ...
+
+    def count(
+        self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    ) -> int | OpenPatternResult[int]:
         """Count distinct accepting scope spans, never NFA runs."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.COUNT)
-        return sum(
-            len(self._span_matches(index, scope, truth))
+        pending = (
+            tuple(self._pending_start(scope, truth) for scope in scopes)
+            if open_right
+            else ()
+        )
+        count = sum(
+            len(
+                self._span_matches(
+                    index,
+                    scope,
+                    truth,
+                    open_right=open_right,
+                    before=pending[index] if open_right else None,
+                )
+            )
             for index, scope in enumerate(scopes)
         )
+        return OpenPatternResult(count, pending) if open_right else count
 
 
 def _items_selector(tier: QualifiedName) -> Selector:
@@ -939,10 +1186,12 @@ class _MatchRequest:
         if self.operation == "exists":
             return {"exists": compiled.exists(graph, self.ordering)}
         if self.operation == "focus":
-            return {"nodes": compiled.focus(graph, self.ordering).to_data()}
+            focused = compiled.focus(graph, self.ordering)
+            return {"nodes": focused.to_data()}
         if self.operation == "count":
             return {"count": compiled.count(graph, self.ordering)}
-        return compiled.spans(graph, self.ordering, limit=self.limit).to_data()
+        spans = compiled.spans(graph, self.ordering, limit=self.limit)
+        return spans.to_data()
 
 
 def _match_request_loads(source: str | bytes) -> _MatchRequest | _PairsRequest:
@@ -1050,6 +1299,12 @@ def _pairs_request_from_node(node: dict[str, JsonValue]) -> _PairsRequest:
     )
 
 
+from tiergraph.match_text import (  # noqa: E402 -- text layer uses this AST
+    format_pattern,
+    parse_pattern,
+    parse_pattern_at,
+)
+
 __all__ = [
     "MAX_PATTERN_POSITIONS",
     "AdjacentRuns",
@@ -1060,6 +1315,7 @@ __all__ = [
     "EndPattern",
     "Extent",
     "FocusPattern",
+    "OpenPatternResult",
     "Ordering",
     "Pattern",
     "RepeatPattern",
@@ -1070,7 +1326,10 @@ __all__ = [
     "StartPattern",
     "TierOrder",
     "compile_pattern",
+    "format_pattern",
     "ordering_to_data",
+    "parse_pattern",
+    "parse_pattern_at",
     "pattern_loads",
     "pattern_to_data",
     "span_pairs",
