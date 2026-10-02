@@ -238,6 +238,8 @@ class _PatternParser:
         if self.peek() == "?":
             self._flag_prefix(opening)
         self.space()
+        if self.index == self.end:
+            self.refuse(opening, "'(' is never closed")
         if self.peek() == ")":
             self.refuse(opening, "'()' is an empty group")
         if self.peek() == "_":
@@ -485,6 +487,16 @@ class _PatternParser:
             "_": "'_' marks the focus site and belongs after '/', as in {t} / {a} _",
             "/": "'/' needs exactly one '_' marking the focus site",
         }
+        if self.text.startswith("||", offset, self.end):
+            self.refuse(
+                offset,
+                "'||' is reserved for ordered choice; write '|' for alternation",
+            )
+        if character == "|":
+            self.refuse(
+                offset,
+                "'|' has an empty alternative; write {p}? for an optional part",
+            )
         if self.text.startswith("&&", offset, self.end):
             self.refuse(offset, "'&&' is reserved for short-circuit conjunction")
         if character in fixed:

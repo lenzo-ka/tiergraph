@@ -960,6 +960,35 @@ def test_match_cli_pattern_text_equals_json_request(
     assert json.loads(capsys.readouterr().out) == text_result
 
 
+@pytest.mark.parametrize(
+    "argument_order",
+    ("options-graph-op", "graph-options-op", "graph-op-options"),
+)
+def test_match_cli_accepts_each_documented_argument_order(
+    argument_order: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "graph.json"
+    source.write_bytes(tiergraph.dump_bytes(chain("a")))
+    options = [
+        "--pattern",
+        "{seg=a}",
+        "--ordering",
+        json.dumps(ordering_to_data(TierOrder(q("seg")))),
+        "--prefix",
+        "ex",
+    ]
+    parts = {
+        "options-graph-op": [*options, str(source), "count"],
+        "graph-options-op": [str(source), *options, "count"],
+        "graph-op-options": [str(source), "count", *options],
+    }
+
+    assert main(["match", *parts[argument_order]]) == 0
+    assert json.loads(capsys.readouterr().out) == {"count": 1}
+
+
 def test_match_cli_refuses_incompatible_text_options(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

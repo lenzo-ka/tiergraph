@@ -700,17 +700,23 @@ def _handle_step(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command line. Returns the process exit status."""
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
     operations = {"exists", "focus", "spans", "count"}
     if (
-        argv is not None
-        and len(argv) >= _MATCH_MIN_ARGS
-        and argv[0] == "match"
-        and argv[-1] in operations
-        and argv[2] not in operations
+        len(arguments) >= _MATCH_MIN_ARGS
+        and arguments[0] == "match"
+        and arguments[-1] in operations
+        and arguments[2] not in operations
+        and (arguments[1] == "-" or not arguments[1].startswith("-"))
     ):
-        argv = (argv[0], argv[1], argv[-1], *argv[2:-1])
+        arguments = (
+            arguments[0],
+            arguments[1],
+            arguments[-1],
+            *arguments[2:-1],
+        )
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if args.version:
         print(json.dumps({"version": tiergraph.__version__}))
         return 0

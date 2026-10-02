@@ -118,8 +118,11 @@ def test_focus_context_lowering_and_grouped_alternatives() -> None:
         ("{seg=a} {2}", 8, "follows a space"),
         ("({seg=a})", 0, "groups one element"),
         ("()", 0, "empty group"),
+        ("(", 0, "never closed"),
         ("({seg=a}", 0, "never closed"),
+        ("| {seg=a}", 0, "empty alternative"),
         ("{seg=a}|", 7, "empty alternative"),
+        ("||", 0, "reserved for ordered choice"),
         ("{seg=a}||{seg=b}", 7, "reserved for ordered choice"),
         ("&&", 0, "short-circuit conjunction"),
         ("(?i:{seg=a})", 2, "flag 'i' is not defined"),
@@ -175,6 +178,252 @@ def test_pattern_refusals_are_source_located(
         parsed(text)
     assert caught.value.stage is RefusalStage.SYNTAX
     assert str(caught.value).startswith(f"pattern at offset {offset}:")
+
+
+@pytest.mark.parametrize(
+    ("row", "text", "offset", "message"),
+    [
+        ("R1", "", 0, "empty pattern; write '.' for one item of any kind"),
+        (
+            "R2",
+            "{}",
+            0,
+            "'{}' is an empty item test; write '.' for one item of any kind",
+        ),
+        (
+            "R3",
+            "*",
+            0,
+            "'*' has nothing before it to repeat; write '.' for one item of any kind, or '.*' for any number of items",
+        ),
+        (
+            "R4",
+            "{seg=a} *",
+            8,
+            "'*' follows a space; a quantifier attaches directly to the item or group before it, as in {p}*; write '.' for one item of any kind",
+        ),
+        (
+            "R5",
+            "{seg=a}**",
+            8,
+            "'*' stacks a second quantifier on one operand; group first, as in ({p}{2})*",
+        ),
+        (
+            "R6",
+            "{seg=a}*?",
+            7,
+            "'*?' is a lazy quantifier; patterns decide every span, so lazy and possessive quantifiers are refused",
+        ),
+        (
+            "R7",
+            "{seg=a}{2,,3}",
+            7,
+            "'{2,,3}' is not a counted quantifier; write {n}, {n,}, {,m} or {n,m}",
+        ),
+        (
+            "R8",
+            "{seg=a}{3,2}",
+            7,
+            "'{3,2}' has minimum 3 greater than maximum 2",
+        ),
+        (
+            "R9",
+            "{seg=a}{0}",
+            7,
+            "'{0}' matches only the empty sequence; remove it",
+        ),
+        (
+            "R10",
+            "{seg=a}{10001}",
+            7,
+            "repeat count 10001 exceeds limit 10000",
+        ),
+        (
+            "R11",
+            "{seg=a} {2}",
+            8,
+            "'{2}' follows a space; a counted quantifier attaches directly, as in {p}{2}",
+        ),
+        (
+            "R12",
+            "({seg=a})",
+            0,
+            "'({seg=a})' groups one element and changes nothing; write {seg=a}? for an optional item or {seg=a} for a required one",
+        ),
+        ("R13", "()", 0, "'()' is an empty group"),
+        ("R14-open", "(", 0, "'(' is never closed"),
+        ("R14-close", ")", 0, "')' closes no group"),
+        (
+            "R15",
+            "| {seg=a}",
+            0,
+            "'|' has an empty alternative; write {p}? for an optional part",
+        ),
+        (
+            "R16",
+            "||",
+            0,
+            "'||' is reserved for ordered choice; write '|' for alternation",
+        ),
+        (
+            "R16b",
+            "&&",
+            0,
+            "'&&' is reserved for short-circuit conjunction",
+        ),
+        (
+            "R17a",
+            "(?i:{seg=a})",
+            2,
+            "flag 'i' is not defined; no pattern flag is defined yet, so write (?:...) or (...) for a plain group",
+        ),
+        ("R17b", "(?)", 0, "'(?)' sets no flag; remove it"),
+        (
+            "R17c",
+            "(?-:{seg=a})",
+            2,
+            "'-' clears no flag; write (?:...) for a plain group",
+        ),
+        (
+            "R17d",
+            "(?ii:{seg=a})",
+            3,
+            "flag 'i' is repeated in '(?ii:'",
+        ),
+        (
+            "R17e",
+            "(?i-i:{seg=a})",
+            4,
+            "flag 'i' is both set and cleared in '(?i-i:'",
+        ),
+        (
+            "R17f",
+            "(?={seg=a})",
+            0,
+            "'(?=' is not a flag group; '(?' opens (?flags:...) or (?flags)",
+        ),
+        (
+            "R18",
+            "#",
+            0,
+            "'#' is not pattern notation; write '^' for the start of the scope or '$' for its end",
+        ),
+        (
+            "R19",
+            "[",
+            0,
+            "'[' is reserved; item tests go in braces, as in {class=vowel}",
+        ),
+        (
+            "R20",
+            "a",
+            0,
+            "'a' is a bare word; item tests go in braces, as in {class=a}",
+        ),
+        (
+            "R21",
+            '"a"',
+            0,
+            'a quoted string is an item value; item tests go in braces, as in {class="a"}',
+        ),
+        (
+            "R22",
+            "&",
+            0,
+            "'&' conjoins item tests; write it inside one brace, as in {p & q}",
+        ),
+        (
+            "R23",
+            "!",
+            0,
+            "'!' negates item tests; write it inside the brace, as in {!(p)}; a pattern has no complement",
+        ),
+        (
+            "R24",
+            "{seg=a}|{seg=b} / _",
+            16,
+            "alternatives before '/' must be grouped, as in ({a} | {b}) / _",
+        ),
+        (
+            "R25",
+            "{seg=a} / {seg=x}|{seg=y} _",
+            26,
+            "alternatives in a context must be grouped, as in ({a} | {b}) _",
+        ),
+        (
+            "R26",
+            "{seg=a}/",
+            7,
+            "'/' needs exactly one '_' marking the focus site",
+        ),
+        (
+            "R27",
+            "_",
+            0,
+            "'_' marks the focus site and belongs after '/', as in {t} / {a} _",
+        ),
+        ("R28", "{seg=a} // _", 9, "a pattern has at most one '/'"),
+        (
+            "R29",
+            "(_)",
+            1,
+            "'_' cannot be grouped, repeated or alternated; it stands between the left and right context",
+        ),
+        (
+            "R30",
+            "^ / _",
+            2,
+            "the focus can match no item; a focus must consume at least one item",
+        ),
+        (
+            "R31",
+            "^ {seg=a} / _",
+            10,
+            "'^' is inside the focus; write anchors in the context, as in {t} / ^ _",
+        ),
+        (
+            "R32",
+            "^*",
+            1,
+            "'^' is inside a repetition; an anchor matches a position, not an item, and cannot repeat",
+        ),
+        ("R33-percent", "%", 0, "'%' is reserved"),
+        ("R33-equals", "=", 0, "unexpected '='"),
+        ("R35", "]", 0, "unexpected ']'"),
+        (
+            "R36",
+            "\\",
+            0,
+            "'\\' escapes nothing at pattern level; literals go in braces, as in {seg=\"*\"}",
+        ),
+        (
+            "R37",
+            "∅",
+            0,
+            "'∅' is reserved for the empty language, which a pattern cannot spell in this version",
+        ),
+    ],
+    ids=lambda value: (
+        value if isinstance(value, str) and value.startswith("R") else None
+    ),
+)
+def test_spec_pattern_refusals_are_literal(
+    row: str, text: str, offset: int, message: str
+) -> None:
+    del row
+    with pytest.raises(Refusal) as caught:
+        parsed(text)
+    assert caught.value.stage is RefusalStage.SYNTAX
+    assert str(caught.value) == f"pattern at offset {offset}: {message}"
+
+
+def test_spec_missing_terminator_refusal_is_literal() -> None:
+    with pytest.raises(Refusal) as caught:
+        parse_pattern_at("match({seg=a}", 6, SYN, ")")
+    assert caught.value.stage is RefusalStage.SYNTAX
+    assert str(caught.value) == (
+        "pattern at offset 13: pattern text has no closing ')'"
+    )
 
 
 def test_format_json_and_text_round_trips() -> None:
