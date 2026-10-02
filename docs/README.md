@@ -10,7 +10,7 @@ immutable API.
   [Construction](guide/construction.md).
 - **Find items or follow their links?** See
   [Selection and traversal](guide/selection-and-traversal.md).
-- **Match stored values, related items, or complete outputs?** See
+- **Match stored values, related items, offset intervals, or complete outputs?** See
   [Matching with existing pieces](guide/matching-with-existing-pieces.md).
 - **Attach physical times to boundaries?** Use [Timing](guide/timing.md).
 - **Compute a cost, count, or recognition result?** Read
