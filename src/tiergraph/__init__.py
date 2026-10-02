@@ -103,6 +103,7 @@ from tiergraph.grammar import (
     LoweredGrammar,
     ParseForest,
     Realization,
+    TargetLattice,
     TargetPiece,
     best,
     count,
@@ -110,6 +111,7 @@ from tiergraph.grammar import (
     grammar_loads,
     lower_grammar,
     recognize,
+    target_lattice,
 )
 from tiergraph.inspect import graph_summary
 from tiergraph.machine import (
@@ -432,6 +434,7 @@ __all__ = [
     "StarSelector",
     "Step",
     "StructuralPathProfile",
+    "TargetLattice",
     "TargetPiece",
     "TextGridReadResult",
     "TiePolicy",
@@ -473,6 +476,7 @@ __all__ = [
     "selection_loads",
     "span_view",
     "steps",
+    "target_lattice",
     "to_data",
     "to_html",
     "to_json",
