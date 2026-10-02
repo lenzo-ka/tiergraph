@@ -568,6 +568,44 @@ def test_experimental_generation_materializes_declared_target_order() -> None:
     assert result.cost.relation_incidence > 0
 
 
+def test_experimental_generation_retains_equal_text_derivations() -> None:
+    """Bounded ranking keeps tied structural witnesses that emit equal text."""
+    declaration, input_tokens = reordered_tokens()
+    tied = replace(
+        declaration,
+        rules=(declaration.rules[0], *declaration.rules),
+    )
+
+    one = generate(lower_grammar(tied), input_tokens, count=1)
+    result = generate(lower_grammar(tied), input_tokens, count=2)
+
+    assert len(one.derivations) == 1
+    assert one.truncated is True
+    assert len(result.derivations) == 2
+    assert [derivation.text for derivation in result.derivations] == [
+        "three dollars and fifty cents",
+        "three dollars and fifty cents",
+    ]
+    assert result.derivations[0].witness != result.derivations[1].witness
+    assert result.derivations[0].witness < result.derivations[1].witness
+    assert result.truncated is False
+
+
+def test_text_deduplication_mutation_loses_equal_derivation() -> None:
+    """Deduplicating emitted text drops one required structural derivation."""
+    declaration, input_tokens = reordered_tokens()
+    tied = replace(
+        declaration,
+        rules=(declaration.rules[0], *declaration.rules),
+    )
+    result = generate(lower_grammar(tied), input_tokens, count=2)
+
+    deduplicated = {derivation.text: derivation for derivation in result.derivations}
+
+    assert len(result.derivations) == 2
+    assert len(deduplicated) == 1
+
+
 def test_source_order_mutation_fails_declared_target_literal() -> None:
     """Reading source children instead changes the required target materialization."""
     declaration, input_tokens = reordered_tokens()
@@ -674,8 +712,8 @@ def test_experimental_generation_refuses_undefined_copying_and_echoes() -> None:
     for declaration, input_tokens, message in cases:
         with pytest.raises(ValueError, match=message):
             generate(lower_grammar(declaration), input_tokens)
-    with pytest.raises(ValueError, match="count 2.*must be 1"):
-        generate(lower_grammar(oracle()), ("written",), count=2)
+    with pytest.raises(ValueError, match="count 0.*positive"):
+        generate(lower_grammar(oracle()), ("written",), count=0)
 
 
 def test_unit_closure_and_nullable_rules_recognize() -> None:

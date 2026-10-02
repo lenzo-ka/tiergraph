@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added experimental synchronous-grammar target materialization.
+- Added experimental bounded n-best synchronous-grammar target materialization.
 - Added regular sequence patterns over declared graph orderings.
 
 ## [0.5.0] - 2026-10-01
