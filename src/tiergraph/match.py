@@ -189,6 +189,13 @@ class AdjacentRuns:
 type Ordering = TierOrder | ContainerOrder | AdjacentRuns
 
 
+class _PatternOperation(StrEnum):
+    EXISTS = "exists"
+    FOCUS = "focus"
+    SPANS = "spans"
+    COUNT = "count"
+
+
 def _children(pattern: Pattern) -> tuple[Pattern, ...]:
     if isinstance(pattern, (SeqPattern, AltPattern)):
         return pattern.parts
@@ -477,12 +484,37 @@ class CompiledPattern:
         runs.append(_Scope(tuple(nodes), tuple(offsets)))
         return tuple(runs)
 
-    def _truth(
-        self, graph: Graph, scopes: tuple[_Scope, ...]
-    ) -> tuple[dict[Node, bool], ...]:
+    def _prepare(
+        self,
+        graph: Graph,
+        ordering: Ordering,
+        operation: _PatternOperation,
+        *,
+        limit: int | None = None,
+    ) -> tuple[tuple[_Scope, ...], tuple[dict[Node, bool], ...]]:
+        """Bind atoms, validate the operation, then read and evaluate scopes."""
         bound = tuple(
             compile_predicate(predicate).bind(graph) for predicate in self.predicates
         )
+        if operation is _PatternOperation.FOCUS and _focus_count(self.pattern) == 0:
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "pattern has no focus; mark one with FocusPattern or write T / L _ R",
+            )
+        if operation in (
+            _PatternOperation.SPANS,
+            _PatternOperation.COUNT,
+        ) and _nullable(self.pattern):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "pattern can match the empty sequence; spans and count need a pattern "
+                "that consumes at least one item",
+            )
+        if operation is _PatternOperation.SPANS and (
+            limit is not None and (type(limit) is not int or limit < 0)
+        ):
+            raise ValueError("pattern span limit must be a nonnegative integer or None")
+        scopes = self._scopes(graph, ordering)
         nodes: list[Node] = []
         seen: set[Node] = set()
         for scope in scopes:
@@ -490,7 +522,7 @@ class CompiledPattern:
                 if node not in seen:
                     seen.add(node)
                     nodes.append(node)
-        return tuple(
+        return scopes, tuple(
             {node: predicate.holds(node) for node in nodes} for predicate in bound
         )
 
@@ -512,8 +544,7 @@ class CompiledPattern:
 
     def exists(self, graph: Graph, ordering: Ordering) -> bool:
         """Return whether any scope contains an accepting span."""
-        scopes = self._scopes(graph, ordering)
-        truth = self._truth(graph, scopes)
+        scopes, truth = self._prepare(graph, ordering, _PatternOperation.EXISTS)
         for scope in scopes:
             length = len(scope.nodes)
             active: set[int] = set()
@@ -529,13 +560,7 @@ class CompiledPattern:
 
     def focus(self, graph: Graph, ordering: Ordering) -> NodeSet:
         """Return every item consumed by a focus edge on an accepting run."""
-        if _focus_count(self.pattern) == 0:
-            raise Refusal(
-                RefusalStage.SEMANTICS,
-                "pattern has no focus; mark one with FocusPattern or write T / L _ R",
-            )
-        scopes = self._scopes(graph, ordering)
-        truth = self._truth(graph, scopes)
+        scopes, truth = self._prepare(graph, ordering, _PatternOperation.FOCUS)
         selected: list[Node] = []
         reverse = self._reverse_epsilon()
         for scope in scopes:
@@ -611,16 +636,9 @@ class CompiledPattern:
         limit: int | None = None,
     ) -> SpanMatches:
         """Return each distinct accepting span once in scope-major order."""
-        if limit is not None and (type(limit) is not int or limit < 0):
-            raise ValueError("pattern span limit must be a nonnegative integer or None")
-        if _nullable(self.pattern):
-            raise Refusal(
-                RefusalStage.SEMANTICS,
-                "pattern can match the empty sequence; spans and count need a pattern "
-                "that consumes at least one item",
-            )
-        scopes = self._scopes(graph, ordering)
-        truth = self._truth(graph, scopes)
+        scopes, truth = self._prepare(
+            graph, ordering, _PatternOperation.SPANS, limit=limit
+        )
         result: list[SpanMatch] = []
         for scope_index, scope in enumerate(scopes):
             for match in self._span_matches(scope_index, scope, truth):
@@ -631,14 +649,7 @@ class CompiledPattern:
 
     def count(self, graph: Graph, ordering: Ordering) -> int:
         """Count distinct accepting scope spans, never NFA runs."""
-        if _nullable(self.pattern):
-            raise Refusal(
-                RefusalStage.SEMANTICS,
-                "pattern can match the empty sequence; spans and count need a pattern "
-                "that consumes at least one item",
-            )
-        scopes = self._scopes(graph, ordering)
-        truth = self._truth(graph, scopes)
+        scopes, truth = self._prepare(graph, ordering, _PatternOperation.COUNT)
         return sum(
             len(self._span_matches(index, scope, truth))
             for index, scope in enumerate(scopes)

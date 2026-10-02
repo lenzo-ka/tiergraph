@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,7 @@ from tiergraph import (
     PolyadicRelationInstance,
     QualifiedName,
     Refusal,
+    RefusalStage,
     RelationEndpointKind,
     RelationSideDeclaration,
     SequenceSelector,
@@ -136,6 +137,18 @@ def atom(attribute: str, value: str) -> AtomPattern:
 def any_item() -> AtomPattern:
     """Return the always-true consuming atom."""
     return AtomPattern(And(()))
+
+
+def _assert_atom_bind_refusal(call: Callable[[], object]) -> None:
+    with pytest.raises(
+        Refusal, match="predicate names undeclared attribute ex:missing-attr"
+    ) as caught:
+        call()
+    assert caught.value.stage is RefusalStage.REFERENCE
+
+
+def _unbound_atom() -> AtomPattern:
+    return AtomPattern(Equals(Cell(q("missing-attr")), (Bare("x"),)))
 
 
 def ch_k() -> Graph:
@@ -498,6 +511,48 @@ def test_m7_atoms_are_eager_for_every_item(reverse: bool, operation: str) -> Non
     compiled = compile_pattern(AtomPattern(predicate))
     with pytest.raises(Refusal, match="item 'r1' stores a JSON string"):
         getattr(compiled, operation)(graph, TierOrder(q("r")))
+
+
+def test_exists_binds_atoms_before_reading_scopes() -> None:
+    """Exists reports an atom bind refusal before an ordering refusal."""
+    graph = chain("a")
+    compiled = compile_pattern(_unbound_atom())
+    _assert_atom_bind_refusal(
+        lambda: compiled.exists(graph, TierOrder(q("missing-tier")))
+    )
+
+
+def test_focus_binds_atoms_before_reading_scopes_and_checking_focus() -> None:
+    """Focus binds atoms before ordering and missing-focus checks."""
+    graph = chain("a")
+    focused = compile_pattern(FocusPattern(_unbound_atom()))
+    _assert_atom_bind_refusal(
+        lambda: focused.focus(graph, TierOrder(q("missing-tier")))
+    )
+    unfocused = compile_pattern(_unbound_atom())
+    _assert_atom_bind_refusal(lambda: unfocused.focus(graph, TierOrder(q("seg"))))
+
+
+def test_spans_binds_atoms_before_reading_scopes_and_checking_nullable() -> None:
+    """Spans binds atoms before ordering and nullable-pattern checks."""
+    graph = chain("a")
+    compiled = compile_pattern(_unbound_atom())
+    _assert_atom_bind_refusal(
+        lambda: compiled.spans(graph, TierOrder(q("missing-tier")))
+    )
+    nullable = compile_pattern(RepeatPattern(_unbound_atom(), 0, None))
+    _assert_atom_bind_refusal(lambda: nullable.spans(graph, TierOrder(q("seg"))))
+
+
+def test_count_binds_atoms_before_reading_scopes_and_checking_nullable() -> None:
+    """Count binds atoms before ordering and nullable-pattern checks."""
+    graph = chain("a")
+    compiled = compile_pattern(_unbound_atom())
+    _assert_atom_bind_refusal(
+        lambda: compiled.count(graph, TierOrder(q("missing-tier")))
+    )
+    nullable = compile_pattern(RepeatPattern(_unbound_atom(), 0, None))
+    _assert_atom_bind_refusal(lambda: nullable.count(graph, TierOrder(q("seg"))))
 
 
 def test_m8_sequence_selector_json_and_match_cli(
