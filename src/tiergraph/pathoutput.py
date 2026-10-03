@@ -229,8 +229,8 @@ class Emissions[Value]:
                 raise Refusal(
                     RefusalStage.SEMANTICS,
                     f"from_attribute needs a JSON array of strings at {display}; "
-                    f"item {plan.labels[index]!r} stores a JSON array with a "
-                    f"{_json_kind(tokens[bad])} at index {bad}",
+                    f"item {plan.labels[index]!r} stores a JSON array with "
+                    f"{_indefinite(_json_kind(tokens[bad]))} at index {bad}",
                 )
             per_item.append(tuple(cast(list[str], tokens)))
         return cls(plan, tuple(per_item))
@@ -825,6 +825,10 @@ def _display_name(graph: Graph, name: QualifiedName) -> str:
         None,
     )
     return f"{prefix}:{name.local_name}" if prefix is not None else str(name)
+
+
+def _indefinite(noun: str) -> str:
+    return f"{'an' if noun[0] in 'aeiou' else 'a'} {noun}"
 
 
 def _json_kind(value: object) -> str:

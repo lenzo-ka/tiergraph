@@ -405,7 +405,7 @@ def test_l5_emissions_from_string_json_and_absence() -> None:
             ),
         ),
     )
-    with pytest.raises(Refusal, match="array with a integer at index 1"):
+    with pytest.raises(Refusal, match="array with an integer at index 1"):
         Emissions.from_attribute(plan(array_graph, roots=("r",)), TOKS)
 
     null_item = replace(
