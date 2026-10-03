@@ -200,10 +200,20 @@ class DeclaredOrder:
     successor: QualifiedName
     members: Selector
     open_left: bool = False
+    chain: Selector | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.open_left, bool):
             raise ValueError("DeclaredOrder open_left must be a boolean")
+
+    def project(self, members: Selector) -> DeclaredOrder:
+        """Project this order while retaining its complete-chain selector."""
+        return DeclaredOrder(
+            self.successor,
+            members,
+            self.open_left,
+            self.members if self.chain is None else self.chain,
+        )
 
 
 type Ordering = TierOrder | ContainerOrder | AdjacentRuns | DeclaredOrder
@@ -388,6 +398,7 @@ class _Scope:
     nodes: tuple[Node, ...]
     offsets: tuple[tuple[int, int], ...] | None = None
     open_left: bool = False
+    open_right: bool = False
 
 
 def _contains_sequence_selector(selector: Selector) -> bool:
@@ -433,19 +444,47 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
             f"declared order successor '{ordering.successor}' is not a declared "
             "polyadic relation",
         )
-    if _contains_sequence_selector(ordering.members):
+    complete_selector = ordering.members if ordering.chain is None else ordering.chain
+    if _contains_sequence_selector(complete_selector):
         raise Refusal(
             RefusalStage.SEMANTICS,
-            "DeclaredOrder members may not contain SequenceSelector",
+            f"DeclaredOrder {'members' if ordering.chain is None else 'chain'} "
+            "may not contain SequenceSelector",
         )
-    members = evaluate_selection(graph, ordering.members)
+    chain = evaluate_selection(graph, complete_selector)
     if any(
-        member.kind not in (NodeKind.ITEM, NodeKind.BOUNDARY)
-        for member in members.nodes
+        member.kind not in (NodeKind.ITEM, NodeKind.BOUNDARY) for member in chain.nodes
     ):
         raise Refusal(
             RefusalStage.SEMANTICS,
-            "DeclaredOrder members must select only items and boundaries",
+            f"DeclaredOrder {'members' if ordering.chain is None else 'chain'} "
+            "must select only items and boundaries",
+        )
+    if ordering.chain is None:
+        members = chain
+    else:
+        if _contains_sequence_selector(ordering.members):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "DeclaredOrder members may not contain SequenceSelector",
+            )
+        members = evaluate_selection(graph, ordering.members)
+        if any(
+            member.kind not in (NodeKind.ITEM, NodeKind.BOUNDARY)
+            for member in members.nodes
+        ):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "DeclaredOrder members must select only items and boundaries",
+            )
+    complete = set(chain.nodes)
+    projected = set(members.nodes)
+    if not projected <= complete:
+        offender = next(node for node in members.nodes if node not in complete)
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"DeclaredOrder members must be a subset of chain; "
+            f"{_node_label(offender)} is outside",
         )
 
     named = tuple(
@@ -469,7 +508,7 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
     except ValueError as error:
         raise Refusal(RefusalStage.SEMANTICS, str(error)) from error
 
-    admitted = set(members.nodes)
+    admitted = complete
     outgoing: dict[Node, tuple[int, Node]] = {}
     incoming: dict[Node, tuple[int, Node]] = {}
     for instance_index, sources, targets in incidences:
@@ -481,7 +520,7 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
                     RefusalStage.SEMANTICS,
                     f"declared order successor '{ordering.successor}' instance "
                     f"{instance_index} names {_node_label(endpoint)} outside its "
-                    "member selection",
+                    f"{'member' if ordering.chain is None else 'chain'} selection",
                 )
         previous_out = outgoing.get(source)
         if previous_out is not None:
@@ -503,7 +542,7 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
         incoming[target] = (instance_index, source)
 
     finished: set[Node] = set()
-    for root in members.nodes:
+    for root in chain.nodes:
         if root in finished:
             continue
         visiting: set[Node] = set()
@@ -523,9 +562,9 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
                 )
             cursor = target
 
-    if not members.nodes:
+    if not chain.nodes:
         return _Scope((), open_left=ordering.open_left)
-    heads = tuple(member for member in members.nodes if member not in incoming)
+    heads = tuple(member for member in chain.nodes if member not in incoming)
     if len(heads) != 1:
         raise Refusal(
             RefusalStage.SEMANTICS,
@@ -545,13 +584,20 @@ def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
     if len(visited) != len(
         admitted
     ):  # pragma: no cover - prior invariants imply reachability
-        unreachable = next(member for member in members.nodes if member not in visited)
+        unreachable = next(member for member in chain.nodes if member not in visited)
         raise Refusal(
             RefusalStage.SEMANTICS,
             f"declared order successor '{ordering.successor}' leaves "
             f"{_node_label(unreachable)} unreachable from head {_node_label(head)}",
         )
-    return _Scope(tuple(ordered), open_left=ordering.open_left)
+    visible = tuple(node for node in ordered if node in projected)
+    dropped_head = not visible or visible[0] != ordered[0]
+    dropped_tail = not visible or visible[-1] != ordered[-1]
+    return _Scope(
+        visible,
+        open_left=ordering.open_left or dropped_head,
+        open_right=dropped_tail,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -892,7 +938,8 @@ class CompiledPattern:
     ) -> bool | OpenPatternResult[bool]:
         """Return whether any scope contains an accepting span."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.EXISTS)
-        if open_right:
+        effective_open_right = open_right or any(scope.open_right for scope in scopes)
+        if effective_open_right:
             pending = tuple(self._pending_start(scope, truth) for scope in scopes)
             settled = any(
                 self._scope_accepts(
@@ -902,7 +949,7 @@ class CompiledPattern:
                 )
                 for scope, mark in zip(scopes, pending, strict=True)
             )
-            return OpenPatternResult(settled, pending)
+            return OpenPatternResult(settled, pending) if open_right else settled
         for scope in scopes:
             length = len(scope.nodes)
             active: set[int] = set()
@@ -946,9 +993,10 @@ class CompiledPattern:
         """Return every item consumed by a focus edge on an accepting run."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.FOCUS)
         selected: list[Node] = []
+        effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
             tuple(self._pending_start(scope, truth) for scope in scopes)
-            if open_right
+            if effective_open_right
             else ()
         )
         reverse = self._reverse_epsilon()
@@ -1005,7 +1053,7 @@ class CompiledPattern:
                     for state in forward[position]
                     for edge in self.atom_edges[state]
                 ) and (
-                    not open_right
+                    not effective_open_right
                     or pending[scope_index] is None
                     or position < cast(int, pending[scope_index])
                 ):
@@ -1095,15 +1143,20 @@ class CompiledPattern:
             graph, ordering, _PatternOperation.SPANS, limit=limit
         )
         result: list[SpanMatch] = []
+        effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
             tuple(self._pending_start(scope, truth) for scope in scopes)
-            if open_right
+            if effective_open_right
             else ()
         )
         for scope_index, scope in enumerate(scopes):
-            before = pending[scope_index] if open_right else None
+            before = pending[scope_index] if effective_open_right else None
             matches = self._span_matches(
-                scope_index, scope, truth, open_right=open_right, before=before
+                scope_index,
+                scope,
+                truth,
+                open_right=effective_open_right,
+                before=before,
             )
             for match in matches:
                 if limit is not None and len(result) == limit:
@@ -1132,9 +1185,10 @@ class CompiledPattern:
     ) -> int | OpenPatternResult[int]:
         """Count distinct accepting scope spans, never NFA runs."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.COUNT)
+        effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
             tuple(self._pending_start(scope, truth) for scope in scopes)
-            if open_right
+            if effective_open_right
             else ()
         )
         count = sum(
@@ -1143,8 +1197,8 @@ class CompiledPattern:
                     index,
                     scope,
                     truth,
-                    open_right=open_right,
-                    before=pending[index] if open_right else None,
+                    open_right=effective_open_right,
+                    before=pending[index] if effective_open_right else None,
                 )
             )
             for index, scope in enumerate(scopes)
@@ -1348,16 +1402,22 @@ def ordering_to_data(ordering: Ordering) -> JsonValue:
             "containers": _selector_to_data(ordering.containers),
         }
     if isinstance(ordering, DeclaredOrder):
-        if _contains_sequence_selector(ordering.members):
-            raise Refusal(
-                RefusalStage.SEMANTICS,
-                "DeclaredOrder members may not contain SequenceSelector",
-            )
+        for role, selector in (
+            ("members", ordering.members),
+            ("chain", ordering.chain),
+        ):
+            if selector is not None and _contains_sequence_selector(selector):
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"DeclaredOrder {role} may not contain SequenceSelector",
+                )
         result: dict[str, JsonValue] = {
             "order": "declared",
             "successor": ordering.successor.to_data(),
             "members": _selector_to_data(ordering.members),
         }
+        if ordering.chain is not None:
+            result["chain"] = _selector_to_data(ordering.chain)
         if ordering.open_left:
             result["open_left"] = True
         return result
@@ -1388,7 +1448,7 @@ def _decode_ordering(value: JsonValue, path: str) -> Ordering:
             _decode_selector(node["containers"], f"{path}.containers"),
         )
     if kind == "declared":
-        optional = {"open_left"} if "open_left" in node else set()
+        optional = {name for name in ("open_left", "chain") if name in node}
         _refuse_field_set(
             node.keys(),
             {"order", "successor", "members"} | optional,
@@ -1399,15 +1459,22 @@ def _decode_ordering(value: JsonValue, path: str) -> Ordering:
         if not isinstance(open_left, bool):
             raise Refusal(RefusalStage.VALUE, f"{path}.open_left must be a boolean")
         members = _decode_selector(node["members"], f"{path}.members")
-        if _contains_sequence_selector(members):
-            raise Refusal(
-                RefusalStage.SEMANTICS,
-                "DeclaredOrder members may not contain SequenceSelector",
-            )
+        chain = (
+            _decode_selector(node["chain"], f"{path}.chain")
+            if "chain" in node
+            else None
+        )
+        for role, selector in (("members", members), ("chain", chain)):
+            if selector is not None and _contains_sequence_selector(selector):
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"DeclaredOrder {role} may not contain SequenceSelector",
+                )
         return DeclaredOrder(
             _decode_qname(node["successor"], f"{path}.successor"),
             members,
             open_left,
+            chain,
         )
     if kind == "adjacent-runs":
         _refuse_field_set(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from itertools import pairwise
+from typing import cast
 
 import pytest
 
@@ -65,7 +66,14 @@ from tiergraph.match import (
     compile_pattern,
     ordering_to_data,
 )
-from tiergraph.predicate import And, OffsetProfile
+from tiergraph.predicate import (
+    And,
+    IntervalRelation,
+    OffsetProfile,
+    Quantifier,
+    Spans,
+    compile_predicate,
+)
 from tiergraph.traversal import OrderedPolyadicTraversal
 
 NS = "urn:test"
@@ -117,6 +125,87 @@ def item_chain(
     return graph, DeclaredOrder(q("next"), ItemsSelector(q("seg")))
 
 
+def mixed_chain() -> tuple[
+    Graph,
+    DeclaredOrder,
+    tuple[ItemRef, DurableBoundaryRef, ItemRef, ItemRef],
+]:
+    """Return the declared chain a, boundary, tone, b."""
+    tiers = (
+        Tier(TierDeclaration(q("seg"), "Segments"), (Item("a"), Item("b"))),
+        Tier(TierDeclaration(q("tone"), "Tone"), (Item("tone"),)),
+    )
+    boundary = DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE)
+    nodes: tuple[ItemRef, DurableBoundaryRef, ItemRef, ItemRef] = (
+        ItemRef(q("seg"), 0),
+        boundary,
+        ItemRef(q("tone"), 0),
+        ItemRef(q("seg"), 1),
+    )
+    graph = Graph(
+        (NamespaceDeclaration("t", NS),),
+        tiers,
+        (
+            SimpleRelationDeclaration(q("sm"), q("seg"), q("si")),
+            SimpleRelationDeclaration(q("tm"), q("tone"), q("ti")),
+            declaration(),
+        ),
+        polyadic_relations=tuple(
+            PolyadicRelationInstance(q("next"), (left,), (right,))
+            for left, right in pairwise(cast(tuple[RelationEndpointRef, ...], nodes))
+        ),
+    )
+    members = UnionSelector(
+        tuple(
+            BoundarySelector(node)
+            if isinstance(node, DurableBoundaryRef)
+            else ItemSelector(node)
+            for node in nodes
+        )
+    )
+    return graph, DeclaredOrder(q("next"), members), nodes
+
+
+def span_mixed_chain() -> tuple[Graph, DeclaredOrder, DurableBoundaryRef]:
+    """Return boundary,a with a overlapping one syllable item."""
+    values = (
+        AttributeValue(q("origin"), XsdType.INTEGER, "0"),
+        AttributeValue(q("end"), XsdType.INTEGER, "2"),
+    )
+    syllable_values = (
+        AttributeValue(q("origin"), XsdType.INTEGER, "1"),
+        AttributeValue(q("end"), XsdType.INTEGER, "3"),
+    )
+    tiers = (
+        Tier(TierDeclaration(q("seg"), "Segments"), (Item("a", values),)),
+        Tier(
+            TierDeclaration(q("syl"), "Syllables"),
+            (Item("syllable", syllable_values),),
+        ),
+    )
+    boundary = DurableBoundaryRef(DurableItemRef("a"), BoundarySide.BEFORE)
+    graph = Graph(
+        (NamespaceDeclaration("t", NS),),
+        tiers,
+        (
+            SimpleRelationDeclaration(q("sm"), q("seg"), q("si")),
+            SimpleRelationDeclaration(q("ym"), q("syl"), q("yi")),
+            declaration(),
+        ),
+        attribute_declarations=(
+            AttributeDeclaration(q("origin"), AttributeDomain.ITEM, XsdType.INTEGER),
+            AttributeDeclaration(q("end"), AttributeDomain.ITEM, XsdType.INTEGER),
+        ),
+        polyadic_relations=(
+            PolyadicRelationInstance(q("next"), (boundary,), (ItemRef(q("seg"), 0),)),
+        ),
+    )
+    members = UnionSelector(
+        (BoundarySelector(boundary), ItemSelector(ItemRef(q("seg"), 0)))
+    )
+    return graph, DeclaredOrder(q("next"), members), boundary
+
+
 def any_node() -> AtomPattern:
     return AtomPattern(And(()))
 
@@ -131,6 +220,16 @@ def _item_index(node: Node) -> int:
     reference = node.reference
     assert isinstance(reference, ItemRef)
     return reference.index
+
+
+def _node_name(graph: Graph, node: Node) -> str:
+    assert isinstance(node.reference, ItemRef)
+    tier = next(
+        tier for tier in graph.tiers if tier.declaration.name == node.reference.tier
+    )
+    result = tier.items[node.reference.index].durable_id
+    assert result is not None
+    return result
 
 
 def bounds(
@@ -709,3 +808,219 @@ def test_append_declared_requires_owned_order_and_exact_updated_members() -> Non
         doc.append_declared(foreign, first, ())
     with pytest.raises(BuilderError, match="must select exactly"):
         doc.append_declared(order, first, (seg.ref(1),))
+
+
+def test_s5d_projection_preserves_declared_order_across_hidden_boundary() -> None:
+    graph, order, nodes = mixed_chain()
+    members = UnionSelector(
+        (ItemSelector(nodes[0]), ItemSelector(nodes[2]), ItemSelector(nodes[3]))
+    )
+    projected = order.project(members)
+    match = compile_pattern(SeqPattern((any_node(), any_node(), any_node()))).spans(
+        graph, projected
+    )
+    assert [
+        tuple(_node_name(graph, node) for node in span.items) for span in match.matches
+    ] == [("a", "tone", "b")]
+
+
+def test_s5d_projection_validates_hidden_chain_before_filtering() -> None:
+    graph, order = item_chain(3, ((0, 1), (0, 2)))
+    projected = order.project(ItemSelector(ItemRef(q("seg"), 0)))
+    with pytest.raises(Refusal, match="more than one successor"):
+        compile_pattern(any_node()).spans(graph, projected)
+
+
+def test_s5d_projected_anchor_openness_is_derived_from_complete_chain() -> None:
+    graph, order = item_chain(2)
+    first = ItemSelector(ItemRef(q("seg"), 0))
+    second = ItemSelector(ItemRef(q("seg"), 1))
+    start = SeqPattern((StartPattern(), any_node()))
+    end = SeqPattern((any_node(), EndPattern()))
+    assert bounds(graph, order.project(second), start) == []
+    assert bounds(graph, order.project(first), end) == []
+    retained = SeqPattern((StartPattern(), any_node(), any_node(), EndPattern()))
+    assert bounds(graph, order.project(order.members), retained) == [(0, 2)]
+
+
+def test_s5d_append_full_chain_then_reproject_preserves_watermark() -> None:
+    doc = document(NS, prefix="t")
+    seg = doc.tier("seg", ("a", "x", "b"), item_type="item", membership="m")
+    initial = UnionSelector((ItemSelector(seg.ref(0)), ItemSelector(seg.ref(1))))
+    full = doc.declared_order("next", initial, (seg.ref(0), seg.ref(1)))
+    only_a = ItemSelector(seg.ref(0))
+    pattern = compile_pattern(SeqPattern((any_node(), any_node())))
+    before = pattern.spans(doc.build(), full.project(only_a), open_right=True)
+    assert before.pending_from == (0,)
+    assert before.result.matches == ()
+    complete = ItemsSelector(q("seg"))
+    appended = doc.append_declared(full, complete, (seg.ref(2),))
+    a_and_b = UnionSelector((ItemSelector(seg.ref(0)), ItemSelector(seg.ref(2))))
+    after = pattern.spans(doc.build(), appended.project(a_and_b))
+    assert [
+        tuple(_node_name(doc.build(), node) for node in span.items)
+        for span in after.matches
+    ] == [("a", "b")]
+
+
+def test_s5d_append_declared_refuses_projected_order_exactly() -> None:
+    doc = document(NS, prefix="t")
+    seg = doc.tier("seg", ("a", "b"), item_type="item", membership="m")
+    first = ItemSelector(seg.ref(0))
+    order = doc.declared_order("next", first, (seg.ref(0),))
+    with pytest.raises(BuilderError) as caught:
+        doc.append_declared(
+            order.project(first), ItemsSelector(q("seg")), (seg.ref(1),)
+        )
+    assert str(caught.value) == "append declared: project the result after appending"
+
+
+def test_s5d_old_declared_order_json_is_byte_identical() -> None:
+    old = (
+        '{"order":"declared","successor":{"namespace":"urn:test",'
+        '"local_name":"next"},"members":{"select":"items","tier":{'
+        '"namespace":"urn:test","local_name":"seg"}}}'
+    )
+    decoded = _decode_ordering(json.loads(old), "$")
+    encoded = json.dumps(ordering_to_data(decoded), separators=(",", ":"))
+    assert encoded == old
+    assert '"chain"' not in encoded
+
+
+def test_s5d_nested_projection_retains_original_complete_selector() -> None:
+    _, order = item_chain(3)
+    middle = ItemPathSelector("/items/durable/s1")
+    tail = ItemPathSelector("/items/durable/s2")
+    nested = order.project(UnionSelector((middle, tail))).project(tail)
+    assert nested.chain == order.members
+    data = ordering_to_data(nested)
+    assert isinstance(data, dict)
+    assert _decode_ordering(data, "$") == nested
+
+
+def test_s5d_empty_and_singleton_projections_derive_both_edges() -> None:
+    empty, empty_order = item_chain(0)
+    anchored = SeqPattern((StartPattern(), EndPattern()))
+    assert (
+        compile_pattern(anchored).exists(
+            empty, empty_order.project(empty_order.members)
+        )
+        is True
+    )
+    one, one_order = item_chain(1)
+    no_members = DifferenceSelector(one_order.members, one_order.members)
+    projected_empty = one_order.project(no_members)
+    assert compile_pattern(anchored).exists(one, projected_empty) is False
+    closed = SeqPattern((StartPattern(), any_node(), EndPattern()))
+    assert bounds(one, one_order.project(one_order.members), closed) == [(0, 1)]
+
+
+def test_s5d_projection_refuses_members_outside_complete_chain() -> None:
+    graph, order = item_chain(2)
+    projected = DeclaredOrder(
+        order.successor,
+        ItemSelector(ItemRef(q("seg"), 1)),
+        chain=ItemSelector(ItemRef(q("seg"), 0)),
+    )
+    with pytest.raises(Refusal, match="members must be a subset of chain"):
+        compile_pattern(any_node()).exists(graph, projected)
+
+
+def test_s5d_projection_refuses_edges_outside_complete_chain() -> None:
+    graph, order = item_chain(3)
+    projected = DeclaredOrder(
+        order.successor,
+        ItemSelector(ItemRef(q("seg"), 0)),
+        chain=UnionSelector(
+            (
+                ItemSelector(ItemRef(q("seg"), 0)),
+                ItemSelector(ItemRef(q("seg"), 1)),
+            )
+        ),
+    )
+    with pytest.raises(Refusal, match="outside its chain selection"):
+        compile_pattern(any_node()).exists(graph, projected)
+
+
+@pytest.mark.parametrize(
+    ("edges", "message"),
+    [
+        (((0, 1), (0, 2)), "more than one successor"),
+        (((0, 2), (1, 2)), "more than one predecessor"),
+        (((0, 1), (1, 0)), "closes a cycle"),
+        (((0, 1), (2, 3)), "has 2 heads"),
+    ],
+)
+def test_s5d_projection_refuses_hidden_degree_cycle_and_disconnect(
+    edges: tuple[tuple[int, int], ...], message: str
+) -> None:
+    graph, order = item_chain(max(max(pair) for pair in edges) + 1, edges)
+    projected = order.project(ItemSelector(ItemRef(q("seg"), 0)))
+    with pytest.raises(Refusal, match=message):
+        compile_pattern(any_node()).exists(graph, projected)
+
+
+def test_s5d_reverse_chain_projection_keeps_declared_direction() -> None:
+    graph, order = item_chain(3, ((2, 1), (1, 0)))
+    edges = UnionSelector(
+        (
+            ItemSelector(ItemRef(q("seg"), 2)),
+            ItemSelector(ItemRef(q("seg"), 0)),
+        )
+    )
+    pattern = SeqPattern((StartPattern(), any_node(), any_node(), EndPattern()))
+    matches = compile_pattern(pattern).spans(graph, order.project(edges)).matches
+    assert [tuple(_item_index(node) for node in match.items) for match in matches] == [
+        (2, 0)
+    ]
+
+
+def test_s5d_projection_accepts_item_boundary_mixtures() -> None:
+    graph, order, nodes = mixed_chain()
+    visible = UnionSelector((ItemSelector(nodes[0]), BoundarySelector(nodes[1])))
+    result = compile_pattern(SeqPattern((any_node(), any_node()))).spans(
+        graph, order.project(visible)
+    )
+    assert [tuple(node.kind for node in match.items) for match in result.matches] == [
+        (NodeKind.ITEM, NodeKind.BOUNDARY)
+    ]
+
+
+def test_s5d_projection_refuses_nested_sequence_in_complete_chain() -> None:
+    graph, order = item_chain(1)
+    recursive = WhereSelector(
+        SequenceSelector(TierOrder(q("seg")), FocusPattern(any_node())), And(())
+    )
+    projected = DeclaredOrder(order.successor, order.members, chain=recursive)
+    with pytest.raises(Refusal, match="chain may not contain SequenceSelector"):
+        compile_pattern(any_node()).exists(graph, projected)
+    with pytest.raises(Refusal, match="chain may not contain SequenceSelector"):
+        ordering_to_data(projected)
+    recursive_members = DeclaredOrder(order.successor, recursive, chain=order.members)
+    with pytest.raises(Refusal, match="members may not contain SequenceSelector"):
+        compile_pattern(any_node()).exists(graph, recursive_members)
+    wrong_kind = DeclaredOrder(
+        order.successor, TierSelector(q("seg")), chain=order.members
+    )
+    with pytest.raises(Refusal, match="members must select only items and boundaries"):
+        compile_pattern(any_node()).exists(graph, wrong_kind)
+
+
+def test_s5d_spans_is_false_on_non_item_candidates_in_mixed_scope() -> None:
+    graph, order, boundary = span_mixed_chain()
+    profile = OffsetProfile(q("origin"), end=q("end"))
+    predicate = Spans(
+        profile,
+        IntervalRelation.OVERLAPS,
+        Quantifier.ANY,
+        q("syl"),
+        And(()),
+    )
+    matches = compile_pattern(AtomPattern(predicate)).spans(graph, order).matches
+    assert [
+        tuple(_node_name(graph, node) for node in match.items) for match in matches
+    ] == [("a",)]
+    boundary_node = evaluate_selection(graph, BoundarySelector(boundary)).nodes[0]
+    for quantifier in Quantifier:
+        total = replace(predicate, quantifier=quantifier)
+        assert compile_predicate(total).bind(graph).holds(boundary_node) is False

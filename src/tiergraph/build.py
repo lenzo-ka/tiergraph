@@ -543,6 +543,8 @@ class Document:
 
         if not isinstance(order, DeclaredOrder):
             raise BuilderError("append declared: order must be a DeclaredOrder")
+        if order.chain is not None:
+            raise BuilderError("append declared: project the result after appending")
         retained = self._declared_orders.get(order.successor)
         if retained is None:
             raise BuilderError(
