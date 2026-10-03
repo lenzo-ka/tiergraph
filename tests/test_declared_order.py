@@ -52,6 +52,7 @@ from tiergraph.core import RelationEndpointRef
 from tiergraph.grammar import GrammarInput
 from tiergraph.match import (
     AtomPattern,
+    ContainerOrder,
     DeclaredOrder,
     EndPattern,
     FocusPattern,
@@ -232,8 +233,10 @@ def test_d2_json_encodes_all_new_leaves_and_algebra() -> None:
     assert isinstance(data, dict)
     assert _decode_ordering(data, "$") == DeclaredOrder(q("next"), members)
     sequence = SequenceSelector(TierOrder(q("seg")), FocusPattern(any_node()))
-    with pytest.raises(Refusal, match="may not contain SequenceSelector"):
+    with pytest.raises(Refusal, match="nested SequenceSelector has no selector JSON"):
         _selector_to_data(sequence)
+    with pytest.raises(Refusal, match="nested SequenceSelector has no selector JSON"):
+        ordering_to_data(ContainerOrder(q("parts"), sequence))
 
 
 def test_d3_builder_appends_bridge_and_returns_grown_members() -> None:

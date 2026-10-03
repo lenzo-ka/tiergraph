@@ -1451,7 +1451,7 @@ def _selector_to_data(selector: Selector) -> JsonValue:
     if isinstance(selector, SequenceSelector):
         raise Refusal(
             RefusalStage.SEMANTICS,
-            "DeclaredOrder members may not contain SequenceSelector",
+            "a nested SequenceSelector has no selector JSON encoding",
         )
     if isinstance(selector, WhereSelector):
         return {
