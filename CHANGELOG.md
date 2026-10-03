@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added exact regular-pattern decisions and path counts over emitted finite
+  lattices, with declared ambiguity policies and bounded determinization.
+- Added string and JSON-array token emissions read from graph attributes.
+
 ## [0.6.0] - 2026-10-03
 
 ### Added

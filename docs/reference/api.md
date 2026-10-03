@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 223 top-level `tiergraph` exports exactly once.
+It covers 228 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -983,6 +983,31 @@ Remove one relation instance by bipartite index or by durable id.
 
 ## Fold
 
+### `AmbiguityPolicy`
+
+Type alias.
+
+Type aliases are created through the type statement::
+
+    type Alias = int
+
+In this example, Alias and int will be treated equivalently by static
+type checkers.
+
+At runtime, Alias is an instance of TypeAliasType. The __name__
+attribute holds the name of the type alias. The value of the type alias
+is stored in the __value__ attribute. It is evaluated lazily, so the
+value is computed only if the attribute is accessed.
+
+Type aliases can also be generic::
+
+    type ListOrSet[T] = list[T] | set[T]
+
+In this case, the type parameters of the alias are stored in the
+__type_params__ attribute.
+
+See PEP 695 for more information.
+
 ### `AlgebraOrder`
 
 ```text
@@ -1038,6 +1063,14 @@ Declare whether one relation's incident children are alternatives or requirement
 
 - `OR` = `or`
 - `AND` = `and`
+
+### `Determinize`
+
+```text
+Determinize(max_states: 'int') -> None
+```
+
+Count with lazy subset construction up to a declared state bound.
 
 ### `ExactnessRefusal`
 
@@ -1355,6 +1388,64 @@ Emissions.bind(cls, plan: 'PathPlan[Value]', by_label: 'Mapping[str, Sequence[st
 
 Bind emissions by item label, leaving unlisted items non-emitting.
 
+#### `Emissions.from_attribute`
+
+Class method.
+
+```text
+Emissions.from_attribute(cls, plan: 'PathPlan[Value]', attribute: 'QualifiedName') -> 'Emissions[Value]'
+```
+
+Read string-token tuples from one item attribute, with absence silent.
+
+### `LatticeMatch`
+
+```text
+LatticeMatch(emissions: 'Emissions[object]', pattern: 'CompiledPattern', _boolean_cache: 'list[_BooleanProduct]' = <factory>, _ambiguity_cache: 'list[bool]' = <factory>, _subset_cache: 'dict[int, _SubsetProduct]' = <factory>) -> None
+```
+
+Match one compiled regular pattern against every root-to-sink path.
+
+#### `LatticeMatch.exists`
+
+Method.
+
+```text
+LatticeMatch.exists(self) -> 'bool'
+```
+
+Return whether some complete lattice path matches the whole pattern.
+
+#### `LatticeMatch.on_accepting_path`
+
+Method.
+
+```text
+LatticeMatch.on_accepting_path(self) -> 'NodeSet'
+```
+
+Return every base item lying on some accepting complete path.
+
+#### `LatticeMatch.count`
+
+Method.
+
+```text
+LatticeMatch.count(self, policy: 'AmbiguityPolicy') -> 'int'
+```
+
+Count accepting lattice paths exactly under the declared policy.
+
+#### `LatticeMatch.all_paths`
+
+Method.
+
+```text
+LatticeMatch.all_paths(self, policy: 'AmbiguityPolicy') -> 'bool'
+```
+
+Return whether every complete lattice path matches the pattern.
+
 ### `OutputItemMarginals`
 
 ```text
@@ -1600,6 +1691,22 @@ own comparison and takes no policy.
 
 - `ALL` = `all`
 - `CHOOSE_FIRST` = `choose-first`
+
+### `Unambiguous`
+
+```text
+Unambiguous() -> None
+```
+
+Require the pattern to have at most one accepting run per token string.
+
+### `match_lattice`
+
+```text
+match_lattice(emissions: 'Emissions[Value]', pattern: 'CompiledPattern') -> 'LatticeMatch'
+```
+
+Bind a compiled pattern to one emitted finite path DAG.
 
 ## Grammar
 

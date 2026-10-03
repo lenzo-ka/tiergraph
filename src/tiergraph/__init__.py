@@ -159,10 +159,15 @@ from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPoster
 
 if TYPE_CHECKING:
     from tiergraph.pathoutput import (
+        AmbiguityPolicy,
+        Determinize,
         Emissions,
+        LatticeMatch,
         OutputItemMarginals,
         OutputMasses,
         OutputPlan,
+        Unambiguous,
+        match_lattice,
     )
 from tiergraph.profile import (
     PROFILES,
@@ -251,7 +256,17 @@ from tiergraph.wire import (
 __version__ = "0.6.0"
 
 _PATHOUTPUT_EXPORTS = frozenset(
-    {"Emissions", "OutputItemMarginals", "OutputMasses", "OutputPlan"}
+    {
+        "AmbiguityPolicy",
+        "Determinize",
+        "Emissions",
+        "LatticeMatch",
+        "OutputItemMarginals",
+        "OutputMasses",
+        "OutputPlan",
+        "Unambiguous",
+        "match_lattice",
+    }
 )
 
 
@@ -286,6 +301,7 @@ __all__ = [
     "AddItem",
     "AlgebraOrder",
     "AlternativeRef",
+    "AmbiguityPolicy",
     "AsBuilt",
     "AttachValue",
     "Attribute",
@@ -314,6 +330,7 @@ __all__ = [
     "DeclareRelation",
     "DeclareTier",
     "Delivery",
+    "Determinize",
     "DifferenceSelector",
     "Displacement",
     "DistributionWitness",
@@ -357,6 +374,7 @@ __all__ = [
     "JsonAttributeValue",
     "JsonType",
     "JsonValueProfile",
+    "LatticeMatch",
     "Layer",
     "LayerFact",
     "LayerName",
@@ -447,6 +465,7 @@ __all__ = [
     "TierRef",
     "TierSelector",
     "TypeSelector",
+    "Unambiguous",
     "UnionSelector",
     "Walk",
     "WalkDirection",
@@ -473,6 +492,7 @@ __all__ = [
     "load_program",
     "loads",
     "lower_grammar",
+    "match_lattice",
     "program_dumps",
     "program_loads",
     "recognize",

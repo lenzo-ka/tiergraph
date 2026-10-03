@@ -38,9 +38,11 @@
       "GraphEditor"
     ],
     "fold": [
+      "AmbiguityPolicy",
       "AlgebraOrder",
       "AttributeValuation",
       "ChildCombination",
+      "Determinize",
       "ExactnessRefusal",
       "FoldCertificate",
       "FoldCost",
@@ -50,13 +52,16 @@
       "FoldResult",
       "FoldTransition",
       "Emissions",
+      "LatticeMatch",
       "OutputItemMarginals",
       "OutputMasses",
       "OutputPlan",
       "PathMarginals",
       "PathPlan",
       "PathPosteriors",
-      "TiePolicy"
+      "TiePolicy",
+      "Unambiguous",
+      "match_lattice"
     ],
     "grammar": [
       "BestDerivation",
