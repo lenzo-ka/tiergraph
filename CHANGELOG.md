@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added relation-declared linear orderings for cross-tier and boundary-aware matching.
 - Added strict experimental grammar-generation JSON envelopes and CLI commands.
 - Added experimental keep-all and bounded n-best synchronous-grammar target
   materialization with declared provenance, graph-bound absolute spans, and

@@ -472,6 +472,7 @@
       "AtomPattern",
       "CompiledPattern",
       "ContainerOrder",
+      "DeclaredOrder",
       "EndPattern",
       "Extent",
       "FocusPattern",

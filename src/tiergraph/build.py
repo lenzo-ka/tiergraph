@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
-from typing import cast
+from itertools import pairwise
+from typing import TYPE_CHECKING, cast
 
 from tiergraph.core import (
     Attribute,
@@ -38,11 +39,16 @@ from tiergraph.core import (
     RelationEndpointKind,
     RelationEndpointRef,
     RelationInstance,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
     XsdType,
 )
+from tiergraph.selection import Node, NodeKind, Selector, evaluate_selection
+
+if TYPE_CHECKING:
+    from tiergraph.match import DeclaredOrder
 
 type Name = str | QualifiedName
 type AttributeTarget = (
@@ -151,6 +157,7 @@ class Document:
         self._attribute_declarations: list[AttributeDeclaration] = []
         self._boundaries: list[Boundary] = []
         self._attributes: list[Attribute] = []
+        self._declared_orders: dict[QualifiedName, tuple[RelationEndpointRef, ...]] = {}
 
     def namespace(self, namespace: str, *, prefix: str) -> None:
         """Register an additional namespace binding."""
@@ -460,6 +467,137 @@ class Document:
             )
         self._relations.append(declaration)
 
+    def declared_order(
+        self,
+        name: Name,
+        members: Selector,
+        sequence: Iterable[RelationEndpointRef] = (),
+        *,
+        open_left: bool = False,
+    ) -> DeclaredOrder:
+        """Declare and populate one mixed-kind successor chain."""
+        from tiergraph.match import DeclaredOrder, _declared_scope  # noqa: PLC0415
+
+        relation_name = self._name(name)
+        if relation_name in self._declared_orders:
+            raise BuilderError(
+                f"declared order {relation_name.local_name}: name is already used"
+            )
+        endpoints = self._ordered_endpoints(
+            sequence, f"declared order {relation_name.local_name} sequence"
+        )
+        side = RelationSideDeclaration(
+            (RelationEndpointKind.ITEM, RelationEndpointKind.BOUNDARY),
+            minimum=1,
+            maximum=1,
+        )
+        declaration = PolyadicRelationDeclaration(
+            relation_name,
+            side,
+            side,
+            unique_sources=True,
+            single_parent=True,
+            acyclic=True,
+        )
+        instances = tuple(
+            PolyadicRelationInstance(relation_name, (left,), (right,))
+            for left, right in pairwise(endpoints)
+        )
+        order = DeclaredOrder(relation_name, members, open_left)
+        try:
+            preview = replace(
+                self.build(),
+                relation_declarations=(*self._relations, declaration),
+                polyadic_relations=(*self._polyadic_instances, *instances),
+            )
+            expected = self._resolved_order_nodes(preview, endpoints)
+            selected = evaluate_selection(preview, members).nodes
+            if set(selected) != set(expected) or len(selected) != len(expected):
+                raise BuilderError(
+                    f"declared order {relation_name.local_name}: members must select "
+                    "exactly the explicit sequence"
+                )
+            scope = _declared_scope(preview, order)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"declared order {relation_name.local_name}: {error}"
+            ) from error
+        if scope.nodes != expected:
+            raise BuilderError(
+                f"declared order {relation_name.local_name}: members must select "
+                "exactly the explicit sequence"
+            )
+        self._relations.append(declaration)
+        self._polyadic_instances.extend(instances)
+        self._declared_orders[relation_name] = endpoints
+        return order
+
+    def append_declared(
+        self,
+        order: DeclaredOrder,
+        members: Selector,
+        chunk: Iterable[RelationEndpointRef],
+    ) -> DeclaredOrder:
+        """Append one chunk and return the order with its complete member selector."""
+        from tiergraph.match import DeclaredOrder, _declared_scope  # noqa: PLC0415
+
+        if not isinstance(order, DeclaredOrder):
+            raise BuilderError("append declared: order must be a DeclaredOrder")
+        retained = self._declared_orders.get(order.successor)
+        if retained is None:
+            raise BuilderError(
+                f"append declared {order.successor.local_name}: order is not owned "
+                "by this builder"
+            )
+        addition = self._ordered_endpoints(
+            chunk, f"append declared {order.successor.local_name} chunk"
+        )
+        candidate = (*retained, *addition)
+        current = self.build()
+        try:
+            resolved = self._resolved_order_nodes(current, candidate)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"append declared {order.successor.local_name}: {error}"
+            ) from error
+        if len(set(resolved)) != len(resolved):
+            raise BuilderError(
+                f"append declared {order.successor.local_name}: member is already present"
+            )
+        pairs: list[tuple[RelationEndpointRef, RelationEndpointRef]] = []
+        if retained and addition:
+            pairs.append((retained[-1], addition[0]))
+        pairs.extend(pairwise(addition))
+        instances = tuple(
+            PolyadicRelationInstance(order.successor, (left,), (right,))
+            for left, right in pairs
+        )
+        updated = DeclaredOrder(order.successor, members, order.open_left)
+        try:
+            preview = replace(
+                current,
+                polyadic_relations=(*self._polyadic_instances, *instances),
+            )
+            selected = evaluate_selection(preview, members).nodes
+            if set(selected) != set(resolved) or len(selected) != len(resolved):
+                raise BuilderError(
+                    f"append declared {order.successor.local_name}: members must "
+                    "select exactly the accumulated explicit sequence"
+                )
+            scope = _declared_scope(preview, updated)
+        except (TypeError, ValueError) as error:
+            raise BuilderError(
+                f"append declared {order.successor.local_name}: {error}"
+            ) from error
+        if scope.nodes != resolved:
+            raise BuilderError(
+                f"append declared {order.successor.local_name}: members must select "
+                "exactly the accumulated explicit sequence"
+            )
+        self._polyadic_instances.extend(instances)
+        self._declared_orders[order.successor] = candidate
+        return updated
+
     def relate(self, instance: RelationInstance | PolyadicRelationInstance) -> None:
         """Add an already-constructed kernel relation instance as-is."""
         if isinstance(instance, RelationInstance):
@@ -508,6 +646,40 @@ class Document:
             attributes=tuple(self._attributes),
             polyadic_relations=tuple(self._polyadic_instances),
         )
+
+    @staticmethod
+    def _ordered_endpoints(
+        values: Iterable[RelationEndpointRef], operation: str
+    ) -> tuple[RelationEndpointRef, ...]:
+        if isinstance(values, Set | Mapping):
+            raise BuilderError(f"{operation}: expected an ordered iterable")
+        try:
+            endpoints = tuple(values)
+        except TypeError as error:
+            raise BuilderError(f"{operation}: expected an iterable") from error
+        if any(
+            not isinstance(
+                endpoint,
+                ItemRef | DurableItemRef | BoundaryRef | DurableBoundaryRef,
+            )
+            for endpoint in endpoints
+        ):
+            raise BuilderError(
+                f"{operation}: endpoints must be item or boundary references"
+            )
+        return endpoints
+
+    @staticmethod
+    def _resolved_order_nodes(
+        graph: Graph, endpoints: tuple[RelationEndpointRef, ...]
+    ) -> tuple[Node, ...]:
+        nodes: list[Node] = []
+        for endpoint in endpoints:
+            if isinstance(endpoint, ItemRef | DurableItemRef):
+                nodes.append(Node(NodeKind.ITEM, graph.resolve_item(endpoint)))
+            else:
+                nodes.append(Node(NodeKind.BOUNDARY, graph.resolve_boundary(endpoint)))
+        return tuple(nodes)
 
     def _name(self, name: Name) -> QualifiedName:
         if isinstance(name, QualifiedName):
