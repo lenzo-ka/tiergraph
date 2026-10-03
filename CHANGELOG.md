@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Bound JSON-attribute nesting so every constructed value can cross the wire.
+- Bound JSON-attribute nesting at construction only, per carrier, so every
+  newly constructed value can cross the wire.
 
 ### Documentation
 

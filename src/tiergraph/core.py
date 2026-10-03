@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import IntEnum, StrEnum
@@ -15,12 +17,10 @@ from typing import NamedTuple, Protocol, cast
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 
-# Owner-tunable policy shared with the document reader. A JSON attribute can
-# sit at the deepest graph carrier (an item), where the document envelope adds
-# eight containers before the attribute value begins.
+# Owner-tunable policy shared with the document reader. Construction reserves
+# each attribute carrier's actual document envelope from this total limit.
 MAX_JSON_DEPTH = 256
-_JSON_ATTRIBUTE_ENVELOPE_DEPTH = 8
-_MAX_JSON_ATTRIBUTE_DEPTH = MAX_JSON_DEPTH - _JSON_ATTRIBUTE_ENVELOPE_DEPTH
+_CHECK_JSON_ATTRIBUTE_DEPTH = ContextVar("check_json_attribute_depth", default=True)
 
 _INTEGER_LEXICAL = re.compile(r"[+-]?[0-9]+\Z")
 _DECIMAL_LEXICAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
@@ -456,7 +456,7 @@ class _FrozenJson:
 _JSON_SAFE_INTEGER = 2**53 - 1
 
 
-def _freeze_json(value: object, active: set[int], depth: int = 0) -> _FrozenJson:
+def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
     """Snapshot finite JSON with exact primitive kinds and signed doubles."""
     if value is None:
         return _FrozenJson("null", None)
@@ -490,10 +490,6 @@ def _freeze_json(value: object, active: set[int], depth: int = 0) -> _FrozenJson
         raise GraphValidationError(
             "JSON values must be ordinary JSON primitives or containers"
         )
-    if depth >= _MAX_JSON_ATTRIBUTE_DEPTH:
-        raise GraphValidationError(
-            f"JSON attribute nesting depth exceeds limit {_MAX_JSON_ATTRIBUTE_DEPTH}"
-        )
     identity = id(value)
     if identity in active:
         raise GraphValidationError("JSON containers must be acyclic")
@@ -502,19 +498,13 @@ def _freeze_json(value: object, active: set[int], depth: int = 0) -> _FrozenJson
         if type(value) is list:
             return _FrozenJson(
                 "array",
-                tuple(
-                    _freeze_json(item, active, depth + 1)
-                    for item in cast(list[object], value)
-                ),
+                tuple(_freeze_json(item, active) for item in cast(list[object], value)),
             )
         mapping = cast(dict[object, object], value)
         if any(type(key) is not str for key in mapping):
             raise GraphValidationError("JSON object keys must be strings")
         entries = tuple(
-            (
-                _freeze_json(key, active, depth + 1).payload,
-                _freeze_json(item, active, depth + 1),
-            )
+            (_freeze_json(key, active).payload, _freeze_json(item, active))
             for key, item in sorted(cast(dict[str, object], mapping).items())
         )
         return _FrozenJson("object", entries)
@@ -566,6 +556,57 @@ class JsonAttributeValue:
 
 
 type Attribute = AttributeValue | JsonAttributeValue
+
+
+@contextmanager
+def _without_json_attribute_depth_checks() -> Iterator[None]:
+    """Let the wire reader preserve its existing total-document acceptance."""
+    token = _CHECK_JSON_ATTRIBUTE_DEPTH.set(False)
+    try:
+        yield
+    finally:
+        _CHECK_JSON_ATTRIBUTE_DEPTH.reset(token)
+
+
+def _json_attribute_depth(value: _FrozenJson) -> int:
+    """Return the greatest container depth without recursing through user data."""
+    deepest = 0
+    pending = [(value, 0)]
+    while pending:
+        current, parent_depth = pending.pop()
+        if current.kind == "array":
+            depth = parent_depth + 1
+            deepest = max(deepest, depth)
+            pending.extend(
+                (item, depth) for item in cast(tuple[_FrozenJson, ...], current.payload)
+            )
+        elif current.kind == "object":
+            depth = parent_depth + 1
+            deepest = max(deepest, depth)
+            pending.extend(
+                (item, depth)
+                for _, item in cast(
+                    tuple[tuple[str, _FrozenJson], ...], current.payload
+                )
+            )
+    return deepest
+
+
+def _require_json_attribute_depth(
+    attributes: Iterable[Attribute], envelope_depth: int
+) -> None:
+    """Keep newly built values within their carrier's wire depth budget."""
+    if not _CHECK_JSON_ATTRIBUTE_DEPTH.get():
+        return
+    limit = MAX_JSON_DEPTH - envelope_depth
+    for attribute in attributes:
+        if (
+            isinstance(attribute, JsonAttributeValue)
+            and _json_attribute_depth(attribute._value) > limit
+        ):
+            raise GraphValidationError(
+                f"JSON attribute nesting depth exceeds limit {limit}"
+            )
 
 
 def _scalar_attribute(value: Attribute) -> AttributeValue:
@@ -630,7 +671,7 @@ class SimpleRelationDeclaration:
 
     def __post_init__(self) -> None:
         """Canonicalize declaration attributes by their qualified names."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the declaration as JSON-serializable data."""
@@ -663,7 +704,7 @@ class BipartiteRelationDeclaration:
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require JSON-boolean promises."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
         _require_boolean(self.single_parent, "single-parent promise")
         _require_boolean(self.acyclic, "acyclic promise")
 
@@ -755,7 +796,7 @@ class PolyadicRelationDeclaration:
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require actual JSON-boolean promises."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
         for value, subject in (
             (self.unique_sources, "unique-sources promise"),
             (self.distinct_targets, "distinct-targets promise"),
@@ -798,7 +839,7 @@ class Item:
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and refuse a carried empty durable id."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 8)
         if self.durable_id is not None:
             _require_name(self.durable_id, "item durable id")
 
@@ -820,7 +861,7 @@ class Tier:
 
     def __post_init__(self) -> None:
         """Canonicalize tier attributes while retaining item order."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the tier as JSON-serializable data."""
@@ -1061,7 +1102,7 @@ class Boundary:
 
     def __post_init__(self) -> None:
         """Canonicalize the values attached to this boundary."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the boundary and its values as JSON-serializable data."""
@@ -1083,7 +1124,7 @@ class RelationInstance:
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require a usable carried durable id."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
         if self.durable_id is not None:
             _require_name(self.durable_id, "relation instance durable id")
 
@@ -1110,7 +1151,7 @@ class PolyadicRelationInstance:
 
     def __post_init__(self) -> None:
         """Canonicalize attributes and require a usable carried durable id."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 6)
         if self.durable_id is not None:
             _require_name(self.durable_id, "relation instance durable id")
 
@@ -1160,6 +1201,10 @@ class LayerFact:
 
     subject: LayerSubject
     value: Attribute
+
+    def __post_init__(self) -> None:
+        """Keep the fact value within its layer wire envelope."""
+        _require_json_attribute_depth((self.value,), 7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1408,7 +1453,7 @@ class Graph:
 
     def _canonicalize_collections(self) -> None:
         """Canonicalize every keyed collection before validation."""
-        _canonicalize_attributes(self)
+        _canonicalize_attributes(self, 4)
         object.__setattr__(
             self,
             "namespaces",
@@ -3137,8 +3182,9 @@ class _AttributeCarrier(Protocol):
         ...
 
 
-def _canonicalize_attributes(value: _AttributeCarrier) -> None:
+def _canonicalize_attributes(value: _AttributeCarrier, envelope_depth: int) -> None:
     attributes = value.attributes
+    _require_json_attribute_depth(attributes, envelope_depth)
     object.__setattr__(
         value, "attributes", tuple(sorted(attributes, key=lambda item: item.name))
     )

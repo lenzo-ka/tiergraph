@@ -54,6 +54,7 @@ from tiergraph.core import (
     TierDeclaration,
     TierRef,
     XsdType,
+    _without_json_attribute_depth_checks,
 )
 from tiergraph.schema import (
     DECLARATIONS,
@@ -277,7 +278,8 @@ def loads(document: str | bytes) -> Graph:
         )
     _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
-    return _graph(_object(root["graph"], "graph"))
+    with _without_json_attribute_depth_checks():
+        return _graph(_object(root["graph"], "graph"))
 
 
 def _integer_literal(literal: str) -> int:

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import replace
-from typing import cast
+from dataclasses import is_dataclass, replace
+from typing import cast, get_type_hints
 
 import pytest
 from examples.mix_paths import _document_int
 
+import tiergraph.core as core
 import tiergraph_dot
 from tests import test_wire as fixtures
 from tiergraph import (
@@ -66,6 +67,182 @@ def document(value: JsonValue) -> Graph:
         ),
         attributes=(JsonAttributeValue(NAME, value),),
     )
+
+
+def _attribute_carrier_types() -> tuple[type[object], ...]:
+    """Derive every structural attribute carrier from the kernel's dataclasses."""
+    carriers = []
+    for candidate in vars(core).values():
+        if not (
+            isinstance(candidate, type)
+            and candidate.__module__ == core.__name__
+            and is_dataclass(candidate)
+        ):
+            continue
+        hints = get_type_hints(candidate)
+        if (
+            hints.get("attributes") == tuple[core.Attribute, ...]
+            or hints.get("value") == core.Attribute
+        ):
+            carriers.append(candidate)
+    return tuple(sorted(carriers, key=lambda candidate: candidate.__name__))
+
+
+def _carrier_graph(carrier_type: type[object], attribute: JsonAttributeValue) -> Graph:
+    """Place one JSON attribute on the requested reflected carrier."""
+    namespace = (NamespaceDeclaration("j", NAME.namespace),)
+    tier_name = QualifiedName(NAME.namespace, "carrier-tier")
+    item_type = QualifiedName(NAME.namespace, "carrier-item")
+    membership = QualifiedName(NAME.namespace, "carrier-membership")
+    relation_name = QualifiedName(NAME.namespace, "carrier-relation")
+    polyadic_name = QualifiedName(NAME.namespace, "carrier-polyadic")
+    tier = Tier(TierDeclaration(tier_name, "Carrier tier"), (Item("i0"), Item("i1")))
+    simple = core.SimpleRelationDeclaration(membership, tier_name, item_type)
+    bipartite = core.BipartiteRelationDeclaration(relation_name, item_type, item_type)
+    side = core.RelationSideDeclaration((core.RelationEndpointKind.ITEM,), (tier_name,))
+    polyadic = core.PolyadicRelationDeclaration(polyadic_name, side, side)
+
+    if carrier_type is Graph:
+        domain = AttributeDomain.DOCUMENT
+        return Graph(
+            namespace,
+            (),
+            (),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+            attributes=(attribute,),
+        )
+    if carrier_type is Tier:
+        domain = AttributeDomain.TIER
+        carried_tier = replace(tier, attributes=(attribute,))
+        return Graph(
+            namespace,
+            (carried_tier,),
+            (),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is Item:
+        domain = AttributeDomain.ITEM
+        carried_tier = replace(
+            tier, items=(replace(tier.items[0], attributes=(attribute,)), tier.items[1])
+        )
+        return Graph(
+            namespace,
+            (carried_tier,),
+            (),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is core.Boundary:
+        domain = AttributeDomain.BOUNDARY
+        return Graph(
+            namespace,
+            (tier,),
+            (),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+            boundary_values=(core.Boundary(BoundaryRef(tier_name, 1), (attribute,)),),
+        )
+    if carrier_type is core.SimpleRelationDeclaration:
+        domain = AttributeDomain.RELATION_DECLARATION
+        carried_simple = replace(simple, attributes=(attribute,))
+        return Graph(
+            namespace,
+            (tier,),
+            (carried_simple,),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is core.BipartiteRelationDeclaration:
+        domain = AttributeDomain.RELATION_DECLARATION
+        carried_bipartite = replace(bipartite, attributes=(attribute,))
+        return Graph(
+            namespace,
+            (tier,),
+            (simple, carried_bipartite),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is core.PolyadicRelationDeclaration:
+        domain = AttributeDomain.RELATION_DECLARATION
+        carried_polyadic = replace(polyadic, attributes=(attribute,))
+        return Graph(
+            namespace,
+            (tier,),
+            (simple, carried_polyadic),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is core.RelationInstance:
+        domain = AttributeDomain.RELATION_INSTANCE
+        binary_relation = core.RelationInstance(
+            relation_name,
+            ItemRef(tier_name, 0),
+            ItemRef(tier_name, 1),
+            attributes=(attribute,),
+        )
+        return Graph(
+            namespace,
+            (tier,),
+            (simple, bipartite),
+            relations=(binary_relation,),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+        )
+    if carrier_type is core.PolyadicRelationInstance:
+        domain = AttributeDomain.RELATION_INSTANCE
+        polyadic_relation = core.PolyadicRelationInstance(
+            polyadic_name,
+            (ItemRef(tier_name, 0),),
+            (ItemRef(tier_name, 1),),
+            attributes=(attribute,),
+        )
+        return Graph(
+            namespace,
+            (tier,),
+            (simple, polyadic),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+            polyadic_relations=(polyadic_relation,),
+        )
+    if carrier_type is LayerFact:
+        domain = AttributeDomain.DOCUMENT
+        layer = Layer(
+            core.LayerName(NAME.namespace, "carrier-layer"),
+            (LayerFact(core.DocumentRef(), attribute),),
+        )
+        return Graph(
+            namespace,
+            (),
+            (),
+            attribute_declarations=(AttributeDeclaration(NAME, domain, JsonType.JSON),),
+            layers=(layer,),
+        )
+    raise AssertionError(
+        f"missing fixture for reflected carrier {carrier_type.__name__}"
+    )
+
+
+def _attribute_envelope_depth(value: JsonValue) -> int:
+    """Measure containers before this test's unique JSON attribute value."""
+    matches: list[int] = []
+
+    def visit(node: JsonValue, depth: int) -> None:
+        if isinstance(node, dict):
+            if (
+                node.get("name") == "j:payload"
+                and node.get("value_type") == "json"
+                and "value" in node
+            ):
+                matches.append(depth)
+            for child in node.values():
+                visit(child, depth + 1)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child, depth + 1)
+
+    visit(value, 1)
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _nested_value(depth: int) -> JsonValue:
+    value: JsonValue = None
+    for _ in range(depth):
+        value = [value]
+    return value
 
 
 @pytest.mark.parametrize(
@@ -140,30 +317,47 @@ def test_cycle_refusal_and_shared_acyclic_container() -> None:
     assert JsonAttributeValue(NAME, [shared, shared]).to_value() == [[1], [1]]
 
 
-def test_nesting_is_bounded_where_every_attribute_carrier_round_trips() -> None:
-    """Construction reserves the deepest carrier's fixed document envelope."""
-    safe_depth = MAX_JSON_DEPTH - 8
-    value: JsonValue = None
-    for _ in range(safe_depth):
-        value = [value]
-    item_name = QualifiedName(NAME.namespace, "items")
-    graph = Graph(
-        namespaces=(NamespaceDeclaration("j", NAME.namespace),),
-        tiers=(
-            Tier(
-                TierDeclaration(item_name, "Items"),
-                (Item("item", (JsonAttributeValue(NAME, value),)),),
-            ),
-        ),
-        relation_declarations=(),
-        attribute_declarations=(
-            AttributeDeclaration(NAME, AttributeDomain.ITEM, JsonType.JSON),
-        ),
+@pytest.mark.parametrize(
+    "carrier_type",
+    _attribute_carrier_types(),
+    ids=lambda carrier_type: carrier_type.__name__,
+)
+def test_each_derived_attribute_carrier_enforces_its_round_trip_depth(
+    carrier_type: type[object],
+) -> None:
+    """Every reflected carrier reserves exactly its measured wire envelope."""
+    shallow = _carrier_graph(carrier_type, JsonAttributeValue(NAME, []))
+    envelope = _attribute_envelope_depth(wire.to_data(shallow))
+    safe_depth = MAX_JSON_DEPTH - envelope
+    graph = _carrier_graph(
+        carrier_type, JsonAttributeValue(NAME, _nested_value(safe_depth))
     )
     assert wire.loads(wire.dumps(graph)) == graph
 
     with pytest.raises(GraphValidationError, match="JSON attribute nesting depth"):
-        JsonAttributeValue(NAME, [value])
+        _carrier_graph(
+            carrier_type,
+            JsonAttributeValue(NAME, _nested_value(safe_depth + 1)),
+        )
+
+
+@pytest.fixture(params=range(249, 253))
+def origin_main_graph_level_depth_document(request: pytest.FixtureRequest) -> str:
+    """Return the review's non-item document accepted by origin/main."""
+    data = wire.to_data(document(None))
+    graph = cast(dict[str, JsonValue], data["graph"])
+    attributes = cast(list[JsonValue], graph["attributes"])
+    attribute = cast(dict[str, JsonValue], attributes[0])
+    attribute["value"] = _nested_value(cast(int, request.param))
+    return json.dumps(data, separators=(",", ":"))
+
+
+def test_reader_keeps_origin_main_graph_level_depths(
+    origin_main_graph_level_depth_document: str,
+) -> None:
+    """Construction limits do not narrow the existing document reader."""
+    graph = wire.loads(origin_main_graph_level_depth_document)
+    assert isinstance(graph.attributes[0], JsonAttributeValue)
 
 
 def test_editor_and_machine_roundtrip() -> None:
