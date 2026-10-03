@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from itertools import pairwise
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from tiergraph.core import (
     Attribute,
@@ -71,6 +71,9 @@ from tiergraph.predicate import OffsetProfile, _offset_spans, _validate_offset_p
 from tiergraph.selection import Selector, evaluate_selection
 from tiergraph.semiring import BOOLEAN, COUNTING, PATH, PathValue
 from tiergraph.wire import _parsed_json
+
+if TYPE_CHECKING:
+    from tiergraph.match import DeclaredOrder
 
 GRAMMAR_NAMESPACE = "urn:tiergraph:grammar"
 CHART_NAMESPACE = "urn:tiergraph:grammar:chart"
@@ -313,11 +316,25 @@ class GrammarInput:
         symbol_attribute: QualifiedName,
         realization_attribute: QualifiedName,
         offsets: OffsetProfile,
+        *,
+        ordering: DeclaredOrder | None = None,
     ) -> GrammarInput:
         """Bind declared graph items to typed grammar tokens with raw offsets."""
         _validate_offset_profile(graph, offsets)
         selected = evaluate_selection(graph, selector)
-        spans = _offset_spans(graph, selected.nodes, offsets)
+        nodes = selected.nodes
+        if ordering is not None:
+            from tiergraph.match import _declared_scope  # noqa: PLC0415
+
+            scope = _declared_scope(graph, ordering)
+            if any(node.kind.value != "item" for node in scope.nodes):
+                raise ValueError("grammar input ordering must contain only items")
+            if set(scope.nodes) != set(selected.nodes):
+                raise ValueError(
+                    "grammar input ordering members must equal the selected input items"
+                )
+            nodes = scope.nodes
+        spans = _offset_spans(graph, nodes, offsets)
         partitions = {span.partition for span in spans}
         if len(partitions) > 1:
             raise ValueError("grammar input items must belong to one offset partition")
@@ -327,7 +344,7 @@ class GrammarInput:
                     "grammar input item origins must be nondecreasing in declared order"
                 )
         tokens: list[GrammarInputToken] = []
-        for node, offset in zip(selected.nodes, spans, strict=True):
+        for node, offset in zip(nodes, spans, strict=True):
             reference = cast(ItemRef, node.reference)
             attributes = {
                 value.name: value for value in _graph_item_attributes(graph, reference)

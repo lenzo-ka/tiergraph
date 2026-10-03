@@ -11,6 +11,7 @@ from tiergraph.core import (
     Graph,
     ItemRef,
     JsonValue,
+    PolyadicRelationDeclaration,
     QualifiedName,
     Refusal,
     RefusalStage,
@@ -38,7 +39,11 @@ from tiergraph.selection import (
     _decode_selector,
     evaluate_selection,
 )
-from tiergraph.traversal import OrderedContainment
+from tiergraph.traversal import (
+    OrderedContainment,
+    OrderedPolyadicTraversal,
+    PolyadicSide,
+)
 from tiergraph.wire import _object, _parsed_json, _string
 
 MAX_PATTERN_POSITIONS = 100_000
@@ -188,7 +193,20 @@ class AdjacentRuns:
     offsets: OffsetProfile
 
 
-type Ordering = TierOrder | ContainerOrder | AdjacentRuns
+@dataclass(frozen=True, slots=True)
+class DeclaredOrder:
+    """Read one explicitly declared polyadic successor chain as one scope."""
+
+    successor: QualifiedName
+    members: Selector
+    open_left: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.open_left, bool):
+            raise ValueError("DeclaredOrder open_left must be a boolean")
+
+
+type Ordering = TierOrder | ContainerOrder | AdjacentRuns | DeclaredOrder
 
 
 class _PatternOperation(StrEnum):
@@ -369,6 +387,171 @@ class _NfaBuilder:
 class _Scope:
     nodes: tuple[Node, ...]
     offsets: tuple[tuple[int, int], ...] | None = None
+    open_left: bool = False
+
+
+def _contains_sequence_selector(selector: Selector) -> bool:
+    from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
+        DifferenceSelector,
+        IntersectionSelector,
+        SequenceSelector,
+        UnionSelector,
+        WhereSelector,
+    )
+
+    if isinstance(selector, SequenceSelector):
+        return True
+    if isinstance(selector, WhereSelector):
+        return _contains_sequence_selector(selector.base)
+    if isinstance(selector, (UnionSelector, IntersectionSelector)):
+        return any(_contains_sequence_selector(argument) for argument in selector.args)
+    if isinstance(selector, DifferenceSelector):
+        return _contains_sequence_selector(
+            selector.left
+        ) or _contains_sequence_selector(selector.right)
+    return False
+
+
+def _node_label(node: Node) -> str:
+    return f"{node.kind.value} {node.reference}"
+
+
+def _declared_scope(  # noqa: PLR0915 -- validation order fixes diagnostics
+    graph: Graph, ordering: DeclaredOrder
+) -> _Scope:
+    declaration = next(
+        (
+            candidate
+            for candidate in graph.relation_declarations
+            if candidate.name == ordering.successor
+        ),
+        None,
+    )
+    if not isinstance(declaration, PolyadicRelationDeclaration):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"declared order successor '{ordering.successor}' is not a declared "
+            "polyadic relation",
+        )
+    if _contains_sequence_selector(ordering.members):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            "DeclaredOrder members may not contain SequenceSelector",
+        )
+    members = evaluate_selection(graph, ordering.members)
+    if any(
+        member.kind not in (NodeKind.ITEM, NodeKind.BOUNDARY)
+        for member in members.nodes
+    ):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            "DeclaredOrder members must select only items and boundaries",
+        )
+
+    named = tuple(
+        (index, instance)
+        for index, instance in enumerate(graph.polyadic_relations)
+        if instance.declaration == ordering.successor
+    )
+    for instance_index, instance in named:
+        if len(instance.sources) != 1 or len(instance.targets) != 1:
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"declared order successor '{ordering.successor}' instance "
+                f"{instance_index} must have exactly one source and one target",
+            )
+
+    traversal = OrderedPolyadicTraversal(
+        graph, ordering.successor, PolyadicSide.SOURCES, PolyadicSide.TARGETS
+    )
+    try:
+        incidences = traversal._instances(check_cycle=False)
+    except ValueError as error:
+        raise Refusal(RefusalStage.SEMANTICS, str(error)) from error
+
+    admitted = set(members.nodes)
+    outgoing: dict[Node, tuple[int, Node]] = {}
+    incoming: dict[Node, tuple[int, Node]] = {}
+    for instance_index, sources, targets in incidences:
+        source = sources[0]
+        target = targets[0]
+        for endpoint in (source, target):
+            if endpoint not in admitted:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"declared order successor '{ordering.successor}' instance "
+                    f"{instance_index} names {_node_label(endpoint)} outside its "
+                    "member selection",
+                )
+        previous_out = outgoing.get(source)
+        if previous_out is not None:
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"declared order successor '{ordering.successor}' gives "
+                f"{_node_label(source)} more than one successor "
+                f"(instances {previous_out[0]} and {instance_index})",
+            )
+        previous_in = incoming.get(target)
+        if previous_in is not None:
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"declared order successor '{ordering.successor}' gives "
+                f"{_node_label(target)} more than one predecessor "
+                f"(instances {previous_in[0]} and {instance_index})",
+            )
+        outgoing[source] = (instance_index, target)
+        incoming[target] = (instance_index, source)
+
+    finished: set[Node] = set()
+    for root in members.nodes:
+        if root in finished:
+            continue
+        visiting: set[Node] = set()
+        cursor = root
+        while cursor not in finished:
+            visiting.add(cursor)
+            edge = outgoing.get(cursor)
+            if edge is None:
+                finished.update(visiting)
+                break
+            instance_index, target = edge
+            if target in visiting:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"declared order successor '{ordering.successor}' instance "
+                    f"{instance_index} closes a cycle at {_node_label(target)}",
+                )
+            cursor = target
+
+    if not members.nodes:
+        return _Scope((), open_left=ordering.open_left)
+    heads = tuple(member for member in members.nodes if member not in incoming)
+    if len(heads) != 1:
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"declared order successor '{ordering.successor}' has {len(heads)} heads; "
+            "exactly one is required",
+        )
+    head = heads[0]
+    ordered: list[Node] = []
+    cursor = head
+    while True:
+        ordered.append(cursor)
+        edge = outgoing.get(cursor)
+        if edge is None:
+            break
+        cursor = edge[1]
+    visited = set(ordered)
+    if len(visited) != len(
+        admitted
+    ):  # pragma: no cover - prior invariants imply reachability
+        unreachable = next(member for member in members.nodes if member not in visited)
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"declared order successor '{ordering.successor}' leaves "
+            f"{_node_label(unreachable)} unreachable from head {_node_label(head)}",
+        )
+    return _Scope(tuple(ordered), open_left=ordering.open_left)
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,6 +621,7 @@ class CompiledPattern:
         length: int,
         *,
         open_right: bool = False,
+        open_left: bool = False,
     ) -> set[int]:
         result = set(states)
         pending = list(states)
@@ -446,7 +630,7 @@ class CompiledPattern:
             for edge in self.epsilon[state]:
                 if edge.guard == _GUARD_END and open_right:
                     continue
-                if edge.guard == _GUARD_START and position != 0:
+                if edge.guard == _GUARD_START and (position != 0 or open_left):
                     continue
                 if edge.guard == _GUARD_END and position != length:
                     continue
@@ -463,10 +647,12 @@ class CompiledPattern:
         return tuple(tuple(edges) for edges in reverse)
 
     @staticmethod
-    def _guarded(guard: int, position: int, length: int) -> bool:
+    def _guarded(
+        guard: int, position: int, length: int, *, open_left: bool = False
+    ) -> bool:
         return (
             guard == _GUARD_ALWAYS
-            or (guard == _GUARD_START and position == 0)
+            or (guard == _GUARD_START and position == 0 and not open_left)
             or (guard == _GUARD_END and position == length)
         )
 
@@ -476,13 +662,18 @@ class CompiledPattern:
         position: int,
         length: int,
         reverse: tuple[tuple[tuple[int, int], ...], ...],
+        *,
+        open_left: bool = False,
     ) -> set[int]:
         result = set(states)
         pending = list(states)
         while pending:
             state = pending.pop()
             for source, guard in reverse[state]:
-                if self._guarded(guard, position, length) and source not in result:
+                if (
+                    self._guarded(guard, position, length, open_left=open_left)
+                    and source not in result
+                ):
                     result.add(source)
                     pending.append(source)
         return result
@@ -507,6 +698,8 @@ class CompiledPattern:
                     _Scope(containment.direct_children(container.reference).nodes)
                 )
             return tuple(result)
+        if isinstance(ordering, DeclaredOrder):
+            return (_declared_scope(graph, ordering),)
         _validate_offset_profile(graph, ordering.offsets)
         selected = evaluate_selection(graph, ordering.source)
         spans = _offset_spans(graph, selected.nodes, ordering.offsets)
@@ -581,6 +774,7 @@ class CompiledPattern:
         length: int,
         *,
         open_right: bool = False,
+        open_left: bool = False,
     ) -> set[int]:
         targets = {
             edge.target
@@ -588,7 +782,13 @@ class CompiledPattern:
             for edge in self.atom_edges[state]
             if truth[edge.atom][node]
         }
-        return self._closure(targets, position + 1, length, open_right=open_right)
+        return self._closure(
+            targets,
+            position + 1,
+            length,
+            open_right=open_right,
+            open_left=open_left,
+        )
 
     def _can_change_after_end(self, states: set[int], length: int) -> bool:
         pending = [(state, 0) for state in states]
@@ -620,7 +820,13 @@ class CompiledPattern:
     ) -> int | None:
         length = len(scope.nodes)
         for start in range(length + 1):
-            active = self._closure({self.start}, start, length, open_right=True)
+            active = self._closure(
+                {self.start},
+                start,
+                length,
+                open_right=True,
+                open_left=scope.open_left,
+            )
             for position in range(start, length):
                 active = self._step(
                     active,
@@ -629,6 +835,7 @@ class CompiledPattern:
                     position,
                     length,
                     open_right=True,
+                    open_left=scope.open_left,
                 )
                 if not active:
                     break
@@ -641,7 +848,13 @@ class CompiledPattern:
     ) -> bool:
         length = len(scope.nodes)
         for start in range(before):
-            active = self._closure({self.start}, start, length, open_right=True)
+            active = self._closure(
+                {self.start},
+                start,
+                length,
+                open_right=True,
+                open_left=scope.open_left,
+            )
             if self.accept in active:
                 return True
             for position in range(start, length):
@@ -652,6 +865,7 @@ class CompiledPattern:
                     position,
                     length,
                     open_right=True,
+                    open_left=scope.open_left,
                 )
                 if self.accept in active:
                     return True
@@ -693,12 +907,22 @@ class CompiledPattern:
             length = len(scope.nodes)
             active: set[int] = set()
             for position in range(length + 1):
-                active = self._closure(active | {self.start}, position, length)
+                active = self._closure(
+                    active | {self.start},
+                    position,
+                    length,
+                    open_left=scope.open_left,
+                )
                 if self.accept in active:
                     return True
                 if position < length:
                     active = self._step(
-                        active, scope.nodes[position], truth, position, length
+                        active,
+                        scope.nodes[position],
+                        truth,
+                        position,
+                        length,
+                        open_left=scope.open_left,
                     )
         return False
 
@@ -733,15 +957,29 @@ class CompiledPattern:
             forward: list[set[int]] = []
             active: set[int] = set()
             for position in range(length + 1):
-                active = self._closure(active | {self.start}, position, length)
+                active = self._closure(
+                    active | {self.start},
+                    position,
+                    length,
+                    open_left=scope.open_left,
+                )
                 forward.append(active)
                 if position < length:
                     active = self._step(
-                        active, scope.nodes[position], truth, position, length
+                        active,
+                        scope.nodes[position],
+                        truth,
+                        position,
+                        length,
+                        open_left=scope.open_left,
                     )
             backward: list[set[int]] = [set() for _ in range(length + 1)]
             backward[length] = self._reverse_closure(
-                {self.accept}, length, length, reverse
+                {self.accept},
+                length,
+                length,
+                reverse,
+                open_left=scope.open_left,
             )
             for position in range(length - 1, -1, -1):
                 node = scope.nodes[position]
@@ -753,7 +991,11 @@ class CompiledPattern:
                     ):
                         predecessors.add(state)
                 backward[position] = self._reverse_closure(
-                    predecessors, position, length, reverse
+                    predecessors,
+                    position,
+                    length,
+                    reverse,
+                    open_left=scope.open_left,
                 )
             for position, node in enumerate(scope.nodes):
                 if any(
@@ -784,7 +1026,13 @@ class CompiledPattern:
         result: list[SpanMatch] = []
         stop = length + 1 if before is None else before
         for start in range(stop):
-            active = self._closure({self.start}, start, length, open_right=open_right)
+            active = self._closure(
+                {self.start},
+                start,
+                length,
+                open_right=open_right,
+                open_left=scope.open_left,
+            )
             for end in range(start, length):
                 active = self._step(
                     active,
@@ -793,6 +1041,7 @@ class CompiledPattern:
                     end,
                     length,
                     open_right=open_right,
+                    open_left=scope.open_left,
                 )
                 if not active:
                     break
@@ -1098,6 +1347,20 @@ def ordering_to_data(ordering: Ordering) -> JsonValue:
             "relation": ordering.relation.to_data(),
             "containers": _selector_to_data(ordering.containers),
         }
+    if isinstance(ordering, DeclaredOrder):
+        if _contains_sequence_selector(ordering.members):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "DeclaredOrder members may not contain SequenceSelector",
+            )
+        result: dict[str, JsonValue] = {
+            "order": "declared",
+            "successor": ordering.successor.to_data(),
+            "members": _selector_to_data(ordering.members),
+        }
+        if ordering.open_left:
+            result["open_left"] = True
+        return result
     return {
         "order": "adjacent-runs",
         "source": _selector_to_data(ordering.source),
@@ -1124,6 +1387,28 @@ def _decode_ordering(value: JsonValue, path: str) -> Ordering:
             _decode_qname(node["relation"], f"{path}.relation"),
             _decode_selector(node["containers"], f"{path}.containers"),
         )
+    if kind == "declared":
+        optional = {"open_left"} if "open_left" in node else set()
+        _refuse_field_set(
+            node.keys(),
+            {"order", "successor", "members"} | optional,
+            {"order", "successor", "members"},
+            path,
+        )
+        open_left = node.get("open_left", False)
+        if not isinstance(open_left, bool):
+            raise Refusal(RefusalStage.VALUE, f"{path}.open_left must be a boolean")
+        members = _decode_selector(node["members"], f"{path}.members")
+        if _contains_sequence_selector(members):
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                "DeclaredOrder members may not contain SequenceSelector",
+            )
+        return DeclaredOrder(
+            _decode_qname(node["successor"], f"{path}.successor"),
+            members,
+            open_left,
+        )
     if kind == "adjacent-runs":
         _refuse_field_set(
             node.keys(),
@@ -1144,15 +1429,30 @@ def _decode_ordering(value: JsonValue, path: str) -> Ordering:
 def _selector_to_data(selector: Selector) -> JsonValue:
     """Encode the selector leaves and algebra admitted inside an ordering."""
     from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
+        BoundariesSelector,
+        BoundaryPathSelector,
         DifferenceSelector,
         IntersectionSelector,
+        ItemPathSelector,
         ItemsSelector,
+        SequenceSelector,
         UnionSelector,
         WhereSelector,
     )
 
     if isinstance(selector, ItemsSelector):
         return {"select": "items", "tier": selector.tier.to_data()}
+    if isinstance(selector, BoundariesSelector):
+        return {"select": "boundaries", "tier": selector.tier.to_data()}
+    if isinstance(selector, ItemPathSelector):
+        return {"select": "item", "path": selector.path}
+    if isinstance(selector, BoundaryPathSelector):
+        return {"select": "boundary", "path": selector.path}
+    if isinstance(selector, SequenceSelector):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            "DeclaredOrder members may not contain SequenceSelector",
+        )
     if isinstance(selector, WhereSelector):
         return {
             "select": "where",
@@ -1312,6 +1612,7 @@ __all__ = [
     "AtomPattern",
     "CompiledPattern",
     "ContainerOrder",
+    "DeclaredOrder",
     "EndPattern",
     "Extent",
     "FocusPattern",

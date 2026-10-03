@@ -1839,7 +1839,7 @@ Wrap raw source symbols with one identity realization apiece.
 Class method.
 
 ```text
-GrammarInput.from_graph(cls, graph: 'Graph', selector: 'Selector', symbol_attribute: 'QualifiedName', realization_attribute: 'QualifiedName', offsets: 'OffsetProfile') -> 'GrammarInput'
+GrammarInput.from_graph(cls, graph: 'Graph', selector: 'Selector', symbol_attribute: 'QualifiedName', realization_attribute: 'QualifiedName', offsets: 'OffsetProfile', *, ordering: 'DeclaredOrder | None' = None) -> 'GrammarInput'
 ```
 
 Bind declared graph items to typed grammar tokens with raw offsets.
@@ -5447,6 +5447,26 @@ Document.declare(self, declaration: 'RelationDeclaration') -> 'None'
 
 Add an already-constructed kernel relation declaration as-is.
 
+#### `Document.declared_order`
+
+Method.
+
+```text
+Document.declared_order(self, name: 'Name', members: 'Selector', sequence: 'Iterable[RelationEndpointRef]' = (), *, open_left: 'bool' = False) -> 'DeclaredOrder'
+```
+
+Declare and populate one mixed-kind successor chain.
+
+#### `Document.append_declared`
+
+Method.
+
+```text
+Document.append_declared(self, order: 'DeclaredOrder', members: 'Selector', chunk: 'Iterable[RelationEndpointRef]') -> 'DeclaredOrder'
+```
+
+Append one chunk and return the order with its complete member selector.
+
 #### `Document.relate`
 
 Method.
@@ -7070,6 +7090,14 @@ ContainerOrder(relation: 'QualifiedName', containers: 'Selector') -> None
 ```
 
 Read each selected container's direct children as a separate scope.
+
+### `DeclaredOrder`
+
+```text
+DeclaredOrder(successor: 'QualifiedName', members: 'Selector', open_left: 'bool' = False) -> None
+```
+
+Read one explicitly declared polyadic successor chain as one scope.
 
 ### `EndPattern`
 
