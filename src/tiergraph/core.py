@@ -15,6 +15,13 @@ from typing import NamedTuple, Protocol, cast
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 
+# Owner-tunable policy shared with the document reader. A JSON attribute can
+# sit at the deepest graph carrier (an item), where the document envelope adds
+# eight containers before the attribute value begins.
+MAX_JSON_DEPTH = 256
+_JSON_ATTRIBUTE_ENVELOPE_DEPTH = 8
+_MAX_JSON_ATTRIBUTE_DEPTH = MAX_JSON_DEPTH - _JSON_ATTRIBUTE_ENVELOPE_DEPTH
+
 _INTEGER_LEXICAL = re.compile(r"[+-]?[0-9]+\Z")
 _DECIMAL_LEXICAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
 _DOUBLE_LEXICAL = re.compile(
@@ -449,7 +456,7 @@ class _FrozenJson:
 _JSON_SAFE_INTEGER = 2**53 - 1
 
 
-def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
+def _freeze_json(value: object, active: set[int], depth: int = 0) -> _FrozenJson:
     """Snapshot finite JSON with exact primitive kinds and signed doubles."""
     if value is None:
         return _FrozenJson("null", None)
@@ -483,6 +490,10 @@ def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
         raise GraphValidationError(
             "JSON values must be ordinary JSON primitives or containers"
         )
+    if depth >= _MAX_JSON_ATTRIBUTE_DEPTH:
+        raise GraphValidationError(
+            f"JSON attribute nesting depth exceeds limit {_MAX_JSON_ATTRIBUTE_DEPTH}"
+        )
     identity = id(value)
     if identity in active:
         raise GraphValidationError("JSON containers must be acyclic")
@@ -491,13 +502,19 @@ def _freeze_json(value: object, active: set[int]) -> _FrozenJson:
         if type(value) is list:
             return _FrozenJson(
                 "array",
-                tuple(_freeze_json(item, active) for item in cast(list[object], value)),
+                tuple(
+                    _freeze_json(item, active, depth + 1)
+                    for item in cast(list[object], value)
+                ),
             )
         mapping = cast(dict[object, object], value)
         if any(type(key) is not str for key in mapping):
             raise GraphValidationError("JSON object keys must be strings")
         entries = tuple(
-            (_freeze_json(key, active).payload, _freeze_json(item, active))
+            (
+                _freeze_json(key, active, depth + 1).payload,
+                _freeze_json(item, active, depth + 1),
+            )
             for key, item in sorted(cast(dict[str, object], mapping).items())
         )
         return _FrozenJson("object", entries)

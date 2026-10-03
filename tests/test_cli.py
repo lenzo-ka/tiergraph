@@ -512,6 +512,57 @@ def test_discharge_rewrite_certifies_an_effect_the_pair_bears_out(
     }
 
 
+def test_path_resolve_accepts_a_declarative_chart_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A profile input reaches grammar-chart alternatives without changing defaults."""
+    grammar_path = tmp_path / "grammar.json"
+    declaration = _grammar(grammar_path)
+    forest = tiergraph.recognize(tiergraph.lower_grammar(declaration), ("x",))
+    graph_path = tmp_path / "forest-graph.json"
+    graph_path.write_bytes(tiergraph.dump_bytes(forest.graph))
+    profile = tiergraph.GrammarChartProfile(forest)
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(profile.to_data()), encoding="utf-8")
+    relation = QualifiedName(forest.root.tier.namespace, "alternatives")
+    path = str(
+        profile.spell(tiergraph.AlternativeRef(forest.root, relation, 0), forest.graph)
+    )
+    alternative = profile.alternatives(forest.root, relation, forest.graph)[0]
+    assert isinstance(alternative, ItemRef)
+
+    assert (
+        main(
+            [
+                "path",
+                "resolve",
+                str(graph_path),
+                path,
+                "--profile",
+                str(profile_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "kind": "alternative",
+        "path": path,
+        "owner": forest.root.to_data(),
+        "relation": relation.to_data(),
+        "index": 0,
+        "value": alternative.to_data(),
+    }
+    with pytest.raises(ValueError, match="profile.kind"):
+        tiergraph.GrammarChartProfile.from_data(
+            forest.graph, {"kind": "structural", "root": forest.root.to_data()}
+        )
+    bad_root = {"tier": forest.root.tier.to_data(), "index": 999}
+    with pytest.raises(ValueError, match="outside tier"):
+        tiergraph.GrammarChartProfile.from_data(
+            forest.graph, {"kind": "grammar-chart", "root": bad_root}
+        )
+
+
 @pytest.mark.parametrize(
     ("claim", "shrink", "fragment"),
     (
@@ -873,9 +924,24 @@ def test_grammar_commands_recognize_count_and_best(
 ) -> None:
     """Nested grammar commands emit their exact deterministic JSON objects."""
     source = tmp_path / "grammar.json"
-    _grammar(source)
+    declaration = _grammar(source)
     assert main(["grammar", "recognize", str(source), "--tokens-json", '["x"]']) == 0
     assert json.loads(capsys.readouterr().out) == {"recognized": True}
+    forest = tiergraph.recognize(tiergraph.lower_grammar(declaration), ("x",))
+    assert (
+        main(
+            [
+                "grammar",
+                "recognize",
+                str(source),
+                "--tokens-json",
+                '["x"]',
+                "--forest",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.encode() == cli._json_bytes(forest.to_data())
     assert main(["grammar", "count", str(source), "--tokens-json", '["x"]']) == 0
     assert json.loads(capsys.readouterr().out) == {"count": 2}
     assert main(["grammar", "best", str(source), "--tokens-json", '["x"]']) == 0

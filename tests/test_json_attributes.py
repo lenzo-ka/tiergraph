@@ -13,6 +13,7 @@ from examples.mix_paths import _document_int
 import tiergraph_dot
 from tests import test_wire as fixtures
 from tiergraph import (
+    MAX_JSON_DEPTH,
     AttachValue,
     AttributeDeclaration,
     AttributeDomain,
@@ -39,6 +40,8 @@ from tiergraph import (
     RefusalStage,
     RewriteDeclaration,
     RewriteEffect,
+    Tier,
+    TierDeclaration,
     XsdType,
     execute,
     program_dumps,
@@ -135,6 +138,32 @@ def test_cycle_refusal_and_shared_acyclic_container() -> None:
         JsonAttributeValue(NAME, array)
     shared: list[JsonValue] = [1]
     assert JsonAttributeValue(NAME, [shared, shared]).to_value() == [[1], [1]]
+
+
+def test_nesting_is_bounded_where_every_attribute_carrier_round_trips() -> None:
+    """Construction reserves the deepest carrier's fixed document envelope."""
+    safe_depth = MAX_JSON_DEPTH - 8
+    value: JsonValue = None
+    for _ in range(safe_depth):
+        value = [value]
+    item_name = QualifiedName(NAME.namespace, "items")
+    graph = Graph(
+        namespaces=(NamespaceDeclaration("j", NAME.namespace),),
+        tiers=(
+            Tier(
+                TierDeclaration(item_name, "Items"),
+                (Item("item", (JsonAttributeValue(NAME, value),)),),
+            ),
+        ),
+        relation_declarations=(),
+        attribute_declarations=(
+            AttributeDeclaration(NAME, AttributeDomain.ITEM, JsonType.JSON),
+        ),
+    )
+    assert wire.loads(wire.dumps(graph)) == graph
+
+    with pytest.raises(GraphValidationError, match="JSON attribute nesting depth"):
+        JsonAttributeValue(NAME, [value])
 
 
 def test_editor_and_machine_roundtrip() -> None:

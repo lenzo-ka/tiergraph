@@ -155,6 +155,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     resolve.set_defaults(handler=_handle_path)
     resolve.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     resolve.add_argument("tgpath", metavar="TGPATH", help="tiergraph path to resolve")
+    resolve.add_argument(
+        "--profile", metavar="FILE", help="declarative grammar chart profile"
+    )
     _output_argument(resolve)
 
     spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
@@ -184,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
         )
         grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
+        if grammar_command == "recognize":
+            grammar_parser.add_argument(
+                "--forest",
+                action="store_true",
+                help="emit the complete parse forest",
+            )
         if grammar_command == "best":
             grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
         _output_argument(grammar_parser)
@@ -571,8 +580,17 @@ def _handle_walk(args: argparse.Namespace) -> None:
 
 def _handle_path(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    profile = tiergraph.StructuralPathProfile()
+    value: dict[str, object]
     if args.path_command == "resolve":
+        profile: tiergraph.PathProfile = (
+            tiergraph.StructuralPathProfile()
+            if args.profile is None
+            else tiergraph.GrammarChartProfile.from_data(
+                graph, _profile_json(args.profile)
+            )
+        )
+        if args.profile is not None:
+            _check_distinct(args.profile, args.output)
         resolved = tiergraph.resolve_path(graph, profile, args.tgpath)
         if isinstance(resolved, tiergraph.ResolvedItem):
             value = {
@@ -587,10 +605,20 @@ def _handle_path(args: argparse.Namespace) -> None:
                 "current": resolved.current.to_data(),
             }
         else:
-            raise ValueError(  # pragma: no cover - StructuralPathProfile never yields an alternative
-                "structural path profile returned an alternative"
-            )
+            if not isinstance(  # pragma: no cover - chart alternatives are items
+                resolved.value, tiergraph.ItemRef
+            ):
+                raise ValueError("path profile returned an unsupported alternative")
+            value = {
+                "kind": "alternative",
+                "path": str(resolved.path),
+                "owner": resolved.owner.to_data(),
+                "relation": resolved.relation.to_data(),
+                "index": resolved.index,
+                "value": resolved.value.to_data(),
+            }
     else:
+        profile = tiergraph.StructuralPathProfile()
         value = {"path": str(profile.spell(_path_binding(args, profile, graph), graph))}
     _write_output(args.file, args.output, _json_bytes(value))
 
@@ -613,7 +641,8 @@ def _handle_grammar(args: argparse.Namespace) -> None:
         return
     tokens = _tokens_json(args.tokens_json)
     if args.grammar_command == "recognize":
-        value = {"recognized": tiergraph.recognize(lowered, tokens).recognized()}
+        forest = tiergraph.recognize(lowered, tokens)
+        value = forest.to_data() if args.forest else {"recognized": forest.recognized()}
     elif args.grammar_command == "count":
         value = {"count": tiergraph.count(lowered, tokens)}
     else:

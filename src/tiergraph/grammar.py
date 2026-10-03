@@ -1383,6 +1383,14 @@ class ParseForest:
 
 
 @dataclass(frozen=True, slots=True)
+class _GrammarChartSnapshot:
+    """Hold the graph identity and root a chart path profile actually reads."""
+
+    graph: Graph
+    root: ItemRef
+
+
+@dataclass(frozen=True, slots=True)
 class GrammarChartProfile:
     """Address chart alternatives in a stable order within one forest snapshot.
 
@@ -1393,6 +1401,20 @@ class GrammarChartProfile:
     """
 
     forest: ParseForest
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the declarative chart-profile input used by the CLI."""
+        return {"kind": "grammar-chart", "root": self.forest.root.to_data()}
+
+    @classmethod
+    def from_data(cls, graph: Graph, data: object) -> GrammarChartProfile:
+        """Bind a declarative chart profile to one graph snapshot."""
+        obj = _decode_object(data, "grammar chart profile", {"kind", "root"})
+        if obj["kind"] != "grammar-chart":
+            raise ValueError("grammar chart profile.kind must be 'grammar-chart'")
+        root = _decode_item_ref(obj["root"], "grammar chart profile.root")
+        graph.resolve_item(root)
+        return cls(cast(ParseForest, _GrammarChartSnapshot(graph, root)))
 
     def bind(self, path: CanonicalPath, graph: Graph) -> PathBinding:
         """Bind a chart coordinate and profile-owned alternatives literal."""

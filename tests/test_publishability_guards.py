@@ -21,6 +21,14 @@ SALT = bytes.fromhex("00112233445566778899aabbccddeeff")
 LEAK_URL = "https:" + "//unknown.invalid/project"
 
 
+def test_release_guide_requires_a_dependency_floor_without_an_upper_cap() -> None:
+    """Consumer guidance keeps the owner-ruling spelling and rejects its inverse."""
+    guide = (check_tracked_clean.ROOT / "RELEASING.md").read_text(encoding="utf-8")
+    assert "tiergraph>=X.Y" in guide
+    assert "never add an upper cap" in guide
+    assert "tiergraph>=X.Y,<X.(Y+1)" not in guide
+
+
 def _synthetic_denylist() -> check_tracked_clean.Denylist:
     """Return a denylist containing only the synthetic test token."""
     return check_tracked_clean.Denylist(

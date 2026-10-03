@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added full parse-forest output and declarative chart profiles to the CLI.
 - Added projected declared orderings and total span predicates over mixed scopes.
 - Added relation-declared linear orderings for cross-tier and boundary-aware matching.
 - Added strict experimental grammar-generation JSON envelopes and CLI commands.
@@ -18,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added pattern text parsing, formatting, and command-line matching.
 - Added exact pattern widths and open-right matching watermarks.
 - Added regular sequence patterns over declared graph orderings.
+
+### Changed
+
+- Bound JSON-attribute nesting so every constructed value can cross the wire.
+
+### Documentation
+
+- Directed consumers to declare version floors without upper caps.
 
 ## [0.5.0] - 2026-10-01
 
