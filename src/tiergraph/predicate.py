@@ -1266,19 +1266,36 @@ class BoundPredicate:
         if isinstance(atom, Spans):
             from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
                 ItemsSelector,
+                NodeKind,
                 evaluate_selection,
             )
 
-            assert atom.quantifier is Quantifier.ANY
             targets = evaluate_selection(self.graph, ItemsSelector(atom.other))
             matching = self._selection_decision(atom.target, targets)
-            left = _offset_spans(self.graph, candidates.nodes, atom.offsets)
+            if atom.quantifier is Quantifier.ALL:
+                matching = targets - matching
+            item_candidates = candidates.__class__(
+                self.graph,
+                tuple(
+                    node
+                    for node in candidates.nodes
+                    if node.kind is NodeKind.ITEM
+                    and isinstance(node.reference, ItemRef)
+                ),
+            )
+            left = _offset_spans(self.graph, item_candidates.nodes, atom.offsets)
             right = _offset_spans(self.graph, matching.nodes, atom.offsets)
             related = {
                 pair[0].node for pair in _interval_pairs(left, right, atom.relation)
             }
-            return candidates.__class__(
-                self.graph, tuple(node for node in candidates.nodes if node in related)
+            answer = candidates.__class__(
+                self.graph,
+                tuple(node for node in item_candidates.nodes if node in related),
+            )
+            return (
+                answer
+                if atom.quantifier is Quantifier.ANY
+                else item_candidates - answer
             )
         selected = tuple(
             node for node in candidates.nodes if self._atom(atom, _Context(node))
@@ -1681,7 +1698,7 @@ def _atoms(predicate: Predicate) -> Iterator[Predicate]:
 
 
 def _lower_related_quantifiers(predicate: Predicate) -> Predicate:
-    """Express Related and Spans NONE and ALL through generic complement."""
+    """Express Related NONE and ALL through generic complement."""
     if isinstance(predicate, And):
         return And(tuple(_lower_related_quantifiers(arg) for arg in predicate.args))
     if isinstance(predicate, Or):
@@ -1695,18 +1712,12 @@ def _lower_related_quantifiers(predicate: Predicate) -> Predicate:
             _lower_related_quantifiers(predicate.body),
         )
     if isinstance(predicate, Spans):
-        target = _lower_related_quantifiers(predicate.target)
-        any_spanning = Spans(
+        return Spans(
             predicate.offsets,
             predicate.relation,
-            Quantifier.ANY,
+            predicate.quantifier,
             predicate.other,
-            target if predicate.quantifier is not Quantifier.ALL else Not(target),
-        )
-        return (
-            any_spanning
-            if predicate.quantifier is Quantifier.ANY
-            else Not(any_spanning)
+            _lower_related_quantifiers(predicate.target),
         )
     if not isinstance(predicate, Related):
         return predicate

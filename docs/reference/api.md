@@ -7094,10 +7094,20 @@ Read each selected container's direct children as a separate scope.
 ### `DeclaredOrder`
 
 ```text
-DeclaredOrder(successor: 'QualifiedName', members: 'Selector', open_left: 'bool' = False) -> None
+DeclaredOrder(successor: 'QualifiedName', members: 'Selector', open_left: 'bool' = False, chain: 'Selector | None' = None) -> None
 ```
 
 Read one explicitly declared polyadic successor chain as one scope.
+
+#### `DeclaredOrder.project`
+
+Method.
+
+```text
+DeclaredOrder.project(self, members: 'Selector') -> 'DeclaredOrder'
+```
+
+Project this order while retaining its complete-chain selector.
 
 ### `EndPattern`
 
