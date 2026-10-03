@@ -1710,6 +1710,26 @@ The profile vocabulary is
 independent of rule weights, but intentionally are not stable across forest
 snapshots whose sets of alternatives differ.
 
+#### `GrammarChartProfile.to_data`
+
+Method.
+
+```text
+GrammarChartProfile.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the declarative chart-profile input used by the CLI.
+
+#### `GrammarChartProfile.from_data`
+
+Class method.
+
+```text
+GrammarChartProfile.from_data(cls, graph: 'Graph', data: 'object') -> 'GrammarChartProfile'
+```
+
+Bind a declarative chart profile to one graph snapshot.
+
 #### `GrammarChartProfile.bind`
 
 Method.

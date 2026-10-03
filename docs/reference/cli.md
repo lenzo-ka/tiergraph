@@ -310,7 +310,7 @@ options:
 ### `tiergraph path resolve`
 
 ```text
-usage: tiergraph path resolve [-h] [-o FILE] GRAPH TGPATH
+usage: tiergraph path resolve [-h] [--profile FILE] [-o FILE] GRAPH TGPATH
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
@@ -318,6 +318,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --profile FILE        declarative grammar chart profile
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -370,7 +371,9 @@ options:
 ### `tiergraph grammar recognize`
 
 ```text
-usage: tiergraph grammar recognize [-h] --tokens-json JSON [-o FILE] GRAMMAR
+usage: tiergraph grammar recognize [-h] --tokens-json JSON [--forest]
+                                   [-o FILE]
+                                   GRAMMAR
 
 positional arguments:
   GRAMMAR               grammar JSON file, or - for stdin
@@ -378,6 +381,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --tokens-json JSON
+  --forest              emit the complete parse forest
   -o FILE, --output FILE
                         output file (default: -)
 ```

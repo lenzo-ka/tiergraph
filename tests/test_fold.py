@@ -12,6 +12,8 @@ from importlib import import_module
 from typing import cast
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import tiergraph.semiring as semiring_module
 from tests.conformance.fold import FoldFixture
@@ -1777,57 +1779,58 @@ def test_lazy_ranked_product_matches_eager_products_and_declines_unsafe_inputs()
     )
 
 
-def random_dag_fold(seed: int, cap: int) -> FoldDeclaration[PathValue]:
-    """Build one small deterministic random OR DAG with tied PATH costs."""
-    generator = random.Random(seed)
-    tier_name = FIXTURE.name(f"random-rank-nodes-{seed}")
-    item_type = FIXTURE.name(f"random-rank-node-{seed}")
-    weight = FIXTURE.name(f"random-rank-weight-{seed}")
+def tied_layer_fold(widths: tuple[int, ...], cap: int) -> FoldDeclaration[PathValue]:
+    """Build a layered OR DAG whose every complete path has the same cost."""
+    tier_name = FIXTURE.name("hypothesis-rank-nodes")
+    item_type = FIXTURE.name("hypothesis-rank-node")
+    weight = FIXTURE.name("hypothesis-rank-weight")
     depends = BipartiteRelationDeclaration(
-        FIXTURE.name(f"random-rank-depends-{seed}"),
+        FIXTURE.name("hypothesis-rank-depends"),
         item_type,
         item_type,
         acyclic=True,
     )
-    size = generator.randrange(5, 9)
-    tier = Tier(
-        TierDeclaration(tier_name, "Random ranked nodes"),
-        tuple(
-            Item(
-                f"n{index}",
-                (AttributeValue(weight, XsdType.DECIMAL, str(generator.randrange(3))),),
-            )
-            for index in range(size)
-        ),
-    )
-    edge_indices = {(index, index + 1) for index in range(size - 1)}
-    edge_indices.update(
-        (left, right)
-        for left in range(size)
-        for right in range(left + 2, size)
-        if generator.random() < 0.35
-    )
+    offsets: list[int] = []
+    size = 0
+    for width in widths:
+        offsets.append(size)
+        size += width
     graph = Graph(
         FIXTURE.graph().namespaces,
-        (tier,),
+        (
+            Tier(
+                TierDeclaration(tier_name, "Hypothesis ranked nodes"),
+                tuple(
+                    Item(
+                        f"n{index}",
+                        (AttributeValue(weight, XsdType.DECIMAL, "0"),),
+                    )
+                    for index in range(size)
+                ),
+            ),
+        ),
         (
             SimpleRelationDeclaration(
-                FIXTURE.name(f"random-rank-members-{seed}"), tier_name, item_type
+                FIXTURE.name("hypothesis-rank-members"), tier_name, item_type
             ),
             depends,
         ),
         tuple(
             RelationInstance(
-                depends.name, ItemRef(tier_name, left), ItemRef(tier_name, right)
+                depends.name,
+                ItemRef(tier_name, offsets[layer] + left),
+                ItemRef(tier_name, offsets[layer + 1] + right),
             )
-            for left, right in sorted(edge_indices)
+            for layer in range(len(widths) - 1)
+            for left in range(widths[layer])
+            for right in range(widths[layer + 1])
         ),
         (AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DECIMAL),),
     )
     return FoldDeclaration(
-        f"random-ranked-{seed}",
+        "hypothesis-ranked",
         graph,
-        AttributeValuation("random-rank-weight", weight, (tier_name,)),
+        AttributeValuation("hypothesis-rank-weight", weight, (tier_name,)),
         PATH,
         path_lift,
         (FoldTransition(depends.name, ChildCombination.OR),),
@@ -1837,13 +1840,18 @@ def random_dag_fold(seed: int, cap: int) -> FoldDeclaration[PathValue]:
     )
 
 
-def test_random_dag_folds_match_forced_eager_across_caps_semirings_and_ties(
-    monkeypatch: pytest.MonkeyPatch,
+@settings(max_examples=40, deadline=None)
+@given(
+    tail_widths=st.lists(st.integers(min_value=1, max_value=3), min_size=1, max_size=4),
+    cap=st.integers(min_value=1, max_value=8),
+)
+def test_variable_tie_shapes_match_forced_eager_across_fold_policies(
+    tail_widths: list[int], cap: int
 ) -> None:
-    """Differentially compare lazy and eager schedules over varied fold policies."""
-    for seed in range(8):
-        for cap in (1, 3, 8):
-            ranked = random_dag_fold(seed, cap)
+    """Differentially compare lazy and eager schedules over generated tied DAGs."""
+    for widths in ((1, *tail_widths),):
+        for selected_cap in (cap,):
+            ranked = tied_layer_fold(widths, selected_cap)
             generic_ranked = cast(FoldDeclaration[object], ranked)
             configurations: tuple[FoldDeclaration[object], ...] = (
                 generic_ranked,
@@ -1872,7 +1880,7 @@ def test_random_dag_folds_match_forced_eager_across_caps_semirings_and_ties(
             )
             for configured in configurations:
                 lazy = configured.run()
-                with monkeypatch.context() as eager_patch:
+                with pytest.MonkeyPatch.context() as eager_patch:
                     eager_patch.setattr(
                         FoldDeclaration,
                         "_lazy_ranked_product",

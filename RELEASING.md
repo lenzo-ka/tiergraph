@@ -265,21 +265,18 @@ ascending sort order.
   once it passes.
 - **Re-releases**: PyPI is immutable — you cannot overwrite `X.Y.Z`. If a build
   is bad, bump to `X.Y.Z+1` (or a post-release `X.Y.Z.postN`).
-- **Consumer dependencies**: published consumers should use a released version
-  constraint, and before 1.0 it has to be **capped** — `tiergraph>=X.Y,<X.(Y+1)`,
-  so `tiergraph>=0.2,<0.3` against a 0.2 release. A git-URL dependency makes the
-  consumer unpublishable to PyPI.
+- **Consumer dependencies**: published consumers should declare the oldest
+  released version they support as a floor, such as `tiergraph>=X.Y` or
+  `tiergraph>=0.2` against a 0.2 release. They should never add an upper cap.
+  A git-URL dependency makes the consumer unpublishable to PyPI.
 
-  The cap is not a matter of taste here. The
-  [stability policy](README.md#stability) says a pre-1.0 `0.X.0` is in effect a
-  major release and carries no compatibility guarantee for the public Python
-  API: names may be removed or renamed in one, with no migration path. An
-  uncapped `tiergraph>=0.2` therefore admits exactly the releases that are
-  documented as allowed to break it, and it does so at the consumer's next
-  resolve — no code changed, nothing failed at the time the change was made, and
-  the break lands on whoever installs next. The cap is what turns that into a
-  deliberate bump: raise it, take the release, and read what the changelog's new
-  section says the release removed.
+  The floor says what the consumer has actually tested and leaves later
+  releases eligible at its next resolve. Before 1.0, the
+  [stability policy](README.md#stability) allows a `0.X.0` release to remove or
+  rename public Python API, so consumers still need to read the changelog and
+  test each release they take. That compatibility work belongs in the consumer;
+  an upper cap only moves it to dependency resolution and prevents compatible
+  later releases from being selected.
 
   This applies to a consumer's **runtime** dependency, which is the one that
   binds at install time. A development pin or an editable checkout is the

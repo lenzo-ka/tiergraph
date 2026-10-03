@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from typing import cast
 
 from tiergraph.core import (
+    MAX_JSON_DEPTH,
     Attribute,
     AttributeDeclaration,
     AttributeDomain,
@@ -53,6 +54,7 @@ from tiergraph.core import (
     TierDeclaration,
     TierRef,
     XsdType,
+    _without_json_attribute_depth_checks,
 )
 from tiergraph.schema import (
     DECLARATIONS,
@@ -80,8 +82,6 @@ from tiergraph.schema import (
 FORMAT_VERSION = "0.3.0"
 # Owner-tunable policy: bound parser memory while admitting substantial graphs.
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
-# Owner-tunable policy: stay well below interpreter/parser recursion limits.
-MAX_JSON_DEPTH = 256
 
 
 def to_data(graph: Graph) -> dict[str, JsonValue]:
@@ -278,7 +278,8 @@ def loads(document: str | bytes) -> Graph:
         )
     _materialize_defaults(root, DOCUMENT)
     _keys(root, object_fields(DOCUMENT), "document")
-    return _graph(_object(root["graph"], "graph"))
+    with _without_json_attribute_depth_checks():
+        return _graph(_object(root["graph"], "graph"))
 
 
 def _integer_literal(literal: str) -> int:
