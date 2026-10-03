@@ -15,8 +15,9 @@ from tiergraph.core import (
     QualifiedName,
     Refusal,
     RefusalStage,
+    XsdType,
 )
-from tiergraph.machine import MAX_REPEAT_COUNT, _decode_qname
+from tiergraph.machine import MAX_REPEAT_COUNT, _decode_item_ref, _decode_qname
 from tiergraph.predicate import (
     IntervalRelation,
     OffsetProfile,
@@ -1561,7 +1562,84 @@ class _MatchRequest:
         return spans.to_data()
 
 
-def _match_request_loads(source: str | bytes) -> _MatchRequest | _PairsRequest:
+@dataclass(frozen=True, slots=True)
+class _UnitValuation:
+    """Supply unit values while a CLI lattice request compiles only topology."""
+
+    tiers: tuple[QualifiedName, ...]
+    name: str = "lattice-units"
+    attribute: QualifiedName = QualifiedName("urn:tiergraph:lattice-match", "unit")
+
+    def declaration_type(self, graph: Graph) -> XsdType:
+        """Return the integer carrier used for unit path counting."""
+        del graph
+        return XsdType.INTEGER
+
+    def read(self, graph: Graph, reference: ItemRef) -> object:
+        """Return one for every item in the requested lattice topology."""
+        del graph, reference
+        return 1
+
+
+@dataclass(frozen=True, slots=True)
+class _LatticeRequest:
+    transition: QualifiedName
+    roots: tuple[ItemRef, ...]
+    emission: QualifiedName
+    pattern: Pattern
+    policy: str
+    max_states: int | None
+
+    def evaluate(self, graph: Graph) -> dict[str, JsonValue]:
+        """Build the requested unit topology and report its three decisions."""
+        from tiergraph.fold import (  # noqa: PLC0415 -- optional lattice surface
+            AttributeValuation,
+            ChildCombination,
+            FoldDeclaration,
+            FoldTransition,
+        )
+        from tiergraph.pathoutput import (  # noqa: PLC0415 -- match imports this AST
+            Determinize,
+            Emissions,
+            Unambiguous,
+            match_lattice,
+        )
+        from tiergraph.pathplan import PathPlan  # noqa: PLC0415 -- optional surface
+        from tiergraph.semiring import COUNTING  # noqa: PLC0415 -- optional surface
+
+        valuation = cast(
+            AttributeValuation,
+            _UnitValuation(tuple(tier.declaration.name for tier in graph.tiers)),
+        )
+        declaration = FoldDeclaration(
+            "lattice-match",
+            graph,
+            valuation,
+            COUNTING,
+            lambda _value, _label: 1,
+            (FoldTransition(self.transition, ChildCombination.OR),),
+            roots=self.roots,
+        )
+        plan = PathPlan.prepare(declaration)
+        lattice = match_lattice(
+            Emissions.from_attribute(plan, self.emission),
+            compile_pattern(self.pattern),
+        )
+        policy = (
+            Unambiguous()
+            if self.policy == "unambiguous"
+            else Determinize(cast(int, self.max_states))
+        )
+        return {
+            "exists": lattice.exists(),
+            "count": lattice.count(policy),
+            "all_paths": lattice.all_paths(policy),
+        }
+
+
+def _match_request_loads(
+    source: str | bytes,
+) -> _MatchRequest | _PairsRequest | _LatticeRequest:
     value = cast(JsonValue, _parsed_json(source))
     node = cast(dict[str, JsonValue], _object(value, "$"))
     if "match" not in node:
@@ -1569,6 +1647,8 @@ def _match_request_loads(source: str | bytes) -> _MatchRequest | _PairsRequest:
     operation = _string(node["match"], "$.match")
     if operation == "pairs":
         return _pairs_request_from_node(node)
+    if operation == "lattice":
+        return _lattice_request_from_node(node)
     if operation not in {"exists", "focus", "spans", "count"}:
         raise Refusal(
             RefusalStage.DISCRIMINATOR,
@@ -1602,6 +1682,67 @@ def _evaluate_match_request(graph: Graph, source: str | bytes) -> dict[str, Json
             limit=request.limit,
         ).to_data()
     return request.evaluate(graph)
+
+
+def _lattice_request_from_node(node: dict[str, JsonValue]) -> _LatticeRequest:
+    allowed = {
+        "match",
+        "transitions",
+        "roots",
+        "emission",
+        "pattern",
+        "policy",
+    }
+    _refuse_field_set(node.keys(), allowed, allowed, "$")
+    transitions = node["transitions"]
+    if not isinstance(transitions, list):
+        raise Refusal(RefusalStage.SHAPE, "$.transitions must be an array")
+    if len(transitions) != 1:
+        raise Refusal(
+            RefusalStage.VALUE,
+            "$.transitions must name exactly one path relation",
+        )
+    roots = node["roots"]
+    if not isinstance(roots, list):
+        raise Refusal(RefusalStage.SHAPE, "$.roots must be an array")
+    policy_node = cast(dict[str, JsonValue], _object(node["policy"], "$.policy"))
+    if "policy" not in policy_node:
+        _refuse_field_set(policy_node.keys(), {"policy"}, {"policy"}, "$.policy")
+    policy = _string(policy_node["policy"], "$.policy.policy")
+    if policy == "unambiguous":
+        _refuse_field_set(policy_node.keys(), {"policy"}, {"policy"}, "$.policy")
+        max_states = None
+    elif policy == "determinize":
+        _refuse_field_set(
+            policy_node.keys(),
+            {"policy", "max_states"},
+            {"policy", "max_states"},
+            "$.policy",
+        )
+        max_states = _nonnegative_integer(
+            policy_node["max_states"], "$.policy.max_states"
+        )
+        if max_states == 0:
+            raise Refusal(
+                RefusalStage.VALUE,
+                "$.policy.max_states must be a positive integer",
+            )
+    else:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"$.policy.policy has unknown ambiguity policy {policy!r}",
+        )
+    return _LatticeRequest(
+        _decode_qname(transitions[0], "$.transitions[0]"),
+        tuple(
+            _decode_item_ref(root, f"$.roots[{index}]")
+            for index, root in enumerate(roots)
+        ),
+        _decode_qname(node["emission"], "$.emission"),
+        _decode_pattern(node["pattern"], "$.pattern"),
+        policy,
+        max_states,
+    )
 
 
 @dataclass(frozen=True, slots=True)
