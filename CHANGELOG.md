@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-03
+
 ### Added
 
 - Added full parse-forest output and declarative chart profiles to the CLI.
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added pattern text parsing, formatting, and command-line matching.
 - Added exact pattern widths and open-right matching watermarks.
 - Added regular sequence patterns over declared graph orderings.
+- Added folds over ordered polyadic dependency relations.
 
 ### Changed
 
@@ -1086,7 +1089,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/lenzo-ka/tiergraph/compare/v0.4.0...v0.4.1
