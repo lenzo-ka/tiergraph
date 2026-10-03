@@ -393,7 +393,7 @@
     "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
     "MACHINE_VERSION": "Version tag for serialized construction programs.",
     "MAX_DOCUMENT_BYTES": "Largest UTF-8 JSON document accepted by the wire codec.",
-    "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec.",
+    "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec; construction bounds each attribute carrier by this limit less its document envelope.",
     "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",
     "MAX_TOTAL_OPCODES": "Largest flattened primitive trace accepted by the build machine.",
     "GRAMMAR_NAMESPACE": "Default namespace for lowered grammar coordinates.",
