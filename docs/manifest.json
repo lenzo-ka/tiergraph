@@ -108,6 +108,8 @@
       "PolyadicRelationDeclaration",
       "PolyadicRelationInstance",
       "QualifiedName",
+      "BudgetExhausted",
+      "Exhaustion",
       "Refusal",
       "RefusalStage",
       "RelationEndpointKind",
@@ -121,6 +123,8 @@
       "SimpleRelationDeclaration",
       "Tier",
       "TierDeclaration",
+      "WorkBudget",
+      "WorkMeter",
       "XsdType"
     ],
     "layers": [
@@ -403,6 +407,7 @@
     "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec; construction bounds each attribute carrier by this limit less its document envelope.",
     "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",
     "MAX_TOTAL_OPCODES": "Largest flattened primitive trace accepted by the build machine.",
+    "MAX_PATTERN_STATES": "Largest Thompson NFA accepted by the regular-pattern compiler.",
     "GRAMMAR_NAMESPACE": "Default namespace for lowered grammar coordinates.",
     "CHART_NAMESPACE": "Default namespace for grammar chart forests.",
     "COMPLETE_BOUNDARY": "Canonical complete-boundary grammar value.",
@@ -474,6 +479,7 @@
     ],
     "tiergraph.match": [
       "MAX_PATTERN_POSITIONS",
+      "MAX_PATTERN_STATES",
       "AdjacentRuns",
       "AltPattern",
       "AtomPattern",

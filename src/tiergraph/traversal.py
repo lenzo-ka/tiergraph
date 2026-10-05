@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from tiergraph.budget import _active_meter
 from tiergraph.core import (
     BipartiteRelationDeclaration,
     BoundaryRef,
@@ -709,6 +710,9 @@ def _polyadic_relation_image(
 ) -> NodeSet:
     """Return the set-valued far side of matching polyadic incidence."""
     graph = source.graph
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(graph.polyadic_relations))
     admitted = set(source.nodes)
     targets: list[Node] = []
     for instance in graph.polyadic_relations:
@@ -729,6 +733,9 @@ def _bipartite_relation_image(
 ) -> NodeSet:
     """Return the set-valued far side of matching bipartite incidence."""
     graph = source.graph
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(graph.relations))
     admitted = set(source.nodes)
     targets: list[Node] = []
     for instance in graph.relations:

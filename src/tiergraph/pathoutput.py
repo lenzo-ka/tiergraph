@@ -25,6 +25,14 @@ from decimal import Decimal
 from itertools import product
 from typing import cast
 
+from tiergraph.budget import (
+    WorkBudget,
+    WorkMeter,
+    _active_meter,
+    _aggregating,
+    _Meter,
+    _metered,
+)
 from tiergraph.core import (
     AttributeDeclaration,
     AttributeDomain,
@@ -301,6 +309,7 @@ def _product[State: Hashable, Value](
     observe: Callable[[State], None] | None = None,
 ) -> _Product[State, Value]:
     """Build the reachable product under the caller's explicit algebra."""
+    meter = _active_meter()
     pairs: list[tuple[int, State]] = []
     positions: dict[tuple[int, State], int] = {}
     edges: list[list[int]] = []
@@ -311,6 +320,8 @@ def _product[State: Hashable, Value](
         found = positions.get(pair)
         if found is not None:
             return found
+        if meter is not None:
+            meter.charge(1)
         found = len(pairs)
         positions[pair] = found
         pairs.append(pair)
@@ -330,6 +341,8 @@ def _product[State: Hashable, Value](
         parent_index = pending.popleft()
         parent, state = pairs[parent_index]
         for child in plan.children[parent]:
+            if meter is not None:
+                meter.charge(1)
             for target in advance(state, emissions.per_item[child]):
                 if observe is not None:
                     observe(target)
@@ -358,22 +371,39 @@ class LatticeMatch:
         default_factory=dict, repr=False, compare=False
     )
 
-    def exists(self) -> bool:
+    def exists(self, *, budget: WorkBudget | WorkMeter | None = None) -> bool:
         """Return whether some complete lattice path matches the whole pattern."""
-        return bool(self._boolean().accepting)
+        if budget is None and _active_meter() is None:
+            return bool(self._boolean().accepting)
+        with _metered(budget, "lattice.exists"):
+            return bool(self._boolean().accepting)
 
-    def on_accepting_path(self) -> NodeSet:
+    def on_accepting_path(
+        self, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> NodeSet:
         """Return every base item lying on some accepting complete path."""
+        if budget is None and _active_meter() is None:
+            return self._on_accepting_path()
+        with _metered(budget, "lattice.on_accepting_path"):
+            return self._on_accepting_path()
+
+    def _on_accepting_path(self) -> NodeSet:
+        """Implement accepting-path projection under an ambient meter."""
+        meter = _active_meter()
         product_graph = self._boolean()
         reverse: list[list[int]] = [[] for _ in product_graph.pairs]
         for parent, children in enumerate(product_graph.edges):
             for child in children:
+                if meter is not None:
+                    meter.charge(1)
                 reverse[child].append(parent)
         accepted = set(product_graph.accepting)
         pending = list(product_graph.accepting)
         while pending:
             child = pending.pop()
             for parent in reverse[child]:
+                if meter is not None:
+                    meter.charge(1)
                 if parent not in accepted:
                     accepted.add(parent)
                     pending.append(parent)
@@ -385,25 +415,43 @@ class LatticeMatch:
         )
         return NodeSet(plan.declaration.graph, nodes)
 
-    def count(self, policy: AmbiguityPolicy) -> int:
+    def count(
+        self, policy: AmbiguityPolicy, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> int:
         """Count accepting lattice paths exactly under the declared policy."""
-        if isinstance(policy, Unambiguous):
-            self._require_unambiguous()
-            return self._run_count()
-        if not isinstance(policy, Determinize):
+        if not isinstance(policy, (Unambiguous, Determinize)):
             raise TypeError(
                 "lattice count needs Unambiguous() or Determinize(max_states)"
             )
+        if budget is None and _active_meter() is None:
+            return self._count(policy)
+        with _metered(budget, "lattice.count"):
+            return self._count(policy)
+
+    def _count(self, policy: AmbiguityPolicy) -> int:
+        """Count under one validated policy."""
+        if isinstance(policy, Unambiguous):
+            self._require_unambiguous()
+            return self._run_count()
         return self._subset_count(self._subset(policy.max_states))
 
-    def all_paths(self, policy: AmbiguityPolicy) -> bool:
+    def all_paths(
+        self, policy: AmbiguityPolicy, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> bool:
         """Return whether every complete lattice path matches the pattern."""
-        if isinstance(policy, Unambiguous):
-            return self.count(policy) == _path_count(self.emissions.plan)
-        if not isinstance(policy, Determinize):
+        if not isinstance(policy, (Unambiguous, Determinize)):
             raise TypeError(
                 "lattice all_paths needs Unambiguous() or Determinize(max_states)"
             )
+        if budget is None and _active_meter() is None:
+            return self._all_paths(policy)
+        with _metered(budget, "lattice.all_paths"):
+            return self._all_paths(policy)
+
+    def _all_paths(self, policy: AmbiguityPolicy) -> bool:
+        """Apply one validated universal-path policy."""
+        if isinstance(policy, Unambiguous):
+            return self.count(policy) == _path_count(self.emissions.plan)
         product_graph = self._subset(policy.max_states)
         accept = self.pattern.accept
         return all(
@@ -413,7 +461,9 @@ class LatticeMatch:
         )
 
     def _boolean(self) -> _BooleanProduct:
-        if self._boolean_cache:
+        meter = _active_meter()
+        budgeted = meter is not None
+        if not budgeted and self._boolean_cache:
             return self._boolean_cache[0]
         plan = self.emissions.plan
         product_graph = _product(
@@ -422,7 +472,7 @@ class LatticeMatch:
             BOOLEAN,
             self.pattern.start,
             lambda state, tokens: tuple(
-                _advance_states(self.pattern, frozenset((state,)), tokens)
+                _advance_states(self.pattern, frozenset((state,)), tokens, meter=meter)
             ),
         )
         accepting = tuple(
@@ -431,13 +481,16 @@ class LatticeMatch:
             if not plan.children[item] and state == self.pattern.accept
         )
         result = _BooleanProduct(product_graph.pairs, product_graph.edges, accepting)
-        self._boolean_cache.append(result)
+        if not budgeted:
+            self._boolean_cache.append(result)
         return result
 
     def _require_unambiguous(self) -> None:
-        if self._ambiguity_cache:
+        meter = _active_meter()
+        budgeted = meter is not None
+        if not budgeted and self._ambiguity_cache:
             return
-        witness = _ambiguity_witness(self.pattern)
+        witness = _ambiguity_witness(self.pattern, meter=meter)
         if witness is not None:
             rendered = " ".join(
                 json.dumps(token, ensure_ascii=False) for token in witness
@@ -448,9 +501,11 @@ class LatticeMatch:
                 "runs; count under Determinize, or rewrite the pattern so each path "
                 "has one run, as in {.!=zero}* {.=zero} .*",
             )
-        self._ambiguity_cache.append(True)
+        if not budgeted:
+            self._ambiguity_cache.append(True)
 
     def _run_count(self) -> int:
+        meter = _active_meter()
         plan = self.emissions.plan
         reached: list[dict[int, int]] = [dict() for _ in plan.items]
         for root in plan.roots:
@@ -458,8 +513,9 @@ class LatticeMatch:
                 self.pattern,
                 {self.pattern.start: 1},
                 self.emissions.per_item[root],
+                meter=meter,
             )
-            _merge_counts(reached[root], advanced)
+            _merge_counts(reached[root], advanced, meter=meter)
         total = 0
         for item in reversed(plan.order):
             current = reached[item]
@@ -470,30 +526,40 @@ class LatticeMatch:
                     count
                     for state, count in current.items()
                     if self.pattern.accept
-                    in _epsilon_closure(self.pattern, frozenset((state,)))
+                    in _epsilon_closure(self.pattern, frozenset((state,)), meter=meter)
                 )
                 continue
             for child in plan.children[item]:
                 _merge_counts(
                     reached[child],
                     _advance_counts(
-                        self.pattern, current, self.emissions.per_item[child]
+                        self.pattern,
+                        current,
+                        self.emissions.per_item[child],
+                        meter=meter,
                     ),
+                    meter=meter,
                 )
         return total
 
     def _subset(self, max_states: int) -> _SubsetProduct:
-        cached = self._subset_cache.get(max_states)
+        meter = _active_meter()
+        budgeted = meter is not None
+        cached = None if budgeted else self._subset_cache.get(max_states)
         if cached is not None:
             return cached
         plan = self.emissions.plan
-        start = _epsilon_closure(self.pattern, frozenset((self.pattern.start,)))
+        start = _epsilon_closure(
+            self.pattern, frozenset((self.pattern.start,)), meter=meter
+        )
         subsets: set[frozenset[int]] = set()
 
         def register(subset: frozenset[int]) -> None:
             """Count a newly reached subset or refuse beyond the bound."""
             if subset in subsets:
                 return
+            if meter is not None:
+                meter.charge(1)
             subsets.add(subset)
             if len(subsets) > max_states:
                 raise Refusal(
@@ -507,17 +573,21 @@ class LatticeMatch:
             self.emissions,
             COUNTING,
             start,
-            lambda subset, tokens: (_advance_states(self.pattern, subset, tokens),),
+            lambda subset, tokens: (
+                _advance_states(self.pattern, subset, tokens, meter=meter),
+            ),
             observe=register,
         )
         result = _SubsetProduct(
             product_graph.pairs, product_graph.edges, product_graph.roots
         )
-        self._subset_cache[max_states] = result
+        if not budgeted:
+            self._subset_cache[max_states] = result
         return result
 
     def _subset_count(self, product_graph: _SubsetProduct) -> int:
         plan = self.emissions.plan
+        meter = _active_meter()
         position_order = {item: order for order, item in enumerate(plan.order)}
         totals = [0] * len(product_graph.pairs)
         for product_index in sorted(
@@ -526,11 +596,15 @@ class LatticeMatch:
         ):
             item, subset = product_graph.pairs[product_index]
             children = product_graph.edges[product_index]
+            if meter is not None:
+                meter.charge(len(children))
             totals[product_index] = (
                 sum(totals[child] for child in children)
                 if children
                 else int(self.pattern.accept in subset and not plan.children[item])
             )
+        if meter is not None:
+            meter.charge(len(product_graph.roots))
         return sum(totals[root] for root in product_graph.roots)
 
 
@@ -633,7 +707,10 @@ def _token_holds(predicate: Predicate, token: object) -> bool:
 
 
 def _epsilon_closure(
-    pattern: CompiledPattern, states: frozenset[int]
+    pattern: CompiledPattern,
+    states: frozenset[int],
+    *,
+    meter: _Meter | None = None,
 ) -> frozenset[int]:
     result = set(states)
     pending = list(states)
@@ -643,14 +720,22 @@ def _epsilon_closure(
             if edge.target not in result:
                 result.add(edge.target)
                 pending.append(edge.target)
+    if meter is not None:
+        meter.charge(len(result))
     return frozenset(result)
 
 
 def _advance_states(
-    pattern: CompiledPattern, states: frozenset[int], tokens: tuple[str, ...]
+    pattern: CompiledPattern,
+    states: frozenset[int],
+    tokens: tuple[str, ...],
+    *,
+    meter: _Meter | None = None,
 ) -> frozenset[int]:
-    active = _epsilon_closure(pattern, states)
+    active = _epsilon_closure(pattern, states, meter=meter)
     for token in tokens:
+        if meter is not None:
+            meter.charge(len(active))
         active = _epsilon_closure(
             pattern,
             frozenset(
@@ -659,6 +744,7 @@ def _advance_states(
                 for edge in pattern.atom_edges[state]
                 if _token_holds(pattern.predicates[edge.atom], token)
             ),
+            meter=meter,
         )
     return active
 
@@ -667,12 +753,14 @@ def _advance_counts(
     pattern: CompiledPattern,
     counts: Mapping[int, int],
     tokens: tuple[str, ...],
+    *,
+    meter: _Meter | None = None,
 ) -> dict[int, int]:
     active = dict(counts)
     for token in tokens:
         following: dict[int, int] = {}
         for state, count in active.items():
-            for source in _epsilon_closure(pattern, frozenset((state,))):
+            for source in _epsilon_closure(pattern, frozenset((state,)), meter=meter):
                 for edge in pattern.atom_edges[source]:
                     if _token_holds(pattern.predicates[edge.atom], token):
                         following[edge.target] = following.get(edge.target, 0) + count
@@ -680,7 +768,11 @@ def _advance_counts(
     return active
 
 
-def _merge_counts(target: dict[int, int], source: Mapping[int, int]) -> None:
+def _merge_counts(
+    target: dict[int, int], source: Mapping[int, int], *, meter: _Meter | None = None
+) -> None:
+    if meter is not None:
+        meter.charge(len(source))
     for state, count in source.items():
         target[state] = target.get(state, 0) + count
 
@@ -716,12 +808,19 @@ def _minterm_holds(predicate: Predicate, symbol: object) -> bool:
     return True if _contains_matches(predicate) else _token_holds(predicate, symbol)
 
 
-def _ambiguity_witness(pattern: CompiledPattern) -> tuple[str, ...] | None:
+def _ambiguity_witness(
+    pattern: CompiledPattern, *, meter: _Meter | None = None
+) -> tuple[str, ...] | None:
+    atom_edge_count = sum(len(edges) for edges in pattern.atom_edges)
+    if meter is not None:
+        meter.charge(atom_edge_count)
     positions = tuple(
         _Position(source, edge_index)
         for source, edges in enumerate(pattern.atom_edges)
         for edge_index, _edge in enumerate(edges)
     )
+    if meter is not None:
+        meter.charge(len(positions))
     position_index = {position: index for index, position in enumerate(positions)}
 
     def choices(position: int, symbol: object) -> tuple[int, ...]:
@@ -735,7 +834,7 @@ def _ambiguity_witness(pattern: CompiledPattern) -> tuple[str, ...] | None:
         )
         return tuple(
             position_index[_Position(source, edge_index)]
-            for source in _epsilon_closure(pattern, frozenset((state,)))
+            for source in _epsilon_closure(pattern, frozenset((state,)), meter=meter)
             for edge_index, edge in enumerate(pattern.atom_edges[source])
             if _minterm_holds(pattern.predicates[edge.atom], symbol)
         )
@@ -747,6 +846,7 @@ def _ambiguity_witness(pattern: CompiledPattern) -> tuple[str, ...] | None:
             frozenset(
                 (pattern.atom_edges[position.source][position.edge_index].target,)
             ),
+            meter=meter,
         )
         for position in positions
     )
@@ -757,13 +857,19 @@ def _ambiguity_witness(pattern: CompiledPattern) -> tuple[str, ...] | None:
         tuple[tuple[int, int, bool], object] | None,
     ] = {start: None}
     alphabet = _literal_alphabet(pattern)
+    if meter is not None:
+        meter.charge(len(pattern.predicates) + len(alphabet))
     while queue:
         current = queue.popleft()
         left, right, diverged = current
         for symbol in alphabet:
-            for left_next, right_next in product(
-                choices(left, symbol), choices(right, symbol)
-            ):
+            if meter is not None:
+                meter.charge(1)
+            left_choices = choices(left, symbol)
+            right_choices = choices(right, symbol)
+            if meter is not None:
+                meter.charge(len(left_choices) * len(right_choices))
+            for left_next, right_next in product(left_choices, right_choices):
                 pair = (
                     min(left_next, right_next),
                     max(left_next, right_next),
@@ -796,13 +902,18 @@ def _ambiguity_witness(pattern: CompiledPattern) -> tuple[str, ...] | None:
 
 
 def _path_count(plan: PathPlan[object]) -> int:
+    meter = _active_meter()
     totals = [0] * len(plan.items)
     for item in plan.order:
+        if meter is not None:
+            meter.charge(len(plan.children[item]))
         totals[item] = (
             sum(totals[child] for child in plan.children[item])
             if plan.children[item]
             else 1
         )
+    if meter is not None:
+        meter.charge(len(plan.roots))
     return sum(totals[root] for root in plan.roots)
 
 
@@ -1047,6 +1158,13 @@ class OutputPlan[Value]:
 
     def masses(self, base_values: Sequence[Value] | None = None) -> OutputMasses[Value]:
         """Evaluate masses, with certificates only for log probability or counting."""
+        with _aggregating():
+            return self._masses(base_values)
+
+    def _masses(
+        self, base_values: Sequence[Value] | None = None
+    ) -> OutputMasses[Value]:
+        """Implement mass aggregation within the caller's aggregate scope."""
         algebra = self.base.declaration.semiring
         result = self.plan.marginals(self.values(base_values))
         per_candidate = tuple(result.marginals[index] for index in self._accept_indices)
@@ -1085,6 +1203,13 @@ class OutputPlan[Value]:
         self, candidate: int, base_values: Sequence[Value] | None = None
     ) -> OutputItemMarginals[Value]:
         """Pool one candidate's conditioned product copies onto base items."""
+        with _aggregating():
+            return self._item_marginals(candidate, base_values)
+
+    def _item_marginals(
+        self, candidate: int, base_values: Sequence[Value] | None = None
+    ) -> OutputItemMarginals[Value]:
+        """Implement conditioned pooling within the caller's aggregate scope."""
         conditioned, product_indices = self._conditioned(candidate)
         product_values = self.values(base_values)
         result = conditioned.marginals(

@@ -27,6 +27,7 @@ from tiergraph.predicate import (
 
 _PATTERN_NOTATION = frozenset("{(|/_. *+?^$")
 _SEQUENCE_PRECEDENCE = 2
+_MAX_PATTERN_NESTING = 64
 
 
 def _sequence(parts: Sequence[Pattern]) -> Pattern:
@@ -76,6 +77,7 @@ class _PatternParser:
         self.index = start
         self.end = end
         self.syntax = syntax
+        self.group_depth = 0
 
     def parse(self) -> Pattern:
         """Parse exactly the configured source interval."""
@@ -234,6 +236,9 @@ class _PatternParser:
     def group(self) -> _Primary:
         """Parse one parenthesized group."""
         opening = self.index
+        if self.group_depth >= _MAX_PATTERN_NESTING:
+            self.refuse(opening, f"groups nest deeper than {_MAX_PATTERN_NESTING}")
+        self.group_depth += 1
         self.index += 1
         if self.peek() == "?":
             self._flag_prefix(opening)
@@ -257,6 +262,7 @@ class _PatternParser:
         if self.peek() != ")":
             self.refuse(opening, "'(' is never closed")
         self.index += 1
+        self.group_depth -= 1
         text = self.text[opening : self.index]
         return _Primary(body, text, not isinstance(body, (SeqPattern, AltPattern)))
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added declared work budgets for pattern views and binding, predicates,
+  span-pair joins, lattice matching, folds and path plans. Exhaustion raises
+  `BudgetExhausted`; outermost budgeted span scans can report `cut-at-budget`.
+
+### Changed
+
+- Limited pattern text to 64 nested groups, pattern ASTs to 256 levels, and
+  pattern and predicate NFAs to 1,000,000 states.
+- Stopped `spans(limit=)` once its extent is settled and made `count` avoid
+  retaining span witnesses.
+
 ## [0.7.0] - 2026-10-05
 
 ### Added

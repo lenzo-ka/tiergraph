@@ -462,3 +462,51 @@ each selected container's direct children, and `AdjacentRuns` splits selected
 items where their declared offsets are not adjacent. Matches never cross a
 scope. `exists` and `focus` admit nullable patterns; `spans` and `count` refuse
 them because an empty match has no item span.
+
+## Work budgets
+
+Matching has no default work limit. Callers that need one pass
+`WorkBudget(steps=..., seconds=...)` to a compiled or bound pattern view,
+`CompiledPattern.bind`, `BoundPredicate.holds` or `select`, `span_pairs`, or a
+`LatticeMatch` method. A `WorkMeter` shares one declaration across calls and
+exposes the accumulated `spent`; it is intended for one thread or task at a
+time. A step-only budget is deterministic within a release. Deadlines use a
+monotonic clock, are checked periodically, and can only refuse.
+
+Most exhaustion raises `BudgetExhausted` at the `SEMANTICS` stage. Only an
+outermost `spans` or `span_pairs` call with its own step budget may return a
+nonempty completed prefix, marked `Extent.CUT_AT_BUDGET`. An empty prefix, a
+deadline, or exhaustion under an enclosing metered operation refuses. Thus a
+cut witness list can never silently enter a fold or another semiring
+aggregate. `limit` remains an output bound: finding a further witness reports
+`CUT_AT_BOUND`, while scanning to the end with exactly `limit` witnesses stays
+`EXHAUSTIVE`. Open-right spans compute every `pending_from` watermark before
+the truncatable scan.
+
+Steps charge logical work: predicate decisions and relation-instance scans;
+offset records and interval candidates; NFA active sets and epsilon closures;
+copied span items; lattice product pairs, incidences, count entries, reverse
+edges, ambiguity pairs, and full per-state epsilon closures. Budgeted lattice
+calls bypass their caches, so thresholds do not depend on call history. A
+bound pattern charges its truth table at `bind`; its later views charge only
+simulation. Passing the same `WorkMeter` to both records their combined work.
+
+Compilation itself is not metered. Instead, pattern text allows at most 64
+nested groups, a directly constructed pattern AST at most 256 levels, and a
+compiled pattern at most `MAX_PATTERN_POSITIONS` item positions and
+`MAX_PATTERN_STATES` (1,000,000) NFA states. Predicate regexes have the same
+state ceiling. From ordinary call depths, the text bound gives a typed syntax
+refusal; a caller already very near Python's recursion limit can still receive
+`RecursionError` until the pattern-text parser becomes iterative. The direct
+AST depth check itself is iterative.
+
+These are independent bounds: nesting can create hundreds of states per
+position, so the state cap can refuse well below the position cap. For
+example, the reachable 199-character text shape
+`"(" + "(" * 63 + "." + ")?" * 63 + "){10000}"` has 10,000 positions but
+1,280,002 states; the analogous predicate shape has 2,000,002 states.
+
+Scope reading is an unmetered near-linear pass over the size-limited graph.
+Nested pattern work triggered by a `SequenceSelector` charges an ambient
+meter, but the surrounding selector traversal is not separately charged.
+Likewise, a predicate or matching step does not preempt arbitrary user code.
