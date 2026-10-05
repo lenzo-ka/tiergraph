@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added declared work budgets for pattern views and binding, predicates,
   span-pair joins, lattice matching, folds and path plans. Exhaustion raises
   `BudgetExhausted`; outermost budgeted span scans can report `cut-at-budget`.
+- Added opt-in CLI `--max-steps` and match-request `max_steps` work guards.
 
 ### Changed
 

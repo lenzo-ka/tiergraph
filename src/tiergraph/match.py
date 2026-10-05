@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Literal, cast, overload
 
 from tiergraph.budget import (
+    _MAX_USER_STEPS,
     BudgetExhausted,
     Exhaustion,
     WorkBudget,
@@ -2078,18 +2079,21 @@ class _MatchRequest:
     ordering: Ordering
     pattern: Pattern
     limit: int | None = None
+    max_steps: int | None = None
 
-    def evaluate(self, graph: Graph) -> dict[str, JsonValue]:
+    def evaluate(
+        self, graph: Graph, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> dict[str, JsonValue]:
         """Evaluate this decoded request against *graph*."""
         compiled = compile_pattern(self.pattern)
         if self.operation == "exists":
-            return {"exists": compiled.exists(graph, self.ordering)}
+            return {"exists": compiled.exists(graph, self.ordering, budget=budget)}
         if self.operation == "focus":
-            focused = compiled.focus(graph, self.ordering)
+            focused = compiled.focus(graph, self.ordering, budget=budget)
             return {"nodes": focused.to_data()}
         if self.operation == "count":
-            return {"count": compiled.count(graph, self.ordering)}
-        spans = compiled.spans(graph, self.ordering, limit=self.limit)
+            return {"count": compiled.count(graph, self.ordering, budget=budget)}
+        spans = compiled.spans(graph, self.ordering, limit=self.limit, budget=budget)
         return spans.to_data()
 
 
@@ -2120,8 +2124,11 @@ class _LatticeRequest:
     pattern: Pattern
     policy: str
     max_states: int | None
+    max_steps: int | None = None
 
-    def evaluate(self, graph: Graph) -> dict[str, JsonValue]:
+    def evaluate(
+        self, graph: Graph, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> dict[str, JsonValue]:
         """Build the requested unit topology and report its three decisions."""
         from tiergraph.fold import (  # noqa: PLC0415 -- optional lattice surface
             AttributeValuation,
@@ -2161,10 +2168,11 @@ class _LatticeRequest:
             if self.policy == "unambiguous"
             else Determinize(cast(int, self.max_states))
         )
+        shared = WorkMeter(budget) if isinstance(budget, WorkBudget) else budget
         return {
-            "exists": lattice.exists(),
-            "count": lattice.count(policy),
-            "all_paths": lattice.all_paths(policy),
+            "exists": lattice.exists(budget=shared),
+            "count": lattice.count(policy, budget=shared),
+            "all_paths": lattice.all_paths(policy, budget=shared),
         }
 
 
@@ -2185,7 +2193,7 @@ def _match_request_loads(
             RefusalStage.DISCRIMINATOR,
             f"$.match has unknown match operation {operation!r}",
         )
-    allowed = {"match", "ordering", "pattern"}
+    allowed = {"match", "ordering", "pattern", "max_steps"}
     if operation == "spans":
         allowed.add("limit")
     _refuse_field_set(node.keys(), allowed, {"match", "ordering", "pattern"}, "$")
@@ -2197,12 +2205,23 @@ def _match_request_loads(
         _decode_ordering(node["ordering"], "$.ordering"),
         _decode_pattern(node["pattern"], "$.pattern"),
         limit,
+        _request_max_steps(node),
     )
 
 
-def _evaluate_match_request(graph: Graph, source: str | bytes) -> dict[str, JsonValue]:
+def _evaluate_match_request(
+    graph: Graph, source: str | bytes, *, max_steps: int | None = None
+) -> dict[str, JsonValue]:
     """Decode and evaluate one CLI match request."""
     request = _match_request_loads(source)
+    embedded = request.max_steps
+    if max_steps is not None and embedded is not None:
+        raise Refusal(
+            RefusalStage.VALUE,
+            "--max-steps and $.max_steps may not both be set",
+        )
+    steps = embedded if max_steps is None else max_steps
+    budget = None if steps is None else WorkBudget(steps=steps)
     if isinstance(request, _PairsRequest):
         return span_pairs(
             graph,
@@ -2211,8 +2230,9 @@ def _evaluate_match_request(graph: Graph, source: str | bytes) -> dict[str, Json
             request.relation,
             request.offsets,
             limit=request.limit,
+            budget=budget,
         ).to_data()
-    return request.evaluate(graph)
+    return request.evaluate(graph, budget=budget)
 
 
 def _lattice_request_from_node(node: dict[str, JsonValue]) -> _LatticeRequest:
@@ -2223,8 +2243,9 @@ def _lattice_request_from_node(node: dict[str, JsonValue]) -> _LatticeRequest:
         "emission",
         "pattern",
         "policy",
+        "max_steps",
     }
-    _refuse_field_set(node.keys(), allowed, allowed, "$")
+    _refuse_field_set(node.keys(), allowed, allowed - {"max_steps"}, "$")
     transitions = node["transitions"]
     if not isinstance(transitions, list):
         raise Refusal(RefusalStage.SHAPE, "$.transitions must be an array")
@@ -2273,6 +2294,7 @@ def _lattice_request_from_node(node: dict[str, JsonValue]) -> _LatticeRequest:
         _decode_pattern(node["pattern"], "$.pattern"),
         policy,
         max_states,
+        _request_max_steps(node),
     )
 
 
@@ -2283,6 +2305,7 @@ class _PairsRequest:
     relation: IntervalRelation
     offsets: OffsetProfile
     limit: int | None = None
+    max_steps: int | None = None
     _left_data: JsonValue = field(default=None, repr=False, compare=False)
     _right_data: JsonValue = field(default=None, repr=False, compare=False)
 
@@ -2297,6 +2320,8 @@ class _PairsRequest:
         }
         if self.limit is not None:
             result["limit"] = self.limit
+        if self.max_steps is not None:
+            result["max_steps"] = self.max_steps
         return result
 
 
@@ -2307,7 +2332,15 @@ def _pairs_request_loads(source: str | bytes) -> _PairsRequest:
 
 
 def _pairs_request_from_node(node: dict[str, JsonValue]) -> _PairsRequest:
-    allowed = {"match", "left", "right", "relation", "offsets", "limit"}
+    allowed = {
+        "match",
+        "left",
+        "right",
+        "relation",
+        "offsets",
+        "limit",
+        "max_steps",
+    }
     required = {"match", "left", "right", "relation", "offsets"}
     _refuse_field_set(node.keys(), allowed, required, "$")
     if _string(node["match"], "$.match") != "pairs":
@@ -2333,9 +2366,28 @@ def _pairs_request_from_node(node: dict[str, JsonValue]) -> _PairsRequest:
         relation,
         _decode_offset_profile(node["offsets"], "$.offsets"),
         limit,
+        _request_max_steps(node),
         deepcopy(node["left"]),
         deepcopy(node["right"]),
     )
+
+
+def _request_max_steps(node: dict[str, JsonValue]) -> int | None:
+    """Decode the optional bounded positive step count shared by requests."""
+    if "max_steps" not in node:
+        return None
+    value = node["max_steps"]
+    if type(value) is not int or value <= 0:
+        raise Refusal(
+            RefusalStage.VALUE,
+            "$.max_steps must be a positive integer",
+        )
+    if value > _MAX_USER_STEPS:
+        raise Refusal(
+            RefusalStage.VALUE,
+            f"$.max_steps must be no greater than {_MAX_USER_STEPS}",
+        )
+    return value
 
 
 from tiergraph.match_text import (  # noqa: E402 -- text layer uses this AST

@@ -20,6 +20,7 @@ from tiergraph import core as _core
 from tiergraph import match as _match
 from tiergraph import predicate as _predicate
 from tiergraph import wire as _wire
+from tiergraph.budget import _MAX_USER_STEPS, _metered
 from tiergraph.schema import Refusal, RefusalStage, json_schema, shape_hash
 
 # The published semiring constants this shell has a spelling for, which is not
@@ -187,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
         )
         grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
+        _max_steps_argument(grammar_parser)
         if grammar_command == "recognize":
             grammar_parser.add_argument(
                 "--forest",
@@ -219,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
                 metavar="N",
                 help="maximum target derivations to emit",
             )
+            _max_steps_argument(grammar_parser)
         _output_argument(grammar_parser)
 
     clock = subparsers.add_parser("clock", help="query declarative clock timing")
@@ -267,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     selection_input.add_argument("--selector", metavar="FILE")
     selection_input.add_argument("--where", metavar="TEXT")
     selection.add_argument("--prefix", metavar="P")
+    _max_steps_argument(selection)
     _output_argument(selection)
 
     match = subparsers.add_parser("match", help="match a regular item sequence")
@@ -278,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     match.add_argument("--ordering", metavar="JSON")
     match.add_argument("--prefix", metavar="P")
     match.add_argument("--limit", type=int)
+    _max_steps_argument(match)
     match.add_argument(
         "match_operation", nargs="?", choices=("exists", "focus", "spans", "count")
     )
@@ -307,6 +312,39 @@ def _output_argument(parser: argparse.ArgumentParser) -> None:
     """Add the canonical output destination shared by every emitting command."""
     parser.add_argument(
         "-o", "--output", default="-", metavar="FILE", help="output file (default: -)"
+    )
+
+
+def _max_steps_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the opt-in deterministic work guard used by evaluating commands."""
+    parser.add_argument(
+        "--max-steps",
+        type=_positive_step_count,
+        metavar="N",
+        help=(
+            "refuse after N work steps; guards untrusted pattern text "
+            f"(maximum: {_MAX_USER_STEPS})"
+        ),
+    )
+
+
+def _positive_step_count(value: str) -> int:
+    """Decode one bounded positive CLI step count for argparse."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    if parsed > _MAX_USER_STEPS:
+        raise argparse.ArgumentTypeError(f"must be no greater than {_MAX_USER_STEPS}")
+    return parsed
+
+
+def _work_budget(args: argparse.Namespace) -> tiergraph.WorkBudget | None:
+    """Build the explicitly requested budget, leaving omission as exactly None."""
+    return (
+        None if args.max_steps is None else tiergraph.WorkBudget(steps=args.max_steps)
     )
 
 
@@ -383,6 +421,7 @@ def _fold_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-cap", type=int, metavar="N", help="witness cap; requires --ranked"
     )
+    _max_steps_argument(parser)
 
 
 def _handle_validate(args: argparse.Namespace) -> None:
@@ -437,7 +476,9 @@ def _discharge_fold(args: argparse.Namespace) -> object:
     the declaration to be made rather than quietly standing in the weaker claim.
     """
     declaration = _fold_declaration(tiergraph.loads(_read_bytes(args.file)), args)
-    return declaration.check_exactness().to_data(declaration.semiring)
+    return declaration.check_exactness(budget=_work_budget(args)).to_data(
+        declaration.semiring
+    )
 
 
 # One entry per capability this verb carries. The four declaration kinds this
@@ -631,28 +672,35 @@ def _handle_grammar(args: argparse.Namespace) -> None:
             _wire._parsed_json(args.input_json)
         )
         if args.grammar_command == "generate":
-            value: object = tiergraph.generate(
-                lowered, grammar_input, count=args.count
-            ).to_data()
+            with _metered(_work_budget(args), "grammar.generate"):
+                value: object = tiergraph.generate(
+                    lowered, grammar_input, count=args.count
+                ).to_data()
         else:
             forest = tiergraph.recognize(lowered, grammar_input, collapse_units=False)
             value = tiergraph.target_lattice(forest).to_data()
         _write_output(args.file, args.output, _json_bytes(value))
         return
     tokens = _tokens_json(args.tokens_json)
-    if args.grammar_command == "recognize":
-        forest = tiergraph.recognize(lowered, tokens)
-        value = forest.to_data() if args.forest else {"recognized": forest.recognized()}
-    elif args.grammar_command == "count":
-        value = {"count": tiergraph.count(lowered, tokens)}
-    else:
-        if args.count < 1:
-            raise ValueError(f"best derivation count {args.count!r} must be positive")
-        value = {
-            "derivations": [
-                item.to_data() for item in tiergraph.best(lowered, tokens, args.count)
-            ]
-        }
+    with _metered(_work_budget(args), f"grammar.{args.grammar_command}"):
+        if args.grammar_command == "recognize":
+            forest = tiergraph.recognize(lowered, tokens)
+            value = (
+                forest.to_data() if args.forest else {"recognized": forest.recognized()}
+            )
+        elif args.grammar_command == "count":
+            value = {"count": tiergraph.count(lowered, tokens)}
+        else:
+            if args.count < 1:
+                raise ValueError(
+                    f"best derivation count {args.count!r} must be positive"
+                )
+            value = {
+                "derivations": [
+                    item.to_data()
+                    for item in tiergraph.best(lowered, tokens, args.count)
+                ]
+            }
     _write_output(args.file, args.output, _json_bytes(value))
 
 
@@ -679,21 +727,26 @@ def _handle_span(args: argparse.Namespace) -> None:
 
 def _handle_select(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    if args.where is not None:
-        syntax = _predicate.PredicateSyntax.for_graph(graph, default_prefix=args.prefix)
-        predicate = _predicate.parse_predicate(args.where, syntax)
-        candidates = tiergraph.NodeSet(
-            graph,
-            tuple(
-                tiergraph.Node(tiergraph.NodeKind.ITEM, reference)
-                for reference in graph.canonical_items()
-            ),
-        )
-        result = _predicate.compile_predicate(predicate).bind(graph).select(candidates)
-    else:
-        selector = tiergraph.selection_loads(_read_bytes(args.selector))
-        _check_distinct(args.selector, args.output)
-        result = tiergraph.evaluate_selection(graph, selector)
+    with _metered(_work_budget(args), "selection.evaluate"):
+        if args.where is not None:
+            syntax = _predicate.PredicateSyntax.for_graph(
+                graph, default_prefix=args.prefix
+            )
+            predicate = _predicate.parse_predicate(args.where, syntax)
+            candidates = tiergraph.NodeSet(
+                graph,
+                tuple(
+                    tiergraph.Node(tiergraph.NodeKind.ITEM, reference)
+                    for reference in graph.canonical_items()
+                ),
+            )
+            result = (
+                _predicate.compile_predicate(predicate).bind(graph).select(candidates)
+            )
+        else:
+            selector = tiergraph.selection_loads(_read_bytes(args.selector))
+            _check_distinct(args.selector, args.output)
+            result = tiergraph.evaluate_selection(graph, selector)
     _write_output(args.file, args.output, _json_bytes({"nodes": result.to_data()}))
 
 
@@ -706,7 +759,9 @@ def _handle_match(args: argparse.Namespace) -> None:
         ):
             raise ValueError("--request does not take text-pattern options")
         _check_distinct(args.request, args.output)
-        result = _match._evaluate_match_request(graph, _read_bytes(args.request))
+        result = _match._evaluate_match_request(
+            graph, _read_bytes(args.request), max_steps=args.max_steps
+        )
     else:
         if args.ordering is None or args.match_operation is None:
             raise ValueError("--pattern requires --ordering and an operation")
@@ -721,7 +776,7 @@ def _handle_match(args: argparse.Namespace) -> None:
             _match.parse_pattern(args.pattern, syntax),
             args.limit,
         )
-        result = request.evaluate(graph)
+        result = request.evaluate(graph, budget=_work_budget(args))
     _write_output(args.file, args.output, _json_bytes(result))
 
 
@@ -729,7 +784,9 @@ def _handle_fold(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
     fold = _fold_declaration(graph, args)
     _write_output(
-        args.file, args.output, _json_bytes(fold.run().to_data(fold.semiring))
+        args.file,
+        args.output,
+        _json_bytes(fold.run(budget=_work_budget(args)).to_data(fold.semiring)),
     )
 
 
@@ -823,6 +880,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except tiergraph.PathRefusal as error:
         _diagnostic(args.command, "PathRefusal", error)
+        return 1
+    except tiergraph.BudgetExhausted as error:
+        _refusal_diagnostic(args.command, error)
         return 1
     except ValueError as error:
         _diagnostic(args.command, "ValueError", error)
