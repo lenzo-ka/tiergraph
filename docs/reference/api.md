@@ -927,6 +927,24 @@ Insert one item at a tier index, carrying later references with it.
 
 An index equal to the tier's item count appends.
 
+#### `GraphEditor.insert_items`
+
+Method.
+
+```text
+GraphEditor.insert_items(self, tier: 'QualifiedName', index: 'int', items: 'Iterable[Item]') -> 'GraphEditor'
+```
+
+Insert ordered items at a tier index in one restructure.
+
+For ordered input containing at least one item, this equals inserting
+each item at ``index + k`` in turn. An index equal to the tier's item
+count appends. Unlike a zero-step fold, an empty input still validates
+the tier and index. Sets and mappings are refused because they do not
+provide the required item order. The input is materialized before tier
+and index validation, so an exception raised while iterating it takes
+precedence over either validation refusal.
+
 #### `GraphEditor.remove_item`
 
 Method.
@@ -2800,6 +2818,20 @@ Graph.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'G
 ```
 
 Return a new graph with one more item at this tier index.
+
+#### `Graph.insert_items`
+
+Method.
+
+```text
+Graph.insert_items(self, tier: 'QualifiedName', index: 'int', items: 'Iterable[Item]') -> 'Graph'
+```
+
+Return a new graph with these items at this tier index.
+
+The input is materialized before the tier and index are validated, so
+an exception raised while iterating it takes precedence over either
+validation refusal.
 
 #### `Graph.remove_item`
 
@@ -7109,7 +7141,7 @@ shape_hash() -> 'str'
 Hash the declaration independently of JSON Schema presentation.
 ### `tiergraph.match`
 
-This module is importable and usable, but carries no API-stability promise at version 0.6.0.
+This module is a supported secondary API.
 
 ### `MAX_PATTERN_POSITIONS`
 
@@ -7152,6 +7184,75 @@ AtomPattern(predicate: 'Predicate') -> None
 
 Consume one item when a value predicate holds on it.
 
+### `BoundOrdering`
+
+```text
+BoundOrdering(graph: 'Graph', ordering: 'Ordering') -> None
+```
+
+Read one ordering's default scopes once, for any number of patterns.
+
+Because this handle is shared across compiled patterns, it necessarily uses
+the module's default scope reader rather than a ``CompiledPattern._scopes``
+override. Pass a raw ordering to ``CompiledPattern.bind`` when an override
+must participate in preparation.
+
+### `BoundPattern`
+
+```text
+BoundPattern(compiled: 'CompiledPattern', graph: 'Graph', ordering: 'Ordering | BoundOrdering') -> 'None'
+```
+
+Answer every match view from one eager preparation on one graph.
+
+With a valid raw ordering, each view equals the corresponding per-call
+``CompiledPattern`` method and honors any ``_scopes`` override. Predicates
+bind before scopes are read, but each view is checked only when called. A
+prebuilt ``BoundOrdering`` instead supplies the default scopes shared across
+patterns; its construction validates ordering before this handle binds
+predicates or a view validates its operation. This handle holds its deeply
+immutable graph strongly for its own lifetime.
+
+#### `BoundPattern.exists`
+
+Method.
+
+```text
+BoundPattern.exists(self, *, open_right: 'bool' = False) -> 'bool | OpenPatternResult[bool]'
+```
+
+Return whether any scope contains an accepting span.
+
+#### `BoundPattern.focus`
+
+Method.
+
+```text
+BoundPattern.focus(self, *, open_right: 'bool' = False) -> 'NodeSet | OpenPatternResult[NodeSet]'
+```
+
+Return every item consumed by a focus edge on an accepting run.
+
+#### `BoundPattern.spans`
+
+Method.
+
+```text
+BoundPattern.spans(self, *, limit: 'int | None' = None, open_right: 'bool' = False) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
+```
+
+Return each distinct accepting span once in scope-major order.
+
+#### `BoundPattern.count`
+
+Method.
+
+```text
+BoundPattern.count(self, *, open_right: 'bool' = False) -> 'int | OpenPatternResult[int]'
+```
+
+Count distinct accepting scope spans, never NFA runs.
+
 ### `CompiledPattern`
 
 ```text
@@ -7169,6 +7270,24 @@ CompiledPattern.max_width(self) -> 'int | None'
 ```
 
 Return the exact maximum consumed item count, or None if unbounded.
+
+#### `CompiledPattern.bind`
+
+Method.
+
+```text
+CompiledPattern.bind(self, graph: 'Graph', ordering: 'Ordering | BoundOrdering') -> 'BoundPattern'
+```
+
+Bind predicates, read scopes and evaluate atoms once on one graph.
+
+A raw ordering uses this pattern's ``_scopes`` method and binds
+predicates before reading scopes, as the per-call path does. View checks
+happen only when that view is called, so a combined ordering and view
+defect reports the ordering first. A prebuilt ``BoundOrdering`` contains the
+default scopes; its construction reports an ordering defect before this
+method can report a predicate-bind defect or a bound view can report an
+operation defect.
 
 #### `CompiledPattern.exists`
 
@@ -7474,7 +7593,7 @@ span_pairs(graph: 'Graph', left: 'Selector', right: 'Selector', relation: 'Inter
 Return related item pairs in left-major declared order.
 ### `tiergraph.predicate`
 
-This module is importable and usable, but carries no API-stability promise at version 0.6.0.
+This module is a supported secondary API.
 
 ### `And`
 

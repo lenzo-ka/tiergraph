@@ -24,6 +24,7 @@ from tiergraph import (
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    dump_bytes,
 )
 
 NS = "urn:displacement"
@@ -301,6 +302,39 @@ def test_displacement_is_total_over_every_source_position() -> None:
         if polyadic_count:
             editor.remove_relation("p0")
         assert_total(source, editor.freeze(), editor.displacement())
+
+
+def test_batched_insertion_matches_fold_through_later_edits() -> None:
+    """E1: seeded batches compose exactly with later structural operations."""
+    random = Random(20261005)
+    for step in range(100):
+        item_count = random.randint(3, 12)
+        source = graph_with_spaces(
+            item_count,
+            random.randint(0, 8),
+            random.randint(0, 8),
+            durable_items=True,
+        )
+        index = random.randint(0, item_count)
+        items = tuple(Item(f"batch-{step}-{part}") for part in range(1, 5))
+        count = random.randint(1, len(items))
+        batch = source.edit().insert_items(TIER, index, items[:count])
+        folded = source.edit()
+        for offset, item in enumerate(items[:count]):
+            folded.insert_item(TIER, index + offset, item)
+
+        last = item_count + count - 1
+        batch.move_item(ItemRef(TIER, last), 0)
+        folded.move_item(ItemRef(TIER, last), 0)
+        batch.swap_items(ItemRef(TIER, 0), ItemRef(TIER, 1))
+        folded.swap_items(ItemRef(TIER, 0), ItemRef(TIER, 1))
+        batch.insert_items(TIER, 2, (Item(f"later-{step}"),))
+        folded.insert_items(TIER, 2, (Item(f"later-{step}"),))
+
+        assert batch.freeze() == folded.freeze()
+        assert dump_bytes(batch.freeze()) == dump_bytes(folded.freeze())
+        assert batch.displacement() == folded.displacement()
+        assert_total(source, batch.freeze(), batch.displacement())
 
 
 def test_stationary_maps_every_position_to_itself() -> None:

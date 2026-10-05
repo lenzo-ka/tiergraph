@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Literal, cast, overload
 
 from tiergraph.core import (
@@ -19,6 +21,7 @@ from tiergraph.core import (
 )
 from tiergraph.machine import MAX_REPEAT_COUNT, _decode_item_ref, _decode_qname
 from tiergraph.predicate import (
+    BoundPredicate,
     IntervalRelation,
     OffsetProfile,
     Predicate,
@@ -218,6 +221,7 @@ class DeclaredOrder:
 
 
 type Ordering = TierOrder | ContainerOrder | AdjacentRuns | DeclaredOrder
+type _TruthTable = tuple[Mapping[Node, bool], ...]
 
 
 class _PatternOperation(StrEnum):
@@ -400,6 +404,74 @@ class _Scope:
     offsets: tuple[tuple[int, int], ...] | None = None
     open_left: bool = False
     open_right: bool = False
+
+
+def _read_scopes(graph: Graph, ordering: Ordering) -> tuple[_Scope, ...]:
+    if isinstance(ordering, TierOrder):
+        selected = evaluate_selection(graph, _items_selector(ordering.tier))
+        return (_Scope(selected.nodes),)
+    if isinstance(ordering, ContainerOrder):
+        containment = OrderedContainment(graph, ordering.relation)
+        containers = evaluate_selection(graph, ordering.containers)
+        result: list[_Scope] = []
+        for container in containers.nodes:
+            if container.kind is not NodeKind.ITEM or not isinstance(
+                container.reference, ItemRef
+            ):
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    "ContainerOrder containers must select items",
+                )
+            result.append(
+                _Scope(containment.direct_children(container.reference).nodes)
+            )
+        return tuple(result)
+    if isinstance(ordering, DeclaredOrder):
+        return (_declared_scope(graph, ordering),)
+    if not isinstance(ordering, AdjacentRuns):
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            "pattern ordering must be TierOrder, ContainerOrder, AdjacentRuns, "
+            "or DeclaredOrder",
+        )
+    _validate_offset_profile(graph, ordering.offsets)
+    selected = evaluate_selection(graph, ordering.source)
+    spans = _offset_spans(graph, selected.nodes, ordering.offsets)
+    if not spans:
+        return ()
+    runs: list[_Scope] = []
+    nodes: list[Node] = []
+    offsets: list[tuple[int, int]] = []
+    previous = None
+    for span in spans:
+        if previous is None or (
+            span.partition == previous.partition and span.origin == previous.end
+        ):
+            nodes.append(cast(Node, span.node))
+            offsets.append((span.origin, span.end))
+        else:
+            runs.append(_Scope(tuple(nodes), tuple(offsets)))
+            nodes = [cast(Node, span.node)]
+            offsets = [(span.origin, span.end)]
+        previous = span
+    runs.append(_Scope(tuple(nodes), tuple(offsets)))
+    return tuple(runs)
+
+
+def _truth_table(
+    bound: tuple[BoundPredicate, ...], scopes: tuple[_Scope, ...]
+) -> _TruthTable:
+    nodes: list[Node] = []
+    seen: set[Node] = set()
+    for scope in scopes:
+        for node in scope.nodes:
+            if node not in seen:
+                seen.add(node)
+                nodes.append(node)
+    return tuple(
+        MappingProxyType({node: predicate.holds(node) for node in nodes})
+        for predicate in bound
+    )
 
 
 def _contains_sequence_selector(selector: Selector) -> bool:
@@ -645,6 +717,37 @@ class SpanMatches:
         }
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class BoundOrdering:
+    """Read one ordering's default scopes once, for any number of patterns.
+
+    Because this handle is shared across compiled patterns, it necessarily uses
+    the module's default scope reader rather than a ``CompiledPattern._scopes``
+    override. Pass a raw ordering to ``CompiledPattern.bind`` when an override
+    must participate in preparation.
+    """
+
+    graph: Graph
+    ordering: Ordering
+    _scopes: tuple[_Scope, ...] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_scopes", _read_scopes(self.graph, self.ordering))
+
+    @classmethod
+    def _from_scopes(
+        cls,
+        graph: Graph,
+        ordering: Ordering,
+        scopes: tuple[_Scope, ...],
+    ) -> BoundOrdering:
+        prepared = object.__new__(cls)
+        object.__setattr__(prepared, "graph", graph)
+        object.__setattr__(prepared, "ordering", ordering)
+        object.__setattr__(prepared, "_scopes", scopes)
+        return prepared
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledPattern:
     """Hold one Thompson epsilon-NFA and its deduplicated atom table."""
@@ -726,62 +829,9 @@ class CompiledPattern:
         return result
 
     def _scopes(self, graph: Graph, ordering: Ordering) -> tuple[_Scope, ...]:
-        if isinstance(ordering, TierOrder):
-            selected = evaluate_selection(graph, _items_selector(ordering.tier))
-            return (_Scope(selected.nodes),)
-        if isinstance(ordering, ContainerOrder):
-            containment = OrderedContainment(graph, ordering.relation)
-            containers = evaluate_selection(graph, ordering.containers)
-            result: list[_Scope] = []
-            for container in containers.nodes:
-                if container.kind is not NodeKind.ITEM or not isinstance(
-                    container.reference, ItemRef
-                ):
-                    raise Refusal(
-                        RefusalStage.SEMANTICS,
-                        "ContainerOrder containers must select items",
-                    )
-                result.append(
-                    _Scope(containment.direct_children(container.reference).nodes)
-                )
-            return tuple(result)
-        if isinstance(ordering, DeclaredOrder):
-            return (_declared_scope(graph, ordering),)
-        _validate_offset_profile(graph, ordering.offsets)
-        selected = evaluate_selection(graph, ordering.source)
-        spans = _offset_spans(graph, selected.nodes, ordering.offsets)
-        if not spans:
-            return ()
-        runs: list[_Scope] = []
-        nodes: list[Node] = []
-        offsets: list[tuple[int, int]] = []
-        previous = None
-        for span in spans:
-            if previous is None or (
-                span.partition == previous.partition and span.origin == previous.end
-            ):
-                nodes.append(cast(Node, span.node))
-                offsets.append((span.origin, span.end))
-            else:
-                runs.append(_Scope(tuple(nodes), tuple(offsets)))
-                nodes = [cast(Node, span.node)]
-                offsets = [(span.origin, span.end)]
-            previous = span
-        runs.append(_Scope(tuple(nodes), tuple(offsets)))
-        return tuple(runs)
+        return _read_scopes(graph, ordering)
 
-    def _prepare(
-        self,
-        graph: Graph,
-        ordering: Ordering,
-        operation: _PatternOperation,
-        *,
-        limit: int | None = None,
-    ) -> tuple[tuple[_Scope, ...], tuple[dict[Node, bool], ...]]:
-        """Bind atoms, validate the operation, then read and evaluate scopes."""
-        bound = tuple(
-            compile_predicate(predicate).bind(graph) for predicate in self.predicates
-        )
+    def _check(self, operation: _PatternOperation, limit: int | None = None) -> None:
         if operation is _PatternOperation.FOCUS and _focus_count(self.pattern) == 0:
             raise Refusal(
                 RefusalStage.SEMANTICS,
@@ -800,23 +850,41 @@ class CompiledPattern:
             limit is not None and (type(limit) is not int or limit < 0)
         ):
             raise ValueError("pattern span limit must be a nonnegative integer or None")
-        scopes = self._scopes(graph, ordering)
-        nodes: list[Node] = []
-        seen: set[Node] = set()
-        for scope in scopes:
-            for node in scope.nodes:
-                if node not in seen:
-                    seen.add(node)
-                    nodes.append(node)
-        return scopes, tuple(
-            {node: predicate.holds(node) for node in nodes} for predicate in bound
+
+    def _prepare(
+        self,
+        graph: Graph,
+        ordering: Ordering,
+        operation: _PatternOperation,
+        *,
+        limit: int | None = None,
+    ) -> tuple[tuple[_Scope, ...], _TruthTable]:
+        """Bind atoms, validate the operation, then read and evaluate scopes."""
+        bound = tuple(
+            compile_predicate(predicate).bind(graph) for predicate in self.predicates
         )
+        self._check(operation, limit)
+        scopes = self._scopes(graph, ordering)
+        return scopes, _truth_table(bound, scopes)
+
+    def bind(self, graph: Graph, ordering: Ordering | BoundOrdering) -> BoundPattern:
+        """Bind predicates, read scopes and evaluate atoms once on one graph.
+
+        A raw ordering uses this pattern's ``_scopes`` method and binds
+        predicates before reading scopes, as the per-call path does. View checks
+        happen only when that view is called, so a combined ordering and view
+        defect reports the ordering first. A prebuilt ``BoundOrdering`` contains the
+        default scopes; its construction reports an ordering defect before this
+        method can report a predicate-bind defect or a bound view can report an
+        operation defect.
+        """
+        return BoundPattern(self, graph, ordering)
 
     def _step(
         self,
         active: set[int],
         node: Node,
-        truth: tuple[dict[Node, bool], ...],
+        truth: _TruthTable,
         position: int,
         length: int,
         *,
@@ -862,9 +930,7 @@ class CompiledPattern:
                         pending.append(candidate)
         return False
 
-    def _pending_start(
-        self, scope: _Scope, truth: tuple[dict[Node, bool], ...]
-    ) -> int | None:
+    def _pending_start(self, scope: _Scope, truth: _TruthTable) -> int | None:
         length = len(scope.nodes)
         for start in range(length + 1):
             active = self._closure(
@@ -890,9 +956,7 @@ class CompiledPattern:
                 return start
         return None
 
-    def _scope_accepts(
-        self, scope: _Scope, truth: tuple[dict[Node, bool], ...], before: int
-    ) -> bool:
+    def _scope_accepts(self, scope: _Scope, truth: _TruthTable, before: int) -> bool:
         length = len(scope.nodes)
         for start in range(before):
             active = self._closure(
@@ -920,25 +984,13 @@ class CompiledPattern:
                     break
         return False
 
-    @overload
-    def exists(
-        self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
-    ) -> bool:
-        """Return whether a closed scope contains an accepting span."""
-        ...
-
-    @overload
-    def exists(
-        self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
-    ) -> OpenPatternResult[bool]:
-        """Return settled existence and open-right watermarks."""
-        ...
-
-    def exists(
-        self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    def _exists_over(
+        self,
+        scopes: tuple[_Scope, ...],
+        truth: _TruthTable,
+        *,
+        open_right: bool = False,
     ) -> bool | OpenPatternResult[bool]:
-        """Return whether any scope contains an accepting span."""
-        scopes, truth = self._prepare(graph, ordering, _PatternOperation.EXISTS)
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
         if effective_open_right:
             pending = tuple(self._pending_start(scope, truth) for scope in scopes)
@@ -975,24 +1027,34 @@ class CompiledPattern:
         return False
 
     @overload
-    def focus(
+    def exists(
         self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
-    ) -> NodeSet:
-        """Return focused items for closed scopes."""
+    ) -> bool:
+        """Return whether a closed scope contains an accepting span."""
         ...
 
     @overload
-    def focus(
+    def exists(
         self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
-    ) -> OpenPatternResult[NodeSet]:
-        """Return settled focused items and open-right watermarks."""
+    ) -> OpenPatternResult[bool]:
+        """Return settled existence and open-right watermarks."""
         ...
 
-    def focus(
+    def exists(
         self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    ) -> bool | OpenPatternResult[bool]:
+        """Return whether any scope contains an accepting span."""
+        scopes, truth = self._prepare(graph, ordering, _PatternOperation.EXISTS)
+        return self._exists_over(scopes, truth, open_right=open_right)
+
+    def _focus_over(
+        self,
+        graph: Graph,
+        scopes: tuple[_Scope, ...],
+        truth: _TruthTable,
+        *,
+        open_right: bool = False,
     ) -> NodeSet | OpenPatternResult[NodeSet]:
-        """Return every item consumed by a focus edge on an accepting run."""
-        scopes, truth = self._prepare(graph, ordering, _PatternOperation.FOCUS)
         selected: list[Node] = []
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
@@ -1062,11 +1124,32 @@ class CompiledPattern:
         result = NodeSet(graph, tuple(selected))
         return OpenPatternResult(result, pending) if open_right else result
 
+    @overload
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[False] = False
+    ) -> NodeSet:
+        """Return focused items for closed scopes."""
+        ...
+
+    @overload
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: Literal[True]
+    ) -> OpenPatternResult[NodeSet]:
+        """Return settled focused items and open-right watermarks."""
+        ...
+
+    def focus(
+        self, graph: Graph, ordering: Ordering, *, open_right: bool = False
+    ) -> NodeSet | OpenPatternResult[NodeSet]:
+        """Return every item consumed by a focus edge on an accepting run."""
+        scopes, truth = self._prepare(graph, ordering, _PatternOperation.FOCUS)
+        return self._focus_over(graph, scopes, truth, open_right=open_right)
+
     def _span_matches(
         self,
         scope_index: int,
         scope: _Scope,
-        truth: tuple[dict[Node, bool], ...],
+        truth: _TruthTable,
         *,
         open_right: bool = False,
         before: int | None = None,
@@ -1107,6 +1190,38 @@ class CompiledPattern:
         )
         return SpanMatch(scope_index, start, end, scope.nodes[start:end], offsets)
 
+    def _spans_over(
+        self,
+        scopes: tuple[_Scope, ...],
+        truth: _TruthTable,
+        *,
+        limit: int | None = None,
+        open_right: bool = False,
+    ) -> SpanMatches | OpenPatternResult[SpanMatches]:
+        result: list[SpanMatch] = []
+        effective_open_right = open_right or any(scope.open_right for scope in scopes)
+        pending = (
+            tuple(self._pending_start(scope, truth) for scope in scopes)
+            if effective_open_right
+            else ()
+        )
+        for scope_index, scope in enumerate(scopes):
+            before = pending[scope_index] if effective_open_right else None
+            matches = self._span_matches(
+                scope_index,
+                scope,
+                truth,
+                open_right=effective_open_right,
+                before=before,
+            )
+            for match in matches:
+                if limit is not None and len(result) == limit:
+                    spans = SpanMatches(tuple(result), Extent.CUT_AT_BOUND)
+                    return OpenPatternResult(spans, pending) if open_right else spans
+                result.append(match)
+        spans = SpanMatches(tuple(result), Extent.EXHAUSTIVE)
+        return OpenPatternResult(spans, pending) if open_right else spans
+
     @overload
     def spans(
         self,
@@ -1143,29 +1258,34 @@ class CompiledPattern:
         scopes, truth = self._prepare(
             graph, ordering, _PatternOperation.SPANS, limit=limit
         )
-        result: list[SpanMatch] = []
+        return self._spans_over(scopes, truth, limit=limit, open_right=open_right)
+
+    def _count_over(
+        self,
+        scopes: tuple[_Scope, ...],
+        truth: _TruthTable,
+        *,
+        open_right: bool = False,
+    ) -> int | OpenPatternResult[int]:
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
             tuple(self._pending_start(scope, truth) for scope in scopes)
             if effective_open_right
             else ()
         )
-        for scope_index, scope in enumerate(scopes):
-            before = pending[scope_index] if effective_open_right else None
-            matches = self._span_matches(
-                scope_index,
-                scope,
-                truth,
-                open_right=effective_open_right,
-                before=before,
+        count = sum(
+            len(
+                self._span_matches(
+                    index,
+                    scope,
+                    truth,
+                    open_right=effective_open_right,
+                    before=pending[index] if effective_open_right else None,
+                )
             )
-            for match in matches:
-                if limit is not None and len(result) == limit:
-                    spans = SpanMatches(tuple(result), Extent.CUT_AT_BOUND)
-                    return OpenPatternResult(spans, pending) if open_right else spans
-                result.append(match)
-        spans = SpanMatches(tuple(result), Extent.EXHAUSTIVE)
-        return OpenPatternResult(spans, pending) if open_right else spans
+            for index, scope in enumerate(scopes)
+        )
+        return OpenPatternResult(count, pending) if open_right else count
 
     @overload
     def count(
@@ -1186,25 +1306,140 @@ class CompiledPattern:
     ) -> int | OpenPatternResult[int]:
         """Count distinct accepting scope spans, never NFA runs."""
         scopes, truth = self._prepare(graph, ordering, _PatternOperation.COUNT)
-        effective_open_right = open_right or any(scope.open_right for scope in scopes)
-        pending = (
-            tuple(self._pending_start(scope, truth) for scope in scopes)
-            if effective_open_right
-            else ()
+        return self._count_over(scopes, truth, open_right=open_right)
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class BoundPattern:
+    """Answer every match view from one eager preparation on one graph.
+
+    With a valid raw ordering, each view equals the corresponding per-call
+    ``CompiledPattern`` method and honors any ``_scopes`` override. Predicates
+    bind before scopes are read, but each view is checked only when called. A
+    prebuilt ``BoundOrdering`` instead supplies the default scopes shared across
+    patterns; its construction validates ordering before this handle binds
+    predicates or a view validates its operation. This handle holds its deeply
+    immutable graph strongly for its own lifetime.
+    """
+
+    compiled: CompiledPattern
+    graph: Graph
+    ordering: BoundOrdering
+    _truth: _TruthTable = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        compiled: CompiledPattern,
+        graph: Graph,
+        ordering: Ordering | BoundOrdering,
+    ) -> None:
+        bound = tuple(
+            compile_predicate(predicate).bind(graph)
+            for predicate in compiled.predicates
         )
-        count = sum(
-            len(
-                self._span_matches(
-                    index,
-                    scope,
-                    truth,
-                    open_right=effective_open_right,
-                    before=pending[index] if effective_open_right else None,
+        if isinstance(ordering, BoundOrdering):
+            if ordering.graph is not graph:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    "pattern binding requires an ordering bound to the same graph",
                 )
+            prepared = ordering
+        else:
+            prepared = BoundOrdering._from_scopes(
+                graph, ordering, compiled._scopes(graph, ordering)
             )
-            for index, scope in enumerate(scopes)
+        object.__setattr__(self, "compiled", compiled)
+        object.__setattr__(self, "graph", graph)
+        object.__setattr__(self, "ordering", prepared)
+        object.__setattr__(self, "_truth", _truth_table(bound, prepared._scopes))
+
+    @overload
+    def exists(self, *, open_right: Literal[False] = False) -> bool:
+        """Return whether a closed scope contains an accepting span."""
+        ...
+
+    @overload
+    def exists(self, *, open_right: Literal[True]) -> OpenPatternResult[bool]:
+        """Return settled existence and open-right watermarks."""
+        ...
+
+    def exists(self, *, open_right: bool = False) -> bool | OpenPatternResult[bool]:
+        """Return whether any scope contains an accepting span."""
+        self.compiled._check(_PatternOperation.EXISTS)
+        return self.compiled._exists_over(
+            self.ordering._scopes, self._truth, open_right=open_right
         )
-        return OpenPatternResult(count, pending) if open_right else count
+
+    @overload
+    def focus(self, *, open_right: Literal[False] = False) -> NodeSet:
+        """Return focused items for closed scopes."""
+        ...
+
+    @overload
+    def focus(self, *, open_right: Literal[True]) -> OpenPatternResult[NodeSet]:
+        """Return settled focused items and open-right watermarks."""
+        ...
+
+    def focus(
+        self, *, open_right: bool = False
+    ) -> NodeSet | OpenPatternResult[NodeSet]:
+        """Return every item consumed by a focus edge on an accepting run."""
+        self.compiled._check(_PatternOperation.FOCUS)
+        return self.compiled._focus_over(
+            self.graph,
+            self.ordering._scopes,
+            self._truth,
+            open_right=open_right,
+        )
+
+    @overload
+    def spans(
+        self,
+        *,
+        limit: int | None = None,
+        open_right: Literal[False] = False,
+    ) -> SpanMatches:
+        """Return accepting spans for closed scopes."""
+        ...
+
+    @overload
+    def spans(
+        self,
+        *,
+        limit: int | None = None,
+        open_right: Literal[True],
+    ) -> OpenPatternResult[SpanMatches]:
+        """Return settled spans and open-right watermarks."""
+        ...
+
+    def spans(
+        self, *, limit: int | None = None, open_right: bool = False
+    ) -> SpanMatches | OpenPatternResult[SpanMatches]:
+        """Return each distinct accepting span once in scope-major order."""
+        self.compiled._check(_PatternOperation.SPANS, limit)
+        return self.compiled._spans_over(
+            self.ordering._scopes,
+            self._truth,
+            limit=limit,
+            open_right=open_right,
+        )
+
+    @overload
+    def count(self, *, open_right: Literal[False] = False) -> int:
+        """Count accepting spans in closed scopes."""
+        ...
+
+    @overload
+    def count(self, *, open_right: Literal[True]) -> OpenPatternResult[int]:
+        """Return settled counts and open-right watermarks."""
+        ...
+
+    def count(self, *, open_right: bool = False) -> int | OpenPatternResult[int]:
+        """Count distinct accepting scope spans, never NFA runs."""
+        self.compiled._check(_PatternOperation.COUNT)
+        return self.compiled._count_over(
+            self.ordering._scopes, self._truth, open_right=open_right
+        )
 
 
 def _items_selector(tier: QualifiedName) -> Selector:
@@ -1818,6 +2053,8 @@ __all__ = [
     "AdjacentRuns",
     "AltPattern",
     "AtomPattern",
+    "BoundOrdering",
+    "BoundPattern",
     "CompiledPattern",
     "ContainerOrder",
     "DeclaredOrder",

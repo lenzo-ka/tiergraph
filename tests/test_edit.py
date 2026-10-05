@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TypeAliasType, get_args
+from typing import Any, TypeAliasType, get_args
 
 import pytest
 
@@ -36,6 +36,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
+    dump_bytes,
     dumps,
     loads,
 )
@@ -64,6 +65,10 @@ WEIGHT = name("weight")
 KIND = name("kind")
 CONFIDENCE = name("confidence")
 MARK = name("mark")
+FRESH = name("fresh")
+FRESH_MEMBERS = name("fresh-members")
+FRESH_TYPE = name("Fresh")
+FRESH_LINK = name("fresh-link")
 
 DECLARATIONS = (
     AttributeDeclaration(SCORE, AttributeDomain.ITEM, XsdType.INTEGER),
@@ -638,6 +643,232 @@ def with_word_boundary(index: int) -> Graph:
             Boundary(BoundaryRef(WORD, index), (weight("7.5"),)),
         )
     )
+
+
+def fresh_editor() -> GraphEditor:
+    """Return an editor with one tier absent from its input graph."""
+    editor = base().edit()
+    editor.declare(TierDeclaration(FRESH, "fresh"))
+    editor.declare(SimpleRelationDeclaration(FRESH_MEMBERS, FRESH, FRESH_TYPE))
+    return editor
+
+
+def folded_insertion(
+    source: Graph, tier: QualifiedName, index: int, items: tuple[Item, ...]
+) -> GraphEditor:
+    """Apply the public one-item fold used as the batch oracle."""
+    editor = source.edit()
+    for offset, item in enumerate(items):
+        editor.insert_item(tier, index + offset, item)
+    return editor
+
+
+@pytest.mark.parametrize("index", [0, 2, 4])
+@pytest.mark.parametrize("count", [1, 2, 4])
+def test_e1_batch_insertion_equals_the_nonempty_ordered_fold(
+    index: int, count: int
+) -> None:
+    """E1: item, boundary, relation, byte and displacement remaps match the fold."""
+    source = base()
+    items = tuple(Item(f"batch-{offset}") for offset in range(count))
+    batch = source.edit().insert_items(WORD, index, items)
+    folded = folded_insertion(source, WORD, index, items)
+    assert batch.freeze() == folded.freeze()
+    assert dump_bytes(batch.freeze()) == dump_bytes(folded.freeze())
+    assert batch.displacement() == folded.displacement()
+
+
+def test_e1_refused_batch_equals_the_fold_and_writes_nothing() -> None:
+    """E1: the first boundary refusal is identical and leaves the editor intact."""
+    source = with_word_boundary(2)
+    batch = source.edit()
+    folded = source.edit()
+    before_graph = batch.freeze()
+    before_displacement = batch.displacement()
+    with pytest.raises(GraphValidationError) as batch_refusal:
+        batch.insert_items(WORD, 2, (Item("a"), Item("b")))
+    with pytest.raises(GraphValidationError) as fold_refusal:
+        folded.insert_item(WORD, 2, Item("a"))
+    assert (type(batch_refusal.value), str(batch_refusal.value)) == (
+        type(fold_refusal.value),
+        str(fold_refusal.value),
+    )
+    assert batch.freeze() == before_graph
+    assert batch.displacement() is before_displacement
+
+
+def test_e2_fresh_tier_fast_path_equals_the_general_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E2: skipping stationary input remaps changes no graph or displacement."""
+    items = (Item("a"), Item("b"), Item("c"))
+    fast = fresh_editor().insert_items(FRESH, 0, items)
+    original = GraphEditor._restructure
+
+    def general_only(
+        self: GraphEditor,
+        member: Any,
+        inserted: list[Item],
+        mapping: dict[int, int],
+        subject: str,
+        *,
+        stationary_inputs: bool = False,
+    ) -> None:
+        assert isinstance(stationary_inputs, bool)
+        original(
+            self,
+            member,
+            inserted,
+            mapping,
+            subject,
+            stationary_inputs=False,
+        )
+
+    monkeypatch.setattr(GraphEditor, "_restructure", general_only)
+    general = fresh_editor().insert_items(FRESH, 0, items)
+    assert fast.freeze() == general.freeze()
+    assert dump_bytes(fast.freeze()) == dump_bytes(general.freeze())
+    assert fast.displacement() == general.displacement()
+
+
+def test_e2_fresh_tier_fast_path_keeps_relation_refusals() -> None:
+    """E2: an editor relation cannot dangle past a batched fresh-tier insertion."""
+    editor = fresh_editor()
+    editor.declare(BipartiteRelationDeclaration(FRESH_LINK, PHRASE_TYPE, FRESH_TYPE))
+    editor.add_relation(
+        RelationInstance(FRESH_LINK, ItemRef(PHRASE, 0), ItemRef(FRESH, 9))
+    )
+    before = editor.displacement()
+    with pytest.raises(GraphValidationError, match="item insertion would drop"):
+        editor.insert_items(FRESH, 0, (Item("a"), Item("b")))
+    assert editor.displacement() is before
+
+
+def test_e3_fast_path_guard_skips_only_fresh_tiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: input-tier insertion computes a step and fresh-tier insertion does not."""
+    calls = 0
+    original = GraphEditor._current_displacement
+
+    def counted(self: GraphEditor, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(GraphEditor, "_current_displacement", counted)
+    base().edit().insert_items(WORD, 0, (Item("input"),))
+    assert calls == 1
+    calls = 0
+    fresh_editor().insert_items(FRESH, 0, (Item("fresh"),))
+    assert calls == 0
+
+
+def test_e4_batch_uses_one_restructure_and_empty_uses_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E4: batch insertion is not a disguised per-item loop."""
+    calls = 0
+    original = GraphEditor._restructure
+
+    def counted(self: GraphEditor, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(GraphEditor, "_restructure", counted)
+    editor = base().edit()
+    editor.insert_items(WORD, 1, (Item("a"), Item("b"), Item("c")))
+    assert calls == 1
+    editor.insert_items(WORD, 0, ())
+    assert calls == 1
+
+
+def test_e5_batch_keeps_seal_and_boundary_geometry() -> None:
+    """E5: the batch reports the same seal and stored-boundary refusals."""
+    sealed = base().seal(WORD, 2)
+    with pytest.raises(GraphValidationError) as batch_seal:
+        sealed.insert_items(WORD, 1, (Item("a"), Item("b")))
+    with pytest.raises(GraphValidationError) as single_seal:
+        sealed.insert_item(WORD, 1, Item("a"))
+    assert str(batch_seal.value) == str(single_seal.value)
+    assert sealed.insert_items(WORD, 2, (Item("a"), Item("b")))
+
+    bounded = with_word_boundary(2)
+    with pytest.raises(GraphValidationError) as batch_boundary:
+        bounded.insert_items(WORD, 2, (Item("a"), Item("b")))
+    with pytest.raises(GraphValidationError) as single_boundary:
+        bounded.insert_item(WORD, 2, Item("a"))
+    assert str(batch_boundary.value) == str(single_boundary.value)
+
+
+def test_e6_empty_batch_validates_but_adds_no_displacement_step() -> None:
+    """E6: an empty batch is stricter than a zero-step fold, then a true no-op."""
+    with pytest.raises(GraphValidationError, match="undeclared tier"):
+        base().edit().insert_items(name("missing"), 0, ())
+    with pytest.raises(GraphValidationError, match="index 5 is outside"):
+        base().edit().insert_items(WORD, 5, ())
+
+    editor = base().edit()
+    before = editor.displacement()
+    frozen = editor.freeze()
+    assert editor.insert_items(WORD, 0, ()) is editor
+    assert editor.displacement() is before
+    assert editor.freeze() == frozen
+
+
+@pytest.mark.parametrize("items", [{Item("a")}, frozenset({Item("a")}), {"a": Item()}])
+def test_e7_unordered_batches_are_refused_without_writing(items: object) -> None:
+    """E7: sets and mappings never turn hash order into tier order."""
+    editor = base().edit()
+    before = editor.displacement()
+    with pytest.raises(GraphValidationError, match="items must be an ordered iterable"):
+        editor.insert_items(WORD, 0, items)  # type: ignore[arg-type]
+    assert editor.displacement() is before
+    assert editor.freeze() == base()
+
+
+def test_e7_one_shot_and_raising_generators_are_materialized_first() -> None:
+    """E7: generators are consumed once and cannot partially mutate an editor."""
+    editor = base().edit()
+    one_shot = (Item(label) for label in ("a", "b"))
+    editor.insert_items(WORD, 0, one_shot)
+    assert tuple(item.durable_id for item in editor.freeze().tiers[0].items[:2]) == (
+        "a",
+        "b",
+    )
+
+    class GeneratorFailure(Exception):
+        pass
+
+    def broken() -> Any:
+        yield Item("never-written")
+        raise GeneratorFailure
+
+    refused = base().edit()
+    before = refused.displacement()
+    with pytest.raises(GeneratorFailure):
+        refused.insert_items(WORD, 0, broken())
+    assert refused.displacement() is before
+    assert refused.freeze() == base()
+
+
+def test_e8_frozen_batch_is_the_editor_twin_and_keeps_its_source() -> None:
+    """E8: Graph delegates to the editor and remains immutable."""
+    source = base()
+    items = (Item("a"), Item("b"))
+    expected = source.edit().insert_items(WORD, 1, items).freeze()
+    assert source.insert_items(WORD, 1, items) == expected
+    assert source == base()
+
+
+def test_e9_single_insert_keeps_its_existing_displacement_path() -> None:
+    """E9: the batch-only fresh-tier shortcut does not leak into insert_item."""
+    editor = fresh_editor()
+    before = editor.displacement()
+    editor.insert_item(FRESH, 0, Item("a"))
+    assert editor.displacement() == before
+    assert editor.displacement() is not before
 
 
 # --- structure: removal ----------------------------------------------------

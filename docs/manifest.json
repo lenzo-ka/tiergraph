@@ -356,6 +356,8 @@
       "python",
       "text",
       "python",
+      "text",
+      "python",
       "text"
     ],
     "docs/guide/profiles.md": [
@@ -475,6 +477,8 @@
       "AdjacentRuns",
       "AltPattern",
       "AtomPattern",
+      "BoundOrdering",
+      "BoundPattern",
       "CompiledPattern",
       "ContainerOrder",
       "DeclaredOrder",

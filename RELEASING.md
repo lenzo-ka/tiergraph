@@ -170,7 +170,9 @@ job references it; the OIDC identity is scoped to it).
    ```
 
 5. **Publish** — create a **GitHub Release** for tag `vX.Y.Z` (Releases → Draft a
-   new release). Publishing the release triggers `publish.yml`, which:
+   new release).
+   Title the release `tiergraph X.Y.Z`.
+   Publishing the release triggers `publish.yml`, which:
    - builds sdist + wheel (both `tiergraph` and `tiergraph_dot` packages),
    - **asserts the tag matches `tiergraph.__version__`** (fails the release
      otherwise),
