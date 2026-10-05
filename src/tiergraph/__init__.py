@@ -12,6 +12,7 @@ from tiergraph.action import (
     Semimodule,
     YieldNormalization,
 )
+from tiergraph.budget import BudgetExhausted, Exhaustion, WorkBudget, WorkMeter
 from tiergraph.clock import (
     ClockCoordinate,
     ClockProfile,
@@ -320,6 +321,7 @@ __all__ = [
     "BoundaryRef",
     "BoundarySelector",
     "BoundarySide",
+    "BudgetExhausted",
     "CanonicalPath",
     "ChildCombination",
     "ClockCoordinate",
@@ -343,6 +345,7 @@ __all__ = [
     "Emissions",
     "ExactnessRefusal",
     "ExecutionError",
+    "Exhaustion",
     "FoldCertificate",
     "FoldCost",
     "FoldDeclaration",
@@ -471,6 +474,8 @@ __all__ = [
     "WalkDirection",
     "WalkResult",
     "WhereSelector",
+    "WorkBudget",
+    "WorkMeter",
     "XsdType",
     "YieldNormalization",
     "ZeroClosedStar",

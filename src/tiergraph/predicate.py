@@ -11,6 +11,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 
+from tiergraph.budget import WorkBudget, WorkMeter, _active_meter, _metered
 from tiergraph.core import (
     Attribute,
     AttributeDeclaration,
@@ -41,11 +42,13 @@ _MISSING = object()
 _MAX_REGEX_BYTES = 65_536
 _MAX_REGEX_NESTING = 256
 _MAX_REGEX_POSITIONS = 100_000
+_MAX_REGEX_STATES = 1_000_000
 _MAX_REPEAT_COUNT = 10_000
 _PAIR_SIZE = 2
 _WHITE_SPACE_SINGLETONS = frozenset(
     {0x0020, 0x0085, 0x00A0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000}
 )
+
 _WHITE_SPACE_RANGES = ((0x0009, 0x000D), (0x2000, 0x200A))
 
 
@@ -485,6 +488,12 @@ class _RegexParser:
                 0,
                 f"regex unrolls to {positions} positions; limit {_MAX_REGEX_POSITIONS}",
             )
+        states = _regex_states(result)
+        if states > _MAX_REGEX_STATES:
+            self.refuse(
+                0,
+                f"regex unrolls to {states} NFA states; limit {_MAX_REGEX_STATES}",
+            )
         return result
 
     @staticmethod
@@ -750,6 +759,17 @@ def _regex_positions(regex: _Regex) -> int:
     return _regex_positions(regex.body) * factor
 
 
+def _regex_states(regex: _Regex) -> int:
+    if isinstance(regex, _EmptyRegex | _AtomRegex):
+        return 2
+    if isinstance(regex, _SequenceRegex):
+        return sum(_regex_states(part) for part in regex.parts)
+    if isinstance(regex, _AlternateRegex):
+        return 2 + sum(_regex_states(part) for part in regex.parts)
+    factor = regex.maximum if regex.maximum is not None else regex.minimum + 1
+    return 2 + _regex_states(regex.body) * factor
+
+
 @dataclass(slots=True)
 class _Nfa:
     epsilon: list[set[int]]
@@ -832,8 +852,11 @@ class _Nfa:
 
     def fullmatch(self, text: str) -> bool:
         """Return whether the NFA accepts the entire text."""
+        meter = _active_meter()
         states = self.closure({self.start})
         for character in text:
+            if meter is not None:
+                meter.charge(len(states))
             states = self.closure(
                 {
                     target
@@ -1084,7 +1107,10 @@ def _offset_spans(
     result: list[_OffsetSpan] = []
     measure = profile.extent or profile.end
     assert measure is not None
+    meter = _active_meter()
     for node in nodes:
+        if meter is not None:
+            meter.charge(1)
         if _kind(node) != "item" or not isinstance(node.reference, ItemRef):
             raise Refusal(
                 RefusalStage.SEMANTICS,
@@ -1149,12 +1175,15 @@ def _interval_pairs(
     right: tuple[_OffsetSpan, ...],
     relation: IntervalRelation,
 ) -> Iterator[tuple[_OffsetSpan, _OffsetSpan]]:
+    meter = _active_meter()
     if relation in {
         IntervalRelation.EQUAL,
         IntervalRelation.MEETS,
         IntervalRelation.MET_BY,
     }:
         index: dict[tuple[str | None, int, int | None], list[_OffsetSpan]] = {}
+        if meter is not None:
+            meter.charge(len(right))
         for candidate in right:
             key = {
                 IntervalRelation.EQUAL: (
@@ -1192,11 +1221,16 @@ def _interval_pairs(
                     None,
                 ),
             }[relation]
-            for target in index.get(key, ()):
+            targets = index.get(key, ())
+            if meter is not None:
+                meter.charge(len(targets))
+            for target in targets:
                 if candidate.node != target.node:
                     yield candidate, target
         return
     for candidate in left:
+        if meter is not None:
+            meter.charge(len(right))
         for target in right:
             if candidate.node != target.node and _interval_holds(
                 relation, candidate, target
@@ -1223,21 +1257,31 @@ class BoundPredicate:
     predicate: Predicate
     graph: Graph
 
-    def holds(self, node: Node) -> bool:
+    def holds(
+        self, node: Node, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> bool:
         """Decide one graph node after evaluating every atom it can reach."""
         from tiergraph.selection import NodeSet  # noqa: PLC0415 -- cycle breaker
 
         candidates = NodeSet(self.graph, (node,))
-        return bool(self._selection_decision(self.predicate, candidates).nodes)
+        if budget is None and _active_meter() is None:
+            return bool(self._selection_decision(self.predicate, candidates).nodes)
+        with _metered(budget, "predicate.holds"):
+            return bool(self._selection_decision(self.predicate, candidates).nodes)
 
-    def select(self, candidates: NodeSet) -> NodeSet:
+    def select(
+        self, candidates: NodeSet, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> NodeSet:
         """Return candidates that hold, retaining the candidate set's domain."""
         if candidates.graph is not self.graph:
             raise Refusal(
                 RefusalStage.SEMANTICS,
                 "predicate selection requires candidates from the bound graph",
             )
-        return self._selection_decision(self.predicate, candidates)
+        if budget is None and _active_meter() is None:
+            return self._selection_decision(self.predicate, candidates)
+        with _metered(budget, "predicate.select"):
+            return self._selection_decision(self.predicate, candidates)
 
     def _selection_decision(self, predicate: Predicate, candidates: NodeSet) -> NodeSet:
         lowered = _lower_related_quantifiers(predicate)
@@ -1271,6 +1315,9 @@ class BoundPredicate:
             )
 
             targets = evaluate_selection(self.graph, ItemsSelector(atom.other))
+            meter = _active_meter()
+            if meter is not None:
+                meter.charge(len(targets.nodes))
             matching = self._selection_decision(atom.target, targets)
             if atom.quantifier is Quantifier.ALL:
                 matching = targets - matching
@@ -1297,6 +1344,9 @@ class BoundPredicate:
                 if atom.quantifier is Quantifier.ANY
                 else item_candidates - answer
             )
+        meter = _active_meter()
+        if meter is not None:
+            meter.charge(len(candidates.nodes))
         selected = tuple(
             node for node in candidates.nodes if self._atom(atom, _Context(node))
         )
@@ -1377,6 +1427,8 @@ class BoundPredicate:
                 f"{_operand_text(atom.operand)}: item {self._node_label(context.node)!r} "
                 f"stores a JSON {kind}; any, all and none need a JSON array",
             )
+        if (meter := _active_meter()) is not None:
+            meter.charge(len(reading.value))
         decisions = tuple(
             self._decision(atom.body, _Context(context.node, element))
             for element in cast(list[object], reading.value)

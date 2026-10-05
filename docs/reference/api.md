@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 228 top-level `tiergraph` exports exactly once.
+It covers 232 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1248,50 +1248,20 @@ Construct the finite domain-item by index-product state space.
 Method.
 
 ```text
-FoldDeclaration.run(self) -> 'FoldResult[Value]'
+FoldDeclaration.run(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'FoldResult[Value]'
 ```
 
-Evaluate every state with the semiring's own declared operations.
-
-Addition and multiplication carry an acyclic relation. A cyclic
-component reaches the algebra's ``star`` as well, which is what
-specifies the fixpoint there.
+Evaluate every state within an optional declared work budget.
 
 #### `FoldDeclaration.check_exactness`
 
 Method.
 
 ```text
-FoldDeclaration.check_exactness(self, *, derivation_budget: 'int' = 1024) -> 'FoldCertificate[Value]'
+FoldDeclaration.check_exactness(self, *, derivation_budget: 'int' = 1024, budget: 'WorkBudget | WorkMeter | None' = None) -> 'FoldCertificate[Value]'
 ```
 
-Demand this fold's exactness claim and discharge it, or refuse.
-
-Every branch bites, and the asymmetry is deliberate. An ``UNDECLARED``
-exactness is refused with **the declaration to be made**, and no fold is
-run for it; a false claim is refused with **a semantic counterexample**.
-Declining to say is not the same as saying the weaker thing.
-
-The claim is checked two ways, and neither is a carrier swap: re-running
-the fold under another algebra reads the same ``transitions``, so it
-confirms whatever the declaration says rather than testing it.
-
-The first way is a law search over **probes the fold produces itself**,
-rather than a probe set a caller supplies. Distributivity is what
-regroups a sum over derivations into a fold over shared structure, so a
-carrier that fails it at one of those probes cannot be folded exactly,
-whatever its declared ``LawCheck`` says. The probes are capped, so this
-is a search over some of the values the fold reaches and not over all of
-them: finding no refutation here is not a proof. A carrier that
-cannot evaluate its own laws at its own values raises; that is a defect
-in the carrier boundary, not something to be swallowed here.
-
-The second way enumerates the derivations and combines them with no
-sharing at all, then compares. It runs only when the whole enumeration
-fits in ``derivation_budget``, and the returned certificate reports
-whether it did. A search that finds no counterexample has found no
-counterexample; it has not proved the claim, and the certificate says
-which of the two happened rather than implying the stronger one.
+Check exactness within an optional declared work budget.
 
 ### `FoldExactness`
 
@@ -1429,7 +1399,7 @@ Match one compiled regular pattern against every root-to-sink path.
 Method.
 
 ```text
-LatticeMatch.exists(self) -> 'bool'
+LatticeMatch.exists(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool'
 ```
 
 Return whether some complete lattice path matches the whole pattern.
@@ -1439,7 +1409,7 @@ Return whether some complete lattice path matches the whole pattern.
 Method.
 
 ```text
-LatticeMatch.on_accepting_path(self) -> 'NodeSet'
+LatticeMatch.on_accepting_path(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'NodeSet'
 ```
 
 Return every base item lying on some accepting complete path.
@@ -1449,7 +1419,7 @@ Return every base item lying on some accepting complete path.
 Method.
 
 ```text
-LatticeMatch.count(self, policy: 'AmbiguityPolicy') -> 'int'
+LatticeMatch.count(self, policy: 'AmbiguityPolicy', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'int'
 ```
 
 Count accepting lattice paths exactly under the declared policy.
@@ -1459,7 +1429,7 @@ Count accepting lattice paths exactly under the declared policy.
 Method.
 
 ```text
-LatticeMatch.all_paths(self, policy: 'AmbiguityPolicy') -> 'bool'
+LatticeMatch.all_paths(self, policy: 'AmbiguityPolicy', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool'
 ```
 
 Return whether every complete lattice path matches the pattern.
@@ -1664,20 +1634,20 @@ Return an item's position in the plan's value order.
 Method.
 
 ```text
-PathPlan.evaluate(self, values: 'Sequence[Value] | None' = None) -> 'FoldResult[Value]'
+PathPlan.evaluate(self, values: 'Sequence[Value] | None' = None, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'FoldResult[Value]'
 ```
 
-Fold the compiled topology under these values, or the declaration's own.
+Fold the compiled topology within an optional work budget.
 
 #### `PathPlan.marginals`
 
 Method.
 
 ```text
-PathPlan.marginals(self, values: 'Sequence[Value] | None' = None) -> 'PathMarginals[Value]'
+PathPlan.marginals(self, values: 'Sequence[Value] | None' = None, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'PathMarginals[Value]'
 ```
 
-Run the inside and outside passes under these values.
+Run inside and outside passes within an optional work budget.
 
 ### `PathPosteriors`
 
@@ -3033,6 +3003,27 @@ QualifiedName.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the expanded name independently of document prefix choices.
 
+### `BudgetExhausted`
+
+```text
+BudgetExhausted(operation: 'str', exhaustion: 'Exhaustion', spent: 'int', budget: 'WorkBudget') -> 'None'
+```
+
+Refuse an operation whose declared work budget ran out.
+
+### `Exhaustion`
+
+```text
+Exhaustion(*values)
+```
+
+Name which declared work bound stopped an operation.
+
+#### `Exhaustion` members
+
+- `STEPS` = `steps`
+- `DEADLINE` = `deadline`
+
 ### `Refusal`
 
 ```text
@@ -3356,6 +3347,44 @@ TierDeclaration.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the declaration as JSON-serializable data.
+
+### `WorkBudget`
+
+```text
+WorkBudget(steps: 'int | None' = None, seconds: 'float | None' = None) -> None
+```
+
+Declare how much work one operation may do before it stops.
+
+### `WorkMeter`
+
+```text
+WorkMeter(budget: 'WorkBudget') -> 'None'
+```
+
+Charge one budget across calls and report the work they spent.
+
+A meter is intended for one thread or task at a time.
+
+#### `WorkMeter.budget`
+
+Property.
+
+```text
+WorkMeter.budget(self) -> 'WorkBudget'
+```
+
+Return the declaration this meter enforces.
+
+#### `WorkMeter.spent`
+
+Property.
+
+```text
+WorkMeter.spent(self) -> 'int'
+```
+
+Return logical steps charged so far, including a crossing charge.
 
 ### `XsdType`
 
@@ -7160,6 +7189,23 @@ Base 0 means to interpret the base from the string as an integer literal.
 >>> int('0b100', base=0)
 4
 
+### `MAX_PATTERN_STATES`
+
+int([x]) -> integer
+int(x, base=10) -> integer
+
+Convert a number or string to an integer, or return 0 if no arguments
+are given.  If x is a number, return x.__int__().  For floating point
+numbers, this truncates towards zero.
+
+If x is not a number or if base is given, then x must be a string,
+bytes, or bytearray instance representing an integer literal in the
+given base.  The literal can be preceded by '+' or '-' and be surrounded
+by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
+Base 0 means to interpret the base from the string as an integer literal.
+>>> int('0b100', base=0)
+4
+
 ### `AdjacentRuns`
 
 ```text
@@ -7218,7 +7264,7 @@ immutable graph strongly for its own lifetime.
 Method.
 
 ```text
-BoundPattern.exists(self, *, open_right: 'bool' = False) -> 'bool | OpenPatternResult[bool]'
+BoundPattern.exists(self, *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool | OpenPatternResult[bool]'
 ```
 
 Return whether any scope contains an accepting span.
@@ -7228,7 +7274,7 @@ Return whether any scope contains an accepting span.
 Method.
 
 ```text
-BoundPattern.focus(self, *, open_right: 'bool' = False) -> 'NodeSet | OpenPatternResult[NodeSet]'
+BoundPattern.focus(self, *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'NodeSet | OpenPatternResult[NodeSet]'
 ```
 
 Return every item consumed by a focus edge on an accepting run.
@@ -7238,7 +7284,7 @@ Return every item consumed by a focus edge on an accepting run.
 Method.
 
 ```text
-BoundPattern.spans(self, *, limit: 'int | None' = None, open_right: 'bool' = False) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
+BoundPattern.spans(self, *, limit: 'int | None' = None, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
 ```
 
 Return each distinct accepting span once in scope-major order.
@@ -7248,7 +7294,7 @@ Return each distinct accepting span once in scope-major order.
 Method.
 
 ```text
-BoundPattern.count(self, *, open_right: 'bool' = False) -> 'int | OpenPatternResult[int]'
+BoundPattern.count(self, *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'int | OpenPatternResult[int]'
 ```
 
 Count distinct accepting scope spans, never NFA runs.
@@ -7276,7 +7322,7 @@ Return the exact maximum consumed item count, or None if unbounded.
 Method.
 
 ```text
-CompiledPattern.bind(self, graph: 'Graph', ordering: 'Ordering | BoundOrdering') -> 'BoundPattern'
+CompiledPattern.bind(self, graph: 'Graph', ordering: 'Ordering | BoundOrdering', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'BoundPattern'
 ```
 
 Bind predicates, read scopes and evaluate atoms once on one graph.
@@ -7294,7 +7340,7 @@ operation defect.
 Method.
 
 ```text
-CompiledPattern.exists(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'bool | OpenPatternResult[bool]'
+CompiledPattern.exists(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool | OpenPatternResult[bool]'
 ```
 
 Return whether any scope contains an accepting span.
@@ -7304,7 +7350,7 @@ Return whether any scope contains an accepting span.
 Method.
 
 ```text
-CompiledPattern.focus(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'NodeSet | OpenPatternResult[NodeSet]'
+CompiledPattern.focus(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'NodeSet | OpenPatternResult[NodeSet]'
 ```
 
 Return every item consumed by a focus edge on an accepting run.
@@ -7314,7 +7360,7 @@ Return every item consumed by a focus edge on an accepting run.
 Method.
 
 ```text
-CompiledPattern.spans(self, graph: 'Graph', ordering: 'Ordering', *, limit: 'int | None' = None, open_right: 'bool' = False) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
+CompiledPattern.spans(self, graph: 'Graph', ordering: 'Ordering', *, limit: 'int | None' = None, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'SpanMatches | OpenPatternResult[SpanMatches]'
 ```
 
 Return each distinct accepting span once in scope-major order.
@@ -7324,7 +7370,7 @@ Return each distinct accepting span once in scope-major order.
 Method.
 
 ```text
-CompiledPattern.count(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False) -> 'int | OpenPatternResult[int]'
+CompiledPattern.count(self, graph: 'Graph', ordering: 'Ordering', *, open_right: 'bool' = False, budget: 'WorkBudget | WorkMeter | None' = None) -> 'int | OpenPatternResult[int]'
 ```
 
 Count distinct accepting scope spans, never NFA runs.
@@ -7375,6 +7421,7 @@ State whether an output witness list was truncated.
 
 - `EXHAUSTIVE` = `exhaustive`
 - `CUT_AT_BOUND` = `cut-at-bound`
+- `CUT_AT_BUDGET` = `cut-at-budget`
 
 ### `FocusPattern`
 
@@ -7587,7 +7634,7 @@ Return one pattern as strict tagged JSON data.
 ### `span_pairs`
 
 ```text
-span_pairs(graph: 'Graph', left: 'Selector', right: 'Selector', relation: 'IntervalRelation', offsets: 'OffsetProfile', *, limit: 'int | None' = None) -> 'SpanPairs'
+span_pairs(graph: 'Graph', left: 'Selector', right: 'Selector', relation: 'IntervalRelation', offsets: 'OffsetProfile', *, limit: 'int | None' = None, budget: 'WorkBudget | WorkMeter | None' = None) -> 'SpanPairs'
 ```
 
 Return related item pairs in left-major declared order.
@@ -7624,7 +7671,7 @@ Evaluate one predicate against nodes of its bound graph.
 Method.
 
 ```text
-BoundPredicate.holds(self, node: 'Node') -> 'bool'
+BoundPredicate.holds(self, node: 'Node', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool'
 ```
 
 Decide one graph node after evaluating every atom it can reach.
@@ -7634,7 +7681,7 @@ Decide one graph node after evaluating every atom it can reach.
 Method.
 
 ```text
-BoundPredicate.select(self, candidates: 'NodeSet') -> 'NodeSet'
+BoundPredicate.select(self, candidates: 'NodeSet', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'NodeSet'
 ```
 
 Return candidates that hold, retaining the candidate set's domain.

@@ -540,6 +540,30 @@ A plan refuses what a path cannot carry, each by name: ranked output, an index
 product, more than one dependency relation, an `AND` transition, and a cycle,
 which is reported by its closing edge.
 
+## Work budgets
+
+`FoldDeclaration.run` and `check_exactness`, and `PathPlan.evaluate` and
+`marginals`, accept an optional `WorkBudget` or shared `WorkMeter`. There is no
+default. Exhaustion raises `BudgetExhausted`; a fold or plan never publishes a
+partial carrier value.
+
+Fold steps checkpoint each evaluated state or cyclic equation. They charge
+carrier additions, multiplications, and witness operations multiplied by the
+declaration's `carrier_operation_cost`, plus Cartesian provenance products,
+ranked-candidate construction and copied path labels, and cycle-enumeration
+pushes. Built-in PATH carriers also charge the total labels retained in their
+values. One carrier call is indivisible: a budget cannot interrupt arbitrary
+user carrier code, and the charge occurs at the surrounding checkpoint.
+Compiled path plans charge each gather or scatter operation and the size of a
+built-in PATH result.
+
+A work budget is distinct from every existing fold bound. `derivation_budget`
+still makes an exactness certificate report `compared=False` when its oracle
+cannot enumerate all derivations; work-budget exhaustion raises instead.
+`output_cap` limits reported witnesses only, and `FoldResult.truncated` keeps
+that meaning after a complete carrier value has been computed. `FoldCost` is
+retrospective accounting rather than a stopping condition.
+
 ## From the command line
 
 `tiergraph semirings` lists the algebras the `tiergraph fold` shell can name,

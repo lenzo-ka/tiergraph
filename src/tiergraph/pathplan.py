@@ -25,6 +25,13 @@ from dataclasses import dataclass, field
 from itertools import repeat
 from typing import Any, cast
 
+from tiergraph.budget import (
+    WorkBudget,
+    WorkMeter,
+    _active_meter,
+    _aggregating,
+    _metered,
+)
 from tiergraph.core import BipartiteRelationDeclaration, Graph, ItemRef, QualifiedName
 from tiergraph.fold import (
     ChildCombination,
@@ -280,10 +287,11 @@ class PathPlan[Value]:
         )
         order = _postorder(name, transition.relation, items, children)
         labels = tuple(_label(graph, reference) for reference in items)
-        values = tuple(
-            declaration.lift(declaration.valuation.read(graph, reference), label)
-            for reference, label in zip(items, labels, strict=True)
-        )
+        with _aggregating():
+            values = tuple(
+                declaration.lift(declaration.valuation.read(graph, reference), label)
+                for reference, label in zip(items, labels, strict=True)
+            )
         compiled = _compile(declaration, items, children, parents, roots, order)
         if compiled.doubles:
             _check_doubles(name, values, compiled.excluded)
@@ -309,10 +317,28 @@ class PathPlan[Value]:
                 f"{reference.to_data()!r}"
             ) from None
 
-    def evaluate(self, values: Sequence[Value] | None = None) -> FoldResult[Value]:
+    def evaluate(
+        self,
+        values: Sequence[Value] | None = None,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> FoldResult[Value]:
+        """Fold the compiled topology within an optional work budget."""
+        with _aggregating(), _metered(budget, "pathplan.evaluate"):
+            return self._evaluate(values)
+
+    def _evaluate(self, values: Sequence[Value] | None = None) -> FoldResult[Value]:
         """Fold the compiled topology under these values, or the declaration's own."""
         vector = self._vector(values)
         compiled = self._compiled
+        meter = _active_meter()
+        if meter is not None:
+            operations = (
+                compiled.inside_additions
+                + compiled.inside_multiplications
+                + len(compiled.root_states)
+            )
+            meter.charge(operations * (1 + self.declaration.carrier_operation_cost))
         if compiled.fused is None:
             inside, selected = self._inside_general(vector)
         else:
@@ -322,7 +348,7 @@ class PathPlan[Value]:
         if selected is not None:
             provenance = selected[1][: self.declaration.output_cap]
             witness_count = len(selected[1])
-        return FoldResult(
+        result = FoldResult(
             values=tuple(zip(compiled.states, inside, strict=True)),
             roots=compiled.root_states,
             value=self._total(inside),
@@ -336,18 +362,40 @@ class PathPlan[Value]:
             ),
             ranked_witnesses=None,
         )
+        self._charge_value_sizes((*inside, result.value))
+        return result
 
-    def marginals(self, values: Sequence[Value] | None = None) -> PathMarginals[Value]:
+    def marginals(
+        self,
+        values: Sequence[Value] | None = None,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> PathMarginals[Value]:
+        """Run inside and outside passes within an optional work budget."""
+        with _aggregating(), _metered(budget, "pathplan.marginals"):
+            return self._marginals(values)
+
+    def _marginals(self, values: Sequence[Value] | None = None) -> PathMarginals[Value]:
         """Run the inside and outside passes under these values."""
         vector = self._vector(values)
         compiled = self._compiled
+        meter = _active_meter()
+        if meter is not None:
+            operations = (
+                compiled.inside_additions
+                + compiled.inside_multiplications
+                + compiled.outside_additions
+                + compiled.outside_multiplications
+                + len(compiled.root_states)
+            )
+            meter.charge(operations * (1 + self.declaration.carrier_operation_cost))
         if compiled.fused is None:
             inside, _selected = self._inside_general(vector)
             outside, through = self._outside_general(vector, inside)
         else:
             inside, _selected = self._inside_fused(vector, select=False)
             outside, through = self._outside_fused(vector, inside)
-        return PathMarginals(
+        result = PathMarginals(
             self,
             self._total(inside),
             tuple(inside),
@@ -360,6 +408,10 @@ class PathPlan[Value]:
                 0,
             ),
         )
+        self._charge_value_sizes(
+            (result.total, *result.inside, *result.outside, *result.marginals)
+        )
+        return result
 
     def _vector(self, values: Sequence[Value] | None) -> tuple[Value, ...]:
         """Bind a value vector to the plan order, or take the declaration's."""
@@ -375,6 +427,15 @@ class PathPlan[Value]:
         if compiled.doubles:
             _check_doubles(self.declaration.name, vector, compiled.excluded)
         return vector
+
+    def _charge_value_sizes(self, values: Sequence[Value]) -> None:
+        """Charge retained built-in carrier values when the algebra exposes size."""
+        meter = _active_meter()
+        value_size = getattr(self.declaration.semiring, "_value_size", None)
+        if meter is not None and value_size is not None:
+            meter.charge(
+                sum(cast(Callable[[Value], int], value_size)(v) for v in values)
+            )
 
     def _total(self, inside: Sequence[Value]) -> Value:
         """Combine the root values the way the fold's accumulator does."""

@@ -12,6 +12,14 @@ from itertools import pairwise, product
 from types import MappingProxyType
 from typing import NamedTuple, Protocol, TypeVar, cast
 
+from tiergraph.budget import (
+    WorkBudget,
+    WorkMeter,
+    _active_meter,
+    _aggregating,
+    _Meter,
+    _metered,
+)
 from tiergraph.core import (
     AttributeDomain,
     AttributeValue,
@@ -767,6 +775,7 @@ class FoldDeclaration[Value]:
                 )
                 accumulator.total = self.semiring.add(accumulator.total, root_value)
                 accumulator.additions += 1
+                accumulator.checkpoint(self, accumulator.total)
                 if self.ranked_output:
                     accumulator.ranked_roots.extend(root_ranked)
                     accumulator.root_witness_count += root_count
@@ -798,7 +807,12 @@ class FoldDeclaration[Value]:
             accumulator.root_witness_count,
         )
 
-    def run(self) -> FoldResult[Value]:
+    def run(self, *, budget: WorkBudget | WorkMeter | None = None) -> FoldResult[Value]:
+        """Evaluate every state within an optional declared work budget."""
+        with _aggregating(), _metered(budget, "fold.run"):
+            return self._run()
+
+    def _run(self) -> FoldResult[Value]:
         """Evaluate every state with the semiring's own declared operations.
 
         Addition and multiplication carry an acyclic relation. A cyclic
@@ -892,6 +906,16 @@ class FoldDeclaration[Value]:
         )
 
     def check_exactness(
+        self,
+        *,
+        derivation_budget: int = 1024,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> FoldCertificate[Value]:
+        """Check exactness within an optional declared work budget."""
+        with _aggregating(), _metered(budget, "fold.check_exactness"):
+            return self._check_exactness(derivation_budget=derivation_budget)
+
+    def _check_exactness(
         self, *, derivation_budget: int = 1024
     ) -> FoldCertificate[Value]:
         """Demand this fold's exactness claim and discharge it, or refuse.
@@ -1010,6 +1034,8 @@ class FoldDeclaration[Value]:
         for left in probes:
             for first in probes:
                 for second in probes:
+                    if (meter := _active_meter()) is not None:
+                        meter.charge(8 * self.carrier_operation_cost)
                     added = self.semiring.add(first, second)
                     got = self.semiring.multiply(left, added)
                     want = self.semiring.add(
@@ -1061,7 +1087,7 @@ class FoldDeclaration[Value]:
             "the structure rather than in the carrier's arithmetic."
         )
 
-    def _unfold(
+    def _unfold(  # noqa: PLR0915 -- explicit bounded derivation oracle
         self,
         outgoing: _Outgoing,
         item_roots: tuple[ItemRef, ...],
@@ -1076,6 +1102,7 @@ class FoldDeclaration[Value]:
         """
         memo: dict[ItemRef, tuple[Value, ...]] = {}
         produced = 0
+        work_meter = _active_meter()
 
         def charge(size: int) -> None:
             """Refuse to enumerate past the declared budget."""
@@ -1105,6 +1132,10 @@ class FoldDeclaration[Value]:
                             for option in options
                             for value in memo[child]
                         )
+                        if work_meter is not None:
+                            work_meter.charge(
+                                len(options) * (1 + self.carrier_operation_cost)
+                            )
                         charge(len(options))
                 else:
                     options = tuple(
@@ -1115,11 +1146,15 @@ class FoldDeclaration[Value]:
                     for value in values
                     for option in options
                 )
+                if work_meter is not None:
+                    work_meter.charge(len(values) * (1 + self.carrier_operation_cost))
                 charge(len(values))
             if not has_children:
                 values = tuple(
                     self.semiring.multiply(value, self.semiring.one) for value in values
                 )
+                if work_meter is not None:
+                    work_meter.charge(len(values) * self.carrier_operation_cost)
             memo[reference] = values
 
         try:
@@ -1142,6 +1177,8 @@ class FoldDeclaration[Value]:
             derivations = 0
             for root in item_roots:
                 for value in memo[root]:
+                    if work_meter is not None:
+                        work_meter.charge(1 + self.carrier_operation_cost)
                     combined = self.semiring.add(combined, value)
                     derivations += 1
         except _BudgetExceeded:
@@ -1251,6 +1288,12 @@ class FoldDeclaration[Value]:
             if lazy is not None:
                 return lazy
         products = len(left) * len(right)
+        if (meter := _active_meter()) is not None:
+            meter.charge(
+                products
+                + len(right) * sum(len(path) for _value, path in left)
+                + len(left) * sum(len(path) for _value, path in right)
+            )
         return (
             self._rank_candidates(
                 tuple(
@@ -1335,6 +1378,8 @@ class FoldDeclaration[Value]:
             visited.add(index)
             left_value, left_path = left[left_index]
             right_value, right_path = right[right_index]
+            if (meter := _active_meter()) is not None:
+                meter.charge(1 + len(left_path) + len(right_path))
             candidate = (
                 self._ranked_multiply(left_value, right_value),
                 left_path + right_path,
@@ -1436,6 +1481,32 @@ class _FoldAccumulator[Value]:
     values: list[tuple[State, Value]] = field(default_factory=list)
     root_states: list[State] = field(default_factory=list)
     ranked_roots: list[RankedWitness[Value]] = field(default_factory=list)
+    meter: _Meter | None = field(default_factory=_active_meter)
+    charged_additions: int = 0
+    charged_multiplications: int = 0
+    charged_witness_operations: int = 0
+
+    def checkpoint(self, fold: FoldDeclaration[Value], value: Value) -> None:
+        """Charge carrier work accrued since the preceding fold state."""
+        if self.meter is None:
+            return
+        additions = self.additions + self.ranked_additions[0]
+        operations = (
+            additions
+            - self.charged_additions
+            + self.multiplications
+            - self.charged_multiplications
+            + self.witness_operations[0]
+            - self.charged_witness_operations
+        )
+        charge = 1 + fold.carrier_operation_cost * operations
+        value_size = getattr(fold.semiring, "_value_size", None)
+        if value_size is not None:
+            charge += cast(Callable[[Value], int], value_size)(value)
+        self.meter.charge(charge)
+        self.charged_additions = additions
+        self.charged_multiplications = self.multiplications
+        self.charged_witness_operations = self.witness_operations[0]
 
 
 @dataclass(slots=True)
@@ -1449,6 +1520,18 @@ class _CoordinatePass[Value]:
     component_by_item: Mapping[ItemRef, tuple[ItemRef, ...]]
     accumulator: _FoldAccumulator[Value]
     cache: dict[ItemRef, _StateResult[Value]] = field(default_factory=dict)
+
+    def charge_provenance_product(
+        self, left: DerivationProvenance, right: DerivationProvenance
+    ) -> None:
+        """Pre-charge one Cartesian path concatenation."""
+        meter = self.accumulator.meter
+        if meter is not None:
+            meter.charge(
+                len(left) * len(right)
+                + len(right) * sum(map(len, left))
+                + len(left) * sum(map(len, right))
+            )
 
     def cache_component_value(
         self,
@@ -1516,6 +1599,7 @@ class _CoordinatePass[Value]:
                 value = self.fold.semiring.multiply(value, relation_value)
                 self.accumulator.multiplications += 1
             assert has_children
+            self.accumulator.checkpoint(self.fold, value)
             return value
 
         approximants = dict.fromkeys(component, self.fold.semiring.zero)
@@ -1659,6 +1743,7 @@ class _CoordinatePass[Value]:
             cycle_paths: list[tuple[ItemRef, Value, frozenset[ItemRef]]] = [
                 (start, self.fold.semiring.one, frozenset((start,)))
             ]
+            self.accumulator.checkpoint(self.fold, self.fold.semiring.one)
             while cycle_paths:
                 current, path_value, seen = cycle_paths.pop()
                 for child in self.adjacency[current]:
@@ -1674,6 +1759,7 @@ class _CoordinatePass[Value]:
                         child not in seen and self.canonical_index[child] >= start_index
                     ):
                         cycle_paths.append((child, cycle_value, seen | {child}))
+                        self.accumulator.checkpoint(self.fold, cycle_value)
         if not star.admits(operand):
             raise StarRefusal(
                 f"{fallback}; SCC {member_data!r}; closing edge {edge}; "
@@ -1758,6 +1844,7 @@ class _CoordinatePass[Value]:
                             relation_value, child_value
                         )
                         self.accumulator.multiplications += 1
+                        self.charge_provenance_product(relation_paths, child_paths)
                         relation_paths = tuple(
                             left + right
                             for left in relation_paths
@@ -1808,6 +1895,7 @@ class _CoordinatePass[Value]:
                         )
                 value = self.fold.semiring.multiply(value, relation_value)
                 self.accumulator.multiplications += 1
+                self.charge_provenance_product(paths, relation_paths)
                 paths = tuple(
                     left + right for left in paths for right in relation_paths
                 )
@@ -1825,6 +1913,7 @@ class _CoordinatePass[Value]:
                 value = self.fold.semiring.multiply(value, self.fold.semiring.one)
                 self.accumulator.multiplications += 1
             self.cache[current] = (value, paths, ranked, ranked_count)
+            self.accumulator.checkpoint(self.fold, value)
             in_progress.remove(current)
         return self.cache[reference]
 

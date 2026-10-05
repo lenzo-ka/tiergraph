@@ -933,6 +933,10 @@ class PathWitnessSemiring:
     zero_sum_free = no_zero_divisors = True
     star = None
 
+    def _value_size(self, value: tuple[tuple[str, ...], ...]) -> int:
+        """Return the number of labels retained across all carried paths."""
+        return sum(len(path) for path in self._value(value, "value"))
+
     def _value(
         self, value: tuple[tuple[str, ...], ...], name: str
     ) -> tuple[tuple[str, ...], ...]:
@@ -1051,6 +1055,10 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
 
     def __init__(self) -> None:
         super().__init__(DECIMAL_TROPICAL, PATH_WITNESSES)
+
+    def _value_size(self, value: tuple[Decimal, tuple[tuple[str, ...], ...]]) -> int:
+        """Return the label count retained by this enriched path value."""
+        return PATH_WITNESSES._value_size(value[1])
 
     def _ranked_key(
         self,
