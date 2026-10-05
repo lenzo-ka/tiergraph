@@ -24,6 +24,7 @@ from examples.mixing import run_example  # noqa: E402
 
 import tiergraph  # noqa: E402
 import tiergraph_dot  # noqa: E402
+from tiergraph.budget import _MAX_USER_STEPS  # noqa: E402
 from tiergraph.cli import build_parser  # noqa: E402
 from tiergraph.machine import MACHINE_VERSION  # noqa: E402
 
@@ -317,6 +318,19 @@ def cli_bytes() -> bytes:
         "2 means command-line usage error, and 3 means an I/O failure or an input "
         "the CLI could not decode. The CLI's own reports refuse a graph the writer "
         "could not write in the same way as the writer, with exit status 1.\n\n"
+        "`--max-steps N` is an opt-in deterministic work guard on `select`, "
+        "`match`, `fold`, `discharge fold`, and the grammar commands that evaluate "
+        "a fold (`recognize`, `count`, `best`, and `generate`). `N` is a positive "
+        f"integer no greater than {_MAX_USER_STEPS:,}; omission installs no budget "
+        "and preserves the unbudgeted behavior. Use it when accepting untrusted "
+        "pattern or predicate text. Exhaustion is a semantics-stage refusal on "
+        "stderr and exits 1; a completed nonempty prefix from `match ... spans` "
+        "instead succeeds with `extent` equal to `cut-at-budget`. Match request "
+        "JSON accepts the same optional `max_steps` field for `exists`, `focus`, "
+        "`spans`, `count`, `pairs`, and `lattice`; supplying both the field and the "
+        "flag is refused rather than choosing one silently. `grammar lattice` "
+        "takes no guard because it constructs and serializes topology without "
+        "running a budgeted fold, path-plan evaluation, or lattice match.\n\n"
         "`validate` reports whether `loads()` accepts a document, and that is the same "
         "question `convert` settles before emitting anything. A document the encoder "
         "cannot write, such as one spelling a lone surrogate as an escape, is refused "

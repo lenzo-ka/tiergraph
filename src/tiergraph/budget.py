@@ -13,6 +13,11 @@ from enum import StrEnum
 from tiergraph.core import Refusal, RefusalStage
 
 _DEADLINE_INTERVAL = 4096
+# Text-facing interfaces accept a bounded decimal integer even though the Python
+# API deliberately accepts any positive ``int``.  This keeps hostile JSON and
+# command lines from smuggling arbitrarily large integer spellings into policy
+# or logs while leaving ordinary budgets far above practical CLI work.
+_MAX_USER_STEPS = 1_000_000_000
 _clock = time.monotonic
 
 

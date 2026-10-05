@@ -8,6 +8,8 @@ The `tiergraph` command prints help when called without arguments. `--version` p
 
 Every command that reads an input document accepts `-` in place of that document's filename and reads it from standard input, including the inputs named by `--result`, `--profile`, and `--selector`; `step --interactive` is the one exception, below. `schema` and `semirings` read no document, and `discharge`, `path`, `grammar`, `clock`, and `span` take only a subcommand, so `-` is a command-line usage error for those and exits 2. Document-producing commands write to stdout by default or to `-o/--output`; diagnostics go only to stderr. Exit status 0 means success, 1 means invalid input or a refused operation, 2 means command-line usage error, and 3 means an I/O failure or an input the CLI could not decode. The CLI's own reports refuse a graph the writer could not write in the same way as the writer, with exit status 1.
 
+`--max-steps N` is an opt-in deterministic work guard on `select`, `match`, `fold`, `discharge fold`, and the grammar commands that evaluate a fold (`recognize`, `count`, `best`, and `generate`). `N` is a positive integer no greater than 1,000,000,000; omission installs no budget and preserves the unbudgeted behavior. Use it when accepting untrusted pattern or predicate text. Exhaustion is a semantics-stage refusal on stderr and exits 1; a completed nonempty prefix from `match ... spans` instead succeeds with `extent` equal to `cut-at-budget`. Match request JSON accepts the same optional `max_steps` field for `exists`, `focus`, `spans`, `count`, `pairs`, and `lattice`; supplying both the field and the flag is refused rather than choosing one silently. `grammar lattice` takes no guard because it constructs and serializes topology without running a budgeted fold, path-plan evaluation, or lattice match.
+
 `validate` reports whether `loads()` accepts a document, and that is the same question `convert` settles before emitting anything. A document the encoder cannot write, such as one spelling a lone surrogate as an escape, is refused by both at the reader's encoding stage, producing exit status 1 for a refused operation. `convert` canonicalizes to indented `json`, compact `json-compact`, or `bytes`; bytes uses the canonical JSON byte API and is not another syntax.
 
 `run` consumes a CLI-owned JSONL stream. Its first line is exactly `{"machine_version":"1"}` and each later line has one opcode's public `to_data()` shape (a repeat body remains nested on that line). Header-only programs are valid, CRLF and a final line without a newline are accepted, and whitespace-only lines are rejected. The decoder caps each line at 1 MiB and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce repeat and total expansion bounds.
@@ -146,7 +148,7 @@ usage: tiergraph discharge fold [-h] [--name NAME] --attribute-namespace NS
                                 {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
                                 --lift {one,value} --transition NS LOCAL
                                 COMBINATION [--root TGPATH] [--ranked]
-                                [--output-cap N]
+                                [--output-cap N] [--max-steps N]
                                 [--exactness {distributive,approximate,structural}]
                                 [-o FILE]
                                 GRAPH
@@ -171,6 +173,8 @@ options:
   --ranked              also report witnesses ranked by the semiring's own
                         order
   --output-cap N        witness cap; requires --ranked
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   --exactness {distributive,approximate,structural}
                         the claim to discharge; omitted, the library refuses
                         UNDECLARED
@@ -371,8 +375,8 @@ options:
 ### `tiergraph grammar recognize`
 
 ```text
-usage: tiergraph grammar recognize [-h] --tokens-json JSON [--forest]
-                                   [-o FILE]
+usage: tiergraph grammar recognize [-h] --tokens-json JSON [--max-steps N]
+                                   [--forest] [-o FILE]
                                    GRAMMAR
 
 positional arguments:
@@ -381,6 +385,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --tokens-json JSON
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   --forest              emit the complete parse forest
   -o FILE, --output FILE
                         output file (default: -)
@@ -389,7 +395,9 @@ options:
 ### `tiergraph grammar count`
 
 ```text
-usage: tiergraph grammar count [-h] --tokens-json JSON [-o FILE] GRAMMAR
+usage: tiergraph grammar count [-h] --tokens-json JSON [--max-steps N]
+                               [-o FILE]
+                               GRAMMAR
 
 positional arguments:
   GRAMMAR               grammar JSON file, or - for stdin
@@ -397,6 +405,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --tokens-json JSON
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -404,7 +414,8 @@ options:
 ### `tiergraph grammar best`
 
 ```text
-usage: tiergraph grammar best [-h] --tokens-json JSON [--count N] [-o FILE]
+usage: tiergraph grammar best [-h] --tokens-json JSON [--max-steps N]
+                              [--count N] [-o FILE]
                               GRAMMAR
 
 positional arguments:
@@ -413,6 +424,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --tokens-json JSON
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   --count N
   -o FILE, --output FILE
                         output file (default: -)
@@ -422,7 +435,7 @@ options:
 
 ```text
 usage: tiergraph grammar generate [-h] --input-json INPUT [--count N]
-                                  [-o FILE]
+                                  [--max-steps N] [-o FILE]
                                   GRAMMAR
 
 positional arguments:
@@ -432,6 +445,8 @@ options:
   -h, --help            show this help message and exit
   --input-json INPUT    typed grammar input as JSON
   --count N             maximum target derivations to emit
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -574,7 +589,7 @@ options:
 
 ```text
 usage: tiergraph select [-h] (--selector FILE | --where TEXT) [--prefix P]
-                        [-o FILE]
+                        [--max-steps N] [-o FILE]
                         GRAPH
 
 positional arguments:
@@ -585,6 +600,8 @@ options:
   --selector FILE
   --where TEXT
   --prefix P
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -594,7 +611,7 @@ options:
 ```text
 usage: tiergraph match [-h] (--request FILE | --pattern TEXT)
                        [--ordering JSON] [--prefix P] [--limit LIMIT]
-                       [-o FILE]
+                       [--max-steps N] [-o FILE]
                        GRAPH [{exists,focus,spans,count}]
 
 positional arguments:
@@ -608,6 +625,8 @@ options:
   --ordering JSON
   --prefix P
   --limit LIMIT
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   -o FILE, --output FILE
                         output file (default: -)
 ```
@@ -619,7 +638,8 @@ usage: tiergraph fold [-h] [--name NAME] --attribute-namespace NS
                       --attribute-local LOCAL --tier NS LOCAL --semiring
                       {arctic,boolean,counting,decimal-arctic,decimal-tropical,log-probability,path,tropical}
                       --lift {one,value} --transition NS LOCAL COMBINATION
-                      [--root TGPATH] [--ranked] [--output-cap N] [-o FILE]
+                      [--root TGPATH] [--ranked] [--output-cap N]
+                      [--max-steps N] [-o FILE]
                       GRAPH
 
 positional arguments:
@@ -642,6 +662,8 @@ options:
   --ranked              also report witnesses ranked by the semiring's own
                         order
   --output-cap N        witness cap; requires --ranked
+  --max-steps N         refuse after N work steps; guards untrusted pattern
+                        text (maximum: 1000000000)
   -o FILE, --output FILE
                         output file (default: -)
 ```
