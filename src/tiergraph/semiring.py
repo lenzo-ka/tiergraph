@@ -1060,6 +1060,12 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
         """Return the label count retained by this enriched path value."""
         return PATH_WITNESSES._value_size(value[1])
 
+    def _work_value_size(
+        self, value: tuple[Decimal, tuple[tuple[str, ...], ...]]
+    ) -> int:
+        """Count labels in a carrier already produced by this semiring."""
+        return sum(map(len, value[1]))
+
     def _ranked_key(
         self,
         value: tuple[Decimal, tuple[tuple[str, ...], ...]],

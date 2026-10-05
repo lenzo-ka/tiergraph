@@ -1261,13 +1261,17 @@ class BoundPredicate:
         self, node: Node, *, budget: WorkBudget | WorkMeter | None = None
     ) -> bool:
         """Decide one graph node after evaluating every atom it can reach."""
+        if budget is None:
+            return self._holds(node)
+        with _metered(budget, "predicate.holds"):
+            return self._holds(node)
+
+    def _holds(self, node: Node) -> bool:
+        """Decide one node inside an already established metering scope."""
         from tiergraph.selection import NodeSet  # noqa: PLC0415 -- cycle breaker
 
         candidates = NodeSet(self.graph, (node,))
-        if budget is None and _active_meter() is None:
-            return bool(self._selection_decision(self.predicate, candidates).nodes)
-        with _metered(budget, "predicate.holds"):
-            return bool(self._selection_decision(self.predicate, candidates).nodes)
+        return bool(self._selection_decision(self.predicate, candidates).nodes)
 
     def select(
         self, candidates: NodeSet, *, budget: WorkBudget | WorkMeter | None = None

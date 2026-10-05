@@ -17,7 +17,7 @@ from tiergraph.budget import (
     WorkMeter,
     _active_meter,
     _aggregate_active,
-    _Meter,
+    _ChargeMeter,
     _metered,
 )
 from tiergraph.core import (
@@ -614,6 +614,18 @@ def _truth_table(
     return tuple(tables)
 
 
+def _unchecked_step_meter(
+    meter: _ChargeMeter | None, upper_bound: int
+) -> WorkMeter | None:
+    """Return a root step meter when this whole region cannot exhaust it."""
+    if not isinstance(meter, WorkMeter) or meter._deadline is not None:
+        return None
+    limit = meter._step_limit
+    if limit is None or meter._spent + upper_bound > limit:
+        return None
+    return meter
+
+
 def _contains_sequence_selector(selector: Selector) -> bool:
     from tiergraph.selection import (  # noqa: PLC0415 -- cycle breaker
         DifferenceSelector,
@@ -912,7 +924,8 @@ class CompiledPattern:
         *,
         open_right: bool = False,
         open_left: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
+        unchecked: WorkMeter | None = None,
     ) -> set[int]:
         result = set(states)
         pending = list(states)
@@ -928,7 +941,9 @@ class CompiledPattern:
                 if edge.target not in result:
                     result.add(edge.target)
                     pending.append(edge.target)
-        if meter is not None:
+        if unchecked is not None:
+            unchecked._spent += len(result)
+        elif meter is not None:
             meter.charge(len(result))
         return result
 
@@ -957,7 +972,7 @@ class CompiledPattern:
         reverse: tuple[tuple[tuple[int, int], ...], ...],
         *,
         open_left: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
     ) -> set[int]:
         result = set(states)
         pending = list(states)
@@ -1043,9 +1058,12 @@ class CompiledPattern:
         *,
         open_right: bool = False,
         open_left: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
+        unchecked: WorkMeter | None = None,
     ) -> set[int]:
-        if meter is not None:
+        if unchecked is not None:
+            unchecked._spent += len(active)
+        elif meter is not None:
             meter.charge(len(active))
         targets = {
             edge.target
@@ -1060,10 +1078,11 @@ class CompiledPattern:
             open_right=open_right,
             open_left=open_left,
             meter=meter,
+            unchecked=unchecked,
         )
 
     def _can_change_after_end(
-        self, states: set[int], length: int, *, meter: _Meter | None = None
+        self, states: set[int], length: int, *, meter: _ChargeMeter | None = None
     ) -> bool:
         if meter is not None:
             meter.charge(len(self.epsilon))
@@ -1092,7 +1111,7 @@ class CompiledPattern:
         return False
 
     def _pending_start(
-        self, scope: _Scope, truth: _TruthTable, *, meter: _Meter | None = None
+        self, scope: _Scope, truth: _TruthTable, *, meter: _ChargeMeter | None = None
     ) -> int | None:
         length = len(scope.nodes)
         for start in range(length + 1):
@@ -1127,7 +1146,7 @@ class CompiledPattern:
         truth: _TruthTable,
         before: int,
         *,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
     ) -> bool:
         length = len(scope.nodes)
         for start in range(before):
@@ -1164,7 +1183,7 @@ class CompiledPattern:
         truth: _TruthTable,
         *,
         open_right: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
     ) -> bool | OpenPatternResult[bool]:
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
         if effective_open_right:
@@ -1252,7 +1271,7 @@ class CompiledPattern:
         truth: _TruthTable,
         *,
         open_right: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
     ) -> NodeSet | OpenPatternResult[NodeSet]:
         selected: list[Node] = []
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
@@ -1378,7 +1397,8 @@ class CompiledPattern:
         *,
         open_right: bool = False,
         before: int | None = None,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
+        unchecked: WorkMeter | None = None,
         materialize: bool = True,
     ) -> Iterator[SpanMatch | None]:
         length = len(scope.nodes)
@@ -1391,6 +1411,7 @@ class CompiledPattern:
                 open_right=open_right,
                 open_left=scope.open_left,
                 meter=meter,
+                unchecked=unchecked,
             )
             for end in range(start, length):
                 active = self._step(
@@ -1402,16 +1423,22 @@ class CompiledPattern:
                     open_right=open_right,
                     open_left=scope.open_left,
                     meter=meter,
+                    unchecked=unchecked,
                 )
                 if not active:
                     break
                 if self.accept in active:
                     if materialize:
+                        # The proven-headroom path is count-only: materialized
+                        # spans retain crossing-charge/CUT prefix semantics.
+                        assert unchecked is None
                         if meter is not None:
                             meter.charge(end + 1 - start)
                         yield self._span(scope_index, scope, start, end + 1)
                     else:
-                        if meter is not None:
+                        if unchecked is not None:
+                            unchecked._spent += 1
+                        elif meter is not None:
                             meter.charge(1)
                         yield None
 
@@ -1431,7 +1458,7 @@ class CompiledPattern:
         *,
         limit: int | None = None,
         open_right: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
         allow_cut: bool = False,
     ) -> SpanMatches | OpenPatternResult[SpanMatches]:
         result: list[SpanMatch] = []
@@ -1526,13 +1553,26 @@ class CompiledPattern:
         truth: _TruthTable,
         *,
         open_right: bool = False,
-        meter: _Meter | None = None,
+        meter: _ChargeMeter | None = None,
     ) -> int | OpenPatternResult[int]:
         effective_open_right = open_right or any(scope.open_right for scope in scopes)
         pending = (
             tuple(self._pending_start(scope, truth, meter=meter) for scope in scopes)
             if effective_open_right
             else ()
+        )
+        states = len(self.epsilon)
+        unchecked = (
+            None
+            if effective_open_right
+            else _unchecked_step_meter(
+                meter,
+                sum(
+                    (len(scope.nodes) + 1) * states
+                    + len(scope.nodes) * (len(scope.nodes) + 1) // 2 * (2 * states + 1)
+                    for scope in scopes
+                ),
+            )
         )
         count = sum(
             1
@@ -1544,6 +1584,7 @@ class CompiledPattern:
                 open_right=effective_open_right,
                 before=pending[index] if effective_open_right else None,
                 meter=meter,
+                unchecked=unchecked,
                 materialize=False,
             )
         )

@@ -17,7 +17,7 @@ from tiergraph.budget import (
     WorkMeter,
     _active_meter,
     _aggregating,
-    _Meter,
+    _ChargeMeter,
     _metered,
 )
 from tiergraph.core import (
@@ -1481,7 +1481,7 @@ class _FoldAccumulator[Value]:
     values: list[tuple[State, Value]] = field(default_factory=list)
     root_states: list[State] = field(default_factory=list)
     ranked_roots: list[RankedWitness[Value]] = field(default_factory=list)
-    meter: _Meter | None = field(default_factory=_active_meter)
+    meter: _ChargeMeter | None = field(default_factory=_active_meter)
     charged_additions: int = 0
     charged_multiplications: int = 0
     charged_witness_operations: int = 0
@@ -1500,7 +1500,12 @@ class _FoldAccumulator[Value]:
             - self.charged_witness_operations
         )
         charge = 1 + fold.carrier_operation_cost * operations
-        value_size = getattr(fold.semiring, "_value_size", None)
+        value_size = (
+            fold.semiring._work_value_size
+            if isinstance(fold.semiring, PathSemiring)
+            and type(fold.semiring) is PathSemiring
+            else getattr(fold.semiring, "_value_size", None)
+        )
         if value_size is not None:
             charge += cast(Callable[[Value], int], value_size)(value)
         self.meter.charge(charge)
