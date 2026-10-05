@@ -434,6 +434,29 @@ print("primary before a missing stress:", labels(focused))
 primary before a missing stress: ['s0']
 ```
 
+```python
+bound = compile_pattern(primary_then_missing).bind(graph, TierOrder(segments))
+print("bound focus:", labels(bound.focus()))
+print(
+    "bound spans:",
+    [(match.start, match.end) for match in bound.spans().matches],
+)
+
+missing_stress = compile_pattern(
+    FocusPattern(AtomPattern(Not(Has(Cell(stress), alias="none"))))
+).bind(graph, bound.ordering)
+print("reused ordering:", labels(missing_stress.focus()))
+```
+```text
+bound focus: ['s0']
+bound spans: [(0, 2)]
+reused ordering: ['s1']
+```
+
+Binding prepares predicates and scopes once for repeated views. A bound
+ordering can serve other patterns only with the identical graph object, and a
+bound pattern holds that deeply immutable graph for the handle's lifetime.
+
 `TierOrder` treats a tier as one scope. `ContainerOrder` makes one scope from
 each selected container's direct children, and `AdjacentRuns` splits selected
 items where their declared offsets are not adjacent. Matches never cross a

@@ -206,11 +206,12 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
     parts.extend(("", "## Supported secondary surface", ""))
     for module_name, names in manifest["secondary"].items():
         module = importlib.import_module(module_name)
-        # Semirings are the one promised secondary API; the manifest inventories
-        # exports, while this prose records the module's stability policy.
+        # These modules are promised secondary APIs; the manifest inventories
+        # exports, while this prose records each module's stability policy.
         stability = (
             "This module is a supported secondary API."
-            if module_name == "tiergraph.semiring"
+            if module_name
+            in ("tiergraph.match", "tiergraph.predicate", "tiergraph.semiring")
             else "This module is importable and usable, but carries no "
             f"API-stability promise at version {tiergraph.__version__}."
         )

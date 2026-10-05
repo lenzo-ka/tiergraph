@@ -9,9 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added bound pattern execution: one preparation answers exists, focus, spans
+  and count, and one bound ordering serves many patterns. Raw orderings keep
+  per-pattern scope overrides and refusal order; prebuilt orderings validate
+  default scopes first.
+- Added batched item insertion to the editing operation set.
 - Added exact regular-pattern decisions and path counts over emitted finite
   lattices, with declared ambiguity policies and bounded determinization.
 - Added string and JSON-array token emissions read from graph attributes.
+
+### Changed
+
+- Promoted `tiergraph.match` and `tiergraph.predicate` to supported secondary
+  APIs.
 
 ## [0.6.0] - 2026-10-03
 

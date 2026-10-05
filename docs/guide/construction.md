@@ -36,12 +36,17 @@ immutable content is already available to the caller.
 
 `Graph` and `GraphEditor` answer one operation set over two carriers. A frozen
 graph answers `declare()`, `set_attribute()`, `remove_attribute()`,
-`insert_item()`, `remove_item()`, `move_item()`, `swap_items()`,
+`insert_item()`, `insert_items()`, `remove_item()`, `move_item()`, `swap_items()`,
 `add_relation()`, and `remove_relation()` by returning a new graph. The editor
-`Graph.edit()` returns answers the same nine by changing itself, and
+`Graph.edit()` returns answers the same operations by changing itself, and
 `GraphEditor.freeze()` runs the one validation at the end. Whether an operation
 rewrites or mutates follows from the carrier a caller holds, never from an
 argument, so nothing has to decide at run time which kind of object it has.
+
+For ordered nonempty input, `insert_items()` equals repeated `insert_item()` calls.
+It performs one restructure.
+An empty input still validates its tier and index, unlike a zero-step fold.
+Sets and mappings are refused because they do not provide a required order.
 
 Setting a value replaces any value of the same name on that carrier. The value's
 own declaration says which domain it belongs to, so a caller spells the place
@@ -130,10 +135,10 @@ scores: ['6', '7', '8']
 items: ['z', 'a', 'b', 'c']
 ```
 
-The sweep runs nine edits and validates once. The same nine on the frozen
-carrier would build and validate nine graphs, which is the cost the editor
-exists to avoid; the frozen carrier is for the single edit, where building one
-graph is the whole job.
+The sweep applies all of its edits and validates once. The same operations on
+the frozen carrier would build and validate a graph after every call, which is
+the cost the editor exists to avoid; the frozen carrier is for the single edit,
+where building one graph is the whole job.
 
 ## The build machine
 

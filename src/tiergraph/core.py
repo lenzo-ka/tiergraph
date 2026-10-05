@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Set
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -2050,6 +2050,17 @@ class Graph:
         """Return a new graph with one more item at this tier index."""
         return self.edit().insert_item(tier, index, item).freeze()
 
+    def insert_items(
+        self, tier: QualifiedName, index: int, items: Iterable[Item]
+    ) -> Graph:
+        """Return a new graph with these items at this tier index.
+
+        The input is materialized before the tier and index are validated, so
+        an exception raised while iterating it takes precedence over either
+        validation refusal.
+        """
+        return self.edit().insert_items(tier, index, items).freeze()
+
     def remove_item(self, reference: ItemRef | DurableItemRef) -> Graph:
         """Return a new graph without this item."""
         return self.edit().remove_item(reference).freeze()
@@ -2397,6 +2408,45 @@ class GraphEditor:
         )
         return self
 
+    def insert_items(
+        self, tier: QualifiedName, index: int, items: Iterable[Item]
+    ) -> GraphEditor:
+        """Insert ordered items at a tier index in one restructure.
+
+        For ordered input containing at least one item, this equals inserting
+        each item at ``index + k`` in turn. An index equal to the tier's item
+        count appends. Unlike a zero-step fold, an empty input still validates
+        the tier and index. Sets and mappings are refused because they do not
+        provide the required item order. The input is materialized before tier
+        and index validation, so an exception raised while iterating it takes
+        precedence over either validation refusal.
+        """
+        if isinstance(items, Set | Mapping):
+            raise GraphValidationError(
+                "item insertion items must be an ordered iterable"
+            )
+        new = tuple(items)
+        member = self._member(tier, "item insertion")
+        count = len(member.items)
+        if index < 0 or index > count:
+            raise GraphValidationError(
+                f"item insertion index {index} is outside tier {str(tier)!r}"
+            )
+        if not new:
+            return self
+        stationary_inputs = all(
+            member is not source_member
+            for source_member in self._tiers[: len(self._source.tiers)]
+        )
+        self._restructure(
+            member,
+            [*member.items[:index], *new, *member.items[index:]],
+            {old: old if old < index else old + len(new) for old in range(count)},
+            "item insertion",
+            stationary_inputs=stationary_inputs,
+        )
+        return self
+
     def remove_item(self, reference: ItemRef | DurableItemRef) -> GraphEditor:
         """Remove one item, refusing while the graph still references it."""
         coordinate = self._resolve_item(reference)
@@ -2647,6 +2697,8 @@ class GraphEditor:
         items: list[Item],
         mapping: dict[int, int],
         subject: str,
+        *,
+        stationary_inputs: bool = False,
     ) -> None:
         # Everything a refusal can see is computed before anything is written,
         # so a refused operation leaves this editor exactly as it was.
@@ -2672,6 +2724,12 @@ class GraphEditor:
             self._remapped_polyadic(relation, name, mapping, subject)
             for relation in self._polyadic_relations
         ]
+        if stationary_inputs:
+            member.items = items
+            self._boundary_values = boundaries
+            self._relations = relations
+            self._polyadic_relations = polyadic
+            return
         item_mapping = {
             ItemRef(name, old): ItemRef(name, new) for old, new in mapping.items()
         }
