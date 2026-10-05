@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NoReturn
 
 from tiergraph.core import QualifiedName, Refusal, RefusalStage
@@ -43,6 +43,18 @@ class _TextOption:
     spelling: str
 
 
+@dataclass(slots=True)
+class _PredicateExpression:
+    """One suspended value-test expression in the iterative parser."""
+
+    opening: int | None
+    negations: int = 0
+    quantified: tuple[Operand, Quantifier] | None = None
+    alternatives: list[Predicate] = field(default_factory=list)
+    conjunction: list[Predicate] = field(default_factory=list)
+    needs_value: bool = True
+
+
 class _PredicateParser:
     def __init__(
         self,
@@ -68,10 +80,27 @@ class _PredicateParser:
             self.unexpected()
         return result
 
-    def expression(self, minimum: int = 1) -> Predicate:
-        """Parse binary operators by precedence, flattening equal operators."""
-        left = self.unary()
+    def expression(self) -> Predicate:
+        """Parse binary operators and nested primaries with an explicit stack."""
+        if self.text.find("(", self.index, self.end) < 0:
+            return self._flat_expression()
+        return self._iterative_expression()
+
+    def _flat_expression(self) -> Predicate:
+        """Parse a group-free expression without allocating grammar frames."""
+        alternatives: list[Predicate] = []
+        conjunction: list[Predicate] = []
         while True:
+            self.space()
+            negations = 0
+            while self.take("!"):
+                negations += 1
+                self.space()
+            result = self.test()
+            for _ in range(negations):
+                result = Not(result)
+            conjunction.append(result)
+
             self.space()
             if self.text.startswith("||", self.index):
                 self.refuse(
@@ -84,9 +113,9 @@ class _PredicateParser:
                     "'&&' is reserved for short-circuit conjunction; write '&' for and",
                 )
             character = self.peek()
-            precedence = {"|": 1, "&": 2}.get(character, 0)
-            if precedence < minimum:
-                break
+            if character not in {"|", "&"}:
+                alternatives.append(self.join_and(conjunction))
+                return self.join_or(alternatives)
             operator_offset = self.index
             self.index += 1
             self.space()
@@ -97,60 +126,112 @@ class _PredicateParser:
                     else "unexpected ''"
                 )
                 self.refuse(operator_offset, message)
-            right = self.expression(precedence + 1)
-            left = (
-                self.join_or([left, right])
-                if character == "|"
-                else self.join_and([left, right])
-            )
-        return left
+            if character == "|":
+                alternatives.append(self.join_and(conjunction))
+                conjunction = []
 
-    def unary(self) -> Predicate:
-        """Parse prefix negation or one primary."""
-        self.space()
-        if self.take("!"):
+    def _iterative_expression(self) -> Predicate:
+        """Run the value-test grammar without nesting Python calls."""
+        frames = [_PredicateExpression(None)]
+        while frames:
+            frame = frames[-1]
+            if frame.needs_value:
+                result, child = self._next_primary()
+                if child is not None:
+                    frames.append(child)
+                    continue
+                assert result is not None
+                frame.conjunction.append(result)
+                frame.needs_value = False
+                continue
+
             self.space()
-            return Not(self.unary())
-        return self.primary()
+            if self.text.startswith("||", self.index):
+                self.refuse(
+                    self.index,
+                    "'||' is reserved for ordered choice; write '|' for or",
+                )
+            if self.text.startswith("&&", self.index):
+                self.refuse(
+                    self.index,
+                    "'&&' is reserved for short-circuit conjunction; write '&' for and",
+                )
+            character = self.peek()
+            if character in {"|", "&"}:
+                operator_offset = self.index
+                self.index += 1
+                self.space()
+                if self.index == self.end or self.peek() == ")":
+                    message = (
+                        "'|' has no value or test after it"
+                        if character == "|"
+                        else "unexpected ''"
+                    )
+                    self.refuse(operator_offset, message)
+                if character == "|":
+                    frame.alternatives.append(self.join_and(frame.conjunction))
+                    frame.conjunction = []
+                frame.needs_value = True
+                continue
 
-    def primary(self) -> Predicate:
-        """Parse a group, quantified test, or ordinary test."""
+            frame.alternatives.append(self.join_and(frame.conjunction))
+            result = self.join_or(frame.alternatives)
+            opening = frame.opening
+            if opening is None:
+                return result
+            if not self.take(")"):
+                self.refuse(opening, "'(' is never closed")
+            self.nesting -= 1
+            if frame.quantified is not None:
+                operand, quantifier = frame.quantified
+                result = Elements(operand, quantifier, result)
+            for _ in range(frame.negations):
+                result = Not(result)
+            frames.pop()
+            parent = frames[-1]
+            parent.conjunction.append(result)
+            parent.needs_value = False
+        raise AssertionError(  # pragma: no cover - loop returns or refuses
+            "expression stack exhausted without a result"
+        )
+
+    def _next_primary(
+        self,
+    ) -> tuple[Predicate | None, _PredicateExpression | None]:
+        """Parse one prefix and return either its value or a suspended frame."""
         self.space()
+        negations = 0
+        while self.take("!"):
+            negations += 1
+            self.space()
         if self.peek() == "(":
             opening = self.index
             self.index += 1
             self.enter(opening)
             self.space()
-            result = self.expression()
-            self.space()
-            if not self.take(")"):
-                self.refuse(opening, "'(' is never closed")
-            self.nesting -= 1
-            return result
+            return None, _PredicateExpression(opening, negations)
         quantifier = self.quantifier_ahead()
         if quantifier is not None:
-            return self.quantified(quantifier)
-        return self.test()
-
-    def quantified(self, quantifier: Quantifier) -> Predicate:
-        """Parse any/all/none over a JSON array operand."""
-        self.index += len(quantifier.value)
-        self.space()
-        opening = self.index
-        self.index += 1
-        self.enter(opening)
-        self.space()
-        operand, _, _ = self.operand()
-        self.space()
-        if not self.take(":"):
-            self.unexpected()
-        self.space()
-        body = self.expression()
-        self.space()
-        if not self.take(")"):
-            self.refuse(opening, "'(' is never closed")
-        self.nesting -= 1
-        return Elements(operand, quantifier, body)
+            self.index += len(quantifier.value)
+            self.space()
+            opening = self.index
+            self.index += 1
+            self.enter(opening)
+            self.space()
+            operand, _, _ = self.operand()
+            self.space()
+            if not self.take(":"):
+                self.unexpected()
+            self.space()
+            return None, _PredicateExpression(
+                opening,
+                negations,
+                (operand, quantifier),
+            )
+        result = self.test()
+        for _ in range(negations):
+            result = Not(result)
+        return result, None
 
     def test(self) -> Predicate:
         """Parse one operand and its value-test operator."""

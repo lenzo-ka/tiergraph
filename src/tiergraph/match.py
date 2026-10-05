@@ -253,9 +253,13 @@ def _children(pattern: Pattern) -> tuple[Pattern, ...]:
 
 
 def _contains_anchor(pattern: Pattern) -> bool:
-    return isinstance(pattern, (StartPattern, EndPattern)) or any(
-        _contains_anchor(child) for child in _children(pattern)
-    )
+    pending = [pattern]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, (StartPattern, EndPattern)):
+            return True
+        pending.extend(_children(current))
+    return False
 
 
 def _focus_count(pattern: Pattern) -> int:
@@ -269,52 +273,81 @@ def _focus_count(pattern: Pattern) -> int:
 
 
 def _nullable(pattern: Pattern) -> bool:
-    if isinstance(pattern, AtomPattern):
-        return False
-    if isinstance(pattern, (StartPattern, EndPattern)):
-        return True
-    if isinstance(pattern, SeqPattern):
-        return all(_nullable(part) for part in pattern.parts)
-    if isinstance(pattern, AltPattern):
-        return any(_nullable(part) for part in pattern.parts)
-    if isinstance(pattern, RepeatPattern):
-        return pattern.min == 0 or _nullable(pattern.body)
-    return _nullable(pattern.body)
+    nullable: dict[int, bool] = {}
+    for current in _postorder(pattern):
+        if isinstance(current, AtomPattern):
+            result = False
+        elif isinstance(current, (StartPattern, EndPattern)):
+            result = True
+        elif isinstance(current, SeqPattern):
+            result = all(nullable[id(part)] for part in current.parts)
+        elif isinstance(current, AltPattern):
+            result = any(nullable[id(part)] for part in current.parts)
+        elif isinstance(current, RepeatPattern):
+            result = current.min == 0 or nullable[id(current.body)]
+        else:
+            result = nullable[id(current.body)]
+        nullable[id(current)] = result
+    return nullable[id(pattern)]
 
 
 def _position_count(pattern: Pattern) -> int:
-    if isinstance(pattern, AtomPattern):
-        return 1
-    if isinstance(pattern, (StartPattern, EndPattern)):
-        return 0
-    if isinstance(pattern, (SeqPattern, AltPattern)):
-        return sum(_position_count(part) for part in pattern.parts)
-    if isinstance(pattern, FocusPattern):
-        return _position_count(pattern.body)
-    multiplier = pattern.min + 1 if pattern.max is None else pattern.max
-    return _position_count(pattern.body) * multiplier
+    counts: dict[int, int] = {}
+    for current in _postorder(pattern):
+        if isinstance(current, AtomPattern):
+            count = 1
+        elif isinstance(current, (StartPattern, EndPattern)):
+            count = 0
+        elif isinstance(current, (SeqPattern, AltPattern)):
+            count = sum(counts[id(part)] for part in current.parts)
+        elif isinstance(current, FocusPattern):
+            count = counts[id(current.body)]
+        else:
+            multiplier = current.min + 1 if current.max is None else current.max
+            count = counts[id(current.body)] * multiplier
+        counts[id(current)] = count
+    return counts[id(pattern)]
 
 
 def _max_width(pattern: Pattern) -> int | None:
-    if isinstance(pattern, AtomPattern):
-        return 1
-    if isinstance(pattern, (StartPattern, EndPattern)):
-        return 0
-    if isinstance(pattern, FocusPattern):
-        return _max_width(pattern.body)
-    if isinstance(pattern, SeqPattern):
-        widths = tuple(_max_width(part) for part in pattern.parts)
-        return None if None in widths else sum(cast(tuple[int, ...], widths))
-    if isinstance(pattern, AltPattern):
-        widths = tuple(_max_width(part) for part in pattern.parts)
-        return None if None in widths else max(cast(tuple[int, ...], widths))
-    width = _max_width(pattern.body)
-    if width is None:
-        return None
+    maximums: dict[int, int | None] = {}
+    for current in _postorder(pattern):
+        if isinstance(current, AtomPattern):
+            width: int | None = 1
+        elif isinstance(current, (StartPattern, EndPattern)):
+            width = 0
+        elif isinstance(current, FocusPattern):
+            width = maximums[id(current.body)]
+        elif isinstance(current, (SeqPattern, AltPattern)):
+            widths = tuple(maximums[id(part)] for part in current.parts)
+            if None in widths:
+                width = None
+            elif isinstance(current, SeqPattern):
+                width = sum(cast(tuple[int, ...], widths))
+            else:
+                width = max(cast(tuple[int, ...], widths))
+        else:
+            body_width = maximums[id(current.body)]
+            if body_width is None:
+                width = None
+            elif current.max is None:
+                width = 0 if body_width == 0 else None
+            else:
+                width = body_width * current.max
+        maximums[id(current)] = width
+    return maximums[id(pattern)]
 
-    if pattern.max is None:
-        return 0 if width == 0 else None
-    return width * pattern.max
+
+def _postorder(pattern: Pattern) -> Iterator[Pattern]:
+    """Yield a pattern tree child-first without using the interpreter stack."""
+    pending = [(pattern, False)]
+    while pending:
+        current, visited = pending.pop()
+        if visited:
+            yield current
+            continue
+        pending.append((current, True))
+        pending.extend((child, False) for child in _children(current))
 
 
 def _pattern_node_count(pattern: Pattern) -> int:
@@ -376,6 +409,18 @@ class _AtomEdge:
     focus: bool
 
 
+@dataclass(slots=True)
+class _BuildFrame:
+    """One suspended Thompson-construction call."""
+
+    pattern: Pattern
+    focused: bool
+    start: int
+    end: int
+    cursor: int
+    index: int = 0
+
+
 class _NfaBuilder:
     def __init__(self) -> None:
         self.epsilon: list[list[_Epsilon]] = []
@@ -400,53 +445,91 @@ class _NfaBuilder:
         self._predicate_indices[predicate] = result
         return result
 
-    def build(self, pattern: Pattern, *, focused: bool = False) -> tuple[int, int]:
-        """Build *pattern* and return its entry and exit states."""
-        start = self.state()
-        end = self.state()
-        if isinstance(pattern, AtomPattern):
-            self.atoms[start].append(
-                _AtomEdge(end, self.atom_index(pattern.predicate), focused)
-            )
-        elif isinstance(pattern, StartPattern):
-            self.epsilon[start].append(_Epsilon(end, _GUARD_START))
-        elif isinstance(pattern, EndPattern):
-            self.epsilon[start].append(_Epsilon(end, _GUARD_END))
-        elif isinstance(pattern, FocusPattern):
-            body_start, body_end = self.build(pattern.body, focused=True)
-            self.epsilon[start].append(_Epsilon(body_start))
-            self.epsilon[body_end].append(_Epsilon(end))
-        elif isinstance(pattern, SeqPattern):
-            cursor = start
-            for part in pattern.parts:
-                part_start, part_end = self.build(part, focused=focused)
-                self.epsilon[cursor].append(_Epsilon(part_start))
-                cursor = part_end
-            self.epsilon[cursor].append(_Epsilon(end))
-        elif isinstance(pattern, AltPattern):
-            for part in pattern.parts:
-                part_start, part_end = self.build(part, focused=focused)
-                self.epsilon[start].append(_Epsilon(part_start))
-                self.epsilon[part_end].append(_Epsilon(end))
-        else:
-            cursor = start
-            for _ in range(pattern.min):
-                body_start, body_end = self.build(pattern.body, focused=focused)
-                self.epsilon[cursor].append(_Epsilon(body_start))
-                cursor = body_end
-            if pattern.max is None:
-                self.epsilon[cursor].append(_Epsilon(end))
-                body_start, body_end = self.build(pattern.body, focused=focused)
-                self.epsilon[cursor].append(_Epsilon(body_start))
-                self.epsilon[body_end].append(_Epsilon(cursor))
+    def build(  # noqa: PLR0915 -- explicit stack mirrors each AST case
+        self, pattern: Pattern, *, focused: bool = False
+    ) -> tuple[int, int]:
+        """Build *pattern* iteratively and return its entry and exit states."""
+
+        def _frame(current: Pattern, is_focused: bool) -> _BuildFrame:
+            start, end = self.state(), self.state()
+            return _BuildFrame(current, is_focused, start, end, start)
+
+        frames = [_frame(pattern, focused)]
+        returned: tuple[int, int] | None = None
+        while frames:
+            current = frames[-1]
+            node = current.pattern
+            if returned is not None:
+                child_start, child_end = returned
+                returned = None
+                if isinstance(node, FocusPattern):
+                    self.epsilon[current.start].append(_Epsilon(child_start))
+                    self.epsilon[child_end].append(_Epsilon(current.end))
+                    returned = current.start, current.end
+                    frames.pop()
+                elif isinstance(node, SeqPattern):
+                    self.epsilon[current.cursor].append(_Epsilon(child_start))
+                    current.cursor = child_end
+                    current.index += 1
+                elif isinstance(node, AltPattern):
+                    self.epsilon[current.start].append(_Epsilon(child_start))
+                    self.epsilon[child_end].append(_Epsilon(current.end))
+                    current.index += 1
+                else:
+                    assert isinstance(node, RepeatPattern)
+                    required = current.index < node.min
+                    self.epsilon[current.cursor].append(_Epsilon(child_start))
+                    if required:
+                        current.cursor = child_end
+                    elif node.max is None:
+                        self.epsilon[child_end].append(_Epsilon(current.cursor))
+                    else:
+                        self.epsilon[current.cursor].append(_Epsilon(child_end))
+                        current.cursor = child_end
+                    current.index += 1
+                continue
+            if isinstance(node, AtomPattern):
+                self.atoms[current.start].append(
+                    _AtomEdge(
+                        current.end,
+                        self.atom_index(node.predicate),
+                        current.focused,
+                    )
+                )
+                returned = current.start, current.end
+                frames.pop()
+            elif isinstance(node, StartPattern):
+                self.epsilon[current.start].append(_Epsilon(current.end, _GUARD_START))
+                returned = current.start, current.end
+                frames.pop()
+            elif isinstance(node, EndPattern):
+                self.epsilon[current.start].append(_Epsilon(current.end, _GUARD_END))
+                returned = current.start, current.end
+                frames.pop()
+            elif isinstance(node, FocusPattern):
+                frames.append(_frame(node.body, True))
+            elif isinstance(node, (SeqPattern, AltPattern)):
+                if current.index < len(node.parts):
+                    frames.append(_frame(node.parts[current.index], current.focused))
+                else:
+                    if isinstance(node, SeqPattern):
+                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                    returned = current.start, current.end
+                    frames.pop()
             else:
-                for _ in range(pattern.max - pattern.min):
-                    body_start, body_end = self.build(pattern.body, focused=focused)
-                    self.epsilon[cursor].append(_Epsilon(body_start))
-                    self.epsilon[cursor].append(_Epsilon(body_end))
-                    cursor = body_end
-                self.epsilon[cursor].append(_Epsilon(end))
-        return start, end
+                assert isinstance(node, RepeatPattern)
+                total = node.min + 1 if node.max is None else node.max
+                if current.index < total:
+                    if current.index == node.min and node.max is None:
+                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                    frames.append(_frame(node.body, current.focused))
+                else:
+                    if node.max is not None:
+                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                    returned = current.start, current.end
+                    frames.pop()
+        assert returned is not None
+        return returned
 
 
 @dataclass(frozen=True, slots=True)

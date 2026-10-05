@@ -349,15 +349,77 @@ def test_lattice_count_charges_epsilon_closures_and_bypasses_caches() -> None:
 def test_pattern_text_nesting_has_typed_syntax_refusal(
     request: pytest.FixtureRequest,
 ) -> None:
-    """Parse 64 groups and refuse the 65th without leaking RecursionError."""
+    """Admit 256 groups, but refuse group 257 by policy from a deep caller."""
     old_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(1000)
+    sys.setrecursionlimit(200)
     request.addfinalizer(lambda: sys.setrecursionlimit(old_limit))
-    parse_pattern("(" * 64 + "." + ")?" * 64, SYNTAX)
+
+    def nested_call(frames: int, text: str) -> Pattern:
+        return nested_call(frames - 1, text) if frames else parse_pattern(text, SYNTAX)
+
+    nested_call(80, "(" * 256 + "." + ")?" * 256)
     with pytest.raises(Refusal) as caught:
-        parse_pattern("(" * 65 + "." + ")?" * 65, SYNTAX)
+        nested_call(80, "(" * 257 + "." + ")?" * 257)
     assert caught.value.stage is RefusalStage.SYNTAX
-    assert "offset 64" in str(caught.value)
+    assert str(caught.value) == "pattern at offset 256: groups nest deeper than 256"
+
+
+def test_deep_pattern_text_compiles_with_a_low_recursion_limit(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Keep focus validation, compile counts and NFA construction iterative."""
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(200)
+    request.addfinalizer(lambda: sys.setrecursionlimit(old_limit))
+    text = "(" * 254 + "." + "){1}" * 254 + " / _"
+
+    def nested_call(frames: int) -> CompiledPattern:
+        if frames:
+            return nested_call(frames - 1)
+        return compile_pattern(parse_pattern(text, SYNTAX))
+
+    compiled = nested_call(60)
+    assert len(compiled.epsilon) == 512
+    assert compiled.max_width == 1
+
+
+def test_pattern_text_compile_boundary_is_255_groups() -> None:
+    """Pin the interaction between the text-group and pattern-tree limits."""
+    accepted = "(" * 255 + "." + "){1}" * 255
+    compile_pattern(parse_pattern(accepted, SYNTAX))
+
+    refused = "(" * 256 + "." + "){1}" * 256
+    with pytest.raises(Refusal) as caught:
+        compile_pattern(parse_pattern(refused, SYNTAX))
+    assert caught.value.stage is RefusalStage.SEMANTICS
+    assert str(caught.value) == "pattern nests deeper than 256 levels"
+
+
+def test_embedded_predicate_nesting_is_independent_of_python_stack(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Exercise deep groups, a deep caller, and an unbounded negation chain."""
+    old_limit = sys.getrecursionlimit()
+    request.addfinalizer(lambda: sys.setrecursionlimit(old_limit))
+    grouped = "{" + "(" * 256 + "b:x=a" + ")" * 256 + "}"
+
+    sys.setrecursionlimit(200)
+    parse_pattern(grouped, SYNTAX)
+    too_deep = "{" + "(" * 257 + "b:x=a" + ")" * 257 + "}"
+    with pytest.raises(Refusal) as caught:
+        parse_pattern(too_deep, SYNTAX)
+    assert caught.value.stage is RefusalStage.SYNTAX
+    assert str(caught.value) == (
+        "predicate at offset 257: predicate nests deeper than 256"
+    )
+
+    sys.setrecursionlimit(1000)
+
+    def nested_call(frames: int) -> Pattern:
+        return nested_call(frames - 1) if frames else parse_pattern(grouped, SYNTAX)
+
+    nested_call(250)
+    parse_pattern("{" + "!" * 2_000 + "b:x=a}", SYNTAX)
 
 
 def test_ast_depth_refusal_wins_from_a_deep_caller(

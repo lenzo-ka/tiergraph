@@ -491,20 +491,27 @@ calls bypass their caches, so thresholds do not depend on call history. A
 bound pattern charges its truth table at `bind`; its later views charge only
 simulation. Passing the same `WorkMeter` to both records their combined work.
 
-Compilation itself is not metered. Instead, pattern text allows at most 64
+Compilation itself is not metered. Instead, pattern text allows at most 256
 nested groups, a directly constructed pattern AST at most 256 levels, and a
 compiled pattern at most `MAX_PATTERN_POSITIONS` item positions and
 `MAX_PATTERN_STATES` (1,000,000) NFA states. Predicate regexes have the same
-state ceiling. From ordinary call depths, the text bound gives a typed syntax
-refusal; a caller already very near Python's recursion limit can still receive
-`RecursionError` until the pattern-text parser becomes iterative. The direct
-AST depth check itself is iterative.
+state ceiling. The pattern and embedded-predicate text parsers, and the pattern
+validation and compilation walks, are iterative, so these bounds give typed
+refusals independently of the caller's Python stack depth. The output paths
+`pattern_to_data` and `format_pattern` remain recursive over already constructed
+ASTs.
 
-These are independent bounds: nesting can create hundreds of states per
-position, so the state cap can refuse well below the position cap. For
-example, the reachable 199-character text shape
-`"(" + "(" * 63 + "." + ")?" * 63 + "){10000}"` has 10,000 positions but
-1,280,002 states; the analogous predicate shape has 2,000,002 states.
+The text-group and pattern-tree bounds interact. Every text group adds at least
+one level above its innermost atom, so a 256-group text always exceeds the
+256-level pattern-tree bound when compiled. Compilable text therefore nests at
+most 255 groups, or fewer when the innermost body is a sequence or alternation.
+
+The state and position ceilings are otherwise independent: nesting can create
+hundreds of states per position, so the state cap can refuse well below the
+position cap. For
+example, the reachable 772-character text shape
+`"(" + "(" * 254 + "." + ")?" * 254 + "){10000}"` has 10,000 positions but
+5,100,002 states; the analogous predicate shape has 2,000,002 states.
 
 Scope reading is an unmetered near-linear pass over the size-limited graph.
 Nested pattern work triggered by a `SequenceSelector` charges an ambient

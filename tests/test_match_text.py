@@ -181,6 +181,29 @@ def test_pattern_refusals_are_source_located(
 
 
 @pytest.mark.parametrize(
+    ("text", "message"),
+    (
+        ("| (", "pattern at offset 0: '|' has an empty alternative"),
+        (
+            "{seg=a} || (",
+            "pattern at offset 8: '||' is reserved for ordered choice",
+        ),
+        ("({seg=a})* |", "pattern at offset 11: '|' has an empty alternative"),
+        (")(", "pattern at offset 0: ')' closes no group"),
+        ("* (", "pattern at offset 0: '*' has nothing before it to repeat"),
+        ("{seg=a} {2} (", "pattern at offset 8: '{2}' follows a space"),
+        ("{seg=a} * (", "pattern at offset 8: '*' follows a space"),
+    ),
+)
+def test_iterative_group_stack_preserves_refusal_paths(text: str, message: str) -> None:
+    """Exercise group-bearing refusal paths that a recursive parser could mask."""
+    with pytest.raises(Refusal) as caught:
+        parsed(text)
+    assert caught.value.stage is RefusalStage.SYNTAX
+    assert str(caught.value).startswith(message)
+
+
+@pytest.mark.parametrize(
     ("row", "text", "offset", "message"),
     [
         ("R1", "", 0, "empty pattern; write '.' for one item of any kind"),
