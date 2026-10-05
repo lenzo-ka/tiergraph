@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NoReturn
 
 from tiergraph.core import Refusal, RefusalStage
@@ -27,38 +27,39 @@ from tiergraph.predicate import (
 
 _PATTERN_NOTATION = frozenset("{(|/_. *+?^$")
 _SEQUENCE_PRECEDENCE = 2
-_MAX_PATTERN_NESTING = 64
+_MAX_PATTERN_NESTING = 256
 
 
 def _sequence(parts: Sequence[Pattern]) -> Pattern:
-    flattened = tuple(
-        child
-        for part in parts
-        for child in (part.parts if isinstance(part, SeqPattern) else (part,))
-    )
-    return flattened[0] if len(flattened) == 1 else SeqPattern(flattened)
+    flattened: list[Pattern] = []
+    for part in parts:
+        if isinstance(part, SeqPattern):
+            flattened.extend(part.parts)
+        else:
+            flattened.append(part)
+    return flattened[0] if len(flattened) == 1 else SeqPattern(tuple(flattened))
 
 
 def _alternation(parts: Sequence[Pattern]) -> Pattern:
-    flattened = tuple(
-        child
-        for part in parts
-        for child in (part.parts if isinstance(part, AltPattern) else (part,))
-    )
-    return flattened[0] if len(flattened) == 1 else AltPattern(flattened)
+    flattened: list[Pattern] = []
+    for part in parts:
+        if isinstance(part, AltPattern):
+            flattened.extend(part.parts)
+        else:
+            flattened.append(part)
+    return flattened[0] if len(flattened) == 1 else AltPattern(tuple(flattened))
 
 
 def _first_anchor(pattern: Pattern) -> str:
-    if isinstance(pattern, StartPattern):
-        return "^"
-    if isinstance(pattern, EndPattern):
-        return "$"
-    if isinstance(pattern, (SeqPattern, AltPattern)):
-        for part in pattern.parts:
-            try:
-                return _first_anchor(part)
-            except LookupError:
-                pass
+    pending = [pattern]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, StartPattern):
+            return "^"
+        if isinstance(current, EndPattern):
+            return "$"
+        if isinstance(current, (SeqPattern, AltPattern)):
+            pending.extend(reversed(current.parts))
     raise LookupError("pattern has no anchor")  # pragma: no cover - caller invariant
 
 
@@ -69,6 +70,16 @@ class _Primary:
     single_group_element: bool = False
 
 
+@dataclass(slots=True)
+class _Expression:
+    """One suspended group or top-level expression in the iterative parser."""
+
+    opening: int | None
+    stops: frozenset[str]
+    alternatives: list[Pattern] = field(default_factory=list)
+    sequence: list[Pattern] = field(default_factory=list)
+
+
 class _PatternParser:
     def __init__(
         self, text: str, start: int, end: int, syntax: PredicateSyntax
@@ -77,7 +88,6 @@ class _PatternParser:
         self.index = start
         self.end = end
         self.syntax = syntax
-        self.group_depth = 0
 
     def parse(self) -> Pattern:
         """Parse exactly the configured source interval."""
@@ -152,8 +162,6 @@ class _PatternParser:
             )
             self.index = end + 1
             return _Primary(AtomPattern(predicate))
-        if character == "(":
-            return self.group()
         self.unexpected()
 
     def pattern_body(self) -> Pattern:  # noqa: PLR0915 -- grammar scenario
@@ -233,42 +241,104 @@ class _PatternParser:
         parts = [part for part in (left, focus, right) if part is not None]
         return parts[0] if len(parts) == 1 else _sequence(parts)
 
-    def group(self) -> _Primary:
-        """Parse one parenthesized group."""
-        opening = self.index
-        if self.group_depth >= _MAX_PATTERN_NESTING:
-            self.refuse(opening, f"groups nest deeper than {_MAX_PATTERN_NESTING}")
-        self.group_depth += 1
-        self.index += 1
-        if self.peek() == "?":
-            self._flag_prefix(opening)
-        self.space()
-        if self.index == self.end:
-            self.refuse(opening, "'(' is never closed")
-        if self.peek() == ")":
-            self.refuse(opening, "'()' is an empty group")
-        if self.peek() == "_":
-            self.refuse(
-                self.index,
-                "'_' cannot be grouped, repeated or alternated; it stands between the left and right context",
-            )
-        body = self.alternation({")", "_", "/"})
-        self.space()
-        if self.peek() == "_":
-            self.refuse(
-                self.index,
-                "'_' cannot be grouped, repeated or alternated; it stands between the left and right context",
-            )
-        if self.peek() != ")":
-            self.refuse(opening, "'(' is never closed")
-        self.index += 1
-        self.group_depth -= 1
-        text = self.text[opening : self.index]
-        return _Primary(body, text, not isinstance(body, (SeqPattern, AltPattern)))
+    def alternation(  # noqa: PLR0915 -- explicit stack mirrors each grammar case
+        self, stops: set[str]
+    ) -> Pattern:
+        """Parse an alternation with an explicit stack for nested groups."""
+        if self.text.find("(", self.index, self.end) < 0:
+            return self._flat_alternation(stops)
+        frames = [_Expression(None, frozenset(stops))]
+        while frames:
+            frame = frames[-1]
+            self.space()
+            character = self.peek()
+            if character == "|":
+                if not frame.sequence:
+                    self.unexpected()
+                offset = self.index
+                if self.text.startswith("||", offset, self.end):
+                    self.refuse(
+                        offset,
+                        "'||' is reserved for ordered choice; write '|' for alternation",
+                    )
+                frame.alternatives.append(_sequence(frame.sequence))
+                frame.sequence = []
+                self.index += 1
+                self.space()
+                if self.index == self.end or self.peek() in frame.stops | {"|", ")"}:
+                    self.refuse(
+                        offset,
+                        "'|' has an empty alternative; write {p}? for an optional part",
+                    )
+                continue
+            if not character or character in frame.stops or character == ")":
+                if not frame.sequence:
+                    self.unexpected()
+                frame.alternatives.append(_sequence(frame.sequence))
+                body = _alternation(frame.alternatives)
+                opening = frame.opening
+                if opening is None:
+                    return body
+                if character == "_":
+                    self.refuse(
+                        self.index,
+                        "'_' cannot be grouped, repeated or alternated; it stands between the left and right context",
+                    )
+                if character != ")":
+                    self.refuse(opening, "'(' is never closed")
+                self.index += 1
+                text = self.text[opening : self.index]
+                frames.pop()
+                primary = _Primary(
+                    body, text, not isinstance(body, (SeqPattern, AltPattern))
+                )
+                frames[-1].sequence.append(self._finish_primary(primary))
+                continue
+            token = self._quantifier_token(self.index)
+            if token:
+                if not frame.sequence:
+                    self.refuse(
+                        self.index,
+                        f"{token!r} has nothing before it to repeat; write '.' for one item of any kind, or '.*' for any number of items",
+                    )
+                if token.startswith("{"):
+                    self.refuse(
+                        self.index,
+                        f"{token!r} follows a space; a counted quantifier attaches directly, as in {{p}}{{2}}",
+                    )
+                self.refuse(
+                    self.index,
+                    f"{token!r} follows a space; a quantifier attaches directly to the item or group before it, as in {{p}}*; write '.' for one item of any kind",
+                )
+            if character == "(":
+                opening = self.index
+                if len(frames) - 1 >= _MAX_PATTERN_NESTING:
+                    self.refuse(
+                        opening, f"groups nest deeper than {_MAX_PATTERN_NESTING}"
+                    )
+                self.index += 1
+                if self.peek() == "?":
+                    self._flag_prefix(opening)
+                self.space()
+                if self.index == self.end:
+                    self.refuse(opening, "'(' is never closed")
+                if self.peek() == ")":
+                    self.refuse(opening, "'()' is an empty group")
+                if self.peek() == "_":
+                    self.refuse(
+                        self.index,
+                        "'_' cannot be grouped, repeated or alternated; it stands between the left and right context",
+                    )
+                frames.append(_Expression(opening, frozenset({")", "_", "/"})))
+                continue
+            frame.sequence.append(self._finish_primary(self.primary()))
+        raise AssertionError(  # pragma: no cover - loop returns or refuses
+            "expression stack exhausted without a result"
+        )
 
-    def alternation(self, stops: set[str]) -> Pattern:
-        """Parse an alternation up to one of the requested stops."""
-        parts = [self.sequence(stops | {"|"})]
+    def _flat_alternation(self, stops: set[str]) -> Pattern:
+        """Parse a group-free alternation without allocating expression frames."""
+        parts = [self._flat_sequence(stops | {"|"})]
         while True:
             self.space()
             if self.peek() != "|":
@@ -286,11 +356,11 @@ class _PatternParser:
                     offset,
                     "'|' has an empty alternative; write {p}? for an optional part",
                 )
-            parts.append(self.sequence(stops | {"|"}))
+            parts.append(self._flat_sequence(stops | {"|"}))
         return _alternation(parts)
 
-    def sequence(self, stops: set[str]) -> Pattern:
-        """Parse a sequence up to one of the requested stops."""
+    def _flat_sequence(self, stops: set[str]) -> Pattern:
+        """Parse a group-free sequence up to one of the requested stops."""
         parts: list[Pattern] = []
         while True:
             self.space()
@@ -313,14 +383,13 @@ class _PatternParser:
                     self.index,
                     f"{token!r} follows a space; a quantifier attaches directly to the item or group before it, as in {{p}}*; write '.' for one item of any kind",
                 )
-            parts.append(self.element())
+            parts.append(self._finish_primary(self.primary()))
         if not parts:
             self.unexpected()
         return _sequence(parts)
 
-    def element(self) -> Pattern:
-        """Parse one primary and its optional quantifier."""
-        primary = self.primary()
+    def _finish_primary(self, primary: _Primary) -> Pattern:
+        """Attach and validate the optional quantifier following one primary."""
         quantifier_start = self.index
         quantifier = self._take_quantifier()
         if primary.single_group_element and quantifier is None:

@@ -1360,6 +1360,18 @@ def test_t7_canonical_format_and_round_trips() -> None:
             SYN,
         ),
         (
+            "(a=1 || b=2)",
+            5,
+            "'||' is reserved for ordered choice; write '|' for or",
+            SYN,
+        ),
+        (
+            "(a=1 && b=2)",
+            5,
+            "'&&' is reserved for short-circuit conjunction; write '&' for and",
+            SYN,
+        ),
+        (
             "f=∅",
             2,
             "'∅' is reserved for the empty language; write the missing-cell alias none for a missing cell",
@@ -1373,6 +1385,8 @@ def test_t7_canonical_format_and_round_trips() -> None:
         ),
         ("%d{1}", 0, "'%' is reserved for typed literals", SYN),
         ("(f=a", 0, "'(' is never closed", SYN),
+        ("(f=a |)", 5, "'|' has no value or test after it", SYN),
+        ("(f=a &)", 5, "unexpected ''", SYN),
         ("f=a)", 3, "')' closes no group", SYN),
         ("f=a|", 3, "'|' has no value or test after it", SYN),
         (
@@ -1441,6 +1455,9 @@ def test_t9_bare_xsd_typing_and_bind_refusals() -> None:
 
 
 def test_a_bar_before_a_not_equal_test_ends_the_value_choice() -> None:
+    assert isinstance(parsed("!a=1 & (b=2)"), And)
+    assert isinstance(parsed("anywhere=x & (f=a)"), And)
+    assert isinstance(parsed("any =x & (f=a)"), And)
     assert parsed("f=a|b!=c") == Or(
         (
             Equals(Cell(q("f")), (Bare("a"),)),

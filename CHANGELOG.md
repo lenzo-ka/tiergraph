@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Limited pattern text to 64 nested groups, pattern ASTs to 256 levels, and
-  pattern and predicate NFAs to 1,000,000 states.
+- Made pattern and embedded-predicate text parsing, and pattern compilation,
+  independent of Python call stack depth and allowed 256 nested text groups.
+  Pattern ASTs remain limited to 256 levels, and pattern and predicate NFAs to
+  1,000,000 states.
 - Stopped `spans(limit=)` once its extent is settled and made `count` avoid
   retaining span witnesses.
 
