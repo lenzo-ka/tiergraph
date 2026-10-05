@@ -53,7 +53,11 @@ own declaration says which domain it belongs to, so a caller spells the place
 and not the domain: `None` is the document, a qualified name is a tier or a
 relation declaration, an item or durable reference is an item, a structural or
 durable boundary reference is a boundary, and an index or a durable id is a
-relation instance.
+relation instance. A bare index names a bipartite relation instance.
+`RelationInstanceRef`, `PolyadicInstanceRef`,
+`DurableRelationRef`, and `DurablePolyadicRef` name a relation instance by
+carrier; these references are how a polyadic instance without a durable id is
+reached.
 
 Structural operations keep the graph's own references denoting what they
 denoted. Item coordinates stored inside the graph move with their items, and

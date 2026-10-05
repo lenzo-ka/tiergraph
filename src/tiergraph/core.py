@@ -2039,11 +2039,19 @@ class Graph:
         return self.edit().declare(declaration).freeze()
 
     def set_attribute(self, target: EditTarget, value: Attribute) -> Graph:
-        """Return a new graph whose target carries this value under its name."""
+        """Return a new graph whose target carries this value under its name.
+
+        A structural relation reference names a position in this graph's
+        current relation content.
+        """
         return self.edit().set_attribute(target, value).freeze()
 
     def remove_attribute(self, target: EditTarget, name: QualifiedName) -> Graph:
-        """Return a new graph whose target no longer carries this name."""
+        """Return a new graph whose target no longer carries this name.
+
+        A structural relation reference names a position in this graph's
+        current relation content.
+        """
         return self.edit().remove_attribute(target, name).freeze()
 
     def insert_item(self, tier: QualifiedName, index: int, item: Item) -> Graph:
@@ -2083,8 +2091,12 @@ class Graph:
         """Return a new graph carrying one more relation instance."""
         return self.edit().add_relation(instance).freeze()
 
-    def remove_relation(self, target: int | str) -> Graph:
-        """Return a new graph without the relation instance this names."""
+    def remove_relation(self, target: RelationTarget) -> Graph:
+        """Return a new graph without the relation instance this names.
+
+        A structural reference names a position in this graph's current
+        relation content.
+        """
         return self.edit().remove_relation(target).freeze()
 
 
@@ -2182,11 +2194,37 @@ type EditTarget = (
     | DurableBoundaryRef
     | int
     | str
+    | RelationInstanceRef
+    | PolyadicInstanceRef
+    | DurableRelationRef
+    | DurablePolyadicRef
+)
+
+type RelationTarget = (
+    int
+    | str
+    | RelationInstanceRef
+    | PolyadicInstanceRef
+    | DurableRelationRef
+    | DurablePolyadicRef
 )
 
 type EditDeclaration = (
     NamespaceDeclaration | TierDeclaration | AttributeDeclaration | RelationDeclaration
 )
+
+
+def _relation_instance_subject(target: EditTarget, polyadic: bool, index: int) -> str:
+    """Name a relation target without changing legacy target messages."""
+    if isinstance(
+        target,
+        RelationInstanceRef
+        | PolyadicInstanceRef
+        | DurableRelationRef
+        | DurablePolyadicRef,
+    ):
+        return f"{'polyadic ' if polyadic else ''}relation instance {index}"
+    return f"relation instance {index}"
 
 
 class GraphEditor:
@@ -2287,7 +2325,8 @@ class GraphEditor:
         The value's declaration decides which carrier the target names, so a
         caller spells the place and not the domain.  An undeclared attribute
         is refused here rather than at freeze, because without a declaration
-        there is no domain to read the target against.
+        there is no domain to read the target against.  A structural relation
+        reference names a position in this editor's current relation content.
         """
         domain = self._declared(value.name).domain
         if domain is AttributeDomain.DOCUMENT:
@@ -2330,7 +2369,11 @@ class GraphEditor:
         return self
 
     def remove_attribute(self, target: EditTarget, name: QualifiedName) -> GraphEditor:
-        """Take the named value off one carrier, refusing when it is absent."""
+        """Take the named value off one carrier, refusing when it is absent.
+
+        A structural relation reference names a position in this editor's
+        current relation content.
+        """
         domain = self._declared(name).domain
         if domain is AttributeDomain.DOCUMENT:
             _require_absent_target(target, domain)
@@ -2384,7 +2427,7 @@ class GraphEditor:
                 _without_value(
                     self._instance(polyadic, index),
                     name,
-                    f"relation instance {index}",
+                    _relation_instance_subject(target, polyadic, index),
                 ),
             )
         return self
@@ -2522,8 +2565,12 @@ class GraphEditor:
             self._polyadic_relations.append(instance)
         return self
 
-    def remove_relation(self, target: int | str) -> GraphEditor:
-        """Remove one relation instance by bipartite index or by durable id."""
+    def remove_relation(self, target: RelationTarget) -> GraphEditor:
+        """Remove one relation instance by index, reference, or durable id.
+
+        A structural reference names a current position; reread
+        ``displacement()`` after removal before reusing one.
+        """
         polyadic, index = self._relation_site(target)
         carrier = (
             GraphCarrier.POLYADIC_RELATIONS if polyadic else GraphCarrier.RELATIONS
@@ -2543,9 +2590,7 @@ class GraphEditor:
             )
             self._layers = [_remap_layer(layer, step) for layer in self._layers]
             durable_id = self._polyadic_relations[index].durable_id
-            if (
-                durable_id is not None
-            ):  # pragma: no branch - polyadic removal needs an id
+            if durable_id is not None:
                 self._layers = [
                     _orphan_durable_relation(
                         layer, durable_id, GraphCarrier.POLYADIC_RELATIONS, index
@@ -2628,19 +2673,79 @@ class GraphEditor:
                     f"{len(self._relations)} bipartite relation instances"
                 )
             return False, target
-        if not isinstance(target, str):
+        if isinstance(target, str):
+            for index, relation in enumerate(self._relations):
+                if relation.durable_id == target:
+                    return False, index
+            for index, polyadic_relation in enumerate(self._polyadic_relations):
+                if polyadic_relation.durable_id == target:
+                    return True, index
             raise GraphValidationError(
-                "relation instance target must be a bipartite instance index "
-                "or a durable id"
+                f"no relation instance carries durable id {target!r}"
             )
-        for index, relation in enumerate(self._relations):
-            if relation.durable_id == target:
-                return False, index
-        for index, polyadic_relation in enumerate(self._polyadic_relations):
-            if polyadic_relation.durable_id == target:
-                return True, index
+        if isinstance(target, RelationInstanceRef):
+            index = target.index
+            _require_integral_index(index, "relation instance reference", target)
+            if index < 0 or index >= len(self._relations):
+                raise GraphValidationError(
+                    f"relation instance reference index {index} is outside the graph's "
+                    f"{len(self._relations)} bipartite relation instances"
+                )
+            return False, index
+        if isinstance(target, PolyadicInstanceRef):
+            index = target.index
+            _require_integral_index(
+                index, "polyadic relation instance reference", target
+            )
+            if index < 0 or index >= len(self._polyadic_relations):
+                raise GraphValidationError(
+                    f"polyadic relation instance reference index {index} is outside "
+                    f"the graph's {len(self._polyadic_relations)} polyadic relation "
+                    "instances"
+                )
+            return True, index
+        if isinstance(target, DurableRelationRef):
+            _require_name(target.durable_id, "durable relation reference")
+            if not isinstance(target.durable_id, str):
+                raise GraphValidationError(
+                    f"durable relation reference {target.durable_id!r} must be a string"
+                )
+            for index, relation in enumerate(self._relations):
+                if relation.durable_id == target.durable_id:
+                    return False, index
+            if any(
+                relation.durable_id == target.durable_id
+                for relation in self._polyadic_relations
+            ):
+                raise GraphValidationError(
+                    f"durable relation reference {target.durable_id!r} names a "
+                    "polyadic relation instance; use DurablePolyadicRef"
+                )
+            raise GraphValidationError(
+                f"no relation instance carries durable id {target.durable_id!r}"
+            )
+        if isinstance(target, DurablePolyadicRef):
+            _require_name(target.durable_id, "durable polyadic reference")
+            if not isinstance(target.durable_id, str):
+                raise GraphValidationError(
+                    f"durable polyadic reference {target.durable_id!r} must be a string"
+                )
+            for index, polyadic_relation in enumerate(self._polyadic_relations):
+                if polyadic_relation.durable_id == target.durable_id:
+                    return True, index
+            if any(
+                relation.durable_id == target.durable_id for relation in self._relations
+            ):
+                raise GraphValidationError(
+                    f"durable polyadic reference {target.durable_id!r} names a "
+                    "bipartite relation instance; use DurableRelationRef"
+                )
+            raise GraphValidationError(
+                f"no relation instance carries durable id {target.durable_id!r}"
+            )
         raise GraphValidationError(
-            f"no relation instance carries durable id {target!r}"
+            "relation instance target must be a bipartite instance index "
+            "or a durable id"
         )
 
     def _tier_views(self) -> dict[QualifiedName, Tier]:

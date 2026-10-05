@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added relation-instance references as targets of `set_attribute`,
+  `remove_attribute` and `remove_relation`, so polyadic instances without
+  durable ids can be edited and removed.
 - Added declared work budgets for pattern views and binding, predicates,
   span-pair joins, lattice matching, folds and path plans. Exhaustion raises
   `BudgetExhausted`; outermost budgeted span scans can report `cut-at-budget`.
