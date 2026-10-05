@@ -903,7 +903,8 @@ Give one carrier this value, replacing any value of the same name.
 The value's declaration decides which carrier the target names, so a
 caller spells the place and not the domain.  An undeclared attribute
 is refused here rather than at freeze, because without a declaration
-there is no domain to read the target against.
+there is no domain to read the target against.  A structural relation
+reference names a position in this editor's current relation content.
 
 #### `GraphEditor.remove_attribute`
 
@@ -914,6 +915,9 @@ GraphEditor.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') 
 ```
 
 Take the named value off one carrier, refusing when it is absent.
+
+A structural relation reference names a position in this editor's
+current relation content.
 
 #### `GraphEditor.insert_item`
 
@@ -994,10 +998,13 @@ Add one relation instance to the collection its arity belongs to.
 Method.
 
 ```text
-GraphEditor.remove_relation(self, target: 'int | str') -> 'GraphEditor'
+GraphEditor.remove_relation(self, target: 'RelationTarget') -> 'GraphEditor'
 ```
 
-Remove one relation instance by bipartite index or by durable id.
+Remove one relation instance by index, reference, or durable id.
+
+A structural reference names a current position; reread
+``displacement()`` after removal before reusing one.
 
 ## Fold
 
@@ -2769,6 +2776,9 @@ Graph.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'Graph'
 
 Return a new graph whose target carries this value under its name.
 
+A structural relation reference names a position in this graph's
+current relation content.
+
 #### `Graph.remove_attribute`
 
 Method.
@@ -2778,6 +2788,9 @@ Graph.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'Gr
 ```
 
 Return a new graph whose target no longer carries this name.
+
+A structural relation reference names a position in this graph's
+current relation content.
 
 #### `Graph.insert_item`
 
@@ -2848,10 +2861,13 @@ Return a new graph carrying one more relation instance.
 Method.
 
 ```text
-Graph.remove_relation(self, target: 'int | str') -> 'Graph'
+Graph.remove_relation(self, target: 'RelationTarget') -> 'Graph'
 ```
 
 Return a new graph without the relation instance this names.
+
+A structural reference names a position in this graph's current
+relation content.
 
 ### `GraphCarrier`
 
