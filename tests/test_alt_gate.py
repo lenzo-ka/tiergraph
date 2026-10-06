@@ -547,3 +547,11 @@ def test_gate_is_deterministic_across_hash_seeds() -> None:
         )
     assert len(set(outputs)) == 1
     assert json.loads(outputs[0])[0] == 3
+
+
+def test_a_gated_end_anchor_is_skipped_before_the_scope_end() -> None:
+    """An end-anchored gated successor matches only at the end of the scope."""
+    parts = tuple(SeqPattern((atom(f"w{index}"), EndPattern())) for index in range(40))
+    compiled = compile_pattern(AltPattern(parts))
+    assert compiled.count(graph(("w0", "w1")), TierOrder(TIER)) == 1
+    assert compiled.count(graph(("w0", "zz")), TierOrder(TIER)) == 0
