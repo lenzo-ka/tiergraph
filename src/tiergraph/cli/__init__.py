@@ -727,8 +727,9 @@ def _handle_span(args: argparse.Namespace) -> None:
 
 def _handle_select(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    with _metered(_work_budget(args), "selection.evaluate"):
-        if args.where is not None:
+    budget = _work_budget(args)
+    if args.where is not None:
+        with _metered(budget, "selection.evaluate"):
             syntax = _predicate.PredicateSyntax.for_graph(
                 graph, default_prefix=args.prefix
             )
@@ -743,10 +744,10 @@ def _handle_select(args: argparse.Namespace) -> None:
             result = (
                 _predicate.compile_predicate(predicate).bind(graph).select(candidates)
             )
-        else:
-            selector = tiergraph.selection_loads(_read_bytes(args.selector))
-            _check_distinct(args.selector, args.output)
-            result = tiergraph.evaluate_selection(graph, selector)
+    else:
+        selector = tiergraph.selection_loads(_read_bytes(args.selector))
+        _check_distinct(args.selector, args.output)
+        result = tiergraph.evaluate_selection(graph, selector, budget=budget)
     _write_output(args.file, args.output, _json_bytes({"nodes": result.to_data()}))
 
 

@@ -18,7 +18,7 @@ certificate provide a bounded alternative.
 from __future__ import annotations
 
 import json
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -1134,8 +1134,13 @@ class OutputPlan[Value]:
         base: PathPlan[Value],
         emissions: Emissions[Value],
         candidates: Sequence[Sequence[str]],
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
     ) -> OutputPlan[Value]:
-        """Build the reachable product with the candidates' trie and a residual."""
+        """Build the reachable product with the candidates' trie and a residual.
+
+        An optional work budget limits preparation.
+        """
         if emissions.plan is not base:
             raise ValueError("emissions are bound to a different path plan")
         algebra = base.declaration.semiring
@@ -1149,16 +1154,33 @@ class OutputPlan[Value]:
         )
         if not parsed:
             raise ValueError("output plan candidates must not be empty")
-        if len(set(parsed)) != len(parsed):
-            repeated = next(
-                candidate for candidate in parsed if parsed.count(candidate) > 1
-            )
+        counts = Counter(parsed)
+        repeated = next(
+            (candidate for candidate in parsed if counts[candidate] > 1), None
+        )
+        if repeated is not None:
             raise ValueError(f"output plan candidate {repeated!r} is duplicated")
         if not base.roots:
             raise ValueError(
                 f"path plan {base.declaration.name!r} has no root for an explicit "
                 "product root"
             )
+
+        with _metered(budget, "outputplan.prepare"):
+            return cls._prepare(base, emissions, parsed)
+
+    @classmethod
+    def _prepare(
+        cls,
+        base: PathPlan[Value],
+        emissions: Emissions[Value],
+        parsed: tuple[tuple[str, ...], ...],
+    ) -> OutputPlan[Value]:
+        """Build a validated output product under the ambient meter."""
+        algebra = base.declaration.semiring
+        meter = _active_meter()
+        if meter is not None:
+            meter.charge(len(parsed))
 
         transitions, terminals = _trie(parsed)
 
@@ -1167,6 +1189,8 @@ class OutputPlan[Value]:
             if state == _OFF:
                 return _OFF
             for token in tokens:
+                if meter is not None:
+                    meter.charge(1)
                 state = transitions.get((state, token), _OFF)
                 if state == _OFF:
                     break
@@ -1181,6 +1205,8 @@ class OutputPlan[Value]:
         )
         pairs = product_graph.pairs
         roots = product_graph.roots
+        if meter is not None:
+            meter.charge(sum(map(len, product_graph.edges)))
         edges = [
             (parent, child)
             for parent, children in enumerate(product_graph.edges)
@@ -1189,6 +1215,8 @@ class OutputPlan[Value]:
 
         accepted = [False] * len(parsed)
         sink_targets: list[int] = []
+        if meter is not None:
+            meter.charge(len(pairs))
         for base_item, state in pairs:
             if base.children[base_item]:
                 sink_targets.append(-1)
@@ -1202,6 +1230,8 @@ class OutputPlan[Value]:
 
         accept_local = tuple(len(pairs) + index for index in range(len(parsed)))
         residual_local = len(pairs) + len(parsed)
+        if meter is not None:
+            meter.charge(len(sink_targets))
         for product_sink, target in enumerate(sink_targets):
             if target >= 0:
                 child = (
@@ -1251,15 +1281,27 @@ class OutputPlan[Value]:
                 f"{len(vector)}"
             )
         algebra = self.base.declaration.semiring
+        meter = _active_meter()
+        if meter is not None:
+            meter.charge(len(self._product_base))
         return tuple(
             algebra.one if base_index is None else vector[base_index]
             for base_index in self._product_base
         )
 
-    def masses(self, base_values: Sequence[Value] | None = None) -> OutputMasses[Value]:
-        """Evaluate masses, with certificates only for log probability or counting."""
-        with _aggregating():
-            return self._masses(base_values)
+    def masses(
+        self,
+        base_values: Sequence[Value] | None = None,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> OutputMasses[Value]:
+        """Evaluate masses, with certificates only for log probability or counting.
+
+        An optional work budget limits evaluation.
+        """
+        vector = self._validated_values(base_values)
+        with _aggregating(), _metered(budget, "outputplan.masses"):
+            return self._masses(vector)
 
     def _masses(
         self, base_values: Sequence[Value] | None = None
@@ -1267,6 +1309,9 @@ class OutputPlan[Value]:
         """Implement mass aggregation within the caller's aggregate scope."""
         algebra = self.base.declaration.semiring
         result = self.plan.marginals(self.values(base_values))
+        meter = _active_meter()
+        if meter is not None:
+            meter.charge(len(self._accept_indices))
         per_candidate = tuple(result.marginals[index] for index in self._accept_indices)
         residual = result.marginals[self._residual_index]
         zero_mass = result.total == algebra.zero
@@ -1295,16 +1340,35 @@ class OutputPlan[Value]:
             result.cost,
         )
 
-    def conditioned(self, candidate: int) -> PathPlan[Value]:
-        """Return the product restricted to paths accepting one candidate."""
-        return self._conditioned(candidate)[0]
+    def conditioned(
+        self,
+        candidate: int,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> PathPlan[Value]:
+        """Return the product restricted to paths accepting one candidate.
+
+        An optional work budget limits conditioning.
+        """
+        self._validate_candidate(candidate)
+        with _metered(budget, "outputplan.conditioned"):
+            return self._conditioned(candidate)[0]
 
     def item_marginals(
-        self, candidate: int, base_values: Sequence[Value] | None = None
+        self,
+        candidate: int,
+        base_values: Sequence[Value] | None = None,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
     ) -> OutputItemMarginals[Value]:
-        """Pool one candidate's conditioned product copies onto base items."""
-        with _aggregating():
-            return self._item_marginals(candidate, base_values)
+        """Pool one candidate's conditioned product copies onto base items.
+
+        An optional work budget limits evaluation.
+        """
+        self._validate_candidate(candidate)
+        vector = self._validated_values(base_values)
+        with _aggregating(), _metered(budget, "outputplan.item_marginals"):
+            return self._item_marginals(candidate, vector)
 
     def _item_marginals(
         self, candidate: int, base_values: Sequence[Value] | None = None
@@ -1319,25 +1383,21 @@ class OutputPlan[Value]:
         if result.total == algebra.zero:
             return OutputItemMarginals(result.total, True, None, result.cost)
         pooled = [algebra.zero for _item in self.base.items]
+        meter = _active_meter()
         for local_index, product_index in enumerate(product_indices):
             base_index = self._product_base[product_index]
             if base_index is not None:
+                if meter is not None:
+                    meter.charge(1 + self.base.declaration.carrier_operation_cost)
                 pooled[base_index] = algebra.add(
                     pooled[base_index], result.marginals[local_index]
                 )
         return OutputItemMarginals(result.total, False, tuple(pooled), result.cost)
 
     def _conditioned(self, candidate: int) -> tuple[PathPlan[Value], tuple[int, ...]]:
-        if type(candidate) is not int or not 0 <= candidate < len(self.candidates):
-            raise ValueError(
-                f"candidate index {candidate!r} is outside output plan candidates"
-            )
-        if not self.accepted[candidate]:
-            raise ValueError(
-                f"output candidate {candidate} {self.candidates[candidate]!r} has no "
-                "structurally accepted path"
-            )
-        cached = self._conditioned_cache.get(candidate)
+        meter = _active_meter()
+        budgeted = meter is not None
+        cached = None if budgeted else self._conditioned_cache.get(candidate)
         if cached is not None:
             return cached
         target = self._accept_indices[candidate]
@@ -1345,14 +1405,22 @@ class OutputPlan[Value]:
         queue = deque((target,))
         while queue:
             child = queue.popleft()
+            if meter is not None:
+                meter.charge(len(self.plan.parents[child]))
             for parent in self.plan.parents[child]:
                 if parent not in keep:
                     keep.add(parent)
                     queue.append(parent)
+        if meter is not None:
+            meter.charge(len(self.plan.items))
         product_indices = tuple(
             index for index in range(len(self.plan.items)) if index in keep
         )
         local = {product: index for index, product in enumerate(product_indices)}
+        if meter is not None:
+            meter.charge(
+                sum(len(self.plan.children[parent]) for parent in product_indices)
+            )
         edges = [
             (local[parent], local[child])
             for parent in product_indices
@@ -1369,8 +1437,36 @@ class OutputPlan[Value]:
             carrier_operation_cost=self.base.declaration.carrier_operation_cost,
         )
         cached = (conditioned, product_indices)
-        self._conditioned_cache[candidate] = cached
+        if not budgeted:
+            self._conditioned_cache[candidate] = cached
         return cached
+
+    def _validate_candidate(self, candidate: int) -> None:
+        """Validate a candidate coordinate before installing a work meter."""
+        if type(candidate) is not int or not 0 <= candidate < len(self.candidates):
+            raise ValueError(
+                f"candidate index {candidate!r} is outside output plan candidates"
+            )
+        if not self.accepted[candidate]:
+            raise ValueError(
+                f"output candidate {candidate} {self.candidates[candidate]!r} has no "
+                "structurally accepted path"
+            )
+
+    def _validated_values(
+        self, base_values: Sequence[Value] | None
+    ) -> tuple[Value, ...] | None:
+        """Validate a supplied value vector before installing a work meter."""
+        if base_values is None:
+            return None
+        vector = tuple(base_values)
+        if len(vector) != len(self.base.items):
+            raise ValueError(
+                f"path plan {self.base.declaration.name!r} takes "
+                f"{len(self.base.items)} values in plan item order and was given "
+                f"{len(vector)}"
+            )
+        return vector
 
 
 def _candidate(candidate: Sequence[str], index: int) -> tuple[str, ...]:
@@ -1392,9 +1488,12 @@ def _trie(
     transitions: dict[tuple[int, str], int] = {}
     terminals: dict[int, int] = {}
     next_state = 1
+    meter = _active_meter()
     for candidate_index, candidate in enumerate(candidates):
         state = 0
         for token in candidate:
+            if meter is not None:
+                meter.charge(1)
             key = (state, token)
             following = transitions.get(key)
             if following is None:
@@ -1417,6 +1516,9 @@ def _prepare_derived[Value](
 ) -> PathPlan[Value]:
     if not roots:
         raise ValueError(f"derived path plan {name!r} requires explicit nonempty roots")
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(values) + len(edges) + len(roots))
     items = tuple(
         Item(
             f"item-{index}",
