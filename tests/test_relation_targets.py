@@ -16,7 +16,6 @@ from tiergraph import (
     DurableRelationRef,
     Graph,
     GraphCarrier,
-    GraphEditor,
     GraphValidationError,
     Item,
     ItemRef,
@@ -475,39 +474,50 @@ def test_durable_reference_kind_and_unknown_refusals_are_atomic(
 @pytest.mark.parametrize(
     ("durable_id", "problem"),
     [
-        (None, "must not be empty"),
+        (None, "must be a string"),
         ("", "must not be empty"),
         (7, "must be a string"),
+        (False, "must be a string"),
+        (0, "must be a string"),
+        (b"", "must be a string"),
     ],
 )
-@pytest.mark.parametrize(
-    "operation", ["set_attribute", "remove_attribute", "remove_relation"]
-)
-@pytest.mark.parametrize("frozen", [False, True], ids=["editor", "graph"])
-def test_invalid_durable_reference_ids_refuse_every_edit_route(
+def test_invalid_durable_reference_ids_refuse_at_construction(
     reference_type: type[DurableRelationRef] | type[DurablePolyadicRef],
     subject: str,
     durable_id: object,
     problem: str,
-    operation: str,
-    frozen: bool,
 ) -> None:
-    """R8: malformed durable ids never select an anonymous relation."""
-    graph = fixture()
-    target = reference_type(durable_id)  # type: ignore[arg-type]
-    receiver: Graph | GraphEditor = graph if frozen else graph.edit()
+    """R8: malformed durable ids refuse before they can select a relation."""
     with pytest.raises(
         GraphValidationError,
         match=rf"^{re.escape(subject)} .* {re.escape(problem)}$",
     ):
-        if operation == "set_attribute":
-            receiver.set_attribute(target, relation_value(ORDER, "1"))
-        elif operation == "remove_attribute":
-            receiver.remove_attribute(target, NOTE)
-        else:
-            receiver.remove_relation(target)
-    if isinstance(receiver, GraphEditor):
-        assert receiver.freeze() == graph
+        reference_type(durable_id)  # type: ignore[arg-type]
+
+
+def test_relation_instances_refuse_non_string_durable_ids() -> None:
+    """Carried durable ids agree with the wire's string requirement."""
+    with pytest.raises(
+        GraphValidationError,
+        match=r"^relation instance durable id 7 must be a string$",
+    ):
+        RelationInstance(
+            BINARY,
+            ItemRef(TIER, 0),
+            ItemRef(TIER, 1),
+            7,  # type: ignore[arg-type]
+        )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"^relation instance durable id 7 must be a string$",
+    ):
+        PolyadicRelationInstance(
+            P,
+            (ItemRef(TIER, 0),),
+            (ItemRef(TIER, 1),),
+            7,  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(

@@ -1797,24 +1797,69 @@ def test_flatten_six_domains_and_polyadic_subjects() -> None:
     assert all(
         isinstance(fact.subject, OrphanedSubject) for fact in departed.layers[0].facts
     )
-    no_id_instance = replace(instance, durable_id=None)
-    no_id = replace(
-        poly,
-        polyadic_relations=(no_id_instance,),
-        layers=(
-            Layer(
-                SOURCE_A,
-                (
-                    LayerFact(
-                        PolyadicInstanceRef(0),
-                        value(AttributeDomain.RELATION_INSTANCE, "p"),
-                    ),
-                ),
+
+
+def test_flatten_three_anonymous_polyadic_instances_under_full_seal() -> None:
+    """Earlier facts do not disturb anonymous structural polyadic targets."""
+    base = graph_with_layers()
+    side = RelationSideDeclaration((RelationEndpointKind.ITEM,), (WORDS,))
+    declaration = PolyadicRelationDeclaration(POLY, side, side)
+    instances = tuple(
+        PolyadicRelationInstance(
+            POLY,
+            (ItemRef(WORDS, index % 2),),
+            (ItemRef(WORDS, (index + 1) % 2),),
+        )
+        for index in range(3)
+    )
+    item_value = value(AttributeDomain.ITEM, "item")
+    tier_value = value(AttributeDomain.TIER, "tier")
+    document_value = value(AttributeDomain.DOCUMENT, "document")
+    polyadic_values = tuple(
+        value(AttributeDomain.RELATION_INSTANCE, f"poly-{index}") for index in range(3)
+    )
+    layer = Layer(
+        SOURCE_A,
+        (
+            LayerFact(ItemRef(WORDS, 0), item_value),
+            LayerFact(TierRef(WORDS), tier_value),
+            LayerFact(DocumentRef(), document_value),
+            *(
+                LayerFact(PolyadicInstanceRef(index), polyadic_values[index])
+                for index in range(3)
             ),
         ),
     )
-    with pytest.raises(GraphValidationError, match="without durable relation identity"):
-        no_id.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+    graph = replace(
+        base,
+        relation_declarations=(*base.relation_declarations, declaration),
+        polyadic_relations=instances,
+        layers=(layer,),
+    ).seal(GraphCarrier.POLYADIC_RELATIONS, 3)
+
+    flattened = graph.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
+    expected = replace(
+        graph,
+        tiers=(
+            replace(
+                graph.tiers[0],
+                items=(
+                    replace(graph.tiers[0].items[0], attributes=(item_value,)),
+                    *graph.tiers[0].items[1:],
+                ),
+                attributes=(tier_value,),
+            ),
+        ),
+        polyadic_relations=tuple(
+            replace(instance, attributes=(polyadic_values[index],))
+            for index, instance in enumerate(instances)
+        ),
+        attributes=(document_value,),
+        layers=(),
+    )
+    assert flattened == expected
+    assert flattened.seals == graph.seals == (Seal(GraphCarrier.POLYADIC_RELATIONS, 3),)
+    assert loads(dumps(flattened)) == flattened
 
 
 # REGRESSION: the shared seal-carrier fragment rejects additions in layer subjects.

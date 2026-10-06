@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refused empty and non-string durable relation references and relation-instance
+  durable ids at construction.
+- Allowed layer flattening onto anonymous polyadic relation instances.
 - Made pattern and embedded-predicate text parsing, and pattern compilation,
   independent of Python call stack depth and allowed 256 nested text groups.
   Pattern ASTs remain limited to 256 levels, and pattern and predicate NFAs to
