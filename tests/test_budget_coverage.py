@@ -109,6 +109,34 @@ def test_nested_and_reused_meters_charge_once() -> None:
     assert shared.spent == 6
 
 
+def test_meter_fast_paths_and_nested_refusals() -> None:
+    """Cover root charge specialization and duplicate-meter discovery."""
+    root = WorkMeter(WorkBudget(steps=10))
+    assert root.budget.steps == 10
+    timed = WorkMeter(WorkBudget(steps=1, seconds=1.0))
+    with budget_module._metered(timed, "timed") as metered:
+        assert metered.meter is not None
+        with pytest.raises(ValueError, match="nonnegative"):
+            metered.meter.charge(-1)
+        with pytest.raises(BudgetExhausted):
+            metered.meter.charge(2)
+
+    child = WorkMeter(WorkBudget(steps=10))
+    with budget_module._metered(root, "root"):
+        with budget_module._metered(child, "child"):
+            with budget_module._metered(child, "reused-child") as reused:
+                assert reused.meter is not None
+                with pytest.raises(ValueError, match="nonnegative"):
+                    reused.meter.charge(-1)
+
+    with budget_module._unchecked_charging(1) as unchecked:
+        assert unchecked is None
+    deadline = WorkMeter(WorkBudget(seconds=1.0))
+    with budget_module._metered(deadline, "deadline"):
+        with budget_module._unchecked_charging(1) as unchecked:
+            assert unchecked is None
+
+
 def test_periodic_deadline_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check deadlines at installation and periodic crossings."""
     readings = iter((0.0, 0.0, 0.5, 2.0))
@@ -279,6 +307,27 @@ def test_budgeted_lattice_views_cover_reverse_subset_and_path_count() -> None:
     assert not matched._subset_cache
 
 
+def test_proven_budget_headroom_uses_exact_fast_charging() -> None:
+    """Exercise fast charges only where a conservative bound proves headroom."""
+    ample = WorkBudget(steps=1_000_000_000)
+    pattern = compiled_atom()
+    document = graph(3)
+    assert pattern.spans(
+        document, TierOrder(document.tiers[0].declaration.name), budget=ample
+    )
+    assert (
+        pattern.count(
+            document, TierOrder(document.tiers[0].declaration.name), budget=ample
+        )
+        == 3
+    )
+
+    matched = lattice_match()
+    assert matched.count(Unambiguous(), budget=ample) == 4
+    assert matched.count(Determinize(64), budget=ample) == 4
+    assert matched.count(Determinize(64), budget=WorkBudget(steps=100)) == 4
+
+
 def test_budgeted_fold_exactness_and_ranked_products(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,3 +368,4 @@ def test_budgeted_pathplan_charges_operations_and_path_values() -> None:
     matched = match_lattice(emissions, pattern)
     assert matched.exists(budget=ample)
     assert matched.on_accepting_path(budget=ample).nodes
+    assert matched.count(Determinize(64), budget=ample) > 0

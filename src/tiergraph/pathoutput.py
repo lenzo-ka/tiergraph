@@ -30,8 +30,9 @@ from tiergraph.budget import (
     WorkMeter,
     _active_meter,
     _aggregating,
-    _Meter,
+    _ChargeMeter,
     _metered,
+    _unchecked_charging,
 )
 from tiergraph.core import (
     AttributeDeclaration,
@@ -307,6 +308,7 @@ def _product[State: Hashable, Value](
     advance: Callable[[State, tuple[str, ...]], tuple[State, ...]],
     *,
     observe: Callable[[State], None] | None = None,
+    unchecked: WorkMeter | None = None,
 ) -> _Product[State, Value]:
     """Build the reachable product under the caller's explicit algebra."""
     meter = _active_meter()
@@ -320,7 +322,9 @@ def _product[State: Hashable, Value](
         found = positions.get(pair)
         if found is not None:
             return found
-        if meter is not None:
+        if unchecked is not None:
+            unchecked._spent += 1
+        elif meter is not None:
             meter.charge(1)
         found = len(pairs)
         positions[pair] = found
@@ -341,7 +345,9 @@ def _product[State: Hashable, Value](
         parent_index = pending.popleft()
         parent, state = pairs[parent_index]
         for child in plan.children[parent]:
-            if meter is not None:
+            if unchecked is not None:
+                unchecked._spent += 1
+            elif meter is not None:
                 meter.charge(1)
             for target in advance(state, emissions.per_item[child]):
                 if observe is not None:
@@ -424,16 +430,60 @@ class LatticeMatch:
                 "lattice count needs Unambiguous() or Determinize(max_states)"
             )
         if budget is None and _active_meter() is None:
-            return self._count(policy)
+            if isinstance(policy, Unambiguous):
+                self._require_unambiguous()
+                return self._run_count()
+            return self._subset_count(self._subset(policy.max_states))
         with _metered(budget, "lattice.count"):
             return self._count(policy)
 
     def _count(self, policy: AmbiguityPolicy) -> int:
         """Count under one validated policy."""
+        with _unchecked_charging(self._count_charge_bound(policy)) as unchecked:
+            if isinstance(policy, Unambiguous):
+                self._require_unambiguous()
+                return self._run_count(unchecked=unchecked)
+            return self._subset_count(
+                self._subset(policy.max_states, unchecked=unchecked),
+                unchecked=unchecked,
+            )
+
+    def _count_charge_bound(self, policy: AmbiguityPolicy) -> int:
+        """Bound every charge in one finite lattice count conservatively."""
+        plan = self.emissions.plan
+        states = len(self.pattern.epsilon)
+        edges = sum(map(len, plan.children))
+        roots = len(plan.roots)
+        items = len(plan.items)
+        tokens = max(map(len, self.emissions.per_item), default=0)
         if isinstance(policy, Unambiguous):
-            self._require_unambiguous()
-            return self._run_count()
-        return self._subset_count(self._subset(policy.max_states))
+            positions = sum(map(len, self.pattern.atom_edges))
+            alphabet = len(_literal_alphabet(self.pattern))
+            ambiguity = (
+                positions * states
+                + 2 * positions
+                + len(self.pattern.predicates)
+                + alphabet
+                + (_MAX_AMBIGUITY_PAIRS + 1)
+                * alphabet
+                * (1 + 2 * states + positions * positions)
+            )
+            advances = roots + edges
+            counting = advances * (tokens * states * states + states)
+            terminals = items * states * states
+            return ambiguity + counting + terminals
+        subsets = policy.max_states + 1
+        product_edges = edges * subsets
+        product_pairs = items * subsets
+        advances = roots + product_edges
+        return (
+            states
+            + advances * states * (1 + 2 * tokens)
+            + product_pairs
+            + 3 * product_edges
+            + subsets
+            + roots * subsets
+        )
 
     def all_paths(
         self, policy: AmbiguityPolicy, *, budget: WorkBudget | WorkMeter | None = None
@@ -504,7 +554,7 @@ class LatticeMatch:
         if not budgeted:
             self._ambiguity_cache.append(True)
 
-    def _run_count(self) -> int:
+    def _run_count(self, *, unchecked: WorkMeter | None = None) -> int:
         meter = _active_meter()
         plan = self.emissions.plan
         reached: list[dict[int, int]] = [dict() for _ in plan.items]
@@ -514,8 +564,9 @@ class LatticeMatch:
                 {self.pattern.start: 1},
                 self.emissions.per_item[root],
                 meter=meter,
+                unchecked=unchecked,
             )
-            _merge_counts(reached[root], advanced, meter=meter)
+            _merge_counts(reached[root], advanced, meter=meter, unchecked=unchecked)
         total = 0
         for item in reversed(plan.order):
             current = reached[item]
@@ -526,7 +577,12 @@ class LatticeMatch:
                     count
                     for state, count in current.items()
                     if self.pattern.accept
-                    in _epsilon_closure(self.pattern, frozenset((state,)), meter=meter)
+                    in _epsilon_closure(
+                        self.pattern,
+                        frozenset((state,)),
+                        meter=meter,
+                        unchecked=unchecked,
+                    )
                 )
                 continue
             for child in plan.children[item]:
@@ -537,12 +593,16 @@ class LatticeMatch:
                         current,
                         self.emissions.per_item[child],
                         meter=meter,
+                        unchecked=unchecked,
                     ),
                     meter=meter,
+                    unchecked=unchecked,
                 )
         return total
 
-    def _subset(self, max_states: int) -> _SubsetProduct:
+    def _subset(
+        self, max_states: int, *, unchecked: WorkMeter | None = None
+    ) -> _SubsetProduct:
         meter = _active_meter()
         budgeted = meter is not None
         cached = None if budgeted else self._subset_cache.get(max_states)
@@ -550,7 +610,10 @@ class LatticeMatch:
             return cached
         plan = self.emissions.plan
         start = _epsilon_closure(
-            self.pattern, frozenset((self.pattern.start,)), meter=meter
+            self.pattern,
+            frozenset((self.pattern.start,)),
+            meter=meter,
+            unchecked=unchecked,
         )
         subsets: set[frozenset[int]] = set()
 
@@ -558,7 +621,9 @@ class LatticeMatch:
             """Count a newly reached subset or refuse beyond the bound."""
             if subset in subsets:
                 return
-            if meter is not None:
+            if unchecked is not None:
+                unchecked._spent += 1
+            elif meter is not None:
                 meter.charge(1)
             subsets.add(subset)
             if len(subsets) > max_states:
@@ -574,9 +639,16 @@ class LatticeMatch:
             COUNTING,
             start,
             lambda subset, tokens: (
-                _advance_states(self.pattern, subset, tokens, meter=meter),
+                _advance_states(
+                    self.pattern,
+                    subset,
+                    tokens,
+                    meter=meter,
+                    unchecked=unchecked,
+                ),
             ),
             observe=register,
+            unchecked=unchecked,
         )
         result = _SubsetProduct(
             product_graph.pairs, product_graph.edges, product_graph.roots
@@ -585,7 +657,12 @@ class LatticeMatch:
             self._subset_cache[max_states] = result
         return result
 
-    def _subset_count(self, product_graph: _SubsetProduct) -> int:
+    def _subset_count(
+        self,
+        product_graph: _SubsetProduct,
+        *,
+        unchecked: WorkMeter | None = None,
+    ) -> int:
         plan = self.emissions.plan
         meter = _active_meter()
         position_order = {item: order for order, item in enumerate(plan.order)}
@@ -596,14 +673,18 @@ class LatticeMatch:
         ):
             item, subset = product_graph.pairs[product_index]
             children = product_graph.edges[product_index]
-            if meter is not None:
+            if unchecked is not None:
+                unchecked._spent += len(children)
+            elif meter is not None:
                 meter.charge(len(children))
             totals[product_index] = (
                 sum(totals[child] for child in children)
                 if children
                 else int(self.pattern.accept in subset and not plan.children[item])
             )
-        if meter is not None:
+        if unchecked is not None:
+            unchecked._spent += len(product_graph.roots)
+        elif meter is not None:
             meter.charge(len(product_graph.roots))
         return sum(totals[root] for root in product_graph.roots)
 
@@ -710,7 +791,8 @@ def _epsilon_closure(
     pattern: CompiledPattern,
     states: frozenset[int],
     *,
-    meter: _Meter | None = None,
+    meter: _ChargeMeter | None = None,
+    unchecked: WorkMeter | None = None,
 ) -> frozenset[int]:
     result = set(states)
     pending = list(states)
@@ -720,7 +802,9 @@ def _epsilon_closure(
             if edge.target not in result:
                 result.add(edge.target)
                 pending.append(edge.target)
-    if meter is not None:
+    if unchecked is not None:
+        unchecked._spent += len(result)
+    elif meter is not None:
         meter.charge(len(result))
     return frozenset(result)
 
@@ -730,11 +814,14 @@ def _advance_states(
     states: frozenset[int],
     tokens: tuple[str, ...],
     *,
-    meter: _Meter | None = None,
+    meter: _ChargeMeter | None = None,
+    unchecked: WorkMeter | None = None,
 ) -> frozenset[int]:
-    active = _epsilon_closure(pattern, states, meter=meter)
+    active = _epsilon_closure(pattern, states, meter=meter, unchecked=unchecked)
     for token in tokens:
-        if meter is not None:
+        if unchecked is not None:
+            unchecked._spent += len(active)
+        elif meter is not None:
             meter.charge(len(active))
         active = _epsilon_closure(
             pattern,
@@ -745,6 +832,7 @@ def _advance_states(
                 if _token_holds(pattern.predicates[edge.atom], token)
             ),
             meter=meter,
+            unchecked=unchecked,
         )
     return active
 
@@ -754,13 +842,19 @@ def _advance_counts(
     counts: Mapping[int, int],
     tokens: tuple[str, ...],
     *,
-    meter: _Meter | None = None,
+    meter: _ChargeMeter | None = None,
+    unchecked: WorkMeter | None = None,
 ) -> dict[int, int]:
     active = dict(counts)
     for token in tokens:
         following: dict[int, int] = {}
         for state, count in active.items():
-            for source in _epsilon_closure(pattern, frozenset((state,)), meter=meter):
+            for source in _epsilon_closure(
+                pattern,
+                frozenset((state,)),
+                meter=meter,
+                unchecked=unchecked,
+            ):
                 for edge in pattern.atom_edges[source]:
                     if _token_holds(pattern.predicates[edge.atom], token):
                         following[edge.target] = following.get(edge.target, 0) + count
@@ -769,9 +863,15 @@ def _advance_counts(
 
 
 def _merge_counts(
-    target: dict[int, int], source: Mapping[int, int], *, meter: _Meter | None = None
+    target: dict[int, int],
+    source: Mapping[int, int],
+    *,
+    meter: _ChargeMeter | None = None,
+    unchecked: WorkMeter | None = None,
 ) -> None:
-    if meter is not None:
+    if unchecked is not None:
+        unchecked._spent += len(source)
+    elif meter is not None:
         meter.charge(len(source))
     for state, count in source.items():
         target[state] = target.get(state, 0) + count
@@ -809,7 +909,7 @@ def _minterm_holds(predicate: Predicate, symbol: object) -> bool:
 
 
 def _ambiguity_witness(
-    pattern: CompiledPattern, *, meter: _Meter | None = None
+    pattern: CompiledPattern, *, meter: _ChargeMeter | None = None
 ) -> tuple[str, ...] | None:
     atom_edge_count = sum(len(edges) for edges in pattern.atom_edges)
     if meter is not None:

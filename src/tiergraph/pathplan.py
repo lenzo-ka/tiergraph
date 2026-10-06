@@ -42,7 +42,12 @@ from tiergraph.fold import (
     State,
     TiePolicy,
 )
-from tiergraph.semiring import DoubleExtremumSemiring, LogProbabilitySemiring, Semiring
+from tiergraph.semiring import (
+    DoubleExtremumSemiring,
+    LogProbabilitySemiring,
+    PathSemiring,
+    Semiring,
+)
 
 type _Gather = Callable[[Sequence[Any]], tuple[Any, ...]]
 type _Selected[Value] = tuple[Value, DerivationProvenance]
@@ -431,7 +436,12 @@ class PathPlan[Value]:
     def _charge_value_sizes(self, values: Sequence[Value]) -> None:
         """Charge retained built-in carrier values when the algebra exposes size."""
         meter = _active_meter()
-        value_size = getattr(self.declaration.semiring, "_value_size", None)
+        semiring = self.declaration.semiring
+        value_size = (
+            semiring._work_value_size
+            if isinstance(semiring, PathSemiring) and type(semiring) is PathSemiring
+            else getattr(semiring, "_value_size", None)
+        )
         if meter is not None and value_size is not None:
             meter.charge(
                 sum(cast(Callable[[Value], int], value_size)(v) for v in values)

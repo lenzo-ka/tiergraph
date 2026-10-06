@@ -703,6 +703,8 @@ def test_lexicographic_and_path_witness_refusals() -> None:
     with pytest.raises(ValueError, match="both zeros"):
         PATH.encode((PATH.left.zero, (("orphan",),)))
     witnesses = PathWitnessSemiring()
+    assert witnesses._value_size((("a", "b"),)) == 2
+    assert PATH._value_size((Decimal(0), (("a", "b"),))) == 2
     invalid_values: tuple[object, ...] = (
         [["duplicate"], ["duplicate"]],
         [[1]],
