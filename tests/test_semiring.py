@@ -454,6 +454,20 @@ def test_path_multiplication_preserves_order() -> None:
     assert PATH.multiply(left, right) != PATH.multiply(right, left)
 
 
+@pytest.mark.parametrize(
+    ("left", "right"),
+    (
+        ((Decimal(1), ()), (Decimal(2), (("right",),))),
+        ((Decimal(1), (("left",),)), (Decimal(2), ())),
+    ),
+)
+def test_ranked_path_private_multiply_preserves_empty_witness_products(
+    left: PathValue, right: PathValue
+) -> None:
+    """The private helper keeps the general empty-product behavior."""
+    assert PATH._ranked_multiply(left, right) == (Decimal(3), ())
+
+
 def test_lexicographic_side_conditions_are_refused() -> None:
     """Construction names each missing first-component side condition."""
     with pytest.raises(ValueError, match="exact multiply_associativity"):

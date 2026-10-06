@@ -27,6 +27,7 @@ _DECIMAL_LEXICAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
 _DOUBLE_LEXICAL = re.compile(
     r"(?:NaN|[+-]?INF|[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\Z"
 )
+_COLLAPSED_WHITESPACE = re.compile(r"[ \t\r\n]+")
 
 
 class RefusalStage(IntEnum):
@@ -889,7 +890,8 @@ class ItemRef:
 
     def __post_init__(self) -> None:
         """Require context-free integral identity before use or serialization."""
-        _require_integral_index(self.index, "item reference", self.to_data())
+        if isinstance(self.index, bool) or not isinstance(self.index, int):
+            _require_integral_index(self.index, "item reference", self.to_data())
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the reference as JSON-serializable data."""
@@ -909,7 +911,8 @@ class BoundaryRef:
 
     def __post_init__(self) -> None:
         """Require context-free integral identity before use or serialization."""
-        _require_integral_index(self.index, "boundary", self.to_data())
+        if isinstance(self.index, bool) or not isinstance(self.index, int):
+            _require_integral_index(self.index, "boundary", self.to_data())
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the boundary reference as JSON-serializable data."""
@@ -3274,7 +3277,7 @@ def _canonical_lexical(value_type: XsdType, lexical: str) -> str:
     # xsd:string has whiteSpace=preserve; the remaining admitted types use collapse.
     if value_type is XsdType.STRING:
         return lexical
-    lexical = re.sub(r"[ \t\r\n]+", " ", lexical).strip(" ")
+    lexical = _COLLAPSED_WHITESPACE.sub(" ", lexical).strip(" ")
     if value_type is XsdType.BOOLEAN:
         if lexical in {"true", "1"}:
             return "true"
@@ -3288,14 +3291,18 @@ def _canonical_lexical(value_type: XsdType, lexical: str) -> str:
     if value_type is XsdType.DECIMAL:
         if _DECIMAL_LEXICAL.fullmatch(lexical) is None:
             raise ValueError(lexical)
+        if "." not in lexical:
+            digits = lexical.lstrip("+-").lstrip("0")
+            if not digits:
+                return "0.0"
+            sign = "-" if lexical.startswith("-") else ""
+            return f"{sign}{digits}.0"
         value = Decimal(lexical)
         if value.is_zero():
             return "0.0"
         fixed = format(value, "f")
-        whole, separator, fraction = fixed.partition(".")
+        whole, _separator, fraction = fixed.partition(".")
         fraction = fraction.rstrip("0") or "0"
-        if not separator:
-            fraction = "0"
         return f"{whole}.{fraction}"
     if _DOUBLE_LEXICAL.fullmatch(lexical) is None:
         raise ValueError(lexical)
@@ -3345,6 +3352,14 @@ class _AttributeCarrier(Protocol):
 
 def _canonicalize_attributes(value: _AttributeCarrier, envelope_depth: int) -> None:
     attributes = value.attributes
+    if type(attributes) is tuple:
+        if not attributes:
+            object.__setattr__(value, "attributes", ())
+            return
+        if len(attributes) == 1:
+            _require_json_attribute_depth(attributes, envelope_depth)
+            object.__setattr__(value, "attributes", attributes)
+            return
     _require_json_attribute_depth(attributes, envelope_depth)
     object.__setattr__(
         value, "attributes", tuple(sorted(attributes, key=lambda item: item.name))
@@ -3400,7 +3415,11 @@ def _validate_attributes(
     domain: AttributeDomain,
     declarations: Mapping[QualifiedName, AttributeDeclaration],
 ) -> None:
-    _unique_by_name(((value.name, value) for value in values), "attribute value")
+    if type(values) is tuple and len(values) <= 1:
+        if not values:
+            return
+    else:
+        _unique_by_name(((value.name, value) for value in values), "attribute value")
     for value in values:
         candidate = declarations.get(value.name)
         if not isinstance(candidate, AttributeDeclaration):
@@ -3593,6 +3612,11 @@ def _validate_relation_invariants(
     items_by_id: dict[str, ItemRef],
 ) -> None:
     for name, declaration in declarations.items():
+        check_acyclic = (
+            declaration.acyclic and declaration.left_type == declaration.right_type
+        )
+        if not declaration.single_parent and not check_acyclic:
+            continue
         indexed = [
             (index, edge)
             for index, edge in enumerate(relations)
@@ -3621,7 +3645,11 @@ def _validate_relation_invariants(
                         f"parent in {str(name)!r}; first parent is relation instance {previous[0]}"
                     )
                 parents[right] = (index, left)
-        if declaration.acyclic:
+        # One graph place has exactly one declared item type.  When the endpoint
+        # types are disjoint, no endpoint can be both the predecessor and the
+        # successor needed by a cycle, so a graph walk cannot find anything that
+        # endpoint validation has not already proved impossible.
+        if check_acyclic:
             _require_acyclic(name, resolved)
 
 

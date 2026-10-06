@@ -10,6 +10,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+import tiergraph.core as core_module
 from tests.conformance.kernel import KernelLawSuite
 from tiergraph import (
     AttributeDeclaration,
@@ -188,6 +189,16 @@ def test_every_attribute_carrier_canonicalizes_by_qualified_name() -> None:
     )
 
 
+def test_item_attribute_fast_path_preserves_out_of_type_behavior() -> None:
+    """None is refused and a one-shot iterable is consumed as before."""
+    with pytest.raises(TypeError, match="'NoneType' object is not iterable"):
+        Item(attributes=None)  # type: ignore[arg-type]
+
+    value = AttributeValue(name("value"), XsdType.STRING, "text")
+    supplied = (attribute for attribute in (value,))
+    assert Item(attributes=supplied).attributes == ()  # type: ignore[arg-type]
+
+
 def test_relation_side_allowed_sets_have_canonical_order() -> None:
     """Allowed endpoint kinds and tiers compare independently of supply order."""
     left = RelationSideDeclaration(
@@ -305,7 +316,7 @@ def test_relation_instance_order_remains_observable() -> None:
         (XsdType.STRING, ("text",), "text"),
         (XsdType.BOOLEAN, ("1", "true"), "true"),
         (XsdType.INTEGER, ("+001", "1"), "1"),
-        (XsdType.DECIMAL, ("01.00", "1.0"), "1.0"),
+        (XsdType.DECIMAL, ("+001", "01.00", "1.0"), "1.0"),
         (XsdType.DOUBLE, ("1.0", "1.00", "1e0"), "1.0E0"),
     ],
 )
@@ -606,6 +617,36 @@ def test_invariant_checks_accept_repeats_and_diamonds() -> None:
         Graph(NAMESPACES, (tier,), (simple, link, dag), relations).relations
         == relations
     )
+
+
+def test_disjoint_endpoint_types_need_no_cycle_walk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validated disjoint endpoint types prove one relation cannot cycle."""
+    left_tier = name("left")
+    right_tier = name("right")
+    left_type = name("left-type")
+    right_type = name("right-type")
+    tiers = (
+        Tier(TierDeclaration(left_tier, "Left"), (Item(),)),
+        Tier(TierDeclaration(right_tier, "Right"), (Item(),)),
+    )
+    declarations = (
+        SimpleRelationDeclaration(name("left-members"), left_tier, left_type),
+        SimpleRelationDeclaration(name("right-members"), right_tier, right_type),
+        BipartiteRelationDeclaration(
+            name("links"), left_type, right_type, acyclic=True
+        ),
+    )
+    relation = RelationInstance(
+        declarations[-1].name, ItemRef(left_tier, 0), ItemRef(right_tier, 0)
+    )
+
+    def unexpected_walk(*_args: object) -> None:
+        raise AssertionError("disjoint endpoint types already prove acyclicity")
+
+    monkeypatch.setattr(core_module, "_require_acyclic", unexpected_walk)
+    assert Graph(NAMESPACES, tiers, declarations, (relation,)).relations == (relation,)
 
 
 def test_acyclic_boundary_relation_resolves_mixed_anchor_spellings() -> None:

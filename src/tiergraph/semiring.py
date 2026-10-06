@@ -8,7 +8,16 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from decimal import MAX_EMAX, MIN_EMIN, Context, Decimal, getcontext, localcontext
+from decimal import (
+    MAX_EMAX,
+    MIN_EMIN,
+    Context,
+    Decimal,
+    Inexact,
+    Rounded,
+    getcontext,
+    localcontext,
+)
 from enum import Enum
 from itertools import repeat
 from typing import Any, Protocol, cast
@@ -273,16 +282,19 @@ class DecimalExtremumSemiring:
         right = self._value(right, "right")
         if left == self.zero or right == self.zero:
             return self.zero
-        # Decimal's ambient context is finite; choose enough precision for this
-        # addition so the XSD-decimal value-space operation stays exact.
-        precision = max(len(left.as_tuple().digits), len(right.as_tuple().digits))
-        precision += abs(left.adjusted() - right.adjusted()) + 2
         fold_context = _fold_decimal_context.get()
         if fold_context is not None:
-            fold_context.prec = precision
-            fold_context.Emax = MAX_EMAX
-            fold_context.Emin = MIN_EMIN
-            return self._value(fold_context.add(left, right), "result")
+            try:
+                return self._value(fold_context.add(left, right), "result")
+            except (Inexact, Rounded):
+                # Most folds enter with ample precision. Compute the wider bound
+                # only after the private context proves that one does not.
+                precision = _exact_decimal_sum_precision(left, right)
+                fold_context.prec = max(fold_context.prec, precision)
+                return self._value(fold_context.add(left, right), "result")
+        # Decimal's ambient context is finite; choose enough precision for this
+        # addition so the XSD-decimal value-space operation stays exact.
+        precision = _exact_decimal_sum_precision(left, right)
         with localcontext() as context:
             context.prec = precision
             context.Emax = MAX_EMAX
@@ -1092,7 +1104,11 @@ class PathSemiring(LexicographicSemiring[Decimal, tuple[tuple[str, ...], ...]]):
         if left == self.zero or right == self.zero:
             return self.zero
         cost = DECIMAL_TROPICAL.multiply(left[0], right[0])
-        paths = tuple(sorted({a + b for a in left[1] for b in right[1]}))
+        paths: tuple[tuple[str, ...], ...]
+        if len(left[1]) == 1 and len(right[1]) == 1:
+            paths = (left[1][0] + right[1][0],)
+        else:
+            paths = tuple(sorted({a + b for a in left[1] for b in right[1]}))
         return (cost, paths)
 
     @property
@@ -1106,13 +1122,24 @@ _fold_decimal_context: ContextVar[Context | None] = ContextVar(
 )
 
 
+def _exact_decimal_sum_precision(left: Decimal, right: Decimal) -> int:
+    """Return a context precision sufficient for one exact finite sum."""
+    precision = max(len(left.as_tuple().digits), len(right.as_tuple().digits))
+    return precision + abs(left.adjusted() - right.adjusted()) + 2
+
+
 @contextmanager
 def _semiring_operation_scope(semiring: Semiring[Any]) -> Iterator[None]:
     """Share exact Decimal setup within one fold without changing ambient state."""
     if not isinstance(semiring, (DecimalExtremumSemiring, PathSemiring)):
         yield
         return
-    token = _fold_decimal_context.set(getcontext().copy())
+    context = getcontext().copy()
+    context.Emax = MAX_EMAX
+    context.Emin = MIN_EMIN
+    context.traps[Inexact] = True
+    context.traps[Rounded] = True
+    token = _fold_decimal_context.set(context)
     try:
         yield
     finally:
