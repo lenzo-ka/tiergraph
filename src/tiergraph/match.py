@@ -66,6 +66,11 @@ MAX_PATTERN_STATES = 1_000_000
 _MAX_PATTERN_NODES = 10_000
 _MAX_PATTERN_DEPTH = 256
 _MIN_PARTS = 2
+_GATE_MIN_PARTS = 32
+_GATE_DEPTH = 3
+_GATE_FRAGMENT_STATES = 4096
+# Tests turn the optimization off to compare against the original closure path.
+_GATE_PRUNING = True
 _GUARD_ALWAYS = 0
 _GUARD_START = 1
 _GUARD_END = 2
@@ -409,6 +414,117 @@ class _AtomEdge:
     focus: bool
 
 
+type _GateAtoms = int | tuple[int, ...] | None
+type _GateLookahead = tuple[_GateAtoms, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Gate:
+    """Per-successor tests for one large alternation split."""
+
+    targets: tuple[int, ...]
+    first: tuple[_GateLookahead, ...]
+
+
+def _gate_closure(
+    epsilon: tuple[tuple[_Epsilon, ...], ...], seeds: set[int]
+) -> set[int] | None:
+    """Close *seeds* ignoring guards, or decline an oversized fragment."""
+    result = set(seeds)
+    pending = list(seeds)
+    while pending:
+        state = pending.pop()
+        for edge in epsilon[state]:
+            if edge.target not in result:
+                result.add(edge.target)
+                if len(result) > _GATE_FRAGMENT_STATES:
+                    return None
+                pending.append(edge.target)
+    return result
+
+
+def _gate_successor(
+    edge: _Epsilon,
+    accept: int,
+    epsilon: tuple[tuple[_Epsilon, ...], ...],
+    atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+    atom_sets: dict[tuple[int, ...], tuple[int, ...]],
+) -> _GateLookahead:
+    """Analyze one successor without using guards or predicate truth."""
+    reachable = _gate_closure(epsilon, {edge.target})
+    if reachable is None:
+        return (None,) * _GATE_DEPTH
+    accepted = accept in reachable
+    first: list[_GateAtoms] = []
+    for depth in range(_GATE_DEPTH):
+        if accepted:
+            first.append(None)
+        else:
+            atoms = tuple(
+                sorted(
+                    {
+                        atom_edge.atom
+                        for state in reachable
+                        for atom_edge in atom_edges[state]
+                    }
+                )
+            )
+            if len(atoms) == 1:
+                first.append(atoms[0])
+            else:
+                first.append(atom_sets.setdefault(atoms, atoms))
+        targets = {
+            atom_edge.target for state in reachable for atom_edge in atom_edges[state]
+        }
+        reachable = _gate_closure(epsilon, targets)
+        if reachable is None:
+            first.extend([None] * (_GATE_DEPTH - depth - 1))
+            break
+        if not accepted and accept in reachable:
+            accepted = True
+    return tuple(first)
+
+
+def _build_gates(
+    accept: int,
+    epsilon: tuple[tuple[_Epsilon, ...], ...],
+    atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+    states: tuple[int, ...] | None = None,
+) -> Mapping[int, _Gate] | None:
+    """Build safe gates only for known or discovered large NFA splits."""
+    candidates = (
+        tuple(
+            state
+            for state, edges in enumerate(epsilon)
+            if sum(edge.guard == _GUARD_ALWAYS for edge in edges) >= _GATE_MIN_PARTS
+        )
+        if states is None
+        else states
+    )
+    if not candidates:
+        return None
+    gates: dict[int, _Gate] = {}
+    atom_sets: dict[tuple[int, ...], tuple[int, ...]] = {}
+    for state in candidates:
+        successors = tuple(
+            edge for edge in epsilon[state] if edge.guard == _GUARD_ALWAYS
+        )
+        gates[state] = _Gate(
+            tuple(edge.target for edge in successors),
+            tuple(
+                _gate_successor(
+                    edge,
+                    accept,
+                    epsilon,
+                    atom_edges,
+                    atom_sets,
+                )
+                for edge in successors
+            ),
+        )
+    return MappingProxyType(gates)
+
+
 @dataclass(slots=True)
 class _BuildFrame:
     """One suspended Thompson-construction call."""
@@ -427,6 +543,7 @@ class _NfaBuilder:
         self.atoms: list[list[_AtomEdge]] = []
         self.predicates: list[Predicate] = []
         self._predicate_indices: dict[Predicate, int] = {}
+        self.gate_splits: list[int] | None = None
 
     def state(self) -> int:
         """Allocate and return one empty NFA state."""
@@ -452,6 +569,13 @@ class _NfaBuilder:
 
         def _frame(current: Pattern, is_focused: bool) -> _BuildFrame:
             start, end = self.state(), self.state()
+            if (
+                isinstance(current, AltPattern)
+                and len(current.parts) >= _GATE_MIN_PARTS
+            ):
+                if self.gate_splits is None:
+                    self.gate_splits = []
+                self.gate_splits.append(start)
             return _BuildFrame(current, is_focused, start, end, start)
 
         frames = [_frame(pattern, focused)]
@@ -910,11 +1034,78 @@ class CompiledPattern:
     epsilon: tuple[tuple[_Epsilon, ...], ...]
     atom_edges: tuple[tuple[_AtomEdge, ...], ...]
     predicates: tuple[Predicate, ...]
+    _gates: Mapping[int, _Gate] | None = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_gates",
+            _build_gates(self.accept, self.epsilon, self.atom_edges),
+        )
+
+    @classmethod
+    def _from_builder(
+        cls,
+        pattern: Pattern,
+        start: int,
+        accept: int,
+        epsilon: tuple[tuple[_Epsilon, ...], ...],
+        atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+        predicates: tuple[Predicate, ...],
+        gates: Mapping[int, _Gate] | None,
+    ) -> CompiledPattern:
+        """Construct from an NFA builder that already identified large splits."""
+        result = object.__new__(cls)
+        object.__setattr__(result, "pattern", pattern)
+        object.__setattr__(result, "start", start)
+        object.__setattr__(result, "accept", accept)
+        object.__setattr__(result, "epsilon", epsilon)
+        object.__setattr__(result, "atom_edges", atom_edges)
+        object.__setattr__(result, "predicates", predicates)
+        object.__setattr__(result, "_gates", gates)
+        return result
 
     @property
     def max_width(self) -> int | None:
         """Return the exact maximum consumed item count, or None if unbounded."""
         return _max_width(self.pattern)
+
+    def _gated_edges(
+        self,
+        state: int,
+        nodes: tuple[Node, ...],
+        truth: _TruthTable,
+        position: int,
+        length: int,
+    ) -> tuple[tuple[_Epsilon, ...], tuple[int, ...]]:
+        """Return safe successors and targets whose gate tests did work."""
+        edges = self.epsilon[state]
+        gates = cast(Mapping[int, _Gate], self._gates)
+        gate = gates.get(state)
+        if gate is None or position >= length:
+            return edges, ()
+        skipped: set[int] = set()
+        stop = min(_GATE_DEPTH, length - position)
+        for target, first_by_depth in zip(gate.targets, gate.first, strict=True):
+            keep = True
+            for depth in range(stop):
+                first = first_by_depth[depth]
+                if first is None:
+                    continue
+                node = nodes[position + depth]
+                matched = (
+                    truth[first][node]
+                    if isinstance(first, int)
+                    else any(truth[atom][node] for atom in first)
+                )
+                if not matched:
+                    keep = False
+                    break
+            if not keep:
+                skipped.add(target)
+        if not skipped:
+            return edges, gate.targets
+        return tuple(edge for edge in edges if edge.target not in skipped), gate.targets
 
     def _closure(
         self,
@@ -922,6 +1113,8 @@ class CompiledPattern:
         position: int,
         length: int,
         *,
+        nodes: tuple[Node, ...] | None = None,
+        truth: _TruthTable | None = None,
         open_right: bool = False,
         open_left: bool = False,
         meter: _ChargeMeter | None = None,
@@ -929,9 +1122,31 @@ class CompiledPattern:
     ) -> set[int]:
         result = set(states)
         pending = list(states)
+        if nodes is None or truth is None or not self._gates or not _GATE_PRUNING:
+            while pending:
+                state = pending.pop()
+                for edge in self.epsilon[state]:
+                    if edge.guard == _GUARD_END and open_right:
+                        continue
+                    if edge.guard == _GUARD_START and (position != 0 or open_left):
+                        continue
+                    if edge.guard == _GUARD_END and position != length:
+                        continue
+                    if edge.target not in result:
+                        result.add(edge.target)
+                        pending.append(edge.target)
+            if unchecked is not None:
+                unchecked._spent += len(result)
+            elif meter is not None:
+                meter.charge(len(result))
+            return result
+        gate_targets: list[tuple[int, ...]] = []
         while pending:
             state = pending.pop()
-            for edge in self.epsilon[state]:
+            edges, tested = self._gated_edges(state, nodes, truth, position, length)
+            if tested:
+                gate_targets.append(tested)
+            for edge in edges:
                 if edge.guard == _GUARD_END and open_right:
                     continue
                 if edge.guard == _GUARD_START and (position != 0 or open_left):
@@ -941,10 +1156,18 @@ class CompiledPattern:
                 if edge.target not in result:
                     result.add(edge.target)
                     pending.append(edge.target)
+        # One existing closure unit pays for either visiting a successor's
+        # entry state or consulting the gate that replaces that visit.  This
+        # charges every successor test without exceeding the full closure.
+        charge = (
+            len(result)
+            + sum(len(targets) for targets in gate_targets)
+            - sum(target in result for targets in gate_targets for target in targets)
+        )
         if unchecked is not None:
-            unchecked._spent += len(result)
+            unchecked._spent += charge
         elif meter is not None:
-            meter.charge(len(result))
+            meter.charge(charge)
         return result
 
     def _reverse_epsilon(self) -> tuple[tuple[tuple[int, int], ...], ...]:
@@ -1056,6 +1279,7 @@ class CompiledPattern:
         position: int,
         length: int,
         *,
+        nodes: tuple[Node, ...],
         open_right: bool = False,
         open_left: bool = False,
         meter: _ChargeMeter | None = None,
@@ -1075,6 +1299,8 @@ class CompiledPattern:
             targets,
             position + 1,
             length,
+            nodes=nodes,
+            truth=truth,
             open_right=open_right,
             open_left=open_left,
             meter=meter,
@@ -1119,6 +1345,8 @@ class CompiledPattern:
                 {self.start},
                 start,
                 length,
+                nodes=scope.nodes,
+                truth=truth,
                 open_right=True,
                 open_left=scope.open_left,
                 meter=meter,
@@ -1130,6 +1358,7 @@ class CompiledPattern:
                     truth,
                     position,
                     length,
+                    nodes=scope.nodes,
                     open_right=True,
                     open_left=scope.open_left,
                     meter=meter,
@@ -1154,6 +1383,8 @@ class CompiledPattern:
                 {self.start},
                 start,
                 length,
+                nodes=scope.nodes,
+                truth=truth,
                 open_right=True,
                 open_left=scope.open_left,
                 meter=meter,
@@ -1167,6 +1398,7 @@ class CompiledPattern:
                     truth,
                     position,
                     length,
+                    nodes=scope.nodes,
                     open_right=True,
                     open_left=scope.open_left,
                     meter=meter,
@@ -1208,6 +1440,8 @@ class CompiledPattern:
                     active | {self.start},
                     position,
                     length,
+                    nodes=scope.nodes,
+                    truth=truth,
                     open_left=scope.open_left,
                     meter=meter,
                 )
@@ -1220,6 +1454,7 @@ class CompiledPattern:
                         truth,
                         position,
                         length,
+                        nodes=scope.nodes,
                         open_left=scope.open_left,
                         meter=meter,
                     )
@@ -1292,6 +1527,8 @@ class CompiledPattern:
                     active | {self.start},
                     position,
                     length,
+                    nodes=scope.nodes,
+                    truth=truth,
                     open_left=scope.open_left,
                     meter=meter,
                 )
@@ -1303,6 +1540,7 @@ class CompiledPattern:
                         truth,
                         position,
                         length,
+                        nodes=scope.nodes,
                         open_left=scope.open_left,
                         meter=meter,
                     )
@@ -1408,6 +1646,8 @@ class CompiledPattern:
                 {self.start},
                 start,
                 length,
+                nodes=scope.nodes,
+                truth=truth,
                 open_right=open_right,
                 open_left=scope.open_left,
                 meter=meter,
@@ -1420,6 +1660,7 @@ class CompiledPattern:
                     truth,
                     end,
                     length,
+                    nodes=scope.nodes,
                     open_right=open_right,
                     open_left=scope.open_left,
                     meter=meter,
@@ -1867,13 +2108,21 @@ def compile_pattern(pattern: Pattern) -> CompiledPattern:
         )
     builder = _NfaBuilder()
     start, accept = builder.build(pattern)
-    return CompiledPattern(
+    epsilon = tuple(tuple(edges) for edges in builder.epsilon)
+    atom_edges = tuple(tuple(edges) for edges in builder.atoms)
+    return CompiledPattern._from_builder(
         pattern,
         start,
         accept,
-        tuple(tuple(edges) for edges in builder.epsilon),
-        tuple(tuple(edges) for edges in builder.atoms),
+        epsilon,
+        atom_edges,
         tuple(builder.predicates),
+        _build_gates(
+            accept,
+            epsilon,
+            atom_edges,
+            () if builder.gate_splits is None else tuple(builder.gate_splits),
+        ),
     )
 
 

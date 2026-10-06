@@ -499,6 +499,15 @@ path-plan operations, and pooled carrier additions. Budgeted conditioning
 bypasses its topology cache. Passing the same `WorkMeter` across entries
 records their combined work.
 
+Large pattern alternations use bounded lookahead to omit successors that cannot
+accept. Steps for a gated alternation count lookups at one unit per successor,
+charged with the enclosing epsilon closure. When lookahead prunes work, the
+closure's total charge is no greater than the corresponding full-NFA charge.
+This lowers charged steps for large alternations, but measurements show no
+wall-time gain. At the step-budget boundary, an outermost span call that
+previously refused can therefore return a nonempty `CUT_AT_BUDGET` partial
+result; a call that previously returned a result never changes to a refusal.
+
 Compilation itself is not metered. Instead, pattern text allows at most 256
 nested groups, a directly constructed pattern AST at most 256 levels, and a
 compiled pattern at most `MAX_PATTERN_POSITIONS` item positions and
