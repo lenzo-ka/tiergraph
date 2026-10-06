@@ -12,27 +12,13 @@ sorts its nodes into the graph's canonical order and supports union (`|`),
 intersection (`&`), and difference (`-`) with another set from the same graph.
 Because the order is canonical, set algebra between selections is stable.
 
-`evaluate_selection(..., budget=...)` bounds selector scans and canonical set
-work with the same `WorkBudget` or shared `WorkMeter` used by matching. Nested
-`SequenceSelector` pattern work and the surrounding selector-tree traversal
-charge one ambient meter. Exhaustion raises `BudgetExhausted`; selections never
-return a partial node set.
-
 `WhereSelector` filters one base selector with a typed value predicate from
 `tiergraph.predicate`. `PredicateSyntax` parses the graph-free text form used by
 `tiergraph select --where`; `Related` quantifies a target predicate over one
 relation step. The complete value, missing-cell, JSON, and related-item examples
-are in [Matching with existing pieces](matching-with-existing-pieces.md).
-
-Relation instances live in two collections -- bipartite pairs and polyadic
-instances -- that index separately, so index `0` names a different fact in each.
-They are two node kinds accordingly, `relation_instance` and
-`polyadic_relation_instance`, each over its own index. An attribute selection on
-the `relation_instance` domain reads both collections, because the kernel admits
-that domain's values on either, and it reports each carrier under its own kind.
-A polyadic node sorts by its declaration, then by its two side arities, then by
-its endpoints read in stored order, so two instances that differ only in the
-order of one side stay distinct and sort apart.
+are in [Predicates and offset joins](predicates-and-offset-joins.md). A
+`SequenceSelector` selects the focus of a [sequence pattern](patterns.md), and
+`evaluate_selection(..., budget=...)` accepts a [work budget](work-budgets.md).
 
 The example is a small acyclic `links` relation over four hosts: `a -> b`,
 `b -> c`, and `a -> d`.
@@ -90,6 +76,16 @@ def names(nodes: NodeSet) -> list[str]:
         labels.append(graph.tiers[0].items[reference.index].durable_id or "")
     return labels
 ```
+
+Relation instances live in two collections -- bipartite pairs and polyadic
+instances -- that index separately, so index `0` names a different fact in each.
+They are two node kinds accordingly, `relation_instance` and
+`polyadic_relation_instance`, each over its own index. An attribute selection on
+the `relation_instance` domain reads both collections, because the kernel admits
+that domain's values on either, and it reports each carrier under its own kind.
+A polyadic node sorts by its declaration, then by its two side arities, then by
+its endpoints read in stored order, so two instances that differ only in the
+order of one side stay distinct and sort apart.
 
 ## Walking a relation
 
@@ -185,7 +181,7 @@ graph content, and reading either side as a bag of endpoints, or pairing the two
 sides off index by index, would lose it.
 
 `OrderedContainment` below is the item-only, source-unique, acyclic profile over
-this shared engine. Its existing result types and ordering remain unchanged.
+this shared engine.
 
 ## Ordered containment
 

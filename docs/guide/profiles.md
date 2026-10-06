@@ -221,7 +221,7 @@ undecided: roots implied by a dependency relation the caller did not enumerate
 undecided: whether the stored roots are the whole inferred set, which OrderedRootsProfile.is_exhaustive answers separately
 ```
 
-Four outcomes keep that answer honest. `satisfied` means the check decided every
+Four outcomes separate what was decided from what was not. `satisfied` means the check decided every
 condition the profile declares. `satisfied_as_checked` means it decided the ones
 it can and the report names the rest, so a partial answer cannot be read as a
 whole guarantee: ordered roots reconciles over the dependency relations you

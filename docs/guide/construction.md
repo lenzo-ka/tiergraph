@@ -38,15 +38,14 @@ immutable content is already available to the caller.
 graph answers `declare()`, `set_attribute()`, `remove_attribute()`,
 `insert_item()`, `insert_items()`, `remove_item()`, `move_item()`, `swap_items()`,
 `add_relation()`, and `remove_relation()` by returning a new graph. The editor
-`Graph.edit()` returns answers the same operations by changing itself, and
+that `Graph.edit()` returns answers the same operations by changing itself, and
 `GraphEditor.freeze()` runs the one validation at the end. Whether an operation
 rewrites or mutates follows from the carrier a caller holds, never from an
 argument, so nothing has to decide at run time which kind of object it has.
 
-For ordered nonempty input, `insert_items()` equals repeated `insert_item()` calls.
-It performs one restructure.
-An empty input still validates its tier and index, unlike a zero-step fold.
-Sets and mappings are refused because they do not provide a required order.
+`insert_items()` inserts an ordered run of items in one restructure, with the
+same result as repeated `insert_item()` calls. An empty run still validates its
+tier and index. Sets and mappings are refused because they supply no order.
 
 Setting a value replaces any value of the same name on that carrier. The value's
 own declaration says which domain it belongs to, so a caller spells the place
@@ -54,10 +53,11 @@ and not the domain: `None` is the document, a qualified name is a tier or a
 relation declaration, an item or durable reference is an item, a structural or
 durable boundary reference is a boundary, and an index or a durable id is a
 relation instance. A bare index names a bipartite relation instance.
-`RelationInstanceRef`, `PolyadicInstanceRef`,
-`DurableRelationRef`, and `DurablePolyadicRef` name a relation instance by
-carrier; these references are how a polyadic instance without a durable id is
-reached.
+`RelationInstanceRef`, `PolyadicInstanceRef`, `DurableRelationRef`, and
+`DurablePolyadicRef` name a relation instance by carrier, and are how a
+polyadic instance without a durable id is reached. The same targets serve
+`set_attribute()` and `remove_attribute()`, and `remove_relation()` accepts the
+same instance references.
 
 Structural operations keep the graph's own references denoting what they
 denoted. Item coordinates stored inside the graph move with their items, and
@@ -68,8 +68,6 @@ follow; `promote_boundary()` gives it one. A removal is refused while the graph
 still references the item, and a refused operation writes nothing.
 
 ```python
-from tiergraph.core import _scalar_attribute
-
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
@@ -122,9 +120,10 @@ edit_settled = edit_editor.freeze()
 print(
     "scores:",
     [
-        _scalar_attribute(value).lexical
+        value.lexical
         for item in edit_settled.tiers[0].items
         for value in item.attributes
+        if isinstance(value, AttributeValue)
     ],
 )
 
@@ -143,6 +142,15 @@ The sweep applies all of its edits and validates once. The same operations on
 the frozen carrier would build and validate a graph after every call, which is
 the cost the editor exists to avoid; the frozen carrier is for the single edit,
 where building one graph is the whole job.
+
+## Memory and large graphs
+
+A graph built from many similar items can hold many equal attribute values and
+item references as separate objects. `Graph.share_values()` returns an equal
+graph in which repeated item attributes and the structural item references that
+relation instances use are shared. It never changes the graph it is called on,
+so for the duration of the call both graphs are in memory; the saving appears
+once the caller drops the original.
 
 ## The build machine
 
@@ -298,9 +306,9 @@ disturbances: 0
 rewrite 'drop' declares DECORATE, but item '{https://example.com/doc}words'[2] has no counterpart in the result.
 ```
 
-`subjects` is the honest part of the certificate. It counts the structures the
-source asserts, every one of which was examined, so a claim over a graph that
-asserts almost nothing cannot be read as a strong one.
+`subjects` counts the structures the source asserts, every one of which was
+examined, so a claim over a graph that asserts almost nothing cannot be read as
+a strong one.
 
 A discharged `DECORATE` licenses one thing. Every reading taken over the source
 is still a correct reading of the result without re-reading it: an item's

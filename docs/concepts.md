@@ -15,9 +15,12 @@ The views are computed, not stored. Selection reads tiers, items, and
 boundaries as nodes. Predicates filter selected nodes by typed values and can
 quantify over one relation step or over half-open intervals read from declared
 item attributes. Interval joins return matching node pairs without storing a
-new relation. Traversal follows declared relation incidence. Profiles interpret
-particular declarations as clocks, roots, choices, or recursive JSON values.
-Folds evaluate a finite dependency relation with a caller-supplied semiring.
+new relation. Sequence patterns match regular expressions of item tests over a
+declared ordering. Traversal follows declared relation incidence. Profiles
+interpret particular declarations as clocks, roots, choices, or recursive JSON
+values.
+Folds evaluate a finite dependency relation with a caller-supplied semiring,
+and grammars parse token input into a chart that folds read the same way.
 None of these views adds a new kind of stored node; each is a reading of the
 same graph.
 
@@ -50,8 +53,7 @@ same graph.
 
 `XsdType` types scalar values, not graph referents. An in-graph reference is a
 relation: its declaration types the referents and can validate `single_parent`
-and `acyclic` promises. An out-of-graph reference is a `STRING`, honestly,
-because the graph cannot validate its target. A hypothetical reference-valued
+and `acyclic` promises. An out-of-graph reference is a `STRING`, because the graph cannot validate its target. A hypothetical reference-valued
 `XsdType` could say only "this string is a reference," which is strictly weaker
 than the referent typing and promises relations already provide.
 
@@ -135,11 +137,6 @@ a coordinate, and the families that spell one are `ItemRef` and `BoundaryRef`,
 with `DurableItemRef` and `DurableBoundaryRef` naming the same places by an
 identity the graph carries rather than by where they sit.
 
-This document said so before the code did. The sentence above about a structural
-reference being a coordinate was already published while the type was called
-`PositionRef`, and the prose was the half that was right: the reading has not
-changed, only the spelling caught up to it.
-
 Coordinates are cheap to key on and they move. An edit that inserts an item
 shifts every later index in that tier, and removing a relation shifts every later
 relation index in the graph. A `Displacement` reports where every position of one
@@ -210,8 +207,7 @@ vacuous rather than letting that pass read as a strong one. This does not weaken
 an operation's own displacement accounting: the operation sees the movement as
 it happens, while a declaration comparing two values has no such history.
 
-One limit is worth stating plainly rather than papering over: the constructor can
-validate that a seal is internally consistent, but it cannot know whether a
+The constructor can validate that a seal is internally consistent, but it cannot know whether a
 hand-built prefix matches anyone else's, so a constructed graph may claim any
 seal. That is the same limit durable identifiers already live with. What a seal
 does guarantee is that it is refutable across every rewrite, checkable between
@@ -249,13 +245,11 @@ references outside their tier, relation endpoints of the wrong kind, and
 violations of declared constraints such as acyclicity or single-parent
 incidence.
 
-Collections whose supply order carries no meaning are canonicalized: namespaces,
-relation and attribute declarations, every attribute-value set, seals, layers and
-the facts within each layer, the sparse boundary values, and a relation side's
-endpoint kinds and tiers are all sorted, so two graphs that differ only in input
-order compare equal and serialize identically. Tiers, tier items, relation
-instances, and polyadic endpoint sequences keep their order, because for those
-the sequence is data.
+Collections whose supply order carries no meaning are canonicalized, so two
+graphs that differ only in input order compare equal and serialize identically.
+Tiers, tier items, relation instances, and polyadic endpoint sequences keep
+their order, because for those the sequence is data; the
+[format notes](format.md) list every collection.
 
 Profiles add their own checks without adding kernel node kinds. Constructing a
 `ClockProfile`, an `OrderedRootsProfile`, or a `JsonValueProfile` validates the
