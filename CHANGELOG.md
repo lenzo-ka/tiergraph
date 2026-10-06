@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recomputing a precision bound for every multiplication.
 - Made ranked PATH folds concatenate already-singleton witness values directly
   instead of running general Cartesian deduplication and sorting.
+- Lowered charged steps for large pattern alternations with bounded lookahead,
+  without a wall-time gain, while preserving every pattern and lattice result.
+  At a step-budget boundary, an outermost span call that previously refused may
+  now return a nonempty `cut-at-budget` prefix; the reverse change cannot occur.
 - Refused empty and non-string durable relation references and relation-instance
   durable ids at construction.
 - Allowed layer flattening onto anonymous polyadic relation instances.
