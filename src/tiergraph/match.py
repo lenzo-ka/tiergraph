@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, cast, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 from tiergraph.budget import (
     _MAX_USER_STEPS,
@@ -426,8 +426,35 @@ class _Gate:
     first: tuple[_GateLookahead, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _Gates(Mapping[int, _Gate]):
+    """Store gates as sorted immutable, copyable and picklable pairs."""
+
+    entries: tuple[tuple[int, _Gate], ...]
+
+    def __getitem__(self, key: int) -> _Gate:
+        lower = 0
+        upper = len(self.entries)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            state, gate = self.entries[middle]
+            if state < key:
+                lower = middle + 1
+            elif state > key:
+                upper = middle
+            else:
+                return gate
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[int]:
+        return (state for state, _gate in self.entries)
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
 def _gate_closure(
-    epsilon: tuple[tuple[_Epsilon, ...], ...], seeds: set[int]
+    epsilon: tuple[tuple[int, ...], ...], seeds: set[int]
 ) -> set[int] | None:
     """Close *seeds* ignoring guards, or decline an oversized fragment."""
     result = set(seeds)
@@ -435,23 +462,24 @@ def _gate_closure(
     while pending:
         state = pending.pop()
         for edge in epsilon[state]:
-            if edge.target not in result:
-                result.add(edge.target)
+            target = _epsilon_target(edge)
+            if target not in result:
+                result.add(target)
                 if len(result) > _GATE_FRAGMENT_STATES:
                     return None
-                pending.append(edge.target)
+                pending.append(target)
     return result
 
 
 def _gate_successor(
-    edge: _Epsilon,
+    edge: int,
     accept: int,
-    epsilon: tuple[tuple[_Epsilon, ...], ...],
-    atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+    epsilon: tuple[tuple[int, ...], ...],
+    atom_edges: tuple[tuple[int, ...], ...],
     atom_sets: dict[tuple[int, ...], tuple[int, ...]],
 ) -> _GateLookahead:
     """Analyze one successor without using guards or predicate truth."""
-    reachable = _gate_closure(epsilon, {edge.target})
+    reachable = _gate_closure(epsilon, {_epsilon_target(edge)})
     if reachable is None:
         return (None,) * _GATE_DEPTH
     accepted = accept in reachable
@@ -463,7 +491,7 @@ def _gate_successor(
             atoms = tuple(
                 sorted(
                     {
-                        atom_edge.atom
+                        _atom_index(atom_edge)
                         for state in reachable
                         for atom_edge in atom_edges[state]
                     }
@@ -474,7 +502,9 @@ def _gate_successor(
             else:
                 first.append(atom_sets.setdefault(atoms, atoms))
         targets = {
-            atom_edge.target for state in reachable for atom_edge in atom_edges[state]
+            _atom_target(atom_edge)
+            for state in reachable
+            for atom_edge in atom_edges[state]
         }
         reachable = _gate_closure(epsilon, targets)
         if reachable is None:
@@ -487,16 +517,17 @@ def _gate_successor(
 
 def _build_gates(
     accept: int,
-    epsilon: tuple[tuple[_Epsilon, ...], ...],
-    atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+    epsilon: tuple[tuple[int, ...], ...],
+    atom_edges: tuple[tuple[int, ...], ...],
     states: tuple[int, ...] | None = None,
-) -> Mapping[int, _Gate] | None:
+) -> _Gates | None:
     """Build safe gates only for known or discovered large NFA splits."""
     candidates = (
         tuple(
             state
             for state, edges in enumerate(epsilon)
-            if sum(edge.guard == _GUARD_ALWAYS for edge in edges) >= _GATE_MIN_PARTS
+            if sum(_epsilon_guard(edge) == _GUARD_ALWAYS for edge in edges)
+            >= _GATE_MIN_PARTS
         )
         if states is None
         else states
@@ -507,10 +538,10 @@ def _build_gates(
     atom_sets: dict[tuple[int, ...], tuple[int, ...]] = {}
     for state in candidates:
         successors = tuple(
-            edge for edge in epsilon[state] if edge.guard == _GUARD_ALWAYS
+            edge for edge in epsilon[state] if _epsilon_guard(edge) == _GUARD_ALWAYS
         )
         gates[state] = _Gate(
-            tuple(edge.target for edge in successors),
+            tuple(_epsilon_target(edge) for edge in successors),
             tuple(
                 _gate_successor(
                     edge,
@@ -522,7 +553,50 @@ def _build_gates(
                 for edge in successors
             ),
         )
-    return MappingProxyType(gates)
+    return _Gates(tuple(sorted(gates.items())))
+
+
+_EPSILON_GUARD_BITS = 2
+_EPSILON_GUARD_MASK = (1 << _EPSILON_GUARD_BITS) - 1
+_ATOM_INDEX_BITS = 14
+_ATOM_INDEX_MASK = (1 << _ATOM_INDEX_BITS) - 1
+_ATOM_TARGET_SHIFT = _ATOM_INDEX_BITS + 1
+
+
+def _pack_epsilon(target: int, guard: int = _GUARD_ALWAYS) -> int:
+    """Pack one epsilon edge into one nonnegative Python integer."""
+    return (target << _EPSILON_GUARD_BITS) | guard
+
+
+def _epsilon_target(edge: _Epsilon | int) -> int:
+    return edge.target if isinstance(edge, _Epsilon) else edge >> _EPSILON_GUARD_BITS
+
+
+def _epsilon_guard(edge: _Epsilon | int) -> int:
+    return edge.guard if isinstance(edge, _Epsilon) else edge & _EPSILON_GUARD_MASK
+
+
+def _pack_atom(target: int, atom: int, focus: bool) -> int:
+    """Pack one atom edge under the pattern's 10,000-node bound."""
+    if atom > _ATOM_INDEX_MASK:
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"pattern has {atom + 1} distinct atoms; packed edge limit "
+            f"{_ATOM_INDEX_MASK + 1}",
+        )
+    return (target << _ATOM_TARGET_SHIFT) | (atom << 1) | focus
+
+
+def _atom_target(edge: _AtomEdge | int) -> int:
+    return edge.target if isinstance(edge, _AtomEdge) else edge >> _ATOM_TARGET_SHIFT
+
+
+def _atom_index(edge: _AtomEdge | int) -> int:
+    return edge.atom if isinstance(edge, _AtomEdge) else (edge >> 1) & _ATOM_INDEX_MASK
+
+
+def _atom_focus(edge: _AtomEdge | int) -> bool:
+    return edge.focus if isinstance(edge, _AtomEdge) else bool(edge & 1)
 
 
 @dataclass(slots=True)
@@ -539,8 +613,8 @@ class _BuildFrame:
 
 class _NfaBuilder:
     def __init__(self) -> None:
-        self.epsilon: list[list[_Epsilon]] = []
-        self.atoms: list[list[_AtomEdge]] = []
+        self.epsilon: list[list[int]] = []
+        self.atoms: list[list[int]] = []
         self.predicates: list[Predicate] = []
         self._predicate_indices: dict[Predicate, int] = {}
         self.gate_splits: list[int] | None = None
@@ -587,34 +661,34 @@ class _NfaBuilder:
                 child_start, child_end = returned
                 returned = None
                 if isinstance(node, FocusPattern):
-                    self.epsilon[current.start].append(_Epsilon(child_start))
-                    self.epsilon[child_end].append(_Epsilon(current.end))
+                    self.epsilon[current.start].append(_pack_epsilon(child_start))
+                    self.epsilon[child_end].append(_pack_epsilon(current.end))
                     returned = current.start, current.end
                     frames.pop()
                 elif isinstance(node, SeqPattern):
-                    self.epsilon[current.cursor].append(_Epsilon(child_start))
+                    self.epsilon[current.cursor].append(_pack_epsilon(child_start))
                     current.cursor = child_end
                     current.index += 1
                 elif isinstance(node, AltPattern):
-                    self.epsilon[current.start].append(_Epsilon(child_start))
-                    self.epsilon[child_end].append(_Epsilon(current.end))
+                    self.epsilon[current.start].append(_pack_epsilon(child_start))
+                    self.epsilon[child_end].append(_pack_epsilon(current.end))
                     current.index += 1
                 else:
                     assert isinstance(node, RepeatPattern)
                     required = current.index < node.min
-                    self.epsilon[current.cursor].append(_Epsilon(child_start))
+                    self.epsilon[current.cursor].append(_pack_epsilon(child_start))
                     if required:
                         current.cursor = child_end
                     elif node.max is None:
-                        self.epsilon[child_end].append(_Epsilon(current.cursor))
+                        self.epsilon[child_end].append(_pack_epsilon(current.cursor))
                     else:
-                        self.epsilon[current.cursor].append(_Epsilon(child_end))
+                        self.epsilon[current.cursor].append(_pack_epsilon(child_end))
                         current.cursor = child_end
                     current.index += 1
                 continue
             if isinstance(node, AtomPattern):
                 self.atoms[current.start].append(
-                    _AtomEdge(
+                    _pack_atom(
                         current.end,
                         self.atom_index(node.predicate),
                         current.focused,
@@ -623,11 +697,15 @@ class _NfaBuilder:
                 returned = current.start, current.end
                 frames.pop()
             elif isinstance(node, StartPattern):
-                self.epsilon[current.start].append(_Epsilon(current.end, _GUARD_START))
+                self.epsilon[current.start].append(
+                    _pack_epsilon(current.end, _GUARD_START)
+                )
                 returned = current.start, current.end
                 frames.pop()
             elif isinstance(node, EndPattern):
-                self.epsilon[current.start].append(_Epsilon(current.end, _GUARD_END))
+                self.epsilon[current.start].append(
+                    _pack_epsilon(current.end, _GUARD_END)
+                )
                 returned = current.start, current.end
                 frames.pop()
             elif isinstance(node, FocusPattern):
@@ -637,7 +715,7 @@ class _NfaBuilder:
                     frames.append(_frame(node.parts[current.index], current.focused))
                 else:
                     if isinstance(node, SeqPattern):
-                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                        self.epsilon[current.cursor].append(_pack_epsilon(current.end))
                     returned = current.start, current.end
                     frames.pop()
             else:
@@ -645,11 +723,11 @@ class _NfaBuilder:
                 total = node.min + 1 if node.max is None else node.max
                 if current.index < total:
                     if current.index == node.min and node.max is None:
-                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                        self.epsilon[current.cursor].append(_pack_epsilon(current.end))
                     frames.append(_frame(node.body, current.focused))
                 else:
                     if node.max is not None:
-                        self.epsilon[current.cursor].append(_Epsilon(current.end))
+                        self.epsilon[current.cursor].append(_pack_epsilon(current.end))
                     returned = current.start, current.end
                     frames.pop()
         assert returned is not None
@@ -1024,23 +1102,59 @@ class BoundOrdering:
         return prepared
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class CompiledPattern:
-    """Hold one Thompson epsilon-NFA and its deduplicated atom table."""
+    """Hold one Thompson epsilon-NFA and its deduplicated atom table.
+
+    Each integer in ``epsilon`` packs its target above a two-bit guard.  Each
+    integer in ``atom_edges`` packs its target above a 14-bit atom-table index
+    and one focus bit.  Construction still accepts the former unpacked private
+    edge values for compatibility, but compiled patterns expose packed integers.
+    """
 
     pattern: Pattern
     start: int
     accept: int
-    epsilon: tuple[tuple[_Epsilon, ...], ...]
-    atom_edges: tuple[tuple[_AtomEdge, ...], ...]
+    epsilon: tuple[tuple[int, ...], ...]
+    atom_edges: tuple[tuple[int, ...], ...]
     predicates: tuple[Predicate, ...]
-    _gates: Mapping[int, _Gate] | None = field(init=False, repr=False, compare=False)
+    _gates: _Gates | None = field(init=False, repr=False, compare=False)
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            pattern: Pattern,
+            start: int,
+            accept: int,
+            epsilon: tuple[tuple[int | _Epsilon, ...], ...],
+            atom_edges: tuple[tuple[int | _AtomEdge, ...], ...],
+            predicates: tuple[Predicate, ...],
+        ) -> None:
+            """Accept packed edges and the private legacy construction values."""
+            ...
 
     def __post_init__(self) -> None:
+        epsilon = tuple(
+            tuple(
+                _pack_epsilon(_epsilon_target(edge), _epsilon_guard(edge))
+                for edge in edges
+            )
+            for edges in self.epsilon
+        )
+        atom_edges = tuple(
+            tuple(
+                _pack_atom(_atom_target(edge), _atom_index(edge), _atom_focus(edge))
+                for edge in edges
+            )
+            for edges in self.atom_edges
+        )
+        object.__setattr__(self, "epsilon", epsilon)
+        object.__setattr__(self, "atom_edges", atom_edges)
         object.__setattr__(
             self,
             "_gates",
-            _build_gates(self.accept, self.epsilon, self.atom_edges),
+            _build_gates(self.accept, epsilon, atom_edges),
         )
 
     @classmethod
@@ -1049,10 +1163,10 @@ class CompiledPattern:
         pattern: Pattern,
         start: int,
         accept: int,
-        epsilon: tuple[tuple[_Epsilon, ...], ...],
-        atom_edges: tuple[tuple[_AtomEdge, ...], ...],
+        epsilon: tuple[tuple[int, ...], ...],
+        atom_edges: tuple[tuple[int, ...], ...],
         predicates: tuple[Predicate, ...],
-        gates: Mapping[int, _Gate] | None,
+        gates: _Gates | None,
     ) -> CompiledPattern:
         """Construct from an NFA builder that already identified large splits."""
         result = object.__new__(cls)
@@ -1064,6 +1178,85 @@ class CompiledPattern:
         object.__setattr__(result, "predicates", predicates)
         object.__setattr__(result, "_gates", gates)
         return result
+
+    def __eq__(self, other: object) -> bool:
+        """Compare the public edge values independently of packed storage."""
+        if type(other) is not type(self):
+            return NotImplemented
+        assert isinstance(other, CompiledPattern)
+        return (
+            self.pattern == other.pattern
+            and self.start == other.start
+            and self.accept == other.accept
+            and tuple(
+                tuple((_epsilon_target(edge), _epsilon_guard(edge)) for edge in edges)
+                for edges in self.epsilon
+            )
+            == tuple(
+                tuple((_epsilon_target(edge), _epsilon_guard(edge)) for edge in edges)
+                for edges in other.epsilon
+            )
+            and tuple(
+                tuple(
+                    (_atom_target(edge), _atom_index(edge), _atom_focus(edge))
+                    for edge in edges
+                )
+                for edges in self.atom_edges
+            )
+            == tuple(
+                tuple(
+                    (_atom_target(edge), _atom_index(edge), _atom_focus(edge))
+                    for edge in edges
+                )
+                for edges in other.atom_edges
+            )
+            and self.predicates == other.predicates
+        )
+
+    def __repr__(self) -> str:
+        """Retain the public structural repr while storing edges compactly."""
+        epsilon = tuple(
+            tuple(
+                _Epsilon(_epsilon_target(edge), _epsilon_guard(edge)) for edge in edges
+            )
+            for edges in self.epsilon
+        )
+        atom_edges = tuple(
+            tuple(
+                _AtomEdge(_atom_target(edge), _atom_index(edge), _atom_focus(edge))
+                for edge in edges
+            )
+            for edges in self.atom_edges
+        )
+        return (
+            f"CompiledPattern(pattern={self.pattern!r}, start={self.start!r}, "
+            f"accept={self.accept!r}, epsilon={epsilon!r}, "
+            f"atom_edges={atom_edges!r}, predicates={self.predicates!r})"
+        )
+
+    def __hash__(self) -> int:
+        """Hash the same public edge values as the unpacked representation."""
+        epsilon = tuple(
+            tuple(hash((_epsilon_target(edge), _epsilon_guard(edge))) for edge in edges)
+            for edges in self.epsilon
+        )
+        atom_edges = tuple(
+            tuple(
+                hash((_atom_target(edge), _atom_index(edge), _atom_focus(edge)))
+                for edge in edges
+            )
+            for edges in self.atom_edges
+        )
+        return hash(
+            (
+                self.pattern,
+                self.start,
+                self.accept,
+                epsilon,
+                atom_edges,
+                self.predicates,
+            )
+        )
 
     @property
     def max_width(self) -> int | None:
@@ -1077,11 +1270,10 @@ class CompiledPattern:
         truth: _TruthTable,
         position: int,
         length: int,
-    ) -> tuple[tuple[_Epsilon, ...], tuple[int, ...]]:
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Return safe successors and targets whose gate tests did work."""
         edges = self.epsilon[state]
-        gates = cast(Mapping[int, _Gate], self._gates)
-        gate = gates.get(state)
+        gate = None if self._gates is None else self._gates.get(state)
         if gate is None or position >= length:
             return edges, ()
         skipped: set[int] = set()
@@ -1105,7 +1297,10 @@ class CompiledPattern:
                 skipped.add(target)
         if not skipped:
             return edges, gate.targets
-        return tuple(edge for edge in edges if edge.target not in skipped), gate.targets
+        return (
+            tuple(edge for edge in edges if _epsilon_target(edge) not in skipped),
+            gate.targets,
+        )
 
     def _closure(
         self,
@@ -1126,15 +1321,17 @@ class CompiledPattern:
             while pending:
                 state = pending.pop()
                 for edge in self.epsilon[state]:
-                    if edge.guard == _GUARD_END and open_right:
+                    guard = _epsilon_guard(edge)
+                    target = _epsilon_target(edge)
+                    if guard == _GUARD_END and open_right:
                         continue
-                    if edge.guard == _GUARD_START and (position != 0 or open_left):
+                    if guard == _GUARD_START and (position != 0 or open_left):
                         continue
-                    if edge.guard == _GUARD_END and position != length:
+                    if guard == _GUARD_END and position != length:
                         continue
-                    if edge.target not in result:
-                        result.add(edge.target)
-                        pending.append(edge.target)
+                    if target not in result:
+                        result.add(target)
+                        pending.append(target)
             if unchecked is not None:
                 unchecked._spent += len(result)
             elif meter is not None:
@@ -1147,15 +1344,17 @@ class CompiledPattern:
             if tested:
                 gate_targets.append(tested)
             for edge in edges:
-                if edge.guard == _GUARD_END and open_right:
+                guard = _epsilon_guard(edge)
+                target = _epsilon_target(edge)
+                if guard == _GUARD_END and open_right:
                     continue
-                if edge.guard == _GUARD_START and (position != 0 or open_left):
+                if guard == _GUARD_START and (position != 0 or open_left):
                     continue
-                if edge.guard == _GUARD_END and position != length:
+                if guard == _GUARD_END and position != length:
                     continue
-                if edge.target not in result:
-                    result.add(edge.target)
-                    pending.append(edge.target)
+                if target not in result:
+                    result.add(target)
+                    pending.append(target)
         # One existing closure unit pays for either visiting a successor's
         # entry state or consulting the gate that replaces that visit.  This
         # charges every successor test without exceeding the full closure.
@@ -1174,7 +1373,7 @@ class CompiledPattern:
         reverse: list[list[tuple[int, int]]] = [[] for _ in self.epsilon]
         for source, edges in enumerate(self.epsilon):
             for edge in edges:
-                reverse[edge.target].append((source, edge.guard))
+                reverse[_epsilon_target(edge)].append((source, _epsilon_guard(edge)))
         return tuple(tuple(edges) for edges in reverse)
 
     @staticmethod
@@ -1290,10 +1489,10 @@ class CompiledPattern:
         elif meter is not None:
             meter.charge(len(active))
         targets = {
-            edge.target
+            _atom_target(edge)
             for state in active
             for edge in self.atom_edges[state]
-            if truth[edge.atom][node]
+            if truth[_atom_index(edge)][node]
         }
         return self._closure(
             targets,
@@ -1320,17 +1519,18 @@ class CompiledPattern:
                 return True
             for edge in self.epsilon[state]:
                 next_phase = phase
-                if edge.guard == _GUARD_START and (phase or length):
+                guard = _epsilon_guard(edge)
+                if guard == _GUARD_START and (phase or length):
                     continue
-                if edge.guard == _GUARD_END:
+                if guard == _GUARD_END:
                     next_phase = _FUTURE_END
-                candidate = (edge.target, next_phase)
+                candidate = (_epsilon_target(edge), next_phase)
                 if candidate not in seen:
                     seen.add(candidate)
                     pending.append(candidate)
             if phase != _FUTURE_END:
                 for atom_edge in self.atom_edges[state]:
-                    candidate = (atom_edge.target, _FUTURE_ATOM)
+                    candidate = (_atom_target(atom_edge), _FUTURE_ATOM)
                     if candidate not in seen:
                         seen.add(candidate)
                         pending.append(candidate)
@@ -1560,7 +1760,8 @@ class CompiledPattern:
                 predecessors = {self.accept}
                 for state, edges in enumerate(self.atom_edges):
                     if any(
-                        edge.target in backward[position + 1] and truth[edge.atom][node]
+                        _atom_target(edge) in backward[position + 1]
+                        and truth[_atom_index(edge)][node]
                         for edge in edges
                     ):
                         predecessors.add(state)
@@ -1574,9 +1775,9 @@ class CompiledPattern:
                 )
             for position, node in enumerate(scope.nodes):
                 if any(
-                    edge.focus
-                    and truth[edge.atom][node]
-                    and edge.target in backward[position + 1]
+                    _atom_focus(edge)
+                    and truth[_atom_index(edge)][node]
+                    and _atom_target(edge) in backward[position + 1]
                     for state in forward[position]
                     for edge in self.atom_edges[state]
                 ) and (

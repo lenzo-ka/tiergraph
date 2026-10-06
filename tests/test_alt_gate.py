@@ -7,7 +7,9 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
+from copy import copy, deepcopy
 from functools import partial
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -348,6 +350,27 @@ def test_gate_threshold_is_exact_and_small_patterns_retain_no_table() -> None:
     assert below._gates is None
     assert isinstance(boundary._gates, Mapping)
     assert len(boundary._gates) == 1
+    assert tuple(boundary._gates) == (boundary.start,)
+    with pytest.raises(KeyError):
+        boundary._gates[-1]
+
+
+def test_gated_compiled_patterns_are_copyable_and_picklable() -> None:
+    """Private gate metadata survives ordinary object round trips."""
+    pickle_module = import_module("pickle")
+    compiled = compile_pattern(
+        AltPattern(tuple(atom(f"v{index}") for index in range(32)))
+    )
+    assert compiled._gates
+    for cloned in (
+        copy(compiled),
+        deepcopy(compiled),
+        pickle_module.loads(pickle_module.dumps(compiled)),
+    ):
+        assert cloned == compiled
+        assert cloned._gates == compiled._gates
+        assert repr(cloned) == repr(compiled)
+        assert hash(cloned) == hash(compiled)
 
 
 def test_gate_preserves_multiple_scopes_with_distinct_open_edges() -> None:
@@ -505,7 +528,10 @@ def test_fragment_limit_falls_back_to_always_candidate() -> None:
 
         assert {
             later.start,
-            *(edge.target for edge in later.epsilon[later.start]),
+            *(
+                match_module._epsilon_target(edge)
+                for edge in later.epsilon[later.start]
+            ),
         } <= later._closure({later.start}, 0, 0)
     finally:
         match_module._GATE_MIN_PARTS = previous_parts

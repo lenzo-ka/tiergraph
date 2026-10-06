@@ -2626,6 +2626,24 @@ Graph.flatten(self, delivery: 'Delivery') -> 'Graph'
 
 Write selected readings into a layerless base, refusing ambiguity/orphans.
 
+#### `Graph.share_values`
+
+Method.
+
+```text
+Graph.share_values(self) -> 'Graph'
+```
+
+Return an equal graph sharing repeated immutable retained values.
+
+Value sharing applies to equal item attributes and structural item
+coordinates used by relation instances.  It never mutates this graph
+or any value reachable from it; changed carriers are rebuilt and the
+returned graph owns fresh derived indexes.  During the call, peak
+memory is therefore about the original graph plus the result.  The
+retained-memory saving applies after the caller drops the original
+graph.
+
 #### `Graph.promotion`
 
 Method.
@@ -2655,6 +2673,9 @@ Graph.canonical_items(self) -> 'tuple[ItemRef, ...]'
 ```
 
 Compute tier-major canonical order without storing it.
+
+Durable items are returned as this graph's own references; their values
+are unchanged.
 
 #### `Graph.item_type`
 
@@ -7334,10 +7355,15 @@ Count distinct accepting scope spans, never NFA runs.
 ### `CompiledPattern`
 
 ```text
-CompiledPattern(pattern: 'Pattern', start: 'int', accept: 'int', epsilon: 'tuple[tuple[_Epsilon, ...], ...]', atom_edges: 'tuple[tuple[_AtomEdge, ...], ...]', predicates: 'tuple[Predicate, ...]') -> None
+CompiledPattern(pattern: 'Pattern', start: 'int', accept: 'int', epsilon: 'tuple[tuple[int, ...], ...]', atom_edges: 'tuple[tuple[int, ...], ...]', predicates: 'tuple[Predicate, ...]') -> None
 ```
 
 Hold one Thompson epsilon-NFA and its deduplicated atom table.
+
+Each integer in ``epsilon`` packs its target above a two-bit guard.  Each
+integer in ``atom_edges`` packs its target above a 14-bit atom-table index
+and one focus bit.  Construction still accepts the former unpacked private
+edge values for compatibility, but compiled patterns expose packed integers.
 
 #### `CompiledPattern.max_width`
 

@@ -66,7 +66,10 @@ from tiergraph.match import (
     FocusPattern,
     Pattern,
     StartPattern,
+    _atom_index,
+    _atom_target,
     _children,
+    _epsilon_target,
 )
 from tiergraph.pathplan import PathPlan
 from tiergraph.predicate import (
@@ -799,9 +802,10 @@ def _epsilon_closure(
     while pending:
         state = pending.pop()
         for edge in pattern.epsilon[state]:
-            if edge.target not in result:
-                result.add(edge.target)
-                pending.append(edge.target)
+            target = _epsilon_target(edge)
+            if target not in result:
+                result.add(target)
+                pending.append(target)
     if unchecked is not None:
         unchecked._spent += len(result)
     elif meter is not None:
@@ -826,10 +830,10 @@ def _advance_states(
         active = _epsilon_closure(
             pattern,
             frozenset(
-                edge.target
+                _atom_target(edge)
                 for state in active
                 for edge in pattern.atom_edges[state]
-                if _token_holds(pattern.predicates[edge.atom], token)
+                if _token_holds(pattern.predicates[_atom_index(edge)], token)
             ),
             meter=meter,
             unchecked=unchecked,
@@ -856,8 +860,9 @@ def _advance_counts(
                 unchecked=unchecked,
             ):
                 for edge in pattern.atom_edges[source]:
-                    if _token_holds(pattern.predicates[edge.atom], token):
-                        following[edge.target] = following.get(edge.target, 0) + count
+                    if _token_holds(pattern.predicates[_atom_index(edge)], token):
+                        target = _atom_target(edge)
+                        following[target] = following.get(target, 0) + count
         active = following
     return active
 
@@ -928,15 +933,17 @@ def _ambiguity_witness(
         state = (
             pattern.start
             if position == _START_POSITION
-            else pattern.atom_edges[positions[position].source][
-                positions[position].edge_index
-            ].target
+            else _atom_target(
+                pattern.atom_edges[positions[position].source][
+                    positions[position].edge_index
+                ]
+            )
         )
         return tuple(
             position_index[_Position(source, edge_index)]
             for source in _epsilon_closure(pattern, frozenset((state,)), meter=meter)
             for edge_index, edge in enumerate(pattern.atom_edges[source])
-            if _minterm_holds(pattern.predicates[edge.atom], symbol)
+            if _minterm_holds(pattern.predicates[_atom_index(edge)], symbol)
         )
 
     terminal = tuple(
@@ -944,7 +951,11 @@ def _ambiguity_witness(
         in _epsilon_closure(
             pattern,
             frozenset(
-                (pattern.atom_edges[position.source][position.edge_index].target,)
+                (
+                    _atom_target(
+                        pattern.atom_edges[position.source][position.edge_index]
+                    ),
+                )
             ),
             meter=meter,
         )
