@@ -339,6 +339,7 @@ def test_fold_hoists_decimal_setup_without_changing_ambient_context(
     expected = declared.run().to_data(declared.semiring)
     getcontext_calls = 0
     localcontext_calls = 0
+    precision_calls = 0
     original_getcontext = cast(
         Callable[[], Context], semiring_module.__dict__["getcontext"]
     )
@@ -346,6 +347,7 @@ def test_fold_hoists_decimal_setup_without_changing_ambient_context(
         Callable[..., AbstractContextManager[Context]],
         semiring_module.__dict__["localcontext"],
     )
+    original_precision = semiring_module._exact_decimal_sum_precision
 
     def counted_getcontext() -> Context:
         nonlocal getcontext_calls
@@ -359,8 +361,16 @@ def test_fold_hoists_decimal_setup_without_changing_ambient_context(
         localcontext_calls += 1
         return original_localcontext(*args, **kwargs)
 
+    def counted_precision(left: Decimal, right: Decimal) -> int:
+        nonlocal precision_calls
+        precision_calls += 1
+        return original_precision(left, right)
+
     monkeypatch.setattr(semiring_module, "getcontext", counted_getcontext)
     monkeypatch.setattr(semiring_module, "localcontext", counted_localcontext)
+    monkeypatch.setattr(
+        semiring_module, "_exact_decimal_sum_precision", counted_precision
+    )
     with localcontext() as ambient:
         ambient.prec = 2
         ambient.rounding = ROUND_DOWN
@@ -376,6 +386,7 @@ def test_fold_hoists_decimal_setup_without_changing_ambient_context(
     assert actual == expected
     assert getcontext_calls == 1
     assert localcontext_calls == 0
+    assert precision_calls == 1
 
     DECIMAL_TROPICAL.multiply(Decimal("1.2345"), Decimal("2.3456"))
     assert localcontext_calls == 1

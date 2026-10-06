@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Avoided graph cycle walks for acyclic bipartite relations whose endpoint types
+  are disjoint.
+- Reduced graph construction overhead for empty and singleton attributes and
+  valid structural references without relaxing their validation.
+- Made integer-shaped decimal attribute construction avoid general Decimal
+  re-parsing and reused the compiled whitespace normalizer.
+- Made exact Decimal folds reuse sufficient context precision instead of
+  recomputing a precision bound for every multiplication.
+- Made ranked PATH folds concatenate already-singleton witness values directly
+  instead of running general Cartesian deduplication and sorting.
 - Refused empty and non-string durable relation references and relation-instance
   durable ids at construction.
 - Allowed layer flattening onto anonymous polyadic relation instances.
