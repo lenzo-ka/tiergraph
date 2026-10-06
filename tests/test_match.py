@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import tiergraph
+import tiergraph.match as match_module
 from tiergraph import (
     AttributeDeclaration,
     AttributeDomain,
@@ -639,6 +640,19 @@ def test_compile_constraints_and_operation_refusals() -> None:
         "matches": [],
         "extent": "exhaustive",
     }
+
+
+def test_compile_refuses_an_atom_index_that_cannot_be_packed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Packed atom-table overflow is a semantic refusal, never an assertion."""
+    monkeypatch.setattr(match_module, "_ATOM_INDEX_MASK", 0)
+    pattern = AltPattern((atom("seg", "a"), atom("seg", "b")))
+    with pytest.raises(
+        Refusal, match="pattern has 2 distinct atoms; packed edge limit 1"
+    ) as caught:
+        compile_pattern(pattern)
+    assert caught.value.stage is RefusalStage.SEMANTICS
 
 
 def test_span_limit_and_empty_adjacent_ordering() -> None:

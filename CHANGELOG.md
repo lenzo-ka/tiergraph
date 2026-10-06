@@ -25,9 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added deterministic selector-scan and set-traversal charging to every
   budgeted selection; an ambient meter activates it around a nested
   `SequenceSelector`.
+- Added opt-in `Graph.share_values()` to share equal item attributes and
+  structural item references; the retained-memory saving holds once the caller
+  drops the original graph.
 
 ### Changed
 
+- `Graph.canonical_items()` now returns durable items as the graph's own
+  references, with unchanged values.
+- Reduced compiled-pattern memory by packing NFA edges without changing matching results or work accounting.
+- `CompiledPattern.epsilon` and `CompiledPattern.atom_edges` now hold packed integers.
 - Avoided graph cycle walks for acyclic bipartite relations whose endpoint types
   are disjoint.
 - Reduced graph construction overhead for empty and singleton attributes and

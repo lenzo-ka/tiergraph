@@ -1777,6 +1777,102 @@ class Graph:
                 editor.set_attribute(_layer_edit_target(self, subject), values[0])
         return editor.freeze()
 
+    def share_values(self) -> Graph:
+        """Return an equal graph sharing repeated immutable retained values.
+
+        Value sharing applies to equal item attributes and structural item
+        coordinates used by relation instances.  It never mutates this graph
+        or any value reachable from it; changed carriers are rebuilt and the
+        returned graph owns fresh derived indexes.  During the call, peak
+        memory is therefore about the original graph plus the result.  The
+        retained-memory saving applies after the caller drops the original
+        graph.
+        """
+        attributes: dict[Attribute, Attribute] = {}
+        tiers: list[Tier] = []
+        for tier in self.tiers:
+            items: list[Item] = []
+            for item in tier.items:
+                shared_attributes = tuple(
+                    attributes.setdefault(attribute, attribute)
+                    for attribute in item.attributes
+                )
+                items.append(
+                    replace(item, attributes=shared_attributes)
+                    if any(
+                        original is not shared
+                        for original, shared in zip(
+                            item.attributes, shared_attributes, strict=True
+                        )
+                    )
+                    else item
+                )
+            shared_items = tuple(items)
+            tiers.append(
+                replace(tier, items=shared_items)
+                if any(
+                    original is not shared
+                    for original, shared in zip(tier.items, shared_items, strict=True)
+                )
+                else tier
+            )
+
+        references = {reference: reference for reference in self._items_by_id.values()}
+
+        def share(reference: RelationEndpointRef) -> RelationEndpointRef:
+            """Return one representative for an equal structural item coordinate."""
+            if not isinstance(reference, ItemRef):
+                return reference
+            return references.setdefault(reference, reference)
+
+        relations: list[RelationInstance] = []
+        for relation in self.relations:
+            left = share(relation.left)
+            right = share(relation.right)
+            relations.append(
+                replace(relation, left=left, right=right)
+                if left is not relation.left or right is not relation.right
+                else relation
+            )
+
+        polyadic_relations: list[PolyadicRelationInstance] = []
+        for polyadic_relation in self.polyadic_relations:
+            sources = tuple(share(reference) for reference in polyadic_relation.sources)
+            targets = tuple(share(reference) for reference in polyadic_relation.targets)
+            changed_sources = any(
+                original is not shared
+                for original, shared in zip(
+                    polyadic_relation.sources, sources, strict=True
+                )
+            )
+            changed_targets = any(
+                original is not shared
+                for original, shared in zip(
+                    polyadic_relation.targets, targets, strict=True
+                )
+            )
+            polyadic_relations.append(
+                replace(polyadic_relation, sources=sources, targets=targets)
+                if changed_sources or changed_targets
+                else polyadic_relation
+            )
+
+        shared_graph = replace(
+            self,
+            tiers=tuple(tiers),
+            relations=tuple(relations),
+            polyadic_relations=tuple(polyadic_relations),
+        )
+        object.__setattr__(
+            shared_graph,
+            "_items_by_id",
+            {
+                durable_id: references.setdefault(reference, reference)
+                for durable_id, reference in shared_graph._items_by_id.items()
+            },
+        )
+        return shared_graph
+
     def promotion(self, tier: QualifiedName) -> bool:
         """Report whether every item on a tier carries durable identity."""
         member = self._tiers_by_name.get(tier)
@@ -1833,11 +1929,19 @@ class Graph:
         return tuple(boundaries)
 
     def canonical_items(self) -> tuple[ItemRef, ...]:
-        """Compute tier-major canonical order without storing it."""
+        """Compute tier-major canonical order without storing it.
+
+        Durable items are returned as this graph's own references; their values
+        are unchanged.
+        """
         return tuple(
-            ItemRef(tier.declaration.name, index)
+            (
+                self._items_by_id[item.durable_id]
+                if item.durable_id is not None
+                else ItemRef(tier.declaration.name, index)
+            )
             for tier in self.tiers
-            for index in range(len(tier.items))
+            for index, item in enumerate(tier.items)
         )
 
     def item_type(self, reference: ItemRef) -> QualifiedName:

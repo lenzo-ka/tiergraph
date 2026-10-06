@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
+from importlib import import_module
 from itertools import permutations
 from random import Random
 
@@ -491,6 +493,58 @@ def test_subclass_scopes_override_remains_on_the_per_call_path() -> None:
     assert overridden.bind(subject, ordering).exists() is False
     prepared = BoundOrdering(subject, ordering)
     assert overridden.bind(subject, prepared).exists() is True
+
+
+def test_compiled_edge_packing_preserves_public_value_protocols() -> None:
+    """Packed NFA edges retain equality, repr, hash, copy, and pickle behavior."""
+    pickle_module = import_module("pickle")
+    compiled = compile_pattern(SeqPattern((atom("a"), atom("b"))))
+    unpacked_epsilon = tuple(
+        tuple(
+            match_module._Epsilon(
+                match_module._epsilon_target(edge),
+                match_module._epsilon_guard(edge),
+            )
+            for edge in edges
+        )
+        for edges in compiled.epsilon
+    )
+    unpacked_atom_edges = tuple(
+        tuple(
+            match_module._AtomEdge(
+                match_module._atom_target(edge),
+                match_module._atom_index(edge),
+                match_module._atom_focus(edge),
+            )
+            for edge in edges
+        )
+        for edges in compiled.atom_edges
+    )
+    unpacked = CompiledPattern(
+        compiled.pattern,
+        compiled.start,
+        compiled.accept,
+        unpacked_epsilon,
+        unpacked_atom_edges,
+        compiled.predicates,
+    )
+
+    assert all(isinstance(edge, int) for edges in compiled.epsilon for edge in edges)
+    assert all(isinstance(edge, int) for edges in compiled.atom_edges for edge in edges)
+    assert all(isinstance(edge, int) for edges in unpacked.epsilon for edge in edges)
+    assert all(isinstance(edge, int) for edges in unpacked.atom_edges for edge in edges)
+    assert compiled != object()
+    assert compiled == unpacked
+    assert repr(compiled) == repr(unpacked)
+    assert hash(compiled) == hash(unpacked)
+    for copied in (
+        copy.copy(compiled),
+        copy.deepcopy(compiled),
+        pickle_module.loads(pickle_module.dumps(compiled)),
+    ):
+        assert copied == compiled
+        assert repr(copied) == repr(compiled)
+        assert hash(copied) == hash(compiled)
 
 
 def test_wrong_typed_ordering_has_a_typed_refusal() -> None:

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import fields, is_dataclass
+import sys
+from collections.abc import Callable, Mapping
+from copy import copy, deepcopy
+from dataclasses import fields, is_dataclass, replace
+from decimal import Decimal
+from enum import Enum
+from importlib import import_module
 
 import pytest
 from hypothesis import given
@@ -20,26 +25,40 @@ from tiergraph import (
     Boundary,
     BoundaryRef,
     BoundarySide,
+    Delivery,
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphCarrier,
     GraphValidationError,
     Item,
     ItemRef,
+    Layer,
+    LayerFact,
+    LayerName,
+    LayerRead,
     NamespaceDeclaration,
+    Node,
+    NodeKind,
+    NodeSet,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
     RelationSideDeclaration,
+    Seal,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    WalkDirection,
     XsdType,
     core,
+    dump_bytes,
 )
+from tiergraph.build import document, item
 from tiergraph.core import _resolve_relation_endpoint
+from tiergraph.traversal import relation_image
 
 NS = "urn:test"
 NAMESPACES = (NamespaceDeclaration("t", NS),)
@@ -1361,6 +1380,305 @@ def test_relation_and_item_durable_ids_share_one_unique_namespace() -> None:
         ),
     ):
         Graph(NAMESPACES, (tier,), (simple, link), (colliding,))
+
+
+def _sharing_graph(size: int = 3) -> Graph:
+    """Return a graph exercising every retained value-sharing site."""
+    left = name("left")
+    right = name("right")
+    left_type = name("left-type")
+    right_type = name("right-type")
+    weight = name("weight")
+    note = name("note")
+    boundary_value = name("boundary-value")
+    link = name("link")
+    boundary_link = name("boundary-link")
+    group = name("group")
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM, RelationEndpointKind.BOUNDARY),
+        (left, right),
+    )
+    left_items = tuple(
+        Item(
+            f"left-{index}",
+            (AttributeValue(weight, XsdType.DECIMAL, "0.0"),),
+        )
+        for index in range(size)
+    )
+    right_items = tuple(Item(f"right-{index}") for index in range(size))
+    return Graph(
+        NAMESPACES,
+        (
+            Tier(TierDeclaration(left, "Left"), left_items),
+            Tier(TierDeclaration(right, "Right"), right_items),
+        ),
+        (
+            SimpleRelationDeclaration(name("left-members"), left, left_type),
+            SimpleRelationDeclaration(name("right-members"), right, right_type),
+            BipartiteRelationDeclaration(link, left_type, right_type),
+            BipartiteRelationDeclaration(
+                boundary_link,
+                left_type,
+                right_type,
+                RelationEndpointKind.BOUNDARY,
+                RelationEndpointKind.BOUNDARY,
+            ),
+            PolyadicRelationDeclaration(group, side, side),
+        ),
+        (
+            *(
+                RelationInstance(
+                    link,
+                    ItemRef(left, 0),
+                    ItemRef(right, 0),
+                    f"link-{index}",
+                )
+                for index in range(size)
+            ),
+            RelationInstance(
+                boundary_link,
+                DurableBoundaryRef(left, BoundarySide.BEFORE),
+                DurableBoundaryRef(right, BoundarySide.AFTER),
+                "boundary-link",
+            ),
+        ),
+        (
+            AttributeDeclaration(weight, AttributeDomain.ITEM, XsdType.DECIMAL),
+            AttributeDeclaration(note, AttributeDomain.ITEM, XsdType.STRING),
+            AttributeDeclaration(
+                boundary_value, AttributeDomain.BOUNDARY, XsdType.STRING
+            ),
+        ),
+        (
+            Boundary(
+                DurableBoundaryRef(DurableItemRef("left-0"), BoundarySide.BEFORE),
+                (AttributeValue(boundary_value, XsdType.STRING, "edge"),),
+            ),
+        ),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                group,
+                (ItemRef(left, 0),),
+                (ItemRef(right, 0),),
+                "item-group",
+            ),
+            PolyadicRelationInstance(
+                group,
+                (DurableBoundaryRef(left, BoundarySide.BEFORE),),
+                (DurableBoundaryRef(right, BoundarySide.AFTER),),
+                "boundary-group",
+            ),
+            PolyadicRelationInstance(
+                group,
+                (ItemRef(left, 1),),
+                (DurableBoundaryRef(right, BoundarySide.AFTER),),
+                "mixed-source-group",
+            ),
+            PolyadicRelationInstance(
+                group,
+                (DurableBoundaryRef(left, BoundarySide.BEFORE),),
+                (ItemRef(right, 1),),
+                "mixed-target-group",
+            ),
+        ),
+        seals=(Seal(left, 1), Seal(GraphCarrier.RELATIONS, 1)),
+        layers=(
+            Layer(
+                LayerName(NS, "test"),
+                (
+                    LayerFact(
+                        DurableItemRef("left-0"),
+                        AttributeValue(note, XsdType.STRING, "kept"),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_graph_construction_paths_do_not_share_equal_values() -> None:
+    """Construction, copying, editing, promotion, and builders do no sharing."""
+    subject = _sharing_graph()
+
+    def assert_unshared(graph: Graph) -> None:
+        assert (
+            graph.tiers[0].items[0].attributes[0]
+            is not graph.tiers[0].items[1].attributes[0]
+        )
+        assert graph.relations[0].right is not graph.relations[1].right
+
+    assert_unshared(subject)
+    assert_unshared(copy(subject))
+    assert_unshared(replace(subject))
+    assert_unshared(subject.edit().freeze())
+
+    anonymous = Graph(
+        NAMESPACES,
+        (
+            Tier(
+                TierDeclaration(name("anonymous"), "Anonymous"),
+                (
+                    Item(
+                        attributes=(
+                            AttributeValue(name("weight"), XsdType.DECIMAL, "0"),
+                        )
+                    ),
+                    Item(
+                        "kept",
+                        (AttributeValue(name("weight"), XsdType.DECIMAL, "0"),),
+                    ),
+                ),
+            ),
+        ),
+        (),
+        attribute_declarations=(
+            AttributeDeclaration(name("weight"), AttributeDomain.ITEM, XsdType.DECIMAL),
+        ),
+    )
+    promoted, _ = anonymous.promote_item(ItemRef(name("anonymous"), 0), "new")
+    assert (
+        promoted.tiers[0].items[0].attributes[0]
+        is not promoted.tiers[0].items[1].attributes[0]
+    )
+
+    builder = document(NS, prefix="t")
+    builder.attribute("weight", XsdType.DECIMAL)
+    builder.tier(
+        "built",
+        (
+            item("built-0", weight=Decimal("0")),
+            item("built-1", weight=Decimal("0")),
+        ),
+    )
+    built = builder.build()
+    assert (
+        built.tiers[0].items[0].attributes[0]
+        is not built.tiers[0].items[1].attributes[0]
+    )
+
+
+def test_share_values_preserves_graph_values_wire_and_queries() -> None:
+    """Value sharing is transparent across varied graph features and queries."""
+    subject = _sharing_graph()
+    shared = subject.share_values()
+    delivery = Delivery((LayerName(NS, "test"),), LayerRead.LAST)
+    layer_subject = DurableItemRef("left-0")
+    note = name("note")
+    left = name("left")
+    right = name("right")
+
+    assert shared == subject
+    assert hash(shared) == hash(subject)
+    assert repr(shared) == repr(subject)
+    assert shared.to_data() == subject.to_data()
+    assert dump_bytes(shared) == dump_bytes(subject)
+    assert shared.canonical_items() == subject.canonical_items()
+    assert shared.boundaries(left) == subject.boundaries(left)
+    assert shared.item_type(ItemRef(left, 0)) == subject.item_type(ItemRef(left, 0))
+    assert shared.resolve_item(layer_subject) == subject.resolve_item(layer_subject)
+    boundary = DurableBoundaryRef(DurableItemRef("left-0"), BoundarySide.BEFORE)
+    assert shared.resolve_boundary(boundary) == subject.resolve_boundary(boundary)
+    assert shared.promotion(left) == subject.promotion(left)
+    assert shared.is_sealed(ItemRef(left, 0)) == subject.is_sealed(ItemRef(left, 0))
+    assert shared.layer_values(layer_subject, note, delivery) == subject.layer_values(
+        layer_subject, note, delivery
+    )
+    assert shared.consensus(layer_subject, note, delivery) == subject.consensus(
+        layer_subject, note, delivery
+    )
+    assert shared.disagreements(delivery) == subject.disagreements(delivery)
+    assert shared.boundaries(right) == subject.boundaries(right)
+    original_source = NodeSet(subject, (Node(NodeKind.ITEM, ItemRef(left, 0)),))
+    shared_source = NodeSet(shared, (Node(NodeKind.ITEM, ItemRef(left, 0)),))
+    for relation in (name("link"), name("group")):
+        assert relation_image(
+            shared_source, relation, WalkDirection.FORWARD
+        ) == relation_image(original_source, relation, WalkDirection.FORWARD)
+
+    empty = Graph((), (), ())
+    assert empty.share_values() == empty
+
+
+def test_share_values_does_not_mutate_either_input_graph() -> None:
+    """Value sharing replaces carriers and leaves source values untouched."""
+    subject = _sharing_graph()
+    second = replace(subject)
+    source_tiers = subject.tiers
+    source_items = subject.tiers[0].items
+    source_relations = subject.relations
+    first_attribute = source_items[0].attributes[0]
+    second_attribute = source_items[1].attributes[0]
+    repeated_reference = source_relations[1].right
+
+    shared = subject.share_values()
+
+    assert subject.tiers is source_tiers
+    assert subject.tiers[0].items is source_items
+    assert source_items[0].attributes[0] is first_attribute
+    assert source_items[1].attributes[0] is second_attribute
+    assert first_attribute is not second_attribute
+    assert subject.relations is source_relations
+    assert source_relations[1].right is repeated_reference
+    assert source_relations[0].right is not repeated_reference
+    assert second.tiers[0].items[0].attributes[0] is first_attribute
+    assert second.tiers[0].items[1].attributes[0] is second_attribute
+    assert second.relations[1].right is repeated_reference
+
+    assert (
+        shared.tiers[0].items[0].attributes[0] is shared.tiers[0].items[1].attributes[0]
+    )
+    assert shared.relations[0].right is shared.relations[1].right
+    assert shared.relations[0].left is shared._items_by_id["left-0"]
+    assert shared.polyadic_relations[0].sources[0] is shared.relations[0].left
+    assert shared.polyadic_relations[1] is subject.polyadic_relations[1]
+
+
+def test_share_values_is_idempotent_and_survives_copy_and_pickle() -> None:
+    """Repeated sharing, copies, and pickle round trips preserve graph values."""
+    pickle_module = import_module("pickle")
+    shared = _sharing_graph().share_values()
+    repeated = shared.share_values()
+
+    assert repeated == shared
+    assert (
+        repeated.tiers[0].items[0].attributes[0]
+        is repeated.tiers[0].items[1].attributes[0]
+    )
+    assert repeated.relations[0].right is repeated.relations[1].right
+    assert copy(shared) == shared
+    assert deepcopy(shared) == shared
+    assert pickle_module.loads(pickle_module.dumps(shared)) == shared
+
+
+def _retained_size(value: object, seen: set[int] | None = None) -> int:
+    """Measure graph-owned immutable state while counting shared objects once."""
+    visited = set() if seen is None else seen
+    identity = id(value)
+    if identity in visited or isinstance(value, type | Enum):
+        return 0
+    visited.add(identity)
+    size = sys.getsizeof(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return size + sum(
+            _retained_size(getattr(value, field.name), visited)
+            for field in fields(value)
+        )
+    if isinstance(value, Mapping):
+        return size + sum(
+            _retained_size(key, visited) + _retained_size(item, visited)
+            for key, item in value.items()
+        )
+    if isinstance(value, tuple | list | set | frozenset):
+        return size + sum(_retained_size(item, visited) for item in value)
+    return size
+
+
+def test_share_values_has_a_retained_memory_witness() -> None:
+    """A repetition-heavy shared graph retains less reachable memory."""
+    subject = _sharing_graph(256)
+    shared = subject.share_values()
+
+    assert _retained_size(shared) < _retained_size(subject)
 
 
 @pytest.mark.parametrize("reference_type", [ItemRef, BoundaryRef])
