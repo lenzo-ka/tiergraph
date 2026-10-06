@@ -12,6 +12,12 @@ sorts its nodes into the graph's canonical order and supports union (`|`),
 intersection (`&`), and difference (`-`) with another set from the same graph.
 Because the order is canonical, set algebra between selections is stable.
 
+`evaluate_selection(..., budget=...)` bounds selector scans and canonical set
+work with the same `WorkBudget` or shared `WorkMeter` used by matching. Nested
+`SequenceSelector` pattern work and the surrounding selector-tree traversal
+charge one ambient meter. Exhaustion raises `BudgetExhausted`; selections never
+return a partial node set.
+
 `WhereSelector` filters one base selector with a typed value predicate from
 `tiergraph.predicate`. `PredicateSyntax` parses the graph-free text form used by
 `tiergraph select --where`; `Related` quantifies a target predicate over one

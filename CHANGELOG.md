@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   span-pair joins, lattice matching, folds and path plans. Exhaustion raises
   `BudgetExhausted`; outermost budgeted span scans can report `cut-at-budget`.
 - Added opt-in CLI `--max-steps` and match-request `max_steps` work guards.
+- Added work budgets to output-plan preparation, masses, conditioning and item
+  marginals.
+- Added work budgets to grammar recognition, derivation counts, best
+  derivations and target generation.
+- Added deterministic selector-scan and set-traversal charging to every
+  budgeted selection; an ambient meter activates it around a nested
+  `SequenceSelector`.
 
 ### Changed
 

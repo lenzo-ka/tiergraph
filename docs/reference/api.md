@@ -1497,10 +1497,12 @@ A cached product plan for complete output candidates and their residual.
 Class method.
 
 ```text
-OutputPlan.prepare(cls, base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'Sequence[Sequence[str]]') -> 'OutputPlan[Value]'
+OutputPlan.prepare(cls, base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'Sequence[Sequence[str]]', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'OutputPlan[Value]'
 ```
 
 Build the reachable product with the candidates' trie and a residual.
+
+An optional work budget limits preparation.
 
 #### `OutputPlan.values`
 
@@ -1517,30 +1519,36 @@ Gather base values into the product plan's canonical item order.
 Method.
 
 ```text
-OutputPlan.masses(self, base_values: 'Sequence[Value] | None' = None) -> 'OutputMasses[Value]'
+OutputPlan.masses(self, base_values: 'Sequence[Value] | None' = None, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'OutputMasses[Value]'
 ```
 
 Evaluate masses, with certificates only for log probability or counting.
+
+An optional work budget limits evaluation.
 
 #### `OutputPlan.conditioned`
 
 Method.
 
 ```text
-OutputPlan.conditioned(self, candidate: 'int') -> 'PathPlan[Value]'
+OutputPlan.conditioned(self, candidate: 'int', *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'PathPlan[Value]'
 ```
 
 Return the product restricted to paths accepting one candidate.
+
+An optional work budget limits conditioning.
 
 #### `OutputPlan.item_marginals`
 
 Method.
 
 ```text
-OutputPlan.item_marginals(self, candidate: 'int', base_values: 'Sequence[Value] | None' = None) -> 'OutputItemMarginals[Value]'
+OutputPlan.item_marginals(self, candidate: 'int', base_values: 'Sequence[Value] | None' = None, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'OutputItemMarginals[Value]'
 ```
 
 Pool one candidate's conditioned product copies onto base items.
+
+An optional work budget limits evaluation.
 
 ### `PathMarginals`
 
@@ -2091,37 +2099,41 @@ Carry a machine-built parse forest and its Boolean interpretation.
 Method.
 
 ```text
-ParseForest.recognized(self) -> 'bool'
+ParseForest.recognized(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'bool'
 ```
 
 Return whether the designated start span has a derivation.
+
+An optional work budget limits evaluation.
 
 #### `ParseForest.result`
 
 Method.
 
 ```text
-ParseForest.result(self) -> 'FoldResult[bool]'
+ParseForest.result(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'FoldResult[bool]'
 ```
 
-Evaluate and return the complete Boolean fold result.
+Return the Boolean fold result within an optional work budget.
 
 #### `ParseForest.count`
 
 Method.
 
 ```text
-ParseForest.count(self) -> 'int'
+ParseForest.count(self, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'int'
 ```
 
 Count derivations when the grammar lies in the finite-fold domain.
+
+An optional work budget limits evaluation.
 
 #### `ParseForest.best`
 
 Method.
 
 ```text
-ParseForest.best(self, count: 'int' = 1) -> 'tuple[BestDerivation, ...]'
+ParseForest.best(self, count: 'int' = 1, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'tuple[BestDerivation, ...]'
 ```
 
 Return up to ``count`` cheapest derivations, by exact total cost.
@@ -2239,10 +2251,12 @@ View an experimental keep-all target graph without enumerating paths.
 Method.
 
 ```text
-TargetLattice.best(self, count: 'int' = 1) -> 'GenerationResult'
+TargetLattice.best(self, count: 'int' = 1, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'GenerationResult'
 ```
 
 Project up to ``count`` ranked targets from the retained graph.
+
+An optional work budget limits projection.
 
 #### `TargetLattice.to_data`
 
@@ -2295,26 +2309,26 @@ Decode one strict experimental emitted target piece.
 ### `best`
 
 ```text
-best(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, count: 'int' = 1) -> 'tuple[BestDerivation, ...]'
+best(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, count: 'int' = 1, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'tuple[BestDerivation, ...]'
 ```
 
-Return folded derivations by exact cost, choosing canonical paths on ties.
+Return folded derivations within an optional work budget.
 
 ### `count`
 
 ```text
-count(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | None' = None) -> 'int'
+count(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | None' = None, *, budget: 'WorkBudget | WorkMeter | None' = None) -> 'int'
 ```
 
-Return the derivation count from a new or previously built forest.
+Return the derivation count within an optional work budget.
 
 ### `generate`
 
 ```text
-generate(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, *, count: 'int' = 1) -> 'GenerationResult'
+generate(grammar: 'LoweredGrammar | ParseForest', input_tokens: 'Sequence[str] | GrammarInput | None' = None, *, count: 'int' = 1, budget: 'WorkBudget | WorkMeter | None' = None) -> 'GenerationResult'
 ```
 
-Return up to ``count`` experimental target materializations.
+Return target materializations within an optional work budget.
 
 ### `grammar_loads`
 
@@ -2339,7 +2353,7 @@ Lower a grammar through machine opcodes to an ordered hedge.
 ### `recognize`
 
 ```text
-recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str] | GrammarInput', namespace: 'str' = 'urn:tiergraph:grammar:chart', *, collapse_units: 'bool' = True) -> 'ParseForest'
+recognize(grammar: 'LoweredGrammar', input_tokens: 'Sequence[str] | GrammarInput', namespace: 'str' = 'urn:tiergraph:grammar:chart', *, collapse_units: 'bool' = True, budget: 'WorkBudget | WorkMeter | None' = None) -> 'ParseForest'
 ```
 
 Build a chart forest for token input using polynomial span deduction.
@@ -4989,10 +5003,12 @@ Evaluate the base first, then mask only that finite candidate domain.
 ### `evaluate_selection`
 
 ```text
-evaluate_selection(graph: 'Graph', selector: 'Selector', *, path_profile: 'PathProfile' = StructuralPathProfile()) -> 'NodeSet'
+evaluate_selection(graph: 'Graph', selector: 'Selector', *, path_profile: 'PathProfile' = StructuralPathProfile(), budget: 'WorkBudget | WorkMeter | None' = None) -> 'NodeSet'
 ```
 
 Evaluate a graph-free selector into one canonical node set.
+
+An optional declared work budget limits evaluation.
 
 ### `selection_loads`
 

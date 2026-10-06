@@ -557,6 +557,20 @@ user carrier code, and the charge occurs at the surrounding checkpoint.
 Compiled path plans charge each gather or scatter operation and the size of a
 built-in PATH result.
 
+`OutputPlan.prepare`, `masses`, `conditioned`, and `item_marginals` use the
+same budget. They charge candidate-trie tokens, reachable product topology,
+conditioned reverse traversal, compiled path-plan work, and pooled carrier
+additions. Budgeted conditioning bypasses its cache so its threshold is
+independent of call history.
+
+The synchronous-grammar entries `recognize`, `count`, `best`, and `generate`,
+and the corresponding `ParseForest` and `TargetLattice` run methods, also
+accept `budget=`. Chart search charges each key, rule probe, and recursive
+candidate state before constructing the forest; later aggregation and target
+materialization share the grammar entry's ambient meter. These aggregate
+entries refuse on exhaustion and never return partial counts, derivations, or
+target strings.
+
 A work budget is distinct from every existing fold bound. `derivation_budget`
 still makes an exactness certificate report `compared=False` when its oracle
 cannot enumerate all derivations; work-budget exhaustion raises instead.

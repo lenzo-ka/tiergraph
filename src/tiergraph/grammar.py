@@ -10,6 +10,13 @@ from decimal import Decimal
 from itertools import pairwise
 from typing import TYPE_CHECKING, cast
 
+from tiergraph.budget import (
+    WorkBudget,
+    WorkMeter,
+    _active_meter,
+    _aggregating,
+    _metered,
+)
 from tiergraph.core import (
     Attribute,
     AttributeDeclaration,
@@ -690,22 +697,31 @@ class TargetLattice:
     declaration: GrammarDeclaration
     cyclic: bool
 
-    def best(self, count: int = 1) -> GenerationResult:
-        """Project up to ``count`` ranked targets from the retained graph."""
+    def best(
+        self,
+        count: int = 1,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> GenerationResult:
+        """Project up to ``count`` ranked targets from the retained graph.
+
+        An optional work budget limits projection.
+        """
         if count < 1:
             raise ValueError(
                 f"experimental generation count {count!r} must be positive"
             )
         if self.cyclic:
             raise ValueError("target materialization requires a finite derivation")
-        result = replace(self.fold, output_cap=count).run()
-        ranked = cast(
-            tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
-        )
-        derivations = tuple(
-            _generated_derivation(self, value, witness) for value, witness in ranked
-        )
-        return GenerationResult(derivations, result.truncated, result.cost)
+        with _aggregating(), _metered(budget, "grammar.generate"):
+            result = replace(self.fold, output_cap=count).run()
+            ranked = cast(
+                tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
+            )
+            derivations = tuple(
+                _generated_derivation(self, value, witness) for value, witness in ranked
+            )
+            return GenerationResult(derivations, result.truncated, result.cost)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the versioned experimental keep-all lattice envelope."""
@@ -1341,23 +1357,39 @@ class ParseForest:
     collapsed: bool = True
     input: GrammarInput | None = None
 
-    def recognized(self) -> bool:
-        """Return whether the designated start span has a derivation."""
-        return self.fold.run().value
+    def recognized(self, *, budget: WorkBudget | WorkMeter | None = None) -> bool:
+        """Return whether the designated start span has a derivation.
 
-    def result(self) -> FoldResult[bool]:
-        """Evaluate and return the complete Boolean fold result."""
-        return self.fold.run()
+        An optional work budget limits evaluation.
+        """
+        with _aggregating(), _metered(budget, "grammar.recognize"):
+            return self.fold.run().value
 
-    def count(self) -> int:
-        """Count derivations when the grammar lies in the finite-fold domain."""
+    def result(
+        self, *, budget: WorkBudget | WorkMeter | None = None
+    ) -> FoldResult[bool]:
+        """Return the Boolean fold result within an optional work budget."""
+        with _aggregating(), _metered(budget, "grammar.recognize"):
+            return self.fold.run()
+
+    def count(self, *, budget: WorkBudget | WorkMeter | None = None) -> int:
+        """Count derivations when the grammar lies in the finite-fold domain.
+
+        An optional work budget limits evaluation.
+        """
         if self.collapsed:
             raise ValueError(
                 "count requires a parse forest built with collapse_units=False"
             )
-        return _count_fold(self).run().value
+        with _aggregating(), _metered(budget, "grammar.count"):
+            return _count_fold(self).run().value
 
-    def best(self, count: int = 1) -> tuple[BestDerivation, ...]:
+    def best(
+        self,
+        count: int = 1,
+        *,
+        budget: WorkBudget | WorkMeter | None = None,
+    ) -> tuple[BestDerivation, ...]:
         """Return up to ``count`` cheapest derivations, by exact total cost.
 
         The grammar must lie in the finite-fold domain. Costs are exact and the
@@ -1370,7 +1402,10 @@ class ParseForest:
             raise ValueError(
                 "best requires a parse forest built with collapse_units=False"
             )
-        return _best_derivations(self, count)
+        if count < 1:
+            raise ValueError(f"best derivation count {count!r} must be positive")
+        with _aggregating(), _metered(budget, "grammar.best"):
+            return _best_derivations(self, count)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the forest, root, fingerprint, and Boolean answer as JSON data."""
@@ -1570,6 +1605,7 @@ def _candidate_matches(
     allow_empty_holes: bool = False,
 ) -> tuple[tuple[tuple[tuple[QualifiedName, int, int], ...], bool], ...]:
     found: list[tuple[tuple[tuple[QualifiedName, int, int], ...], bool]] = []
+    meter = _active_meter()
 
     def _visit(
         index: int,
@@ -1577,6 +1613,8 @@ def _candidate_matches(
         children: tuple[tuple[QualifiedName, int, int], ...],
         terminals_match: bool,
     ) -> None:
+        if meter is not None:
+            meter.charge(1)
         if index == len(pattern):
             if cursor == end:
                 found.append((children, terminals_match))
@@ -1604,10 +1642,13 @@ def _recognition_rules(
     declaration: GrammarDeclaration,
     source_rules: tuple[tuple[QualifiedName, GrammarPattern], ...],
 ) -> tuple[tuple[int, QualifiedName, GrammarPattern], ...]:
+    meter = _active_meter()
     nullable: set[QualifiedName] = set()
     changed = True
     while changed:
         changed = False
+        if meter is not None:
+            meter.charge(len(source_rules))
         for left, pattern in source_rules:
             if left in nullable:
                 continue
@@ -1622,6 +1663,8 @@ def _recognition_rules(
     for rule_index, (left, pattern) in enumerate(source_rules):
         variants: list[GrammarPattern] = [()]
         for element in pattern:
+            if meter is not None:
+                meter.charge(len(variants))
             kept = [(*variant, element) for variant in variants]
             if isinstance(element, GrammarHole) and element.nonterminal in nullable:
                 variants = [*variants, *kept]
@@ -1634,6 +1677,8 @@ def _recognition_rules(
 
     unit_targets: dict[QualifiedName, tuple[QualifiedName, ...]] = {}
     for left in declaration.nonterminals:
+        if meter is not None:
+            meter.charge(len(expanded))
         targets = tuple(
             pattern[0].nonterminal
             for _, candidate_left, pattern in expanded
@@ -1647,10 +1692,14 @@ def _recognition_rules(
     for left in declaration.nonterminals:
         closure = [left]
         for reachable_unit in closure:
+            if meter is not None:
+                meter.charge(len(unit_targets[reachable_unit]))
             for target in unit_targets[reachable_unit]:
                 if target not in closure:
                     closure.append(target)
         for reachable in closure:
+            if meter is not None:
+                meter.charge(len(expanded))
             for rule_index, candidate_left, pattern in expanded:
                 unit = len(pattern) == 1 and isinstance(pattern[0], GrammarHole)
                 candidate = (rule_index, left, pattern)
@@ -1662,10 +1711,13 @@ def _recognition_rules(
 def _source_rules(
     grammar: LoweredGrammar,
 ) -> tuple[tuple[QualifiedName, GrammarPattern], ...]:
+    meter = _active_meter()
     graph = grammar.as_built.graph
     tiers = {tier.declaration.name.local_name: tier for tier in graph.tiers}
     productions = tiers["productions"]
     elements = tiers["elements"]
+    if meter is not None:
+        meter.charge(2 * len(graph.polyadic_relations))
     slots_by_production = {
         cast(ItemRef, relation.sources[0]): tuple(
             cast(ItemRef, target) for target in relation.targets
@@ -1683,6 +1735,8 @@ def _source_rules(
     names = {str(name): name for name in grammar.declaration.nonterminals}
     rules: list[tuple[QualifiedName, GrammarPattern]] = []
     for index, production in enumerate(productions.items):
+        if meter is not None:
+            meter.charge(1 + len(production.attributes))
         values = {
             value.name.local_name: _scalar_attribute(value).lexical
             for value in production.attributes
@@ -1693,6 +1747,8 @@ def _source_rules(
         ]
         pattern: list[GrammarPatternElement] = []
         for reference in elements_by_slot[source_slot]:
+            if meter is not None:
+                meter.charge(1 + len(elements.items[reference.index].attributes))
             element_values = {
                 value.name.local_name: _scalar_attribute(value)
                 for value in elements.items[reference.index].attributes
@@ -1716,6 +1772,7 @@ def recognize(
     namespace: str = CHART_NAMESPACE,
     *,
     collapse_units: bool = True,
+    budget: WorkBudget | WorkMeter | None = None,
 ) -> ParseForest:
     """Build a chart forest for token input using polynomial span deduction.
 
@@ -1728,6 +1785,17 @@ def recognize(
         if isinstance(input_tokens, GrammarInput)
         else GrammarInput.from_symbols(input_tokens)
     )
+    with _metered(budget, "grammar.recognize"):
+        return _recognize(grammar, grammar_input, namespace, collapse_units)
+
+
+def _recognize(
+    grammar: LoweredGrammar,
+    grammar_input: GrammarInput,
+    namespace: str,
+    collapse_units: bool,
+) -> ParseForest:
+    """Build a validated chart under the ambient work meter."""
     tokens = tuple(token.symbol for token in grammar_input.tokens)
     declaration = grammar.declaration
     source_rules = _source_rules(grammar)
@@ -1776,11 +1844,15 @@ def _deduce_chart(
     collapse_units: bool,
 ) -> tuple[list[_ChartKey], dict[_ChartKey, list[_ChartApplication]]]:
     """Deduce every chart item and its production applications."""
+    meter = _active_meter()
     applications: dict[
         tuple[QualifiedName, int, int],
         list[tuple[int, tuple[tuple[QualifiedName, int, int], ...], bool]],
     ] = {}
     size = len(tokens)
+    key_count = len(declaration.nonterminals) * (size + 1) * (size + 2) // 2
+    if meter is not None:
+        meter.charge(key_count)
     keys = [
         (nonterminal, start, end)
         for width in range(size + 1)
@@ -1792,6 +1864,8 @@ def _deduce_chart(
         left, start, end = key
         choices = applications.setdefault(key, [])
         for rule_index, candidate_left, source in recognition_rules:
+            if meter is not None:
+                meter.charge(1)
             if candidate_left != left:
                 continue
             for children, terminals_match in _candidate_matches(
@@ -1819,6 +1893,19 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
     grammar_input: GrammarInput,
 ) -> ParseForest:
     """Construct the opcode program and bound recognition fold for a chart."""
+    meter = _active_meter()
+    if meter is not None:
+        input_work = sum(
+            1
+            + len(token.provenance)
+            + sum(
+                1 + len(realization.provenance) + len(realization.tokens)
+                for realization in token.realization
+            )
+            for token in grammar_input.tokens
+        )
+        application_work = sum(1 + len(children) for _, _, children, _ in app_rows)
+        meter.charge(len(keys) + input_work + application_work)
     declaration = grammar.declaration
     names = {
         local: _name(namespace, local)
@@ -2224,6 +2311,8 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
             )
         )
     program = Program(tuple(opcodes))
+    if meter is not None:
+        meter.charge(len(opcodes))
     graph = program.unroll().graph
     root = references[root_key]
     fold = FoldDeclaration(
@@ -2347,6 +2436,9 @@ def _count_fold(forest: ParseForest) -> FoldDeclaration[int]:
 def _best_fold(forest: ParseForest, output_cap: int) -> FoldDeclaration[PathValue]:
     names = _forest_names(forest)
     tiers = (names["chart-items"], names["applications"])
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(forest.graph.canonical_items()))
     valid_labels = {
         f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
         for reference in forest.graph.canonical_items()
@@ -2392,6 +2484,9 @@ def _generation_fold(
         names["realizations"],
         names["target-pieces"],
     )
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(forest.graph.canonical_items()))
     valid_labels = {
         f"{reference.tier.namespace}:{reference.tier.local_name}:{reference.index}"
         for reference in forest.graph.canonical_items()
@@ -2464,6 +2559,14 @@ def _generated_derivation(  # noqa: PLR0915 -- one structural witness scan
     witness: tuple[str, ...],
 ) -> GeneratedDerivation:
     """Materialize target pieces and applications from one structural witness."""
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(
+            len(forest.graph.canonical_items())
+            + len(forest.graph.relations)
+            + len(forest.graph.polyadic_relations)
+            + 2 * len(witness)
+        )
     grammar_input = forest.input
     names = _forest_names(forest)
     references_by_label = {
@@ -2653,6 +2756,12 @@ def target_lattice(
 def _has_reachable_cycle(fold: FoldDeclaration[PathValue]) -> bool:
     """Report whether a fold root reaches one of its already-computed cyclic SCCs."""
     dependency_graph = fold._dependency_graph()
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(
+            len(dependency_graph.references)
+            + sum(map(len, dependency_graph.adjacency.values()))
+        )
     cyclic_items = {
         item for component in dependency_graph.cyclic_components for item in component
     }
@@ -2708,17 +2817,33 @@ def generate(
     input_tokens: Sequence[str] | GrammarInput | None = None,
     *,
     count: int = 1,
+    budget: WorkBudget | WorkMeter | None = None,
 ) -> GenerationResult:
-    """Return up to ``count`` experimental target materializations."""
-    forest = _forest(grammar, input_tokens, "generate")
-    return target_lattice(forest).best(count)
+    """Return target materializations within an optional work budget."""
+    _validate_forest_request(grammar, input_tokens, "generate")
+    if count < 1:
+        raise ValueError(f"experimental generation count {count!r} must be positive")
+    with _aggregating(), _metered(budget, "grammar.generate"):
+        forest = _forest(grammar, input_tokens)
+        return target_lattice(forest).best(count)
 
 
 def _forest(
     grammar: LoweredGrammar | ParseForest,
     input_tokens: Sequence[str] | GrammarInput | None,
-    operation: str,
 ) -> ParseForest:
+    if isinstance(grammar, ParseForest):
+        return grammar
+    assert input_tokens is not None
+    return recognize(grammar, input_tokens, collapse_units=False)
+
+
+def _validate_forest_request(
+    grammar: LoweredGrammar | ParseForest,
+    input_tokens: Sequence[str] | GrammarInput | None,
+    operation: str,
+) -> None:
+    """Validate convenience-entry arguments before installing a meter."""
     if isinstance(grammar, ParseForest):
         if input_tokens is not None:
             raise ValueError("a prebuilt parse forest does not accept input tokens")
@@ -2726,26 +2851,26 @@ def _forest(
             raise ValueError(
                 f"{operation} requires a parse forest built with collapse_units=False"
             )
-        return grammar
-    if input_tokens is None:
+    elif input_tokens is None:
         raise ValueError("a lowered grammar requires input tokens")
-    return recognize(grammar, input_tokens, collapse_units=False)
 
 
 def count(
     grammar: LoweredGrammar | ParseForest,
     input_tokens: Sequence[str] | None = None,
+    *,
+    budget: WorkBudget | WorkMeter | None = None,
 ) -> int:
-    """Return the derivation count from a new or previously built forest."""
-    forest = _forest(grammar, input_tokens, "count")
-    return _count_fold(forest).run().value
+    """Return the derivation count within an optional work budget."""
+    _validate_forest_request(grammar, input_tokens, "count")
+    with _aggregating(), _metered(budget, "grammar.count"):
+        forest = _forest(grammar, input_tokens)
+        return _count_fold(forest).run().value
 
 
 def _best_derivations(
     forest: ParseForest, output_cap: int
 ) -> tuple[BestDerivation, ...]:
-    if output_cap < 1:
-        raise ValueError(f"best derivation count {output_cap!r} must be positive")
     result = _best_fold(forest, output_cap).run()
     ranked = cast(
         tuple[tuple[PathValue, tuple[str, ...]], ...], result.ranked_witnesses
@@ -2757,10 +2882,16 @@ def best(
     grammar: LoweredGrammar | ParseForest,
     input_tokens: Sequence[str] | GrammarInput | None = None,
     count: int = 1,
+    *,
+    budget: WorkBudget | WorkMeter | None = None,
 ) -> tuple[BestDerivation, ...]:
-    """Return folded derivations by exact cost, choosing canonical paths on ties."""
-    forest = _forest(grammar, input_tokens, "best")
-    return _best_derivations(forest, count)
+    """Return folded derivations within an optional work budget."""
+    _validate_forest_request(grammar, input_tokens, "best")
+    if count < 1:
+        raise ValueError(f"best derivation count {count!r} must be positive")
+    with _aggregating(), _metered(budget, "grammar.best"):
+        forest = _forest(grammar, input_tokens)
+        return _best_derivations(forest, count)
 
 
 __all__ = [

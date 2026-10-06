@@ -468,10 +468,14 @@ them because an empty match has no item span.
 Matching has no default work limit. Callers that need one pass
 `WorkBudget(steps=..., seconds=...)` to a compiled or bound pattern view,
 `CompiledPattern.bind`, `BoundPredicate.holds` or `select`, `span_pairs`, or a
-`LatticeMatch` method. A `WorkMeter` shares one declaration across calls and
-exposes the accumulated `spent`; it is intended for one thread or task at a
-time. A step-only budget is deterministic within a release. Deadlines use a
-monotonic clock, are checked periodically, and can only refuse.
+`LatticeMatch` method. `OutputPlan.prepare`, `masses`, `conditioned`, and
+`item_marginals` accept the same keyword. `evaluate_selection` accepts it too;
+in particular, selector scans, canonical set construction, and set operations
+around a nested `SequenceSelector` share the pattern's meter. A `WorkMeter`
+shares one declaration across calls and exposes the accumulated `spent`; it is
+intended for one thread or task at a time. A step-only budget is deterministic
+within a release. Deadlines use a monotonic clock, are checked periodically,
+and can only refuse.
 
 Most exhaustion raises `BudgetExhausted` at the `SEMANTICS` stage. Only an
 outermost `spans` or `span_pairs` call with its own step budget may return a
@@ -489,7 +493,11 @@ copied span items; lattice product pairs, incidences, count entries, reverse
 edges, ambiguity pairs, and full per-state epsilon closures. Budgeted lattice
 calls bypass their caches, so thresholds do not depend on call history. A
 bound pattern charges its truth table at `bind`; its later views charge only
-simulation. Passing the same `WorkMeter` to both records their combined work.
+simulation. Output plans charge candidate tokens, reachable product pairs and
+incidences, derived-plan construction, conditioned reverse edges, compiled
+path-plan operations, and pooled carrier additions. Budgeted conditioning
+bypasses its topology cache. Passing the same `WorkMeter` across entries
+records their combined work.
 
 Compilation itself is not metered. Instead, pattern text allows at most 256
 nested groups, a directly constructed pattern AST at most 256 levels, and a
@@ -513,7 +521,8 @@ example, the reachable 772-character text shape
 `"(" + "(" * 254 + "." + ")?" * 254 + "){10000}"` has 10,000 positions but
 5,100,002 states; the analogous predicate shape has 2,000,002 states.
 
-Scope reading is an unmetered near-linear pass over the size-limited graph.
-Nested pattern work triggered by a `SequenceSelector` charges an ambient
-meter, but the surrounding selector traversal is not separately charged.
-Likewise, a predicate or matching step does not preempt arbitrary user code.
+Ordinary matching scope reading remains an unmetered near-linear pass over the
+size-limited graph. A metered selection charges one logical visit per scanned
+carrier and deterministic size-based work for canonical node sets; this also
+covers the traversal surrounding a nested `SequenceSelector`. Likewise, a
+predicate or matching step does not preempt arbitrary user code.

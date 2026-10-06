@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
+from tiergraph.budget import (
+    WorkBudget,
+    WorkMeter,
+    _active_meter,
+    _metered,
+)
 from tiergraph.core import (
     AttributeDomain,
     BoundaryRef,
@@ -32,6 +39,24 @@ from tiergraph.wire import _object, _parsed_json, _string
 
 if TYPE_CHECKING:
     from tiergraph.match import Ordering, Pattern
+
+
+_METER_TRAVERSAL: ContextVar[bool] = ContextVar(
+    "tiergraph_sequence_selector_traversal", default=False
+)
+
+
+def _traversal_charging() -> bool:
+    """Return whether this context should charge selector traversal work."""
+    return _METER_TRAVERSAL.get()
+
+
+def _charge_traversal(steps: int) -> None:
+    """Charge selector work only in one explicitly metered nested traversal."""
+    meter = _active_meter()
+    if meter is None:
+        raise RuntimeError("selector traversal charging requires an active work meter")
+    meter.charge(steps)
 
 
 class NodeKind(StrEnum):
@@ -90,6 +115,9 @@ class NodeSet:
 
     def __post_init__(self) -> None:
         """Normalize caller order and repeated identities."""
+        if _traversal_charging():
+            size = len(self.nodes)
+            _charge_traversal(size * max(1, size.bit_length()))
         unique = set(self.nodes)
         object.__setattr__(self, "nodes", tuple(sorted(unique, key=self._key)))
 
@@ -162,11 +190,15 @@ class NodeSet:
     def __or__(self, other: NodeSet) -> NodeSet:
         """Return the canonical union of two selections."""
         self._same_graph(other)
+        if _traversal_charging():
+            _charge_traversal(len(self.nodes) + len(other.nodes))
         return NodeSet(self.graph, self.nodes + other.nodes)
 
     def __and__(self, other: NodeSet) -> NodeSet:
         """Return the canonical intersection of two selections."""
         self._same_graph(other)
+        if _traversal_charging():
+            _charge_traversal(len(self.nodes) + len(other.nodes))
         admitted = set(other.nodes)
         return NodeSet(
             self.graph, tuple(node for node in self.nodes if node in admitted)
@@ -175,6 +207,8 @@ class NodeSet:
     def __sub__(self, other: NodeSet) -> NodeSet:
         """Return the canonical difference of two selections."""
         self._same_graph(other)
+        if _traversal_charging():
+            _charge_traversal(len(self.nodes) + len(other.nodes))
         excluded = set(other.nodes)
         return NodeSet(
             self.graph, tuple(node for node in self.nodes if node not in excluded)
@@ -199,6 +233,8 @@ class TierSelector:
                 RefusalStage.REFERENCE,
                 f"tier selector {str(self.tier)!r} is undeclared",
             )
+        if _traversal_charging():
+            _charge_traversal(len(graph.tiers))
         return NodeSet(graph, (Node(NodeKind.TIER, self.tier),))
 
 
@@ -219,6 +255,10 @@ class TypeSelector:
             raise Refusal(
                 RefusalStage.REFERENCE,
                 f"type selector {str(self.item_type)!r} is undeclared",
+            )
+        if _traversal_charging():
+            _charge_traversal(
+                len(graph.relation_declarations) + len(graph.canonical_items())
             )
         tiers = {
             declaration.tier
@@ -245,11 +285,14 @@ class ItemsSelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return the tier's items in coordinate order."""
         TierSelector(self.tier).evaluate(graph, path_profile=path_profile)
+        items = graph.canonical_items()
+        if _traversal_charging():
+            _charge_traversal(len(items))
         return NodeSet(
             graph,
             tuple(
                 Node(NodeKind.ITEM, reference)
-                for reference in graph.canonical_items()
+                for reference in items
                 if reference.tier == self.tier
             ),
         )
@@ -264,6 +307,13 @@ class BoundariesSelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Validate and return outer and inter-item boundaries."""
         TierSelector(self.tier).evaluate(graph, path_profile=path_profile)
+        tier = next(
+            candidate
+            for candidate in graph.tiers
+            if candidate.declaration.name == self.tier
+        )
+        if _traversal_charging():
+            _charge_traversal(len(tier.items) + 1)
         return NodeSet(
             graph,
             tuple(
@@ -282,9 +332,10 @@ class ItemSelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the item identity."""
         del path_profile
-        return NodeSet(
-            graph, (Node(NodeKind.ITEM, graph.resolve_item(self.reference)),)
-        )
+        reference = graph.resolve_item(self.reference)
+        if _traversal_charging():
+            _charge_traversal(1)
+        return NodeSet(graph, (Node(NodeKind.ITEM, reference),))
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,9 +347,10 @@ class BoundarySelector:
     def evaluate(self, graph: Graph, *, path_profile: PathProfile) -> NodeSet:
         """Resolve and return the boundary identity."""
         del path_profile
-        return NodeSet(
-            graph, (Node(NodeKind.BOUNDARY, graph.resolve_boundary(self.reference)),)
-        )
+        reference = graph.resolve_boundary(self.reference)
+        if _traversal_charging():
+            _charge_traversal(1)
+        return NodeSet(graph, (Node(NodeKind.BOUNDARY, reference),))
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,15 +428,21 @@ class AttributeSelector:
 
         nodes: list[Node] = []
         if self.domain is AttributeDomain.DOCUMENT:
+            if _traversal_charging():
+                _charge_traversal(1)
             if self._has(graph.attributes):
                 nodes.append(Node(NodeKind.DOCUMENT, None))
         elif self.domain is AttributeDomain.TIER:
+            if _traversal_charging():
+                _charge_traversal(len(graph.tiers))
             nodes.extend(
                 Node(NodeKind.TIER, tier.declaration.name)
                 for tier in graph.tiers
                 if self._has(tier.attributes)
             )
         elif self.domain is AttributeDomain.ITEM:
+            if _traversal_charging():
+                _charge_traversal(sum(len(tier.items) for tier in graph.tiers))
             nodes.extend(
                 Node(NodeKind.ITEM, ItemRef(tier.declaration.name, index))
                 for tier in graph.tiers
@@ -392,18 +450,24 @@ class AttributeSelector:
                 if self._has(item.attributes)
             )
         elif self.domain is AttributeDomain.BOUNDARY:
+            if _traversal_charging():
+                _charge_traversal(len(graph.boundary_values))
             nodes.extend(
                 Node(NodeKind.BOUNDARY, graph.resolve_boundary(boundary.reference))
                 for boundary in graph.boundary_values
                 if self._has(boundary.attributes)
             )
         elif self.domain is AttributeDomain.RELATION_DECLARATION:
+            if _traversal_charging():
+                _charge_traversal(len(graph.relation_declarations))
             nodes.extend(
                 Node(NodeKind.RELATION_DECLARATION, declaration.name)
                 for declaration in graph.relation_declarations
                 if self._has(declaration.attributes)
             )
         else:
+            if _traversal_charging():
+                _charge_traversal(len(graph.relations) + len(graph.polyadic_relations))
             nodes.extend(
                 Node(NodeKind.RELATION_INSTANCE, index)
                 for index, relation in enumerate(graph.relations)
@@ -548,9 +612,36 @@ def evaluate_selection(
     selector: Selector,
     *,
     path_profile: PathProfile = _STRUCTURAL_PATH_PROFILE,
+    budget: WorkBudget | WorkMeter | None = None,
 ) -> NodeSet:
-    """Evaluate a graph-free selector into one canonical node set."""
-    return selector.evaluate(graph, path_profile=path_profile)
+    """Evaluate a graph-free selector into one canonical node set.
+
+    An optional declared work budget limits evaluation.
+    """
+    with _metered(budget, "selection.evaluate") as metered:
+        active = budget is not None or (
+            metered.meter is not None and _contains_sequence_selector(selector)
+        )
+        token = _METER_TRAVERSAL.set(active)
+        try:
+            return selector.evaluate(graph, path_profile=path_profile)
+        finally:
+            _METER_TRAVERSAL.reset(token)
+
+
+def _contains_sequence_selector(selector: Selector) -> bool:
+    """Report whether a selector tree reaches a regular-sequence view."""
+    if isinstance(selector, SequenceSelector):
+        return True
+    if isinstance(selector, WhereSelector):
+        return _contains_sequence_selector(selector.base)
+    if isinstance(selector, UnionSelector | IntersectionSelector):
+        return any(_contains_sequence_selector(argument) for argument in selector.args)
+    if isinstance(selector, DifferenceSelector):
+        return _contains_sequence_selector(
+            selector.left
+        ) or _contains_sequence_selector(selector.right)
+    return False
 
 
 def selection_loads(source: str | bytes) -> Selector:
