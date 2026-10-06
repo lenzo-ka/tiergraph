@@ -282,6 +282,10 @@ class DurableRelationRef:
 
     durable_id: str
 
+    def __post_init__(self) -> None:
+        """Require the identifier needed for durable resolution."""
+        _require_durable_id(self.durable_id, "durable relation reference")
+
 
 @dataclass(frozen=True, slots=True)
 class PolyadicInstanceRef:
@@ -295,6 +299,10 @@ class DurablePolyadicRef:
     """Identify one polyadic relation instance by durable identity."""
 
     durable_id: str
+
+    def __post_init__(self) -> None:
+        """Require the identifier needed for durable resolution."""
+        _require_durable_id(self.durable_id, "durable polyadic reference")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1126,7 +1134,7 @@ class RelationInstance:
         """Canonicalize attributes and require a usable carried durable id."""
         _canonicalize_attributes(self, 6)
         if self.durable_id is not None:
-            _require_name(self.durable_id, "relation instance durable id")
+            _require_durable_id(self.durable_id, "relation instance durable id")
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the instance as JSON-serializable data."""
@@ -1153,7 +1161,7 @@ class PolyadicRelationInstance:
         """Canonicalize attributes and require a usable carried durable id."""
         _canonicalize_attributes(self, 6)
         if self.durable_id is not None:
-            _require_name(self.durable_id, "relation instance durable id")
+            _require_durable_id(self.durable_id, "relation instance durable id")
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the ordered sides as JSON-serializable arrays."""
@@ -2705,11 +2713,6 @@ class GraphEditor:
                 )
             return True, index
         if isinstance(target, DurableRelationRef):
-            _require_name(target.durable_id, "durable relation reference")
-            if not isinstance(target.durable_id, str):
-                raise GraphValidationError(
-                    f"durable relation reference {target.durable_id!r} must be a string"
-                )
             for index, relation in enumerate(self._relations):
                 if relation.durable_id == target.durable_id:
                     return False, index
@@ -2725,11 +2728,6 @@ class GraphEditor:
                 f"no relation instance carries durable id {target.durable_id!r}"
             )
         if isinstance(target, DurablePolyadicRef):
-            _require_name(target.durable_id, "durable polyadic reference")
-            if not isinstance(target.durable_id, str):
-                raise GraphValidationError(
-                    f"durable polyadic reference {target.durable_id!r} must be a string"
-                )
             for index, polyadic_relation in enumerate(self._polyadic_relations):
                 if polyadic_relation.durable_id == target.durable_id:
                     return True, index
@@ -3356,6 +3354,12 @@ def _canonicalize_attributes(value: _AttributeCarrier, envelope_depth: int) -> N
 def _require_name(value: str, subject: str) -> None:
     if not value:
         raise GraphValidationError(f"{subject} {value!r} must not be empty")
+
+
+def _require_durable_id(value: object, subject: str) -> None:
+    if not isinstance(value, str):
+        raise GraphValidationError(f"{subject} {value!r} must be a string")
+    _require_name(value, subject)
 
 
 def _unique_by_name[NameKey, NamedValue](
@@ -4007,12 +4011,10 @@ def _layer_edit_target(graph: Graph, subject: LayerSubject) -> EditTarget:
     if isinstance(subject, PolyadicInstanceRef):
         relation = graph.polyadic_relations[subject.index]
         if relation.durable_id is None:
-            raise GraphValidationError(
-                "a polyadic layer fact cannot be flattened without durable relation identity"
-            )
-        return relation.durable_id
+            return subject
+        return DurablePolyadicRef(relation.durable_id)
     if isinstance(subject, DurableRelationRef | DurablePolyadicRef):
-        return subject.durable_id
+        return subject
     if isinstance(subject, DocumentRef):
         return None
     if isinstance(subject, OrphanedSubject):  # pragma: no cover - flatten prechecks
