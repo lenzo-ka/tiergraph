@@ -233,6 +233,7 @@ from tiergraph.rewrite import (
     RewriteEffect,
 )
 from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
+from tiergraph.selected import apply_selected
 from tiergraph.selection import (
     AttributeSelector,
     BoundariesSelector,
@@ -550,6 +551,7 @@ __all__ = [
     "abstract_form",
     "anchored_boundary",
     "apply_patch",
+    "apply_selected",
     "best",
     "compose_patches",
     "count",
