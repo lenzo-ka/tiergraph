@@ -890,6 +890,151 @@ withdrawing one retroactively decides the meaning of every value and
 reference that already depends on it, which is a migration of the
 whole graph rather than an edit to a place in it.
 
+#### `GraphEditor.promote_item`
+
+Method.
+
+```text
+GraphEditor.promote_item(self, reference: 'ItemRef', durable_id: 'str') -> 'GraphEditor'
+```
+
+Give one item durable identity, refusing a conflict before writing.
+
+#### `GraphEditor.promote_boundary`
+
+Method.
+
+```text
+GraphEditor.promote_boundary(self, reference: 'BoundaryRef', durable_id: 'str') -> 'GraphEditor'
+```
+
+Give a boundary a durable anchor and store its values by that anchor.
+
+Demotion restores a stored boundary value to coordinate addressing. If
+no value is stored, demotion is a no-op because there is no boundary
+record to rewrite. It is an exact inverse when the interior anchor
+already carried the id. If promotion created that item id, demote the
+item separately for exact restoration.
+
+#### `GraphEditor.promote_relation`
+
+Method.
+
+```text
+GraphEditor.promote_relation(self, target: 'RelationTarget', durable_id: 'str') -> 'GraphEditor'
+```
+
+Give one bipartite or polyadic instance durable identity.
+
+#### `GraphEditor.demote_item`
+
+Method.
+
+```text
+GraphEditor.demote_item(self, reference: 'DurableItemRef') -> 'GraphEditor'
+```
+
+Remove an unreferenced item's durable identity.
+
+#### `GraphEditor.demote_boundary`
+
+Method.
+
+```text
+GraphEditor.demote_boundary(self, reference: 'DurableBoundaryRef') -> 'GraphEditor'
+```
+
+Store one boundary value by coordinate while retaining its anchor id.
+
+Retaining the anchor is exact when it was durable before promotion. If
+promotion created that item id, this inverse is functional rather than
+identified until the caller separately demotes the item. A valid durable
+boundary with no stored value has no boundary record to rewrite, so
+demotion is a no-op.
+
+#### `GraphEditor.demote_relation`
+
+Method.
+
+```text
+GraphEditor.demote_relation(self, reference: 'DurableRelationRef | DurablePolyadicRef') -> 'GraphEditor'
+```
+
+Remove an unreferenced relation instance's durable identity.
+
+#### `GraphEditor.seal`
+
+Method.
+
+```text
+GraphEditor.seal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'GraphEditor'
+```
+
+Seal this much of one carrier, refusing a retreat.
+
+#### `GraphEditor.unseal`
+
+Method.
+
+```text
+GraphEditor.unseal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'GraphEditor'
+```
+
+Retreat an existing seal without dropping its record.
+
+#### `GraphEditor.drop_seal`
+
+Method.
+
+```text
+GraphEditor.drop_seal(self, carrier: 'SealedCarrier') -> 'GraphEditor'
+```
+
+Remove one seal record, including a zero-length record.
+
+#### `GraphEditor.add_layer`
+
+Method.
+
+```text
+GraphEditor.add_layer(self, name: 'LayerName') -> 'GraphEditor'
+```
+
+Add one empty layer, refusing a duplicate name.
+
+#### `GraphEditor.remove_layer`
+
+Method.
+
+```text
+GraphEditor.remove_layer(self, name: 'LayerName') -> 'GraphEditor'
+```
+
+Remove one empty layer, refusing to discard its facts.
+
+#### `GraphEditor.put_fact`
+
+Method.
+
+```text
+GraphEditor.put_fact(self, layer: 'LayerName', fact: 'LayerFact') -> 'GraphEditor'
+```
+
+Add or replace one exactly addressed fact in an existing layer.
+
+A supplied valid ``OrphanedSubject`` is retained as content. Invalid
+orphan coordinates and unresolved live subjects refuse before writing.
+
+#### `GraphEditor.remove_fact`
+
+Method.
+
+```text
+GraphEditor.remove_fact(self, layer: 'LayerName', subject: 'LayerSubject', name: 'QualifiedName') -> 'GraphEditor'
+```
+
+Remove one fact by its exact subject spelling and attribute name.
+
 #### `GraphEditor.set_attribute`
 
 Method.
@@ -959,6 +1104,33 @@ GraphEditor.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'GraphEd
 
 Remove one item, refusing while the graph still references it.
 
+#### `GraphEditor.remove_items`
+
+Method.
+
+```text
+GraphEditor.remove_items(self, tier: 'QualifiedName', index: 'int', count: 'int') -> 'GraphEditor'
+```
+
+Remove a contiguous item run in one restructure.
+
+This equals removing ``count`` items at ``index`` one at a time when
+every removal is admitted. A zero count validates the tier and range,
+then leaves both graph content and displacement untouched.
+
+#### `GraphEditor.replace_item`
+
+Method.
+
+```text
+GraphEditor.replace_item(self, reference: 'ItemRef | DurableItemRef', item: 'Item') -> 'GraphEditor'
+```
+
+Replace one item's values while preserving its durable identity.
+
+Promotion and demotion are separate operations, so replacement refuses
+an item whose durable id differs from the item already at the coordinate.
+
 #### `GraphEditor.move_item`
 
 Method.
@@ -988,10 +1160,10 @@ Exchange two items of one tier, carrying their references with them.
 Method.
 
 ```text
-GraphEditor.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance') -> 'GraphEditor'
+GraphEditor.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance', at: 'int | None' = None) -> 'GraphEditor'
 ```
 
-Add one relation instance to the collection its arity belongs to.
+Insert one relation instance in the collection its arity belongs to.
 
 #### `GraphEditor.remove_relation`
 
@@ -1005,6 +1177,16 @@ Remove one relation instance by index, reference, or durable id.
 
 A structural reference names a current position; reread
 ``displacement()`` after removal before reusing one.
+
+#### `GraphEditor.set_endpoints`
+
+Method.
+
+```text
+GraphEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndpointRef | Iterable[RelationEndpointRef]', targets: 'RelationEndpointRef | Iterable[RelationEndpointRef]') -> 'GraphEditor'
+```
+
+Replace one instance's endpoints while preserving its other content.
 
 ## Equivalence
 
@@ -1020,6 +1202,10 @@ Choose which observable graph identity an equivalence query compares.
 resolves durable references to structural coordinates. ``IDENTIFIED`` adds
 carried durable ids while retaining those resolved references. ``EXACT``
 is graph equality (``==``), including prefixes and reference spellings.
+
+Fact order within a layer is not part of ``FUNCTIONAL`` or ``IDENTIFIED``.
+Values compare after construction-time canonicalization with no tolerance;
+tolerance belongs to a distance measure, not equivalence.
 
 #### `EquivalenceView` members
 
@@ -2742,6 +2928,55 @@ id is as-built content, so adding it changes canonical bytes and the
 construction fingerprint.  An anchor carrying a different id refuses
 the requested boundary identity rather than replacing its own.
 
+Demotion restores a stored boundary value to coordinate addressing. If
+no value is stored, demotion is a no-op because there is no boundary
+record to rewrite. It is an exact inverse when the interior anchor
+already carried the id. If promotion created that item id, demote the
+item separately for exact restoration.
+
+#### `Graph.promote_relation`
+
+Method.
+
+```text
+Graph.promote_relation(self, target: 'RelationTarget', durable_id: 'str') -> 'tuple[Graph, DurableRelationRef | DurablePolyadicRef]'
+```
+
+Return a graph carrying the caller's semantic id for one instance.
+
+#### `Graph.demote_item`
+
+Method.
+
+```text
+Graph.demote_item(self, reference: 'DurableItemRef') -> 'Graph'
+```
+
+Return a graph without this item's durable identity.
+
+#### `Graph.demote_boundary`
+
+Method.
+
+```text
+Graph.demote_boundary(self, reference: 'DurableBoundaryRef') -> 'Graph'
+```
+
+Return a graph storing this boundary value by coordinate.
+
+A valid durable boundary with no stored value has no boundary record to
+rewrite, so demotion is a no-op.
+
+#### `Graph.demote_relation`
+
+Method.
+
+```text
+Graph.demote_relation(self, reference: 'DurableRelationRef | DurablePolyadicRef') -> 'Graph'
+```
+
+Return a graph without this relation instance's durable identity.
+
 #### `Graph.to_data`
 
 Method.
@@ -2771,6 +3006,16 @@ Graph.unseal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'Graph'
 ```
 
 Return a graph whose seal on one carrier stands lower than it did.
+
+#### `Graph.drop_seal`
+
+Method.
+
+```text
+Graph.drop_seal(self, carrier: 'SealedCarrier') -> 'Graph'
+```
+
+Return a graph with no seal record for this carrier.
 
 #### `Graph.is_sealed`
 
@@ -2867,6 +3112,26 @@ Graph.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'Graph'
 
 Return a new graph without this item.
 
+#### `Graph.remove_items`
+
+Method.
+
+```text
+Graph.remove_items(self, tier: 'QualifiedName', index: 'int', count: 'int') -> 'Graph'
+```
+
+Return a new graph without one contiguous run of items.
+
+#### `Graph.replace_item`
+
+Method.
+
+```text
+Graph.replace_item(self, reference: 'ItemRef | DurableItemRef', item: 'Item') -> 'Graph'
+```
+
+Return a new graph with this item's values replaced.
+
 #### `Graph.move_item`
 
 Method.
@@ -2892,10 +3157,10 @@ Return a new graph with two items of one tier exchanged.
 Method.
 
 ```text
-Graph.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance') -> 'Graph'
+Graph.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance', at: 'int | None' = None) -> 'Graph'
 ```
 
-Return a new graph carrying one more relation instance.
+Return a new graph carrying one relation instance at a position.
 
 #### `Graph.remove_relation`
 
@@ -2909,6 +3174,56 @@ Return a new graph without the relation instance this names.
 
 A structural reference names a position in this graph's current
 relation content.
+
+#### `Graph.set_endpoints`
+
+Method.
+
+```text
+Graph.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndpointRef | Iterable[RelationEndpointRef]', targets: 'RelationEndpointRef | Iterable[RelationEndpointRef]') -> 'Graph'
+```
+
+Return a graph with one instance's endpoint side or sides replaced.
+
+#### `Graph.add_layer`
+
+Method.
+
+```text
+Graph.add_layer(self, name: 'LayerName') -> 'Graph'
+```
+
+Return a graph carrying a new empty layer.
+
+#### `Graph.remove_layer`
+
+Method.
+
+```text
+Graph.remove_layer(self, name: 'LayerName') -> 'Graph'
+```
+
+Return a graph without this empty layer.
+
+#### `Graph.put_fact`
+
+Method.
+
+```text
+Graph.put_fact(self, layer: 'LayerName', fact: 'LayerFact') -> 'Graph'
+```
+
+Return a graph with this layer fact added or replaced.
+
+#### `Graph.remove_fact`
+
+Method.
+
+```text
+Graph.remove_fact(self, layer: 'LayerName', subject: 'LayerSubject', name: 'QualifiedName') -> 'Graph'
+```
+
+Return a graph without this exactly addressed layer fact.
 
 ### `GraphCarrier`
 
@@ -4301,8 +4616,8 @@ Removing an anchor is refused rather than reinterpreted.  Removal destroys
 the anchor, a boundary whose anchor is gone has no identity left to keep,
 and the kernel will not choose a replacement anchor on a caller's behalf.
 An edit that would remove such an item is therefore refused, immediately by
-a frozen graph's operation and at ``GraphEditor.freeze()`` by the editor's,
-and a caller who means to keep the boundary anchors it elsewhere first.
+either a frozen graph's operation or the mutable editor's removal call, and
+a caller who means to keep the boundary anchors it elsewhere first.
 
 #### `DurableBoundaryRef.to_data`
 

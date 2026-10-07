@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added public `first_difference()` stable graph difference diagnostics.
 - Added `SpanViewProfile.to_data()` so imported TextGrid profiles can be saved
   for `tiergraph span render --profile`.
+- Added positional relation insertion and in-place endpoint replacement.
+- Added reversible item-run removal, item-value replacement, durable identity
+  promotion and demotion, seal-record editing, and layer/fact editing to frozen
+  graphs and mutable editors.
+
+### Changed
+
+- Item and relation removal now refuses locally, before changing an editor, when
+  a relation endpoint, durable boundary anchor, stored boundary value, seal, or
+  live layer fact still depends on the removed content. Some item removals that
+  previously returned from the editor and failed only at `freeze()` now refuse
+  at `remove_item()` or `remove_items()`; removals that previously converted a
+  live layer fact into an orphan now also refuse at the removal call.
 
 ### Fixed
 

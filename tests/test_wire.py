@@ -1484,8 +1484,8 @@ def test_consensus_and_disagreements() -> None:
     )
 
 
-# REGRESSION: predicted FAIL against the parent because layers cannot be orphaned.
-def test_removal_orphans_fact_and_flatten_refuses() -> None:
+# REGRESSION: live facts refuse removal while explicit orphans remain content.
+def test_removal_refuses_live_fact_and_flatten_refuses_explicit_orphan() -> None:
     layer = Layer(
         SOURCE_A, (LayerFact(ItemRef(WORDS, 0), value(AttributeDomain.ITEM, "gone")),)
     )
@@ -1493,11 +1493,17 @@ def test_removal_orphans_fact_and_flatten_refuses() -> None:
     # Remove the relation first: structural references still veto their target.
     with pytest.raises(GraphValidationError, match="still references"):
         graph.remove_item(ItemRef(WORDS, 0))
-    edited = graph.remove_relation(0).remove_item(ItemRef(WORDS, 0))
-    orphan = edited.layers[0].facts[0].subject
-    assert isinstance(orphan, OrphanedSubject)
-    assert orphan.carrier == WORDS
-    assert orphan.was == ItemRef(WORDS, 0)
+    unrelated = graph.remove_relation(0)
+    editor = unrelated.edit()
+    before = editor.freeze()
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        editor.remove_item(ItemRef(WORDS, 0))
+    assert editor.freeze() == before
+
+    orphan = OrphanedSubject(WORDS, ItemRef(WORDS, 0))
+    edited = graph_with_layers(
+        Layer(SOURCE_A, (LayerFact(orphan, value(AttributeDomain.ITEM, "gone")),))
+    )
     assert (
         edited.layer_values(
             ItemRef(WORDS, 0),
@@ -1512,18 +1518,18 @@ def test_removal_orphans_fact_and_flatten_refuses() -> None:
         edited.flatten(Delivery((SOURCE_A,), LayerRead.FIRST))
 
 
-def test_durable_item_layer_subject_orphans_and_invalid_subject_refuses_typed() -> None:
-    """REGRESSION (F5): durable layer identity does not veto base removal."""
+def test_durable_item_layer_subject_vetoes_and_invalid_subject_refuses_typed() -> None:
+    """A durable live fact vetoes base removal before any write."""
     layer = Layer(
         SOURCE_A,
         (LayerFact(DurableItemRef("w0"), value(AttributeDomain.ITEM, "gone")),),
     )
-    edited = (
-        graph_with_layers(layer).remove_relation(0).remove_item(DurableItemRef("w0"))
-    )
-    assert edited.layers[0].facts[0].subject == OrphanedSubject(
-        WORDS, ItemRef(WORDS, 0)
-    )
+    graph = graph_with_layers(layer).remove_relation(0)
+    editor = graph.edit()
+    before = editor.freeze()
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        editor.remove_item(DurableItemRef("w0"))
+    assert editor.freeze() == before
 
     invalid = Layer(
         SOURCE_A,
@@ -1712,7 +1718,7 @@ def test_delivery_and_flatten_refusals_and_promotion() -> None:
         graph.promotion(QualifiedName(LAYER_NS, "missing"))
 
 
-# REGRESSION: durable subjects and relation orphans retain every wire arm.
+# REGRESSION: durable subjects and explicit relation orphans retain every wire arm.
 def test_durable_subjects_and_relation_orphan_round_trip() -> None:
     subjects = (
         DurableItemRef("w0"),
@@ -1730,9 +1736,13 @@ def test_durable_subjects_and_relation_orphan_round_trip() -> None:
         graph,
         layers=(Layer(SOURCE_A, (LayerFact(RelationInstanceRef(0), facts[2].value),)),),
     )
-    orphaned = indexed.remove_relation(0)
-    orphan = orphaned.layers[0].facts[0].subject
-    assert isinstance(orphan, OrphanedSubject)
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        indexed.remove_relation(0)
+    orphan = OrphanedSubject(GraphCarrier.RELATIONS, 0)
+    orphaned = replace(
+        indexed,
+        layers=(Layer(SOURCE_A, (LayerFact(orphan, facts[2].value),)),),
+    )
     assert loads(dumps(orphaned)) == orphaned
     assert (
         orphaned.layer_values(
@@ -1793,7 +1803,24 @@ def test_flatten_six_domains_and_polyadic_subjects() -> None:
         .polyadic_relations[0]
         .attributes
     )
-    departed = poly.remove_relation("p0")
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        poly.remove_relation("p0")
+    departed = replace(
+        poly,
+        polyadic_relations=(),
+        layers=(
+            Layer(
+                SOURCE_A,
+                tuple(
+                    LayerFact(
+                        OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, 0),
+                        fact.value,
+                    )
+                    for fact in poly.layers[0].facts
+                ),
+            ),
+        ),
+    )
     assert all(
         isinstance(fact.subject, OrphanedSubject) for fact in departed.layers[0].facts
     )
@@ -2161,8 +2188,9 @@ def test_boundary_orphan_wire_and_unknown_layer_subject() -> None:
             ),
         )
     )
-    restructured = live.remove_relation(0).remove_item(ItemRef(WORDS, 0))
-    assert any(
-        isinstance(fact.subject, OrphanedSubject)
-        for fact in restructured.layers[0].facts
-    )
+    unrelated = live.remove_relation(0)
+    editor = unrelated.edit()
+    before = editor.freeze()
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        editor.remove_item(ItemRef(WORDS, 0))
+    assert editor.freeze() == before

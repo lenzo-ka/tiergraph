@@ -38,6 +38,10 @@ class EquivalenceView(StrEnum):
     resolves durable references to structural coordinates. ``IDENTIFIED`` adds
     carried durable ids while retaining those resolved references. ``EXACT``
     is graph equality (``==``), including prefixes and reference spellings.
+
+    Fact order within a layer is not part of ``FUNCTIONAL`` or ``IDENTIFIED``.
+    Values compare after construction-time canonicalization with no tolerance;
+    tolerance belongs to a distance measure, not equivalence.
     """
 
     FUNCTIONAL = "functional"

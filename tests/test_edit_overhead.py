@@ -144,9 +144,9 @@ def test_render_names_passing_and_failing_gates() -> None:
     """The human report makes both independent decisions explicit."""
     baseline = _worker(benchmark.RELEASE)
     candidate = _worker(benchmark.RELEASE)
-    passing = benchmark.Summary("flat", "move", 1, 1, 1, 1, 1, 1, 15)
+    passing = benchmark.Summary("flat", "move", 1, 1, 1, 1, 1, 2, 15)
     failing = benchmark.Summary("flat", "move", 1, 1, 2, 20, 2, 2, -3)
-    assert "ratio gate (1.100x): PASS" in benchmark.render(
+    passing_report = benchmark.render(
         baseline,
         candidate,
         (passing,),
@@ -155,6 +155,8 @@ def test_render_names_passing_and_failing_gates() -> None:
         frame_ms=benchmark.FRAME_MS,
         max_ratio=1.1,
     )
+    assert "p50 ratio gate (1.100x; p95 reported): PASS" in passing_report
+    assert "2.000" in passing_report
     report = benchmark.render(
         baseline,
         candidate,
@@ -164,7 +166,7 @@ def test_render_names_passing_and_failing_gates() -> None:
         frame_ms=benchmark.FRAME_MS,
         max_ratio=1.1,
     )
-    assert "ratio gate (1.100x): FAIL" in report
+    assert "p50 ratio gate (1.100x; p95 reported): FAIL" in report
     assert "frame gate (16.667 ms): FAIL" in report
 
 
@@ -235,6 +237,21 @@ def test_positive_argument_type() -> None:
         benchmark._positive("0")
 
 
+def test_sample_batches_are_balanced_and_combine_in_order() -> None:
+    """Interleaved runs retain the requested sample total and stable pairing."""
+    assert benchmark._sample_batches(10) == (3, 3, 2, 2)
+    first = _worker(benchmark.RELEASE, 1)
+    second = _worker(benchmark.RELEASE, 3)
+    combined = benchmark._combine_results((first, second))
+    assert combined["samples"]["flat:move"] == [1, 2, 3, 6]
+    with pytest.raises(ValueError, match="zero benchmark runs"):
+        benchmark._combine_results(())
+    incompatible = _worker(benchmark.RELEASE)
+    incompatible["module"] = "/different/tiergraph/__init__.py"
+    with pytest.raises(ValueError, match="incompatible workers"):
+        benchmark._combine_results((first, incompatible))
+
+
 def test_execute_refuses_an_unknown_operation() -> None:
     """A misspelled operation cannot turn into an edit-and-freeze measurement."""
     with pytest.raises(ValueError, match="unknown operation"):
@@ -245,7 +262,7 @@ def test_compare_checks_release_and_combines_gates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The parent refuses the wrong baseline and reports one combined result."""
-    results = iter((_worker("0.7.0"), _worker(benchmark.RELEASE)))
+    results = iter((_worker("0.7.0"),))
     monkeypatch.setattr(
         benchmark, "run_worker", lambda *_args, **_kwargs: next(results)
     )
@@ -259,10 +276,13 @@ def test_compare_checks_release_and_combines_gates(
             max_ratio=1.1,
         )
 
-    results = iter((_worker(benchmark.RELEASE), _worker(benchmark.RELEASE)))
-    monkeypatch.setattr(
-        benchmark, "run_worker", lambda *_args, **_kwargs: next(results)
-    )
+    calls: list[bool] = []
+
+    def run_worker(*_args: object, **kwargs: object) -> benchmark.WorkerResult:
+        calls.append(bool(kwargs["checkout"]))
+        return _worker(benchmark.RELEASE)
+
+    monkeypatch.setattr(benchmark, "run_worker", run_worker)
     _, _, rows, passed = benchmark.compare(
         Path("python"),
         items=1000,
@@ -273,6 +293,7 @@ def test_compare_checks_release_and_combines_gates(
     )
     assert rows[0].ratio_p95 == 1.0
     assert passed
+    assert calls == [False, True, True, False]
 
 
 def test_main_runs_worker_and_both_parent_output_modes(

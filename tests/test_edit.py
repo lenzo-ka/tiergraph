@@ -911,7 +911,7 @@ def test_removal_reaches_an_item_by_durable_id() -> None:
 
 def test_removing_a_boundary_anchor_is_refused() -> None:
     """A boundary whose anchor is gone has no identity, so removal refuses."""
-    with pytest.raises(GraphValidationError, match="anchor item 'w2' was not found"):
+    with pytest.raises(GraphValidationError, match="stored boundary value"):
         base(relations=()).remove_item(ItemRef(WORD, 2))
 
 
