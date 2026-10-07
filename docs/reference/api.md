@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 269 top-level `tiergraph` exports exactly once.
+It covers 270 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2362,6 +2362,40 @@ apply_patch(patch: 'Patch', base: 'Graph') -> 'Graph'
 ```
 
 Apply ``patch`` to its identified base, validating every transition.
+
+### `apply_selected`
+
+```text
+apply_selected(graph: 'Graph', selected: 'NodeSet | Selector | SpanMatches', operation: 'Callable[[GraphEditor, Node], object]', *, path_profile: 'PathProfile | None' = None, budget: 'WorkBudget | WorkMeter | None' = None) -> 'Graph'
+```
+
+Apply ``operation`` once to every materialized selected node.
+
+``selected`` may be a graph-free selector, a node set belonging to
+``graph``, or an exhaustive set of regular-pattern spans. Selectors are
+evaluated once before editing starts. ``path_profile`` applies only to this
+selector form. Span items are combined as a set, so nodes shared by
+overlapping spans are edited once. Spans carry no graph provenance; their
+item coordinates are validated and interpreted against ``graph``.
+
+Nodes are visited in reverse canonical order. Before every call, the
+original node is remapped through all preceding edits. This puts relation
+instances before their endpoints, tiers after their contents, and positions
+within one carrier in descending order while keeping arbitrary positional
+shifts safe. If a preceding callback removes a later selected node, the
+bulk edit refuses instead of retargeting the callback.
+
+Every callback receives the same editor. Outside the callback,
+``apply_selected`` constructs one editor and performs one final validation.
+The input graph is immutable, so a callback refusal, invalid final graph, or
+exhausted budget exposes no partial graph result. The callback's return
+value is ignored.
+
+One optional work budget covers selector evaluation, span materialization,
+and one step per callback. Nested budget-aware work in the callback shares
+the active meter. This graph-level entry point records no journal and
+applies no clock rebinding policy. Callers requiring either must perform the
+equivalent selected structural operations through the appropriate editor.
 
 ### `compose_patches`
 

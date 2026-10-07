@@ -69,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Clock-aware replacement requires a named rebinding policy, creates
   provisional bindings for unmatched boundaries, and carries unambiguous
   corresponding timings under `keep-earlier`.
+- Added atomic `apply_selected()` bulk editing for selectors, materialized node
+  sets, and exhaustive match spans. Selections are evaluated once, overlapping
+  spans are deduplicated, every target follows preceding displacement, and one
+  optional work budget covers selection and callback application. This
+  graph-level operation records no journal and does not apply a clock rebinding
+  policy.
 
 ### Changed
 

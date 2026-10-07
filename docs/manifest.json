@@ -58,6 +58,7 @@
       "Subtree",
       "SubtreeCorrespondence",
       "apply_patch",
+      "apply_selected",
       "compose_patches",
       "diff",
       "invert_patch",
