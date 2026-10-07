@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol, cast, overload
 
 if TYPE_CHECKING:
     from tiergraph.edit import Journal, JournalEditor
+    from tiergraph.replacement import ReplacementPolicies, Subtree
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -2335,6 +2336,37 @@ class Graph:
         """Return a new graph with this item's values replaced."""
         return self.edit().replace_item(reference, item).freeze()
 
+    def replace_subtree(
+        self,
+        root: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        new: Subtree,
+        policies: ReplacementPolicies | None = None,
+    ) -> Graph:
+        """Return a graph with one root's containment descendants replaced."""
+        return self.edit().replace_subtree(root, containment, new, policies).freeze()
+
+    def swap_subtrees(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        first_policies: ReplacementPolicies | None = None,
+        second_policies: ReplacementPolicies | None = None,
+    ) -> Graph:
+        """Return a graph with two non-nested descendant sets exchanged."""
+        return (
+            self.edit()
+            .swap_subtrees(
+                first,
+                second,
+                containment,
+                first_policies,
+                second_policies,
+            )
+            .freeze()
+        )
+
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> Graph:
         """Return a new graph with this item at another index of its own tier."""
         return self.edit().move_item(reference, index).freeze()
@@ -3187,6 +3219,70 @@ class GraphEditor:
                 f"{current.durable_id!r}; use promote_item or demote_item to change identity"
             )
         member.items[coordinate.index] = item
+        return self
+
+    def replace_subtree(
+        self,
+        root: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        new: Subtree,
+        policies: ReplacementPolicies | None = None,
+    ) -> GraphEditor:
+        """Replace containment descendants under explicit dependency policies."""
+        from tiergraph.replacement import _replace_subtree  # noqa: PLC0415
+
+        outcome = _replace_subtree(self.freeze(), root, containment, new, policies)
+        candidate = outcome.graph
+        self._namespaces = list(candidate.namespaces)
+        self._tiers = [
+            _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
+            for tier in candidate.tiers
+        ]
+        self._relation_declarations = list(candidate.relation_declarations)
+        self._relations = list(candidate.relations)
+        self._attribute_declarations = list(candidate.attribute_declarations)
+        self._boundary_values = list(candidate.boundary_values)
+        self._attributes = list(candidate.attributes)
+        self._polyadic_relations = list(candidate.polyadic_relations)
+        self._seals = list(candidate.seals)
+        self._layers = list(candidate.layers)
+        self._advance_displacement(outcome.displacement)
+        return self
+
+    def swap_subtrees(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        first_policies: ReplacementPolicies | None = None,
+        second_policies: ReplacementPolicies | None = None,
+    ) -> GraphEditor:
+        """Exchange two non-nested containment descendant sets."""
+        from tiergraph.replacement import _swap_subtrees  # noqa: PLC0415
+
+        outcome = _swap_subtrees(
+            self.freeze(),
+            first,
+            second,
+            containment,
+            first_policies,
+            second_policies,
+        )
+        candidate = outcome.graph
+        self._namespaces = list(candidate.namespaces)
+        self._tiers = [
+            _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
+            for tier in candidate.tiers
+        ]
+        self._relation_declarations = list(candidate.relation_declarations)
+        self._relations = list(candidate.relations)
+        self._attribute_declarations = list(candidate.attribute_declarations)
+        self._boundary_values = list(candidate.boundary_values)
+        self._attributes = list(candidate.attributes)
+        self._polyadic_relations = list(candidate.polyadic_relations)
+        self._seals = list(candidate.seals)
+        self._layers = list(candidate.layers)
+        self._advance_displacement(outcome.displacement)
         return self
 
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:

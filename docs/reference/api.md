@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 262 top-level `tiergraph` exports exactly once.
+It covers 269 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -478,6 +478,16 @@ relation itself. ``keep-earlier`` leaves timing unchanged. The named
 collapsing policy conservatively collapses each touched timed tier onto
 its earlier extent and records that realignment is needed.
 
+#### `ClockEditor.replace_subtree`
+
+Method.
+
+```text
+ClockEditor.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'ClockEditor'
+```
+
+Replace descendants while explicitly reconciling every timed tier.
+
 #### `ClockEditor.undeclare_with_contents`
 
 Method.
@@ -515,6 +525,7 @@ Name the structural operation summarized by a clock edit report.
 - `ITEM_SWAP` = `item swap`
 - `REPARENT` = `reparent`
 - `DECLARATION_CASCADE` = `declaration cascade`
+- `SUBTREE_REPLACEMENT` = `subtree replacement`
 
 ### `ClockRebindingPolicy`
 
@@ -1396,6 +1407,26 @@ Replace one item's values while preserving its durable identity.
 Promotion and demotion are separate operations, so replacement refuses
 an item whose durable id differs from the item already at the coordinate.
 
+#### `GraphEditor.replace_subtree`
+
+Method.
+
+```text
+GraphEditor.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'GraphEditor'
+```
+
+Replace containment descendants under explicit dependency policies.
+
+#### `GraphEditor.swap_subtrees`
+
+Method.
+
+```text
+GraphEditor.swap_subtrees(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'GraphEditor'
+```
+
+Exchange two non-nested containment descendant sets.
+
 #### `GraphEditor.move_item`
 
 Method.
@@ -1846,6 +1877,26 @@ JournalEditor.replace_item(self, reference: 'ItemRef | DurableItemRef', item: 'I
 
 Replace one item and retain its prior value.
 
+#### `JournalEditor.replace_subtree`
+
+Method.
+
+```text
+JournalEditor.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'JournalEditor'
+```
+
+Replace descendants atomically and retain abandoned dependencies.
+
+#### `JournalEditor.swap_subtrees`
+
+Method.
+
+```text
+JournalEditor.swap_subtrees(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'JournalEditor'
+```
+
+Exchange two non-nested descendant sets as one journal event.
+
 #### `JournalEditor.move_item`
 
 Method.
@@ -2044,6 +2095,16 @@ ClockJournalEditor.reparent(self, target: 'RelationTarget', sources: 'RelationEn
 
 Reparent one relation under the named rebinding policy.
 
+#### `ClockJournalEditor.replace_subtree`
+
+Method.
+
+```text
+ClockJournalEditor.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'ClockJournalEditor'
+```
+
+Replace descendants under replacement and clock policies.
+
 #### `ClockJournalEditor.undeclare_with_contents`
 
 Method.
@@ -2103,7 +2164,7 @@ Describe the inverse without exposing retained Python values.
 ### `EditReport`
 
 ```text
-EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = ()) -> None
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = ()) -> None
 ```
 
 Describe the content one recorded operation touched.
@@ -2148,6 +2209,24 @@ EditAnnotations.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return only supplied metadata as detached JSON data.
+
+### `DetachedDependency`
+
+```text
+DetachedDependency(carrier: 'str', index: 'int', declaration: 'QualifiedName | None' = None, layer: 'LayerName | None' = None, subject: 'LayerSubject | None' = None, tier: 'QualifiedName | None' = None) -> None
+```
+
+Name one dependency removed from the live graph by replacement.
+
+#### `DetachedDependency.to_data`
+
+Method.
+
+```text
+DetachedDependency.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return a stable, JSON-compatible description.
 
 ### `Patch`
 
@@ -2213,6 +2292,69 @@ RelationTouch.to_data(self) -> 'dict[str, JsonValue]'
 
 Return the carrier and structural index.
 
+### `ReplacementAction`
+
+```text
+ReplacementAction(*values)
+```
+
+Choose how a dependency on replaced content is handled.
+
+#### `ReplacementAction` members
+
+- `ABANDON` = `abandon`
+- `FOLLOW` = `follow`
+- `SPLIT` = `split`
+
+### `ReplacementPolicies`
+
+```text
+ReplacementPolicies(default: 'ReplacementAction' = <ReplacementAction.ABANDON: 'abandon'>, correspond: 'bool' = False, correspondence: 'SubtreeCorrespondence' = <factory>, relations: 'Mapping[QualifiedName, ReplacementAction]' = <factory>, layers: 'Mapping[LayerName, ReplacementAction]' = <factory>, insertion_points: 'Mapping[QualifiedName, int]' = <factory>) -> None
+```
+
+Declare replacement defaults and per-carrier dependency actions.
+
+Abandonment is the default. ``correspond`` enables a stable local
+per-tier alignment for unmatched items with equal content; an explicit
+correspondence is applied first. Per-relation and per-layer actions
+override ``default``.
+``follow`` requires exactly one counterpart for every referenced item.
+``split`` duplicates a dependency over all declared counterparts.
+
+#### `ReplacementPolicies.corresponding`
+
+Class method.
+
+```text
+ReplacementPolicies.corresponding(cls, correspondence: 'SubtreeCorrespondence | None' = None, *, relations: 'Mapping[QualifiedName, ReplacementAction] | None' = None, layers: 'Mapping[LayerName, ReplacementAction] | None' = None, insertion_points: 'Mapping[QualifiedName, int] | None' = None) -> 'ReplacementPolicies'
+```
+
+Return an organization default that follows local correspondence.
+
+A speech-processing profile can use this default to retain provenance
+on corresponding alternatives while plain tiergraph editing continues
+to abandon dependencies unless the caller opts in.
+
+### `Subtree`
+
+```text
+Subtree(graph: 'Graph', root: 'ItemRef | DurableItemRef') -> None
+```
+
+Name a rooted containment subtree in a validated graph.
+
+### `SubtreeCorrespondence`
+
+```text
+SubtreeCorrespondence(items: 'Mapping[ItemRef, tuple[ItemRef, ...]]' = <factory>) -> None
+```
+
+Map old descendants to zero, one, or several new descendants.
+
+References on the right address :attr:`Subtree.graph`. Multiple old items
+may name one new item for a merge, and one old item may name several new
+items for a split. Missing old items have no counterpart.
+
 ### `apply_patch`
 
 ```text
@@ -2258,6 +2400,26 @@ invert_patch(patch: 'Patch') -> 'Patch'
 ```
 
 Reverse operation order and exchange every recorded transition.
+
+### `replace_subtree`
+
+```text
+replace_subtree(graph: 'Graph', root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+```
+
+Return ``graph`` with one root's containment descendants replaced.
+
+The root, its incoming containment link, its attributes, and its layer facts
+remain live. The default abandons dependencies on descendants and reports
+them when this operation is journaled. Correspondence is explicitly opt-in.
+
+### `swap_subtrees`
+
+```text
+swap_subtrees(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+```
+
+Exchange two non-nested descendant sets as two atomic replacements.
 
 ### `undeclare_with_contents`
 
@@ -4243,6 +4405,26 @@ Graph.replace_item(self, reference: 'ItemRef | DurableItemRef', item: 'Item') ->
 ```
 
 Return a new graph with this item's values replaced.
+
+#### `Graph.replace_subtree`
+
+Method.
+
+```text
+Graph.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+```
+
+Return a graph with one root's containment descendants replaced.
+
+#### `Graph.swap_subtrees`
+
+Method.
+
+```text
+Graph.swap_subtrees(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+```
+
+Return a graph with two non-nested descendant sets exchanged.
 
 #### `Graph.move_item`
 

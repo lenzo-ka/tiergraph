@@ -64,6 +64,13 @@ from tiergraph.core import (
     _ImmutableMapping,
     undeclare_with_contents,
 )
+from tiergraph.replacement import (
+    DetachedDependency,
+    ReplacementPolicies,
+    Subtree,
+    _replace_subtree,
+    _swap_subtrees,
+)
 
 _ANNOTATION_NAME = QualifiedName("urn:tiergraph:edit-journal", "annotations")
 _GRAPH_FIELDS = (
@@ -503,6 +510,7 @@ class EditReport:
     displacement: Displacement
     annotations: EditAnnotations
     clock_reports: tuple[ClockEditReport, ...] = ()
+    detached_dependencies: tuple[DetachedDependency, ...] = ()
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this report in deterministic JSON-compatible form."""
@@ -522,6 +530,9 @@ class EditReport:
             "annotations": self.annotations.to_data(),
             "clock_reports": [
                 _clock_report_data(report) for report in self.clock_reports
+            ],
+            "detached_dependencies": [
+                dependency.to_data() for dependency in self.detached_dependencies
             ],
         }
 
@@ -605,6 +616,7 @@ class _ReportRecipe:
     displacement: Displacement
     annotations: EditAnnotations
     clock_reports: tuple[ClockEditReport, ...]
+    detached_dependencies: tuple[DetachedDependency, ...]
 
     @classmethod
     def create(
@@ -614,6 +626,7 @@ class _ReportRecipe:
         displacement: Displacement,
         annotations: EditAnnotations,
         clock_reports: tuple[ClockEditReport, ...],
+        detached_dependencies: tuple[DetachedDependency, ...] = (),
     ) -> _ReportRecipe:
         """Capture eagerly derived touches without retaining expanded tuples."""
         return cls(
@@ -631,6 +644,7 @@ class _ReportRecipe:
             displacement,
             annotations,
             clock_reports,
+            detached_dependencies,
         )
 
     def build(self) -> EditReport:
@@ -644,6 +658,7 @@ class _ReportRecipe:
             self.displacement,
             self.annotations,
             self.clock_reports,
+            self.detached_dependencies,
         )
 
     @classmethod
@@ -658,6 +673,7 @@ class _ReportRecipe:
             report.displacement,
             report.annotations,
             report.clock_reports,
+            report.detached_dependencies,
         )
 
 
@@ -1883,6 +1899,7 @@ class _JournalEditorBase:
         clock_reports: tuple[ClockEditReport, ...] = (),
         before_clock_active: bool = True,
         after_clock_active: bool = True,
+        detached_dependencies: tuple[DetachedDependency, ...] = (),
     ) -> None:
         before = self._graph
         acted_subjects = tuple(provenance_subjects)
@@ -1931,6 +1948,7 @@ class _JournalEditorBase:
             compact_step,
             annotations,
             clock_reports,
+            detached_dependencies,
         )
         inverse = EditInverse._create(
             _inverse_name(operation),
@@ -2604,6 +2622,61 @@ class JournalEditor(_JournalEditorBase):
             ),
         )
 
+    def replace_subtree(
+        self,
+        root: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        new: Subtree,
+        policies: ReplacementPolicies | None = None,
+    ) -> JournalEditor:
+        """Replace descendants atomically and retain abandoned dependencies."""
+        outcome = _replace_subtree(self._graph, root, containment, new, policies)
+        coordinate = self._graph.resolve_item(root)
+        self._finish(
+            "replace_subtree",
+            outcome.graph,
+            outcome.displacement,
+            provenance_subjects=_present_subject(
+                _stable_subject(self._graph, coordinate)
+            ),
+            detached_dependencies=outcome.detached,
+        )
+        return self
+
+    def swap_subtrees(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        first_policies: ReplacementPolicies | None = None,
+        second_policies: ReplacementPolicies | None = None,
+    ) -> JournalEditor:
+        """Exchange two non-nested descendant sets as one journal event."""
+        outcome = _swap_subtrees(
+            self._graph,
+            first,
+            second,
+            containment,
+            first_policies,
+            second_policies,
+        )
+        coordinates = (
+            self._graph.resolve_item(first),
+            self._graph.resolve_item(second),
+        )
+        self._finish(
+            "swap_subtrees",
+            outcome.graph,
+            outcome.displacement,
+            provenance_subjects=tuple(
+                stable
+                for coordinate in coordinates
+                if (stable := _stable_subject(self._graph, coordinate)) is not None
+            ),
+            detached_dependencies=outcome.detached,
+        )
+        return self
+
     def move_item(
         self, reference: ItemRef | DurableItemRef, index: int
     ) -> JournalEditor:
@@ -2964,6 +3037,7 @@ class ClockJournalEditor(_JournalEditorBase):
             clock_reports=native.reports,
             before_clock_active=self._profile_active,
             after_clock_active=active,
+            detached_dependencies=native._detached_dependencies,
         )
         self._profile_active = active
         if active:
@@ -3081,6 +3155,23 @@ class ClockJournalEditor(_JournalEditorBase):
         return self._apply_clock(
             "reparent",
             lambda editor: editor.reparent(target, source_values, target_values),
+            provenance_subjects=_present_subject(
+                _stable_subject(self._graph, coordinate)
+            ),
+        )
+
+    def replace_subtree(
+        self,
+        root: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        new: Subtree,
+        policies: ReplacementPolicies | None = None,
+    ) -> ClockJournalEditor:
+        """Replace descendants under replacement and clock policies."""
+        coordinate = self._graph.resolve_item(root)
+        return self._apply_clock(
+            "replace_subtree",
+            lambda editor: editor.replace_subtree(root, containment, new, policies),
             provenance_subjects=_present_subject(
                 _stable_subject(self._graph, coordinate)
             ),

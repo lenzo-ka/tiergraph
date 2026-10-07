@@ -1,0 +1,1403 @@
+"""Replace containment descendants while making dependent-reference policy explicit."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from types import MappingProxyType
+
+from tiergraph.core import (
+    Attribute,
+    BipartiteRelationDeclaration,
+    BoundaryRef,
+    Displacement,
+    DurableBoundaryRef,
+    DurableItemRef,
+    DurablePolyadicRef,
+    DurableRelationRef,
+    Graph,
+    GraphEditor,
+    GraphValidationError,
+    Item,
+    ItemRef,
+    JsonValue,
+    LayerFact,
+    LayerName,
+    LayerSubject,
+    PolyadicInstanceRef,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
+    QualifiedName,
+    RelationEndpointKind,
+    RelationEndpointRef,
+    RelationInstance,
+    RelationInstanceRef,
+    SealDeclaration,
+)
+
+
+class ReplacementAction(StrEnum):
+    """Choose how a dependency on replaced content is handled."""
+
+    ABANDON = "abandon"
+    FOLLOW = "follow"
+    SPLIT = "split"
+
+
+@dataclass(frozen=True, slots=True)
+class Subtree:
+    """Name a rooted containment subtree in a validated graph."""
+
+    graph: Graph
+    root: ItemRef | DurableItemRef
+
+    def __post_init__(self) -> None:
+        """Require the public graph and item-reference shapes."""
+        if not isinstance(self.graph, Graph):
+            raise TypeError("subtree graph must be a Graph")
+        if not isinstance(self.root, ItemRef | DurableItemRef):
+            raise TypeError("subtree root must be an item reference")
+
+
+@dataclass(frozen=True, slots=True)
+class SubtreeCorrespondence:
+    """Map old descendants to zero, one, or several new descendants.
+
+    References on the right address :attr:`Subtree.graph`. Multiple old items
+    may name one new item for a merge, and one old item may name several new
+    items for a split. Missing old items have no counterpart.
+    """
+
+    items: Mapping[ItemRef, tuple[ItemRef, ...]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Detach the mapping and require ordered target tuples."""
+        detached: dict[ItemRef, tuple[ItemRef, ...]] = {}
+        for source, targets in self.items.items():
+            if not isinstance(source, ItemRef):
+                raise TypeError("correspondence sources must be item references")
+            values = tuple(targets)
+            if any(not isinstance(target, ItemRef) for target in values):
+                raise TypeError("correspondence targets must be item references")
+            detached[source] = values
+        object.__setattr__(self, "items", MappingProxyType(detached))
+
+
+@dataclass(frozen=True, slots=True)
+class ReplacementPolicies:
+    """Declare replacement defaults and per-carrier dependency actions.
+
+    Abandonment is the default. ``correspond`` enables a stable local
+    per-tier alignment for unmatched items with equal content; an explicit
+    correspondence is applied first. Per-relation and per-layer actions
+    override ``default``.
+    ``follow`` requires exactly one counterpart for every referenced item.
+    ``split`` duplicates a dependency over all declared counterparts.
+    """
+
+    default: ReplacementAction = ReplacementAction.ABANDON
+    correspond: bool = False
+    correspondence: SubtreeCorrespondence = field(default_factory=SubtreeCorrespondence)
+    relations: Mapping[QualifiedName, ReplacementAction] = field(default_factory=dict)
+    layers: Mapping[LayerName, ReplacementAction] = field(default_factory=dict)
+    insertion_points: Mapping[QualifiedName, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize enum spellings and detach policy mappings."""
+        object.__setattr__(self, "default", ReplacementAction(self.default))
+        object.__setattr__(
+            self,
+            "relations",
+            MappingProxyType(
+                {
+                    name: ReplacementAction(value)
+                    for name, value in self.relations.items()
+                }
+            ),
+        )
+        object.__setattr__(
+            self,
+            "layers",
+            MappingProxyType(
+                {name: ReplacementAction(value) for name, value in self.layers.items()}
+            ),
+        )
+        points: dict[QualifiedName, int] = {}
+        for tier, index in self.insertion_points.items():
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                raise ValueError(
+                    "replacement insertion points must be nonnegative integers"
+                )
+            points[tier] = index
+        object.__setattr__(self, "insertion_points", MappingProxyType(points))
+
+    @classmethod
+    def corresponding(
+        cls,
+        correspondence: SubtreeCorrespondence | None = None,
+        *,
+        relations: Mapping[QualifiedName, ReplacementAction] | None = None,
+        layers: Mapping[LayerName, ReplacementAction] | None = None,
+        insertion_points: Mapping[QualifiedName, int] | None = None,
+    ) -> ReplacementPolicies:
+        """Return an organization default that follows local correspondence.
+
+        A speech-processing profile can use this default to retain provenance
+        on corresponding alternatives while plain tiergraph editing continues
+        to abandon dependencies unless the caller opts in.
+        """
+        return cls(
+            ReplacementAction.FOLLOW,
+            True,
+            SubtreeCorrespondence() if correspondence is None else correspondence,
+            {} if relations is None else relations,
+            {} if layers is None else layers,
+            {} if insertion_points is None else insertion_points,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DetachedDependency:
+    """Name one dependency removed from the live graph by replacement."""
+
+    carrier: str
+    index: int
+    declaration: QualifiedName | None = None
+    layer: LayerName | None = None
+    subject: LayerSubject | None = None
+    tier: QualifiedName | None = None
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return a stable, JSON-compatible description."""
+        data: dict[str, JsonValue] = {
+            "carrier": self.carrier,
+            "index": self.index,
+        }
+        if self.declaration is not None:
+            data["declaration"] = self.declaration.to_data()
+        if self.layer is not None:
+            data["layer"] = self.layer.to_data()
+        if self.subject is not None:
+            data["subject"] = _subject_data(self.subject)
+        if self.tier is not None:
+            data["tier"] = self.tier.to_data()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplacementOutcome:
+    graph: Graph
+    displacement: Displacement
+    detached: tuple[DetachedDependency, ...]
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]]
+    new_items: Mapping[ItemRef, ItemRef]
+
+
+@dataclass(frozen=True, slots=True)
+class _Shape:
+    root: ItemRef
+    descendants: frozenset[ItemRef]
+    binary: frozenset[int]
+    polyadic: frozenset[int]
+
+
+def replace_subtree(
+    graph: Graph,
+    root: ItemRef | DurableItemRef,
+    containment: QualifiedName | Iterable[QualifiedName],
+    new: Subtree,
+    policies: ReplacementPolicies | None = None,
+) -> Graph:
+    """Return ``graph`` with one root's containment descendants replaced.
+
+    The root, its incoming containment link, its attributes, and its layer facts
+    remain live. The default abandons dependencies on descendants and reports
+    them when this operation is journaled. Correspondence is explicitly opt-in.
+    """
+    return _replace_subtree(graph, root, containment, new, policies).graph
+
+
+def swap_subtrees(
+    graph: Graph,
+    first: ItemRef | DurableItemRef,
+    second: ItemRef | DurableItemRef,
+    containment: QualifiedName | Iterable[QualifiedName],
+    first_policies: ReplacementPolicies | None = None,
+    second_policies: ReplacementPolicies | None = None,
+) -> Graph:
+    """Exchange two non-nested descendant sets as two atomic replacements."""
+    return _swap_subtrees(
+        graph,
+        first,
+        second,
+        containment,
+        first_policies,
+        second_policies,
+    ).graph
+
+
+def _swap_subtrees(
+    graph: Graph,
+    first: ItemRef | DurableItemRef,
+    second: ItemRef | DurableItemRef,
+    containment: QualifiedName | Iterable[QualifiedName],
+    first_policies: ReplacementPolicies | None,
+    second_policies: ReplacementPolicies | None,
+) -> _ReplacementOutcome:
+    names = _containment_names(containment)
+    selected = set(names)
+    left = _shape(graph, first, selected)
+    right = _shape(graph, second, selected)
+    if left.root == right.root:
+        raise GraphValidationError("subtree swap roots must be distinct")
+    if left.root in right.descendants or right.root in left.descendants:
+        raise GraphValidationError("subtree swap roots must not contain one another")
+    temporary_graph, temporary_ids = _temporary_subtree(graph, right)
+    first_outcome = _replace_subtree(
+        graph,
+        first,
+        names,
+        Subtree(temporary_graph, right.root),
+        first_policies,
+    )
+    if isinstance(second, DurableItemRef):
+        current_second: ItemRef | DurableItemRef = second
+    else:
+        current_second = first_outcome.displacement.items[right.root]
+    current_right = _shape(first_outcome.graph, current_second, selected)
+    second_outcome = _replace_subtree(
+        first_outcome.graph,
+        current_second,
+        names,
+        Subtree(graph, first),
+        second_policies,
+    )
+    current_temporary = {
+        source: second_outcome.graph.resolve_item(DurableItemRef(durable_id))
+        for source, durable_id in temporary_ids.items()
+    }
+    final_correspondence = SubtreeCorrespondence(
+        {
+            current_temporary[source]: (source,)
+            for source in sorted(
+                right.descendants, key=lambda item: (str(item.tier), item.index)
+            )
+        }
+    )
+    current_left = second_outcome.displacement.items[
+        first_outcome.displacement.items[left.root]
+    ]
+    final_outcome = _replace_subtree(
+        second_outcome.graph,
+        current_left,
+        names,
+        Subtree(graph, right.root),
+        ReplacementPolicies.corresponding(final_correspondence),
+    )
+    return _ReplacementOutcome(
+        final_outcome.graph,
+        first_outcome.displacement.then(second_outcome.displacement).then(
+            final_outcome.displacement
+        ),
+        _ordered_detached(
+            (
+                *_external_detached(graph, left, first_outcome.detached),
+                *_external_detached(
+                    first_outcome.graph, current_right, second_outcome.detached
+                ),
+            )
+        ),
+        final_outcome.correspondence,
+        final_outcome.new_items,
+    )
+
+
+def _temporary_subtree(graph: Graph, shape: _Shape) -> tuple[Graph, dict[ItemRef, str]]:
+    """Build a valid source graph whose copied descendant ids cannot collide."""
+    used = {
+        item.durable_id
+        for tier in graph.tiers
+        for item in tier.items
+        if item.durable_id is not None
+    }
+    temporary_ids: dict[ItemRef, str] = {}
+    serial = 1
+    for reference in sorted(
+        shape.descendants, key=lambda item: (str(item.tier), item.index)
+    ):
+        while (candidate := f"subtree-swap-{serial}") in used:
+            serial += 1
+        temporary_ids[reference] = candidate
+        used.add(candidate)
+        serial += 1
+    tiers = tuple(
+        replace(
+            tier,
+            items=tuple(
+                Item(
+                    temporary_ids.get(
+                        ItemRef(tier.declaration.name, index), item.durable_id
+                    ),
+                    item.attributes,
+                )
+                for index, item in enumerate(tier.items)
+            ),
+        )
+        for tier in graph.tiers
+    )
+    relations = tuple(
+        replace(graph.relations[index], durable_id=None)
+        for index in sorted(shape.binary)
+    )
+    polyadic = tuple(
+        replace(graph.polyadic_relations[index], durable_id=None)
+        for index in sorted(shape.polyadic)
+    )
+    return (
+        replace(
+            graph,
+            tiers=tiers,
+            relations=relations,
+            polyadic_relations=polyadic,
+            boundary_values=(),
+            seals=(),
+            layers=(),
+        ),
+        temporary_ids,
+    )
+
+
+def _external_detached(
+    graph: Graph,
+    shape: _Shape,
+    dependencies: Iterable[DetachedDependency],
+) -> tuple[DetachedDependency, ...]:
+    """Exclude subtree-owned content that a swap copies to its new location."""
+    result: list[DetachedDependency] = []
+    old_runs = _tier_runs(graph, shape.descendants)
+    mapping = {item: item for item in shape.descendants}
+    members = frozenset({shape.root, *shape.descendants})
+    binary = {
+        index: (index,)
+        for index, relation in enumerate(graph.relations)
+        if all(
+            _source_endpoint_inside(graph, endpoint, members)
+            for endpoint in (relation.left, relation.right)
+        )
+    }
+    polyadic = {
+        index: (index,)
+        for index, relation in enumerate(graph.polyadic_relations)
+        if all(
+            _source_endpoint_inside(graph, endpoint, members)
+            for endpoint in (*relation.sources, *relation.targets)
+        )
+    }
+    layers = {layer.name: layer for layer in graph.layers}
+    for dependency in dependencies:
+        if dependency.carrier == "boundary_values" and dependency.tier is not None:
+            if _boundary_touches(
+                BoundaryRef(dependency.tier, dependency.index), old_runs
+            ):
+                continue
+        elif dependency.carrier == "layer" and dependency.layer is not None:
+            layer = layers[dependency.layer]
+            fact = layer.facts[dependency.index]
+            if (
+                _copy_source_fact_subject(
+                    graph,
+                    graph,
+                    fact.subject,
+                    shape,
+                    shape.root,
+                    mapping,
+                    binary,
+                    polyadic,
+                )
+                is not None
+            ):
+                continue
+        result.append(dependency)
+    return tuple(result)
+
+
+def _containment_names(
+    containment: QualifiedName | Iterable[QualifiedName],
+) -> tuple[QualifiedName, ...]:
+    if isinstance(containment, QualifiedName):
+        return (containment,)
+    if isinstance(containment, (str, bytes, Mapping)):
+        raise TypeError("containment must be a qualified name or ordered iterable")
+    names = tuple(containment)
+    if not names or any(not isinstance(name, QualifiedName) for name in names):
+        raise TypeError("containment must contain qualified names")
+    if len(set(names)) != len(names):
+        raise ValueError("containment declarations must be unique")
+    return names
+
+
+def _validated_containment(graph: Graph, names: tuple[QualifiedName, ...]) -> None:
+    declarations = {item.name: item for item in graph.relation_declarations}
+    for name in names:
+        declaration = declarations.get(name)
+        if isinstance(declaration, BipartiteRelationDeclaration):
+            valid = (
+                declaration.single_parent
+                and declaration.acyclic
+                and declaration.left_endpoint is RelationEndpointKind.ITEM
+                and declaration.right_endpoint is RelationEndpointKind.ITEM
+            )
+        elif isinstance(declaration, PolyadicRelationDeclaration):
+            valid = (
+                declaration.single_parent
+                and declaration.acyclic
+                and declaration.sources.endpoint_kinds == (RelationEndpointKind.ITEM,)
+                and declaration.targets.endpoint_kinds == (RelationEndpointKind.ITEM,)
+                and declaration.sources.maximum == 1
+            )
+        else:
+            valid = False
+        if not valid:
+            raise GraphValidationError(
+                f"replacement containment {str(name)!r} must be an acyclic, "
+                "single-parent item relation with one source"
+            )
+
+
+def _item_endpoint(graph: Graph, endpoint: RelationEndpointRef) -> ItemRef:
+    if isinstance(endpoint, DurableBoundaryRef):
+        raise GraphValidationError("replacement containment endpoints must be items")
+    return graph.resolve_item(endpoint)
+
+
+def _shape(
+    graph: Graph, root: ItemRef | DurableItemRef, names: set[QualifiedName]
+) -> _Shape:
+    resolved = graph.resolve_item(root)
+    descendants: set[ItemRef] = set()
+    binary: set[int] = set()
+    polyadic: set[int] = set()
+    pending = [resolved]
+    while pending:
+        parent = pending.pop()
+        for index, binary_relation in enumerate(graph.relations):
+            if binary_relation.declaration not in names:
+                continue
+            source = _item_endpoint(graph, binary_relation.left)
+            if source != parent:
+                continue
+            child = _item_endpoint(graph, binary_relation.right)
+            binary.add(index)
+            if child not in descendants:  # pragma: no branch - validated acyclic
+                descendants.add(child)
+                pending.append(child)
+        for index, polyadic_relation in enumerate(graph.polyadic_relations):
+            if polyadic_relation.declaration not in names:
+                continue
+            sources = tuple(
+                _item_endpoint(graph, item) for item in polyadic_relation.sources
+            )
+            if sources != (parent,):
+                continue
+            polyadic.add(index)
+            for endpoint in polyadic_relation.targets:
+                child = _item_endpoint(graph, endpoint)
+                if child not in descendants:  # pragma: no branch - validated acyclic
+                    descendants.add(child)
+                    pending.append(child)
+    return _Shape(
+        resolved, frozenset(descendants), frozenset(binary), frozenset(polyadic)
+    )
+
+
+def _tier_runs(
+    graph: Graph, references: frozenset[ItemRef]
+) -> dict[QualifiedName, tuple[int, ...]]:
+    result: dict[QualifiedName, tuple[int, ...]] = {}
+    for tier in graph.tiers:
+        indexes = tuple(
+            index
+            for index in range(len(tier.items))
+            if ItemRef(tier.declaration.name, index) in references
+        )
+        if indexes:
+            if indexes != tuple(range(indexes[0], indexes[-1] + 1)):
+                raise GraphValidationError(
+                    f"replacement descendants on tier {str(tier.declaration.name)!r} "
+                    "must form one contiguous run"
+                )
+            result[tier.declaration.name] = indexes
+    return result
+
+
+def _local_correspondence(
+    old: Graph,
+    old_shape: _Shape,
+    new: Graph,
+    new_shape: _Shape,
+    explicit: SubtreeCorrespondence,
+    enabled: bool,
+) -> dict[ItemRef, tuple[ItemRef, ...]]:
+    result = dict(explicit.items)
+    for source, targets in result.items():
+        if source not in old_shape.descendants:
+            raise GraphValidationError(
+                "correspondence source is outside the old subtree"
+            )
+        if any(target not in new_shape.descendants for target in targets):
+            raise GraphValidationError(
+                "correspondence target is outside the new subtree"
+            )
+        if any(target.tier != source.tier for target in targets):
+            raise GraphValidationError("correspondence must stay within one tier")
+    if not enabled:
+        return result
+    used = {target for targets in result.values() for target in targets}
+    for tier in {item.tier for item in old_shape.descendants}:
+        old_items = sorted(
+            (item for item in old_shape.descendants if item.tier == tier),
+            key=lambda item: item.index,
+        )
+        new_items = sorted(
+            (item for item in new_shape.descendants if item.tier == tier),
+            key=lambda item: item.index,
+        )
+        cursor = 0
+        for source in old_items:
+            if source in result:
+                continue
+            value = old._tiers_by_name[tier].items[source.index]
+            match = next(
+                (
+                    target
+                    for target in new_items[cursor:]
+                    if target not in used
+                    and new._tiers_by_name[tier].items[target.index].attributes
+                    == value.attributes
+                ),
+                None,
+            )
+            if match is not None:
+                result[source] = (match,)
+                used.add(match)
+                cursor = new_items.index(match) + 1
+    return result
+
+
+def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
+    graph: Graph,
+    root: ItemRef | DurableItemRef,
+    containment: QualifiedName | Iterable[QualifiedName],
+    new: Subtree,
+    policies: ReplacementPolicies | None,
+) -> _ReplacementOutcome:
+    names = _containment_names(containment)
+    _validated_containment(graph, names)
+    _validated_containment(new.graph, names)
+    selected = set(names)
+    old_shape = _shape(graph, root, selected)
+    new_shape = _shape(new.graph, new.root, selected)
+    if old_shape.root.tier != new_shape.root.tier:
+        raise GraphValidationError("old and new subtree roots must have the same tier")
+    old_declarations = {
+        item.name: item for item in graph.relation_declarations if item.name in selected
+    }
+    new_declarations = {
+        item.name: item
+        for item in new.graph.relation_declarations
+        if item.name in selected
+    }
+    if old_declarations != new_declarations:
+        raise GraphValidationError("old and new containment declarations differ")
+    chosen = ReplacementPolicies() if policies is None else policies
+    old_runs = _tier_runs(graph, old_shape.descendants)
+    new_runs = _tier_runs(new.graph, new_shape.descendants)
+    insertions: dict[QualifiedName, int] = {}
+    for tier in set(old_runs) | set(new_runs):
+        member = graph._tiers_by_name.get(tier)
+        if member is None:  # pragma: no cover - checked for a clearer diagnostic
+            raise GraphValidationError(
+                f"replacement tier {str(tier)!r} is not declared"
+            )
+        if tier in old_runs:
+            insertions[tier] = old_runs[tier][0]
+        else:
+            insertion = chosen.insertion_points.get(tier, len(member.items))
+            if insertion > len(member.items):
+                raise GraphValidationError(
+                    f"replacement insertion point {insertion} is outside tier "
+                    f"{str(tier)!r}"
+                )
+            insertions[tier] = insertion
+    source_to_target: dict[ItemRef, ItemRef] = {}
+    for tier, indexes in new_runs.items():
+        start = insertions[tier]
+        for offset, source_index in enumerate(indexes):
+            source_to_target[ItemRef(tier, source_index)] = ItemRef(
+                tier, start + offset
+            )
+    raw_correspondence = _local_correspondence(
+        graph,
+        old_shape,
+        new.graph,
+        new_shape,
+        chosen.correspondence,
+        chosen.correspond,
+    )
+    for descendant in old_shape.descendants:
+        raw_correspondence.setdefault(descendant, ())
+    correspondence = {
+        source: tuple(source_to_target[target] for target in targets)
+        for source, targets in raw_correspondence.items()
+    }
+
+    editor = GraphEditor(graph)
+    detached: list[DetachedDependency] = []
+
+    old_binary = [
+        (index, relation)
+        for index, relation in enumerate(graph.relations)
+        if index in old_shape.binary
+        or _relation_touches(graph, relation, old_shape.descendants)
+    ]
+    old_polyadic = [
+        (index, relation)
+        for index, relation in enumerate(graph.polyadic_relations)
+        if index in old_shape.polyadic
+        or _polyadic_touches(graph, relation, old_shape.descendants)
+    ]
+    removed_binary = {index for index, _ in old_binary}
+    removed_polyadic = {index for index, _ in old_polyadic}
+
+    held_facts: list[tuple[LayerName, int, LayerFact, ReplacementAction]] = []
+    for layer in graph.layers:
+        for fact_index, fact in enumerate(layer.facts):
+            affected = _subject_touches(
+                graph,
+                fact.subject,
+                old_shape.descendants,
+                removed_binary,
+                removed_polyadic,
+            )
+            if not affected:
+                continue
+            action = chosen.layers.get(layer.name, chosen.default)
+            editor.remove_fact(layer.name, fact.subject, fact.value.name)
+            held_facts.append((layer.name, fact_index, fact, action))
+            if action is ReplacementAction.ABANDON:
+                detached.append(
+                    DetachedDependency(
+                        "layer", fact_index, layer=layer.name, subject=fact.subject
+                    )
+                )
+
+    held_boundaries: list[tuple[BoundaryRef, tuple[Attribute, ...]]] = []
+    for stored_boundary in graph.boundary_values:
+        coordinate = graph.resolve_boundary(stored_boundary.reference)
+        if _boundary_touches(coordinate, old_runs):
+            held_boundaries.append((coordinate, stored_boundary.attributes))
+            for value in stored_boundary.attributes:
+                editor.remove_attribute(stored_boundary.reference, value.name)
+            if chosen.default is ReplacementAction.ABANDON:
+                detached.append(
+                    DetachedDependency(
+                        "boundary_values", coordinate.index, tier=coordinate.tier
+                    )
+                )
+
+    for index, _ in reversed(old_binary):
+        editor.remove_relation(RelationInstanceRef(index))
+    for index, _ in reversed(old_polyadic):
+        editor.remove_relation(PolyadicInstanceRef(index))
+
+    for tier, indexes in sorted(old_runs.items(), key=lambda pair: str(pair[0])):
+        editor.remove_items(tier, indexes[0], len(indexes))
+    for tier, indexes in sorted(new_runs.items(), key=lambda pair: str(pair[0])):
+        items = tuple(new.graph._tiers_by_name[tier].items[index] for index in indexes)
+        editor.insert_items(tier, insertions[tier], items)
+    item_images = editor.displacement().items
+
+    additions_binary: list[tuple[int, RelationInstance, int]] = []
+    additions_polyadic: list[tuple[int, PolyadicRelationInstance, int]] = []
+    for index, binary_relation in old_binary:
+        if index in old_shape.binary:
+            continue
+        action = chosen.relations.get(binary_relation.declaration, chosen.default)
+        binary_replacements = _binary_replacements(
+            graph, binary_relation, correspondence, item_images, action
+        )
+        if not binary_replacements:
+            detached.append(
+                DetachedDependency(
+                    "relations", index, declaration=binary_relation.declaration
+                )
+            )
+        additions_binary.extend((index, value, index) for value in binary_replacements)
+    for index, polyadic_relation in old_polyadic:
+        if index in old_shape.polyadic:
+            continue
+        action = chosen.relations.get(polyadic_relation.declaration, chosen.default)
+        polyadic_replacements = _polyadic_replacements(
+            graph, polyadic_relation, correspondence, item_images, action
+        )
+        if not polyadic_replacements:
+            detached.append(
+                DetachedDependency(
+                    "polyadic_relations",
+                    index,
+                    declaration=polyadic_relation.declaration,
+                )
+            )
+        additions_polyadic.extend(
+            (index, value, index) for value in polyadic_replacements
+        )
+
+    inserted_graph = editor.freeze()
+    source_members = frozenset({new_shape.root, *new_shape.descendants})
+    source_binary = tuple(
+        index
+        for index, relation in enumerate(new.graph.relations)
+        if all(
+            _source_endpoint_inside(new.graph, endpoint, source_members)
+            for endpoint in (relation.left, relation.right)
+        )
+    )
+    source_polyadic = tuple(
+        index
+        for index, relation in enumerate(new.graph.polyadic_relations)
+        if all(
+            _source_endpoint_inside(new.graph, endpoint, source_members)
+            for endpoint in (*relation.sources, *relation.targets)
+        )
+    )
+    binary_anchor = min(old_shape.binary, default=len(graph.relations))
+    for index in source_binary:
+        binary_relation = new.graph.relations[index]
+        additions_binary.append(
+            (
+                binary_anchor,
+                _copy_binary_source_relation(
+                    new.graph,
+                    inserted_graph,
+                    binary_relation,
+                    new_shape.root,
+                    item_images[old_shape.root],
+                    source_to_target,
+                ),
+                -index - 1,
+            )
+        )
+    polyadic_anchor = min(old_shape.polyadic, default=len(graph.polyadic_relations))
+    for index in source_polyadic:
+        polyadic_relation = new.graph.polyadic_relations[index]
+        additions_polyadic.append(
+            (
+                polyadic_anchor,
+                _copy_polyadic_source_relation(
+                    new.graph,
+                    inserted_graph,
+                    polyadic_relation,
+                    new_shape.root,
+                    item_images[old_shape.root],
+                    source_to_target,
+                ),
+                -index - 1,
+            )
+        )
+
+    all_binary_images = _insert_relations(editor, additions_binary, removed_binary)
+    all_polyadic_images = _insert_relations(
+        editor, additions_polyadic, removed_polyadic
+    )
+    binary_images = {
+        index: images for index, images in all_binary_images.items() if index >= 0
+    }
+    polyadic_images = {
+        index: images for index, images in all_polyadic_images.items() if index >= 0
+    }
+    source_binary_images = {
+        -index - 1: images for index, images in all_binary_images.items() if index < 0
+    }
+    source_polyadic_images = {
+        -index - 1: images for index, images in all_polyadic_images.items() if index < 0
+    }
+
+    for boundary_reference, attributes in held_boundaries:
+        targets = _boundary_correspondence(
+            boundary_reference, correspondence, old_runs, insertions, new_runs
+        )
+        carried = False
+        if chosen.default is ReplacementAction.FOLLOW and len(targets) == 1:
+            for value in attributes:
+                editor.set_attribute(targets[0], value)
+            carried = True
+        elif chosen.default is ReplacementAction.SPLIT and targets:
+            for target in targets:
+                for value in attributes:
+                    editor.set_attribute(target, value)
+            carried = True
+        if not carried and chosen.default is not ReplacementAction.ABANDON:
+            detached.append(
+                DetachedDependency(
+                    "boundary_values",
+                    boundary_reference.index,
+                    tier=boundary_reference.tier,
+                )
+            )
+
+    for layer_name, fact_index, fact, action in held_facts:
+        subjects = _fact_subjects(
+            graph,
+            fact.subject,
+            correspondence,
+            binary_images,
+            polyadic_images,
+            action,
+        )
+        if not subjects and action is not ReplacementAction.ABANDON:
+            detached.append(
+                DetachedDependency(
+                    "layer",
+                    fact_index,
+                    layer=layer_name,
+                    subject=fact.subject,
+                )
+            )
+        for subject in subjects:
+            editor.put_fact(layer_name, LayerFact(subject, fact.value))
+
+    for stored_boundary in new.graph.boundary_values:
+        coordinate = new.graph.resolve_boundary(stored_boundary.reference)
+        boundary_run = new_runs.get(coordinate.tier)
+        if (
+            boundary_run is None
+            or not boundary_run[0] <= coordinate.index <= boundary_run[-1] + 1
+        ):
+            continue
+        target = BoundaryRef(
+            coordinate.tier,
+            insertions[coordinate.tier] + coordinate.index - boundary_run[0],
+        )
+        for value in stored_boundary.attributes:
+            editor.set_attribute(target, value)
+
+    target_layer_names = {layer.name for layer in graph.layers}
+    for layer in new.graph.layers:
+        copied: list[LayerFact] = []
+        for fact in layer.facts:
+            copied_subject = _copy_source_fact_subject(
+                new.graph,
+                inserted_graph,
+                fact.subject,
+                new_shape,
+                old_shape.root,
+                source_to_target,
+                source_binary_images,
+                source_polyadic_images,
+            )
+            if copied_subject is not None:
+                copied.append(LayerFact(copied_subject, fact.value))
+        if copied and layer.name not in target_layer_names:
+            editor.add_layer(layer.name)
+            target_layer_names.add(layer.name)
+        for fact in copied:
+            editor.put_fact(layer.name, fact)
+
+    candidate = editor.freeze()
+    SealDeclaration("replace subtree", graph, candidate).check_seals()
+    return _ReplacementOutcome(
+        candidate,
+        editor.displacement(),
+        _ordered_detached(detached),
+        MappingProxyType(correspondence),
+        MappingProxyType(source_to_target),
+    )
+
+
+def _relation_touches(
+    graph: Graph, relation: RelationInstance, descendants: frozenset[ItemRef]
+) -> bool:
+    return any(
+        _endpoint_touches(graph, endpoint, descendants)
+        for endpoint in (relation.left, relation.right)
+    )
+
+
+def _polyadic_touches(
+    graph: Graph, relation: PolyadicRelationInstance, descendants: frozenset[ItemRef]
+) -> bool:
+    return any(
+        _endpoint_touches(graph, endpoint, descendants)
+        for endpoint in (*relation.sources, *relation.targets)
+    )
+
+
+def _endpoint_touches(
+    graph: Graph,
+    endpoint: RelationEndpointRef,
+    descendants: frozenset[ItemRef],
+) -> bool:
+    """Recognize item endpoints and boundary endpoints anchored to descendants."""
+    if isinstance(endpoint, DurableBoundaryRef):
+        return (
+            isinstance(endpoint.anchor, DurableItemRef)
+            and graph.resolve_item(endpoint.anchor) in descendants
+        )
+    return graph.resolve_item(endpoint) in descendants
+
+
+def _endpoint_item(graph: Graph, endpoint: RelationEndpointRef) -> ItemRef | None:
+    if isinstance(endpoint, DurableBoundaryRef):
+        return None
+    return graph.resolve_item(endpoint)
+
+
+def _boundary_owner(graph: Graph, endpoint: DurableBoundaryRef) -> ItemRef | None:
+    """Return the item anchoring a durable boundary, if it has one."""
+    if isinstance(endpoint.anchor, DurableItemRef):
+        return graph.resolve_item(endpoint.anchor)
+    return None
+
+
+def _source_endpoint_inside(
+    graph: Graph,
+    endpoint: RelationEndpointRef,
+    members: frozenset[ItemRef],
+) -> bool:
+    """Say whether an endpoint is wholly owned by a copied subtree."""
+    if isinstance(endpoint, DurableBoundaryRef):
+        return _boundary_owner(graph, endpoint) in members
+    return graph.resolve_item(endpoint) in members
+
+
+def _copy_source_endpoint(
+    source: Graph,
+    target: Graph,
+    endpoint: RelationEndpointRef,
+    source_root: ItemRef,
+    target_root: ItemRef,
+    mapping: Mapping[ItemRef, ItemRef],
+) -> RelationEndpointRef:
+    """Map one endpoint from the supplied subtree into the edited graph."""
+    if not isinstance(endpoint, DurableBoundaryRef):
+        return _mapped_new_endpoint(source, endpoint, source_root, target_root, mapping)
+    owner = _boundary_owner(source, endpoint)
+    if owner is None:
+        raise GraphValidationError(
+            "a copied subtree relation cannot use a tier-anchored boundary"
+        )
+    coordinate = target_root if owner == source_root else mapping[owner]
+    item = target._tiers_by_name[coordinate.tier].items[coordinate.index]
+    if item.durable_id is None:
+        raise GraphValidationError(
+            "a copied subtree boundary endpoint requires a durable target item"
+        )
+    return DurableBoundaryRef(DurableItemRef(item.durable_id), endpoint.side)
+
+
+def _boundary_touches(
+    boundary: BoundaryRef, runs: Mapping[QualifiedName, tuple[int, ...]]
+) -> bool:
+    indexes = runs.get(boundary.tier)
+    return indexes is not None and indexes[0] <= boundary.index <= indexes[-1] + 1
+
+
+def _subject_touches(
+    graph: Graph,
+    subject: LayerSubject,
+    descendants: frozenset[ItemRef],
+    binary: set[int],
+    polyadic: set[int],
+) -> bool:
+    if isinstance(subject, ItemRef | DurableItemRef):
+        return graph.resolve_item(subject) in descendants
+    if isinstance(subject, BoundaryRef | DurableBoundaryRef):
+        coordinate = graph.resolve_boundary(subject)
+        indexes = tuple(
+            item.index for item in descendants if item.tier == coordinate.tier
+        )
+        return bool(indexes) and min(indexes) <= coordinate.index <= max(indexes) + 1
+    if isinstance(subject, RelationInstanceRef):
+        return subject.index in binary
+    if isinstance(subject, PolyadicInstanceRef):
+        return subject.index in polyadic
+    if isinstance(subject, DurableRelationRef):
+        return any(
+            index in binary and relation.durable_id == subject.durable_id
+            for index, relation in enumerate(graph.relations)
+        )
+    if isinstance(subject, DurablePolyadicRef):
+        return any(
+            index in polyadic and relation.durable_id == subject.durable_id
+            for index, relation in enumerate(graph.polyadic_relations)
+        )
+    return False
+
+
+def _endpoint_targets(
+    graph: Graph,
+    endpoint: RelationEndpointRef,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    action: ReplacementAction,
+) -> tuple[RelationEndpointRef, ...]:
+    item = _endpoint_item(graph, endpoint)
+    if item is None or item not in correspondence:
+        return ()
+    targets = correspondence[item]
+    if action is ReplacementAction.ABANDON:
+        return ()
+    if action is ReplacementAction.FOLLOW:
+        return targets if len(targets) == 1 else ()
+    return targets
+
+
+def _binary_replacements(
+    graph: Graph,
+    relation: RelationInstance,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    item_images: Mapping[ItemRef, ItemRef],
+    action: ReplacementAction,
+) -> tuple[RelationInstance, ...]:
+    sides: list[tuple[RelationEndpointRef, ...]] = []
+    for endpoint in (relation.left, relation.right):
+        item = _endpoint_item(graph, endpoint)
+        if item is not None and item in correspondence:
+            targets = _endpoint_targets(graph, endpoint, correspondence, action)
+            if not targets:
+                return ()
+            sides.append(targets)
+        elif isinstance(endpoint, DurableBoundaryRef) and _endpoint_touches(
+            graph, endpoint, frozenset(correspondence)
+        ):
+            return ()
+        else:
+            sides.append((_remap_unaffected_endpoint(endpoint, item_images),))
+    result: list[RelationInstance] = []
+    for left in sides[0]:
+        for right in sides[1]:
+            result.append(
+                RelationInstance(
+                    relation.declaration,
+                    left,
+                    right,
+                    relation.durable_id if not result else None,
+                    relation.attributes,
+                )
+            )
+    return tuple(result)
+
+
+def _polyadic_replacements(
+    graph: Graph,
+    relation: PolyadicRelationInstance,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    item_images: Mapping[ItemRef, ItemRef],
+    action: ReplacementAction,
+) -> tuple[PolyadicRelationInstance, ...]:
+    def _side(
+        values: tuple[RelationEndpointRef, ...],
+    ) -> tuple[RelationEndpointRef, ...] | None:
+        result: list[RelationEndpointRef] = []
+        for endpoint in values:
+            item = _endpoint_item(graph, endpoint)
+            if item is not None and item in correspondence:
+                targets = _endpoint_targets(graph, endpoint, correspondence, action)
+                if not targets:
+                    return None
+                result.extend(targets)
+            elif isinstance(endpoint, DurableBoundaryRef) and _endpoint_touches(
+                graph, endpoint, frozenset(correspondence)
+            ):
+                return None
+            else:
+                result.append(_remap_unaffected_endpoint(endpoint, item_images))
+        return tuple(result)
+
+    sources = _side(relation.sources)
+    targets = _side(relation.targets)
+    if sources is None or targets is None:
+        return ()
+    return (
+        PolyadicRelationInstance(
+            relation.declaration,
+            sources,
+            targets,
+            relation.durable_id,
+            relation.attributes,
+        ),
+    )
+
+
+def _remap_unaffected_endpoint(
+    endpoint: RelationEndpointRef,
+    item_images: Mapping[ItemRef, ItemRef],
+) -> RelationEndpointRef:
+    """Carry an unaffected coordinate endpoint through the tier restructure."""
+    if isinstance(endpoint, ItemRef):
+        return item_images[endpoint]
+    if isinstance(endpoint, DurableItemRef | DurableBoundaryRef):
+        return endpoint
+    raise GraphValidationError(f"unsupported relation endpoint {endpoint!r}")
+
+
+def _mapped_new_endpoint(
+    graph: Graph,
+    endpoint: RelationEndpointRef,
+    source_root: ItemRef,
+    target_root: ItemRef,
+    mapping: Mapping[ItemRef, ItemRef],
+) -> RelationEndpointRef:
+    if isinstance(endpoint, DurableBoundaryRef):
+        raise GraphValidationError("containment endpoints must be items")
+    coordinate = graph.resolve_item(endpoint)
+    if coordinate == source_root:
+        return target_root
+    try:
+        return mapping[coordinate]
+    except KeyError as error:
+        raise GraphValidationError(
+            "new containment relation leaves the subtree"
+        ) from error
+
+
+def _copy_binary_source_relation(
+    graph: Graph,
+    target: Graph,
+    relation: RelationInstance,
+    source_root: ItemRef,
+    target_root: ItemRef,
+    mapping: Mapping[ItemRef, ItemRef],
+) -> RelationInstance:
+    return RelationInstance(
+        relation.declaration,
+        _copy_source_endpoint(
+            graph, target, relation.left, source_root, target_root, mapping
+        ),
+        _copy_source_endpoint(
+            graph, target, relation.right, source_root, target_root, mapping
+        ),
+        relation.durable_id,
+        relation.attributes,
+    )
+
+
+def _copy_polyadic_source_relation(
+    graph: Graph,
+    target: Graph,
+    relation: PolyadicRelationInstance,
+    source_root: ItemRef,
+    target_root: ItemRef,
+    mapping: Mapping[ItemRef, ItemRef],
+) -> PolyadicRelationInstance:
+    return PolyadicRelationInstance(
+        relation.declaration,
+        tuple(
+            _copy_source_endpoint(
+                graph, target, item, source_root, target_root, mapping
+            )
+            for item in relation.sources
+        ),
+        tuple(
+            _copy_source_endpoint(
+                graph, target, item, source_root, target_root, mapping
+            )
+            for item in relation.targets
+        ),
+        relation.durable_id,
+        relation.attributes,
+    )
+
+
+def _insert_relations(
+    editor: GraphEditor,
+    additions: Sequence[tuple[int, RelationInstance | PolyadicRelationInstance, int]],
+    removed: set[int],
+) -> dict[int, tuple[int, ...]]:
+    images: dict[int, list[int]] = {}
+    added = 0
+    for anchor, instance, origin in sorted(additions, key=lambda value: value[0]):
+        before = sum(1 for index in range(anchor) if index not in removed)
+        position = before + added
+        editor.add_relation(instance, position)
+        images.setdefault(origin, []).append(position)
+        added += 1
+    return {key: tuple(values) for key, values in images.items()}
+
+
+def _boundary_correspondence(
+    boundary: BoundaryRef,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    old_runs: Mapping[QualifiedName, tuple[int, ...]],
+    insertions: Mapping[QualifiedName, int],
+    new_runs: Mapping[QualifiedName, tuple[int, ...]],
+) -> tuple[BoundaryRef, ...]:
+    indexes = old_runs.get(boundary.tier)
+    if indexes is None:
+        return ()
+    start = indexes[0]
+    end = indexes[-1] + 1
+    new_count = len(new_runs.get(boundary.tier, ()))
+    if boundary.index == start:
+        return (BoundaryRef(boundary.tier, insertions[boundary.tier]),)
+    if boundary.index == end:
+        return (BoundaryRef(boundary.tier, insertions[boundary.tier] + new_count),)
+    left = correspondence.get(ItemRef(boundary.tier, boundary.index - 1), ())
+    right = correspondence.get(ItemRef(boundary.tier, boundary.index), ())
+    candidates = {
+        *(BoundaryRef(item.tier, item.index + 1) for item in left),
+        *(BoundaryRef(item.tier, item.index) for item in right),
+    }
+    return tuple(sorted(candidates, key=lambda item: item.index))
+
+
+def _fact_subjects(
+    graph: Graph,
+    subject: LayerSubject,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    binary: Mapping[int, tuple[int, ...]],
+    polyadic: Mapping[int, tuple[int, ...]],
+    action: ReplacementAction,
+) -> tuple[LayerSubject, ...]:
+    if action is ReplacementAction.ABANDON:
+        return ()
+    targets: tuple[LayerSubject, ...]
+    if isinstance(subject, ItemRef | DurableItemRef):
+        targets = correspondence.get(graph.resolve_item(subject), ())
+    elif isinstance(subject, RelationInstanceRef):
+        targets = tuple(
+            RelationInstanceRef(index) for index in binary.get(subject.index, ())
+        )
+    elif isinstance(subject, PolyadicInstanceRef):
+        targets = tuple(
+            PolyadicInstanceRef(index) for index in polyadic.get(subject.index, ())
+        )
+    elif isinstance(subject, DurableRelationRef):
+        old = next(
+            index
+            for index, relation in enumerate(graph.relations)
+            if relation.durable_id == subject.durable_id
+        )
+        targets = tuple(RelationInstanceRef(index) for index in binary.get(old, ()))
+    elif isinstance(subject, DurablePolyadicRef):
+        old = next(
+            index
+            for index, relation in enumerate(graph.polyadic_relations)
+            if relation.durable_id == subject.durable_id
+        )
+        targets = tuple(PolyadicInstanceRef(index) for index in polyadic.get(old, ()))
+    else:
+        targets = ()
+    if action is ReplacementAction.FOLLOW:
+        return targets if len(targets) == 1 else ()
+    return targets
+
+
+def _copy_source_fact_subject(
+    source: Graph,
+    target: Graph,
+    subject: LayerSubject,
+    shape: _Shape,
+    target_root: ItemRef,
+    mapping: Mapping[ItemRef, ItemRef],
+    binary: Mapping[int, tuple[int, ...]],
+    polyadic: Mapping[int, tuple[int, ...]],
+) -> LayerSubject | None:
+    """Map a fact owned by copied subtree content into the edited graph."""
+    if isinstance(subject, ItemRef | DurableItemRef):
+        coordinate = source.resolve_item(subject)
+        if coordinate not in shape.descendants:
+            return None
+        if isinstance(subject, DurableItemRef):
+            return subject
+        return mapping[coordinate]
+    if isinstance(subject, BoundaryRef):
+        source_indexes = tuple(
+            sorted(
+                item.index for item in shape.descendants if item.tier == subject.tier
+            )
+        )
+        if (
+            not source_indexes
+            or subject.index < source_indexes[0]
+            or subject.index > source_indexes[-1] + 1
+        ):
+            return None
+        target_start = min(
+            mapping[ItemRef(subject.tier, index)].index for index in source_indexes
+        )
+        return BoundaryRef(
+            subject.tier, target_start + subject.index - source_indexes[0]
+        )
+    if isinstance(subject, DurableBoundaryRef):
+        owner = _boundary_owner(source, subject)
+        if owner not in shape.descendants:
+            return None
+        return _copy_source_endpoint(
+            source, target, subject, shape.root, target_root, mapping
+        )
+    if isinstance(subject, RelationInstanceRef):
+        images = binary.get(subject.index, ())
+        return RelationInstanceRef(images[0]) if len(images) == 1 else None
+    if isinstance(subject, PolyadicInstanceRef):
+        images = polyadic.get(subject.index, ())
+        return PolyadicInstanceRef(images[0]) if len(images) == 1 else None
+    if isinstance(subject, DurableRelationRef):
+        index = next(
+            (
+                index
+                for index, relation in enumerate(source.relations)
+                if relation.durable_id == subject.durable_id
+            ),
+            None,
+        )
+        return subject if index is not None and index in binary else None
+    if isinstance(subject, DurablePolyadicRef):
+        index = next(
+            (
+                index
+                for index, relation in enumerate(source.polyadic_relations)
+                if relation.durable_id == subject.durable_id
+            ),
+            None,
+        )
+        return subject if index is not None and index in polyadic else None
+    return None
+
+
+def _ordered_detached(
+    dependencies: Iterable[DetachedDependency],
+) -> tuple[DetachedDependency, ...]:
+    """Deduplicate and order reports without ordering heterogeneous subjects."""
+    unique = set(dependencies)
+    return tuple(
+        sorted(
+            unique,
+            key=lambda dependency: (
+                dependency.carrier,
+                dependency.index,
+                repr(dependency.declaration),
+                repr(dependency.layer),
+                repr(dependency.subject),
+                repr(dependency.tier),
+            ),
+        )
+    )
+
+
+def _subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
+    """Use the graph's canonical tagged encoding for a layer subject."""
+    from tiergraph.core import _layer_subject_data  # noqa: PLC0415
+
+    return _layer_subject_data(subject)
+
+
+__all__ = [
+    "DetachedDependency",
+    "ReplacementAction",
+    "ReplacementPolicies",
+    "Subtree",
+    "SubtreeCorrespondence",
+    "replace_subtree",
+    "swap_subtrees",
+]
