@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protected-layer preflight. Plain editors keep their existing state shape and
   build none of this recording state.
 - Added `Displacement.to_data()` for deterministic JSON-compatible edit reports.
+- Added versioned, fingerprint-guarded `Patch` values with canonical JSON Lines
+  serialization, per-operation annotations, executable edit calls, guarded
+  residual deltas, and recorded inverse opcodes. Patches check each identified
+  transition before and after execution, invert and compose, and refuse any base
+  whose identified fingerprint differs. `Journal.to_patch()` makes applied
+  history portable without embedding complete graph snapshots per operation.
+- Added `graph_to_program()` exact graph replay, including wire-loaded orphan
+  facts and zero-length seal records. Machine format version 2 adds the needed
+  construction opcodes while retaining version 1 reads unchanged, and
+  construction `Program` values refuse removal opcodes.
 
 ### Changed
 

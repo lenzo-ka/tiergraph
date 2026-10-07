@@ -99,6 +99,35 @@ Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
 later release is not supported.
 
+## Program and patch JSON Lines
+
+Construction programs use canonical JSON Lines. Version 2 adds seal, layer,
+and fact construction records while retaining every version 1 spelling; the
+reader continues to accept version 1 with exactly its original opcode set.
+`Program` always starts from the empty graph and refuses removal operations.
+`graph_to_program()` emits a construction-only version 2 program that replays
+to exact graph equality, including orphan facts and explicit zero-length seal
+records. This does not change the graph document `FORMAT_VERSION`.
+
+Patches are a separate JSON Lines container with `"patch_version": "1"`.
+Their header carries identified base and target fingerprints plus default edit
+annotations. Each following line is one named operation with per-operation
+annotations, identified base and target fingerprints, executable edit calls,
+guarded residual document changes, and its executable recorded inverse. The
+residual changes contain only changed members or array slices, not complete
+before and after graph documents. Patch application checks the header base
+before any operation, checks each operation's base, executes its calls and
+residual changes, validates the resulting graph, checks the operation target,
+and checks the final target. Current patches use identified fingerprints, so a
+patch refuses a functionally equal base with different or reused durable ids.
+
+Both containers share the graph codec's whole-document byte limit, UTF-8 and
+strict-JSON rules, nesting limit, and the independent 1 MiB JSONL line limit.
+Annotations contain optional `author`, `reason`, `stage`, `confidence`,
+`iteration`, `tool`, and caller-supplied `timestamp` fields plus typed JSON
+`fields`; no timestamp is invented. Qualified names in program opcodes remain
+expanded rather than depending on a document prefix table.
+
 ## Refusal order
 
 An input routinely breaks several rules at once. A document reader ranks the

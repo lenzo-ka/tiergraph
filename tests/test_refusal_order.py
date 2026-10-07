@@ -180,9 +180,9 @@ def test_a_machine_header_reports_its_version_before_its_field_set() -> None:
     members, so checking the header's field set first suppressed the one
     diagnostic that tells the caller the truth.  The stamp is decided first.
     """
-    refusal = refuse(program_loads, b'{"machine_version":"2","extra":true}\n')
+    refusal = refuse(program_loads, b'{"machine_version":"3","extra":true}\n')
     assert refusal.stage is RefusalStage.DISCRIMINATOR
-    assert str(refusal) == "header machine_version must be '1'"
+    assert str(refusal) == "header machine_version must be '2'"
 
 
 def test_an_unstamped_machine_header_is_a_discriminator_condition() -> None:
@@ -203,7 +203,7 @@ def test_a_stamped_machine_header_is_still_held_to_its_field_set() -> None:
     Reading the stamp before the field set changes which condition is primary,
     never whether an unknown header member is refused.
     """
-    refusal = refuse(program_loads, b'{"machine_version":"1","extra":true}\n')
+    refusal = refuse(program_loads, b'{"machine_version":"2","extra":true}\n')
     assert refusal.stage is RefusalStage.SHAPE
     assert str(refusal) == (
         "header fields must be ['machine_version']; got ['extra', 'machine_version']"
@@ -309,6 +309,7 @@ READER_SCOPES: dict[str, str] = {
     "grammar_loads": "",
     "selection_loads": "",
     "program_loads": "JSONL line 1: ",
+    "patch_loads": "JSONL line 1: ",
 }
 
 READER_ENVELOPES: dict[str, tuple[object, str]] = {
@@ -316,6 +317,7 @@ READER_ENVELOPES: dict[str, tuple[object, str]] = {
     "grammar_loads": (wire, "document size 2 bytes exceeds limit 1"),
     "selection_loads": (wire, "document size 2 bytes exceeds limit 1"),
     "program_loads": (machine_codec, "JSONL program exceeds 1 bytes"),
+    "patch_loads": (machine_codec, "JSONL patch exceeds 1 bytes"),
 }
 
 
@@ -334,7 +336,28 @@ def duplicate_prefix_document() -> str:
     )
 
 
-PROGRAM_HEADER = b'{"machine_version":"1"}\n'
+PROGRAM_HEADER = b'{"machine_version":"2"}\n'
+
+
+def semantic_patch_document() -> str:
+    """Return a patch whose named opcode has no executable call."""
+    header = {
+        "patch_version": "1",
+        "base_fingerprint": "base",
+        "target_fingerprint": "target",
+        "annotations": {},
+    }
+    operation = {
+        "opcode": "move_item",
+        "calls": [],
+        "changes": [{"kind": "replace", "path": ["graph"], "before": {}, "after": {}}],
+        "base_fingerprint": "base",
+        "target_fingerprint": "target",
+        "annotations": {},
+        "inverse": {"opcode": "delta", "calls": [], "changes": []},
+    }
+    return json.dumps(header) + "\n" + json.dumps(operation) + "\n"
+
 
 # Each reader's own input for each rank it can refuse at.  The graph document
 # reader is the only one that answers all nine, and the three others answer
@@ -388,6 +411,23 @@ READER_STAGES: dict[str, dict[RefusalStage, str | bytes]] = {
         RefusalStage.SEMANTICS: PROGRAM_HEADER + b'{"opcode":"declare_namespace",'
         b'"declaration":{"prefix":"p:q","namespace":"urn:x"}}\n',
     },
+    "patch_loads": {
+        RefusalStage.ENVELOPE: b"x" * (wire.MAX_DOCUMENT_BYTES + 1),
+        RefusalStage.ENCODING: b"\xff\xfe",
+        RefusalStage.SYNTAX: "{",
+        RefusalStage.CONSTRUCTION: b"[]\n",
+        RefusalStage.DISCRIMINATOR: b"{}\n",
+        RefusalStage.SHAPE: (
+            '{"patch_version":"1","base_fingerprint":"base",'
+            '"target_fingerprint":"target","annotations":{},"extra":true}\n'
+        ),
+        RefusalStage.VALUE: (
+            '{"patch_version":"1","base_fingerprint":"base",'
+            '"target_fingerprint":"target",'
+            '"annotations":{"confidence":Infinity}}\n'
+        ),
+        RefusalStage.SEMANTICS: semantic_patch_document(),
+    },
 }
 
 # What stands where a reader has no fixture above.  Ranks 8 and 9 resolve a
@@ -413,6 +453,9 @@ READER_UNREACHED: dict[str, dict[RefusalStage, str]] = {
     },
     "program_loads": {
         RefusalStage.REFERENCE: "resolved when the program is executed",
+    },
+    "patch_loads": {
+        RefusalStage.REFERENCE: "resolved when an opcode applies to its base graph",
     },
 }
 

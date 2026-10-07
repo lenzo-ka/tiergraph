@@ -54,3 +54,8 @@ uv.lock
 # name carrying no separator cannot match a leading path component the way an
 # unanchored directory name can.
 mix.mid
+
+# Local change summaries are prepared beside the checkout for handoff. They are
+# not project sources and must not enter source distributions built locally.
+/COMMIT_MSG.txt
+/PR_BODY.md

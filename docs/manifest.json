@@ -36,6 +36,7 @@
       "Repeat",
       "Step",
       "execute",
+      "graph_to_program",
       "steps"
     ],
     "editing": [
@@ -48,7 +49,12 @@
       "EditInverse",
       "EditReport",
       "EditAnnotations",
+      "Patch",
+      "PatchOperation",
       "RelationTouch",
+      "apply_patch",
+      "compose_patches",
+      "invert_patch",
       "undeclare_with_contents"
     ],
     "equivalence": [
@@ -161,6 +167,7 @@
     "metadata": [
       "FORMAT_VERSION",
       "MACHINE_VERSION",
+      "PATCH_VERSION",
       "MAX_DOCUMENT_BYTES",
       "MAX_JSON_DEPTH",
       "MAX_REPEAT_COUNT",
@@ -267,8 +274,11 @@
       "dump_bytes",
       "dump_compact",
       "dumps",
+      "load_patch",
       "load_program",
       "loads",
+      "patch_dumps",
+      "patch_loads",
       "program_dumps",
       "program_loads",
       "to_data"
@@ -483,6 +493,7 @@
   "constant_descriptions": {
     "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
     "MACHINE_VERSION": "Version tag for serialized construction programs.",
+    "PATCH_VERSION": "Version tag for serialized graph patches.",
     "MAX_DOCUMENT_BYTES": "Largest UTF-8 JSON document accepted by the wire codec.",
     "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec; construction bounds each attribute carrier by this limit less its document envelope.",
     "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",

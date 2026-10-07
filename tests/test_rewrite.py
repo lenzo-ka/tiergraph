@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tiergraph import (
@@ -50,6 +52,7 @@ from tiergraph import (
     machine,
     rewrite,
 )
+from tiergraph.machine import AddLayer, PutFact, SealPrefix
 
 NS = "urn:rewrite"
 NAMESPACES = (NamespaceDeclaration("r", NS),)
@@ -191,6 +194,10 @@ def test_every_build_machine_opcode_decorates() -> None:
         (Item(),),
         (RelationInstance(name("covers"), ItemRef(PHRASE, 0), ItemRef(WORD, 0)),),
     )
+    source = replace(
+        source,
+        layers=(Layer(LayerName(NS, "existing"), ()),),
+    )
     opcodes = (
         DeclareNamespace(NamespaceDeclaration("s", "urn:second")),
         DeclareTier(TierDeclaration(name("syllable"), "Syllable")),
@@ -212,6 +219,12 @@ def test_every_build_machine_opcode_decorates() -> None:
             AttributeDomain.BOUNDARY,
             BoundaryRef(WORD, 1),
             AttributeValue(EDGE, XsdType.STRING, "e"),
+        ),
+        SealPrefix(WORD, 0),
+        AddLayer(LayerName(NS, "new")),
+        PutFact(
+            LayerName(NS, "existing"),
+            LayerFact(ItemRef(WORD, 0), AttributeValue(LABEL, XsdType.STRING, "fact")),
         ),
     )
     # "Every" is measured against the machine's own primitive opcode table, so

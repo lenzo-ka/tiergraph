@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 251 top-level `tiergraph` exports exactly once.
+It covers 261 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1002,6 +1002,18 @@ Drives the same ``steps`` generator a debugger walks and returns its final
 graph, so execution and stepping are one path: the debugger observes exactly
 what runs, and the two cannot diverge.
 
+### `graph_to_program`
+
+```text
+graph_to_program(graph: 'Graph') -> 'Program'
+```
+
+Return a construction-only program whose outcome is exactly ``graph``.
+
+Qualified names stay expanded in machine data, so replay is independent of
+document-local prefix spellings. Orphan facts and explicit zero-length seal
+records are emitted rather than inferred or discarded.
+
 ### `steps`
 
 ```text
@@ -1531,6 +1543,20 @@ Journal.redo(self) -> 'JournalRecord'
 ```
 
 Reapply the most recently undone operation.
+
+#### `Journal.to_patch`
+
+Method.
+
+```text
+Journal.to_patch(self) -> 'Patch'
+```
+
+Return the applied history as a fingerprint-guarded public patch.
+
+The import is local because the patch container depends on journal
+annotations. Each emitted opcode carries only guarded document changes,
+plus the exact reverse changes under the journal's inverse operation name.
 
 ### `JournalEditor`
 
@@ -2123,6 +2149,52 @@ EditAnnotations.to_data(self) -> 'dict[str, JsonValue]'
 
 Return only supplied metadata as detached JSON data.
 
+### `Patch`
+
+```text
+Patch(base_fingerprint: 'str', target_fingerprint: 'str', operations: 'tuple[PatchOperation, ...]', annotations: 'EditAnnotations' = <factory>, patch_version: 'str' = '1') -> None
+```
+
+Apply recorded graph transitions only to their identified base.
+
+#### `Patch.apply`
+
+Method.
+
+```text
+Patch.apply(self, base: 'Graph') -> 'Graph'
+```
+
+Apply every operation after checking each identified transition.
+
+#### `Patch.invert`
+
+Method.
+
+```text
+Patch.invert(self) -> 'Patch'
+```
+
+Return the exact reverse patch.
+
+### `PatchOperation`
+
+```text
+PatchOperation(opcode: 'PrimitiveOpcode', inverse: 'PrimitiveOpcode', base_fingerprint: 'str', target_fingerprint: 'str', annotations: 'EditAnnotations' = <factory>) -> None
+```
+
+Carry one executable transition, its exact inverse, and fingerprints.
+
+#### `PatchOperation.to_data`
+
+Method.
+
+```text
+PatchOperation.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return one self-checking JSONL operation record.
+
 ### `RelationTouch`
 
 ```text
@@ -2140,6 +2212,30 @@ RelationTouch.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the carrier and structural index.
+
+### `apply_patch`
+
+```text
+apply_patch(patch: 'Patch', base: 'Graph') -> 'Graph'
+```
+
+Apply ``patch`` to its identified base, validating every transition.
+
+### `compose_patches`
+
+```text
+compose_patches(first: 'Patch', second: 'Patch') -> 'Patch'
+```
+
+Compose adjacent identified patches without weakening either guard.
+
+### `invert_patch`
+
+```text
+invert_patch(patch: 'Patch') -> 'Patch'
+```
+
+Reverse operation order and exchange every recorded transition.
 
 ### `undeclare_with_contents`
 
@@ -4856,7 +4952,11 @@ Version tag written by the JSON wire codec. Current value: `0.3.0`.
 
 ### `MACHINE_VERSION`
 
-Version tag for serialized construction programs. Current value: `1`.
+Version tag for serialized construction programs. Current value: `2`.
+
+### `PATCH_VERSION`
+
+Version tag for serialized graph patches. Current value: `1`.
 
 ### `MAX_DOCUMENT_BYTES`
 
@@ -6379,6 +6479,14 @@ Return the sole canonical JSON spelling, including its final newline.
 
 A graph carrying a string UTF-8 cannot encode is refused, not written.
 
+### `load_patch`
+
+```text
+load_patch(stream: 'BinaryIO') -> 'Patch'
+```
+
+Read a patch incrementally under the machine codec's shared limits.
+
 ### `load_program`
 
 ```text
@@ -6397,6 +6505,22 @@ Parse the current format without implicitly migrating older documents.
 
 Migration is refused because choosing a loss-aware conversion belongs in an
 explicit version-to-version tool, not in the primitive codec.
+
+### `patch_dumps`
+
+```text
+patch_dumps(patch: 'Patch') -> 'str'
+```
+
+Return canonical JSONL with one operation per line and a final newline.
+
+### `patch_loads`
+
+```text
+patch_loads(source: 'str | bytes') -> 'Patch'
+```
+
+Parse a patch from bounded strict JSONL text or bytes.
 
 ### `program_dumps`
 

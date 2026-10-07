@@ -88,6 +88,7 @@ from tiergraph import (
 )
 from tiergraph.cli import build_parser, main
 from tiergraph.core import _scalar_attribute
+from tiergraph.machine import AddLayer, PutFact, SealPrefix
 from tiergraph.predicate import predicate_to_data
 from tiergraph.schema import json_schema, shape_hash
 
@@ -3151,7 +3152,15 @@ def test_every_remaining_opcode_shape_round_trips_through_decoder(
     added to the machine is either driven here or declared covered elsewhere,
     and otherwise fails this assertion instead of shipping undriven.
     """
-    covered_elsewhere = {DeclareRelation, PromoteItem, PromoteBoundary, Relate}
+    covered_elsewhere = {
+        AddLayer,
+        DeclareRelation,
+        PromoteItem,
+        PromoteBoundary,
+        PutFact,
+        Relate,
+        SealPrefix,
+    }
     ns = "urn:all"
     name = QualifiedName(ns, "name")
     attribute = QualifiedName(ns, "attribute")
