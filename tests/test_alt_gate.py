@@ -581,3 +581,16 @@ def test_a_gated_end_anchor_is_skipped_before_the_scope_end() -> None:
     compiled = compile_pattern(AltPattern(parts))
     assert compiled.count(graph(("w0", "w1")), TierOrder(TIER)) == 1
     assert compiled.count(graph(("w0", "zz")), TierOrder(TIER)) == 0
+
+
+def test_a_gated_end_anchor_alternative_is_skipped_in_an_open_right_scope() -> None:
+    """An open right edge never satisfies an end-anchor alternative in a gated closure."""
+    alternatives = (*(atom(f"w{index}") for index in range(1, 40)), EndPattern())
+    compiled = compile_pattern(SeqPattern((atom("w0"), AltPattern(alternatives))))
+    raw_scopes, truth = compiled._prepare(
+        graph(("w0",)), TierOrder(TIER), _PatternOperation.EXISTS
+    )
+    scopes = (_Scope(raw_scopes[0].nodes),)
+    assert compiled._count_over(scopes, truth) == 1
+    open_count = compiled._count_over(scopes, truth, open_right=True)
+    assert open_count.result == 0
