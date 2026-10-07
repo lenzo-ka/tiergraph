@@ -31,6 +31,25 @@ from tiergraph import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "textgrid"
+PRAAT_SHORT_REPRO = b"""File type = "ooTextFile"
+Object class = "TextGrid"
+
+0
+1.5
+<exists>
+1
+"IntervalTier"
+"words"
+0
+1.5
+2
+0
+0.7
+"hello"
+0.7
+1.5
+"world"
+"""
 
 
 def _fixture(name: str) -> bytes:
@@ -60,6 +79,167 @@ def test_long_and_short_goldens_decode_to_the_same_graph_and_profile() -> None:
         (0, 1, "hello"),
         (1, 3, ""),
     ]
+
+
+def test_praat_short_body_under_ootextfile_header_regression() -> None:
+    """Praat's standard header does not make a bare-value body long form."""
+    result = from_textgrid(PRAAT_SHORT_REPRO)
+    words = span_view(
+        result.graph,
+        _one_tier(result.profile, result.profile.span_tiers[0], point=False),
+    )
+    assert [(span.start, span.end, span.value) for span in words.spans] == [
+        (0, 1, "hello"),
+        (1, 2, "world"),
+    ]
+
+
+def test_body_selects_long_or_short_grammar_independently_of_header() -> None:
+    """Both supported headers leave the body grammar to its own syntax."""
+    short = _fixture("reference-short.TextGrid").decode()
+    praat_short = short.replace(
+        'File type = "ooTextFile short"\n"TextGrid"',
+        'File type = "ooTextFile"\nObject class = "TextGrid"',
+    )
+    long = _fixture("reference-long.TextGrid").decode()
+    legacy_long = long.replace(
+        'File type = "ooTextFile"\nObject class = "TextGrid"',
+        'File type = "ooTextFile short"\n"TextGrid"',
+    )
+    assert from_textgrid(praat_short) == from_textgrid(short)
+    assert from_textgrid(legacy_long) == from_textgrid(long)
+
+
+@pytest.mark.parametrize(
+    ("fixture", "comment"),
+    (
+        ("reference-long.TextGrid", "! hand annotation"),
+        ("reference-short.TextGrid", "! hand annotation"),
+        ("reference-short.TextGrid", "! note xmin = 0"),
+    ),
+)
+def test_leading_comments_do_not_choose_or_shift_the_body_grammar(
+    fixture: str, comment: str
+) -> None:
+    """The first actual body value, not a Praat comment, selects the grammar."""
+    document = _fixture(fixture).decode()
+    commented = document.replace("\n\n", f"\n\n{comment}\n", 1)
+    assert from_textgrid(commented) == from_textgrid(document)
+
+
+@pytest.mark.parametrize(
+    "opening",
+    (
+        'File type = "ooTextFile short"\n"TextGrid"\n\n"',
+        'File type = "ooTextFile"\nObject class = "TextGrid"\n\nxmin = "',
+    ),
+)
+def test_unterminated_quoted_value_is_scanned_linearly(
+    opening: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each physical fragment is scanned once even for a very large refusal."""
+    blank_line_count = 100_000
+    document = opening + "\n" + "\n" * blank_line_count + "0\n"
+    original = textgrid_module._has_closing_quote
+    calls = 0
+    scanned = 0
+
+    def counted(value: str, start: int) -> bool:
+        nonlocal calls, scanned
+        calls += 1
+        scanned += len(value) - start
+        return original(value, start)
+
+    monkeypatch.setattr(textgrid_module, "_has_closing_quote", counted)
+    with pytest.raises(ValueError, match="not a decimal"):
+        from_textgrid(document)
+    assert calls <= blank_line_count + 2
+    assert scanned <= len(document)
+
+
+@pytest.mark.parametrize(
+    "fixture", ("reference-long.TextGrid", "reference-short.TextGrid")
+)
+def test_non_newline_separators_inside_labels_round_trip(fixture: str) -> None:
+    """Unicode and control separators inside labels are content, not newlines."""
+    for separator in (
+        "\v",
+        "\f",
+        "\r",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    ):
+        label = f"a{separator}b"
+        document = _fixture(fixture).decode().replace('"hello"', f'"{label}"', 1)
+        result = from_textgrid(document)
+        words = span_view(
+            result.graph,
+            _one_tier(result.profile, result.profile.span_tiers[0], point=False),
+        )
+        assert words.spans[0].value == label
+        rendered = to_textgrid(result.graph, result.profile)
+        reparsed = from_textgrid(rendered)
+        reparsed_words = span_view(
+            reparsed.graph,
+            _one_tier(reparsed.profile, reparsed.profile.span_tiers[0], point=False),
+        )
+        assert reparsed_words.spans[0].value == label
+
+
+@pytest.mark.parametrize("encoding", ("utf-8-sig", "utf-16"))
+def test_short_interval_and_point_labels_preserve_text_and_round_trip(
+    encoding: str,
+) -> None:
+    """Short tiers retain empty, Unicode, quoted, and multiline labels."""
+    document = '''File type = "ooTextFile"
+Object class = "TextGrid"
+
+0
+2
+<exists>
+2
+"IntervalTier"
+"words"
+0
+2
+2
+0
+1
+""
+1
+2
+"hé said ""hi""
+next line"
+"TextTier"
+"marks"
+0
+2
+1
+1.5
+"π
+""point"""
+'''
+    result = from_textgrid(document.encode(encoding))
+    words = span_view(
+        result.graph,
+        _one_tier(result.profile, result.profile.span_tiers[0], point=False),
+    )
+    marks = span_view(
+        result.graph,
+        _one_tier(result.profile, result.profile.point_tiers[0], point=True),
+    )
+    assert [span.value for span in words.spans] == ["", 'hé said "hi"\nnext line']
+    assert [span.value for span in marks.spans] == ['π\n"point"']
+    rendered = to_textgrid(
+        result.graph,
+        replace(result.profile, clock_face="physical"),
+        clock=result.clock,
+    )
+    assert from_textgrid(rendered) == result
 
 
 def test_reader_decodes_doubled_quotes_and_utf16_bom() -> None:
@@ -322,6 +502,16 @@ def test_profile_new_keys_are_individually_optional_and_unknown_keys_refuse() ->
         (
             'File type = "ooTextFile short"\n"TextGrid"\n0\n1\n<exists>\n1\n"IntervalTier"\n',
             "ends before",
+        ),
+        (
+            'File type = "ooTextFile"\nObject class = "TextGrid"\n'
+            '0\n1\n<exists>\n1\n"IntervalTier"\n"words"\n0\n1\n1\n'
+            '0\n1\n"unterminated\n',
+            "double-quoted string",
+        ),
+        (
+            'File type = "ooTextFile"\nObject class = "TextGrid"\n\n! only comment\n',
+            "not a decimal",
         ),
     ),
 )
