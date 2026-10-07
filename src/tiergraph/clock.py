@@ -19,6 +19,7 @@ from tiergraph.core import (
     BoundarySide,
     DurableBoundaryRef,
     DurableItemRef,
+    EditDeclaration,
     Graph,
     GraphEditor,
     GraphValidationError,
@@ -38,6 +39,7 @@ from tiergraph.core import (
     XsdType,
     _canonical_lexical,
     _scalar_attribute,
+    undeclare_with_contents,
 )
 from tiergraph.machine import _QNameFields
 
@@ -100,6 +102,7 @@ class ClockEditOperation(StrEnum):
     ITEM_MOVE = "item move"
     ITEM_SWAP = "item swap"
     REPARENT = "reparent"
+    DECLARATION_CASCADE = "declaration cascade"
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,7 +579,9 @@ class ClockProfile:
         span onto its earlier clock boundary and records a tier fact saying
         that the result needs realignment. Untimed tiers need no rebinding
         policy. The clock tier itself cannot be structurally edited in a bound
-        session.
+        session. A named declaration cascade may explicitly remove this clock
+        definition and retire the session; its graph and withdrawal reports
+        remain available, but later profile-aware edits refuse.
         """
         return ClockEditor(self, rebinding)
 
@@ -708,7 +713,10 @@ class ClockEditor:
     The editor validates both the graph and the clock profile after every
     operation. Structural edits on timed tiers are atomic: a refusal leaves the
     editor's graph, reports, and profile unchanged. Successful timed-tier edits
-    append a :class:`ClockEditReport`; untimed edits need no clock report.
+    append a :class:`ClockEditReport`; untimed edits need no clock report. A
+    named declaration cascade may explicitly remove the clock definition and
+    end the profile-aware session; its graph and reports remain readable, while
+    later profile-aware operations refuse.
     """
 
     def __init__(
@@ -732,6 +740,7 @@ class ClockEditor:
                     f"unknown clock rebinding policy {rebinding!r}; choose {names}"
                 ) from error
         self._profile = profile
+        self._profile_active = True
         self._graph = profile.graph
         self._policy = policy
         self._reports: list[ClockEditReport] = []
@@ -739,6 +748,7 @@ class ClockEditor:
     @property
     def profile(self) -> ClockProfile:
         """Return the clock profile validated for the current graph."""
+        self._require_active_profile()
         return self._profile
 
     @property
@@ -758,6 +768,7 @@ class ClockEditor:
         self, tier: QualifiedName, index: int, items: Iterable[Item]
     ) -> ClockEditor:
         """Insert ordered items and atomically bind resulting timed boundaries."""
+        self._require_active_profile()
         if isinstance(items, Set | Mapping):
             raise GraphValidationError(
                 "item insertion items must be an ordered iterable"
@@ -806,11 +817,13 @@ class ClockEditor:
 
     def remove_item(self, reference: ItemRef | DurableItemRef) -> ClockEditor:
         """Remove one item together with its departing clock anchor."""
+        self._require_active_profile()
         coordinate = self._graph.resolve_item(reference)
         return self.remove_items(coordinate.tier, coordinate.index, 1)
 
     def remove_items(self, tier: QualifiedName, index: int, count: int) -> ClockEditor:
         """Remove a run and keep one reported binding on its merged boundary."""
+        self._require_active_profile()
         operation = ClockEditOperation.ITEM_REMOVAL
         old_count = self._item_count(tier, operation)
         if count < 0:
@@ -859,6 +872,7 @@ class ClockEditor:
 
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> ClockEditor:
         """Move an item through fixed boundary times under the named policy."""
+        self._require_active_profile()
         operation = ClockEditOperation.ITEM_MOVE
         coordinate = self._graph.resolve_item(reference)
         count = self._item_count(coordinate.tier, operation)
@@ -894,6 +908,7 @@ class ClockEditor:
         second: ItemRef | DurableItemRef,
     ) -> ClockEditor:
         """Exchange two items through fixed boundary times under the policy."""
+        self._require_active_profile()
         left = self._graph.resolve_item(first)
         right = self._graph.resolve_item(second)
         if left.tier != right.tier:
@@ -938,6 +953,7 @@ class ClockEditor:
         collapsing policy conservatively collapses each touched timed tier onto
         its earlier extent and records that realignment is needed.
         """
+        self._require_active_profile()
         source_values = _endpoint_tuple(sources)
         target_values = _endpoint_tuple(targets)
         current = _target_relation(self._graph, target)
@@ -1027,6 +1043,140 @@ class ClockEditor:
         self._profile = next_profile
         self._reports.extend(reports)
         return self
+
+    def undeclare_with_contents(
+        self, target: str | QualifiedName | EditDeclaration
+    ) -> ClockEditor:
+        """Cascade one declaration under this session's rebinding policy.
+
+        The complete graph-level cascade is staged before this editor changes.
+        Removing or changing a clock binding, the clock tier, the binding
+        declaration, or items on a bound tier requires a named policy. The
+        report records every withdrawn binding under that policy. A withdrawal
+        leaves no binding behind, so it does not claim realignment.
+
+        A cascade that removes the clock tier or binding contract necessarily
+        retires this profile. The resulting graph and reports remain available
+        through :meth:`freeze` and :attr:`reports`, but :attr:`profile` and any
+        later profile-aware edit refuse.
+        """
+        self._require_active_profile()
+        candidate = undeclare_with_contents(self._graph, target)
+        affected, changes, impacts_timing = self._cascade_clock_impact(candidate)
+        if impacts_timing and self._policy is None:
+            self._missing_policy(
+                ClockEditOperation.DECLARATION_CASCADE,
+                affected[0] if affected else self._profile.clock_tier,
+            )
+
+        next_profile: ClockProfile | None
+        try:
+            next_profile = self._profile_for(candidate)
+        except ValueError as error:
+            if not impacts_timing or self._policy is None:
+                raise GraphValidationError(
+                    "declaration cascade would invalidate the active clock profile: "
+                    f"{error}"
+                ) from error
+            next_profile = None
+
+        reports: tuple[ClockEditReport, ...] = ()
+        if impacts_timing:
+            policy = cast(ClockRebindingPolicy, self._policy)
+            reports = tuple(
+                ClockEditReport(
+                    ClockEditOperation.DECLARATION_CASCADE,
+                    policy,
+                    tier,
+                    changes.get(tier, ()),
+                    False,
+                )
+                for tier in affected
+            )
+        self._graph = candidate
+        self._reports.extend(reports)
+        if next_profile is None:
+            self._profile_active = False
+        else:
+            self._profile = next_profile
+        return self
+
+    def _cascade_clock_impact(
+        self, candidate: Graph
+    ) -> tuple[
+        tuple[QualifiedName, ...],
+        dict[QualifiedName, tuple[ClockBindingChange, ...]],
+        bool,
+    ]:
+        """Compare a staged cascade with the active profile's timing structure."""
+        remaining_relations = list(candidate.relations)
+        changes_by_tier: dict[QualifiedName, list[ClockBindingChange]] = {}
+        for relation in self._graph.relations:
+            if relation.declaration != self._profile.binding_relation:
+                continue
+            try:
+                remaining_relations.remove(relation)
+            except ValueError:
+                boundary = self._graph.resolve_boundary(
+                    cast(DurableBoundaryRef, relation.left)
+                )
+                changes_by_tier.setdefault(boundary.tier, []).append(
+                    ClockBindingChange(
+                        boundary,
+                        None,
+                        relation.left,
+                        None,
+                        self._profile.clock_index(boundary),
+                        None,
+                        False,
+                    )
+                )
+
+        before_tiers = {tier.declaration.name: tier for tier in self._graph.tiers}
+        after_tiers = {tier.declaration.name: tier for tier in candidate.tiers}
+        affected = set(changes_by_tier)
+        for name, tier in before_tiers.items():
+            if name == self._profile.clock_tier or not self._profile.is_timed(name):
+                continue
+            after = after_tiers.get(name)
+            if after is None or after.items != tier.items:
+                affected.add(name)
+
+        old_clock = before_tiers[self._profile.clock_tier]
+        clock_changed = after_tiers.get(self._profile.clock_tier) != old_clock
+        before_binding = next(
+            declaration
+            for declaration in self._graph.relation_declarations
+            if declaration.name == self._profile.binding_relation
+        )
+        after_binding = next(
+            (
+                declaration
+                for declaration in candidate.relation_declarations
+                if declaration.name == self._profile.binding_relation
+            ),
+            None,
+        )
+        binding_changed = after_binding != before_binding
+        impacts_timing = bool(affected) or clock_changed or binding_changed
+        if impacts_timing and not affected:
+            affected.add(self._profile.clock_tier)
+        return (
+            tuple(sorted(affected)),
+            {
+                tier: tuple(tier_changes)
+                for tier, tier_changes in changes_by_tier.items()
+            },
+            impacts_timing,
+        )
+
+    def _require_active_profile(self) -> None:
+        """Refuse another profile edit after its declarations were removed."""
+        if not self._profile_active:
+            raise GraphValidationError(
+                "clock profile was retired by a declaration cascade; start a new "
+                "clock session for the resulting graph"
+            )
 
     def _no_op(self, operation: ClockEditOperation, tier: QualifiedName) -> ClockEditor:
         """Report a timed no-op without inventing a timing change."""

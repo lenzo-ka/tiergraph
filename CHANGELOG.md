@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structured reports for every timed-tier policy outcome. Provisional spans are
   durably marked under either policy, while untimed-tier edits retain the plain
   editor's cost model.
+- Added positional declaration insertion and strict declaration removal to
+  frozen graphs and mutable editors. Removal reports all current dependents
+  before writing, and `undeclare_with_contents()` provides an atomic derived
+  cascade composed from editing primitives, including mutually dependent
+  declaration components. Its inverse is supplied by the edit journal in a
+  later slice, not by the function itself. The graph-level cascade explicitly
+  bypasses clock rebinding like `Graph.edit()`; the clock-session form requires
+  a named policy before timing is removed and records binding withdrawals.
 
 ### Changed
 

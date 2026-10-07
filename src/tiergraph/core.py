@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Iterator, Mapping, Set
+from collections.abc import Callable, Iterable, Iterator, Mapping, Set
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -2200,9 +2200,20 @@ class Graph:
         """
         return GraphEditor(self)
 
-    def declare(self, declaration: EditDeclaration) -> Graph:
-        """Return a new graph carrying one more declaration."""
-        return self.edit().declare(declaration).freeze()
+    def declare(self, declaration: EditDeclaration, at: int | None = None) -> Graph:
+        """Return a new graph carrying one declaration at its carrier position."""
+        return self.edit().declare(declaration, at=at).freeze()
+
+    def undeclare(self, target: str | QualifiedName | EditDeclaration) -> Graph:
+        """Return a graph without one unused declaration.
+
+        A bare ``str`` selects a namespace prefix. A qualified name shared by
+        declaration kinds is ambiguous; passing the declaration value itself
+        selects its kind. The operation refuses, before changing an editor,
+        while any graph content or another declaration depends on the selected
+        declaration.
+        """
+        return self.edit().undeclare(target).freeze()
 
     def set_attribute(self, target: EditTarget, value: Attribute) -> Graph:
         """Return a new graph whose target carries this value under its name.
@@ -2417,6 +2428,33 @@ type EditDeclaration = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _DeclarationSite:
+    """Locate one declaration in the mutable carrier that owns it."""
+
+    kind: str
+    index: int
+    declaration: EditDeclaration
+
+    @property
+    def display(self) -> str:
+        """Return a stable diagnostic spelling for the selected declaration."""
+        if isinstance(self.declaration, NamespaceDeclaration):
+            return repr(self.declaration.prefix)
+        return repr(str(self.declaration.name))
+
+
+def _declaration_insertion_index(at: int | None, count: int, kind: str) -> int:
+    """Validate and return one declaration-carrier insertion position."""
+    index = count if at is None else at
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= count:
+        raise GraphValidationError(
+            f"{kind} declaration insertion index {index!r} is outside the "
+            f"carrier of length {count}"
+        )
+    return index
+
+
 def _relation_instance_subject(target: EditTarget, polyadic: bool, index: int) -> str:
     """Name a relation target without changing legacy target messages."""
     if isinstance(
@@ -2494,32 +2532,98 @@ class GraphEditor:
         """Return where every position of this editor's input now stands."""
         return self._displacement
 
-    def declare(self, declaration: EditDeclaration) -> GraphEditor:
-        """Add one namespace, tier, attribute, or relation declaration.
+    def declare(
+        self, declaration: EditDeclaration, at: int | None = None
+    ) -> GraphEditor:
+        """Insert one namespace, tier, attribute, or relation declaration.
 
-        Declarations are added, never changed or withdrawn.  Retyping or
-        withdrawing one retroactively decides the meaning of every value and
-        reference that already depends on it, which is a migration of the
-        whole graph rather than an edit to a place in it.
+        ``at`` addresses the selected declaration carrier.  An omitted position
+        appends.  Name-keyed carriers retain their graph-defined canonical order
+        when frozen; tier positions remain in the supplied order.
         """
         if isinstance(declaration, NamespaceDeclaration):
-            self._namespaces.append(declaration)
+            index = _declaration_insertion_index(at, len(self._namespaces), "namespace")
+            if any(item.prefix == declaration.prefix for item in self._namespaces):
+                raise GraphValidationError(
+                    f"duplicate namespace prefix {declaration.prefix!r}; names "
+                    "must be unique"
+                )
+            if any(
+                item.namespace == declaration.namespace for item in self._namespaces
+            ):
+                raise GraphValidationError(
+                    f"duplicate namespace URI {declaration.namespace!r}; each URI "
+                    "needs one prefix"
+                )
+            self._namespaces.insert(index, declaration)
         elif isinstance(declaration, TierDeclaration):
-            self._tiers.append(_MutableTier(declaration, [], []))
+            index = _declaration_insertion_index(at, len(self._tiers), "tier")
+            if any(
+                member.declaration.name == declaration.name for member in self._tiers
+            ):
+                raise GraphValidationError(
+                    f"duplicate tier {str(declaration.name)!r}; names must be unique"
+                )
+            self._tiers.insert(index, _MutableTier(declaration, [], []))
         elif isinstance(declaration, AttributeDeclaration):
-            self._attribute_declarations.append(declaration)
+            index = _declaration_insertion_index(
+                at, len(self._attribute_declarations), "attribute"
+            )
+            if any(
+                item.name == declaration.name for item in self._attribute_declarations
+            ):
+                raise GraphValidationError(
+                    f"duplicate attribute declaration {str(declaration.name)!r}; "
+                    "names must be unique"
+                )
+            self._attribute_declarations.insert(index, declaration)
         elif isinstance(
             declaration,
             SimpleRelationDeclaration
             | BipartiteRelationDeclaration
             | PolyadicRelationDeclaration,
         ):
-            self._relation_declarations.append(declaration)
+            index = _declaration_insertion_index(
+                at, len(self._relation_declarations), "relation"
+            )
+            if any(
+                item.name == declaration.name for item in self._relation_declarations
+            ):
+                raise GraphValidationError(
+                    f"duplicate relation declaration {str(declaration.name)!r}; "
+                    "names must be unique"
+                )
+            self._relation_declarations.insert(index, declaration)
         else:
             raise GraphValidationError(
                 "declare expected a namespace, tier, attribute, or relation "
                 f"declaration; got {type(declaration).__name__}"
             )
+        return self
+
+    def undeclare(self, target: str | QualifiedName | EditDeclaration) -> GraphEditor:
+        """Remove one unused declaration, listing every current dependent.
+
+        A bare ``str`` selects a namespace prefix. Passing a declaration value
+        disambiguates equal qualified names in different declaration carriers.
+        A refusal is a preflight: no editor carrier or displacement is changed
+        unless the complete dependency list is empty.
+        """
+        site = self._declaration_site(target)
+        dependents = self._declaration_dependents(site)
+        if dependents:
+            raise GraphValidationError(
+                f"cannot undeclare {site.kind} {site.display}: dependents: "
+                + "; ".join(dependents)
+            )
+        if site.kind == "namespace":
+            del self._namespaces[site.index]
+        elif site.kind == "tier":
+            del self._tiers[site.index]
+        elif site.kind == "attribute":
+            del self._attribute_declarations[site.index]
+        else:
+            del self._relation_declarations[site.index]
         return self
 
     def promote_item(self, reference: ItemRef, durable_id: str) -> GraphEditor:
@@ -3391,6 +3495,397 @@ class GraphEditor:
                 return declaration
         raise GraphValidationError(f"attribute {str(name)!r} is undeclared")
 
+    def _declaration_site(
+        self, target: str | QualifiedName | EditDeclaration
+    ) -> _DeclarationSite:
+        """Resolve a declaration selector without consulting a frozen graph."""
+        sites = self._declaration_sites(target)
+        if not sites:
+            if isinstance(target, str):
+                raise GraphValidationError(f"no namespace prefix {target!r}")
+            raise GraphValidationError(f"no declaration named {str(target)!r}")
+        if len(sites) > 1:
+            kinds = ", ".join(site.kind for site in sites)
+            raise GraphValidationError(
+                f"declaration name {str(target)!r} is ambiguous across {kinds}; "
+                "pass the declaration value to select its kind"
+            )
+        return sites[0]
+
+    def _declaration_sites(
+        self, target: str | QualifiedName | EditDeclaration
+    ) -> list[_DeclarationSite]:
+        """Return every declaration matching one supported selector."""
+        if isinstance(target, NamespaceDeclaration):
+            return [
+                _DeclarationSite("namespace", index, declaration)
+                for index, declaration in enumerate(self._namespaces)
+                if declaration == target
+            ]
+        if isinstance(target, TierDeclaration):
+            return [
+                _DeclarationSite("tier", index, member.declaration)
+                for index, member in enumerate(self._tiers)
+                if member.declaration == target
+            ]
+        if isinstance(target, AttributeDeclaration):
+            return [
+                _DeclarationSite("attribute", index, declaration)
+                for index, declaration in enumerate(self._attribute_declarations)
+                if declaration == target
+            ]
+        if isinstance(
+            target,
+            SimpleRelationDeclaration
+            | BipartiteRelationDeclaration
+            | PolyadicRelationDeclaration,
+        ):
+            return [
+                _DeclarationSite("relation", index, declaration)
+                for index, declaration in enumerate(self._relation_declarations)
+                if declaration == target
+            ]
+        if isinstance(target, str):
+            return [
+                _DeclarationSite("namespace", index, declaration)
+                for index, declaration in enumerate(self._namespaces)
+                if declaration.prefix == target
+            ]
+        if isinstance(target, QualifiedName):
+            sites = [
+                _DeclarationSite("tier", index, member.declaration)
+                for index, member in enumerate(self._tiers)
+                if member.declaration.name == target
+            ]
+            sites.extend(
+                _DeclarationSite("attribute", index, declaration)
+                for index, declaration in enumerate(self._attribute_declarations)
+                if declaration.name == target
+            )
+            sites.extend(
+                _DeclarationSite("relation", index, declaration)
+                for index, declaration in enumerate(self._relation_declarations)
+                if declaration.name == target
+            )
+            return sites
+        raise GraphValidationError(
+            "undeclare expected a namespace prefix, qualified name, or declaration; "
+            f"got {type(target).__name__}"
+        )
+
+    def _declaration_dependents(self, site: _DeclarationSite) -> tuple[str, ...]:
+        """Return all direct and content dependencies in deterministic order."""
+        declaration = site.declaration
+        if isinstance(declaration, NamespaceDeclaration):
+            return self._namespace_dependents(declaration.namespace)
+        if isinstance(declaration, TierDeclaration):
+            return self._tier_dependents(declaration.name, site.index)
+        if isinstance(declaration, AttributeDeclaration):
+            return self._attribute_dependents(declaration.name)
+        return self._relation_dependents(declaration)
+
+    def _namespace_dependents(self, namespace: str) -> tuple[str, ...]:
+        """List every graph place whose qualified spelling uses a namespace."""
+        dependents: list[str] = []
+        for member in self._tiers:
+            tier = member.declaration.name
+            if tier.namespace == namespace:
+                dependents.append(f"tier declaration {str(tier)!r}")
+                dependents.extend(
+                    f"item {str(tier)!r}[{item_index}]"
+                    for item_index in range(len(member.items))
+                )
+            dependents.extend(
+                _namespace_attribute_dependents(
+                    member.attributes, namespace, f"tier {str(tier)!r}"
+                )
+            )
+            for item_index, item in enumerate(member.items):
+                dependents.extend(
+                    _namespace_attribute_dependents(
+                        item.attributes,
+                        namespace,
+                        f"item {str(tier)!r}[{item_index}]",
+                    )
+                )
+        for declaration in self._relation_declarations:
+            names = _relation_declaration_names(declaration)
+            if any(name.namespace == namespace for name in names):
+                dependents.append(f"relation declaration {str(declaration.name)!r}")
+            dependents.extend(
+                _namespace_attribute_dependents(
+                    declaration.attributes,
+                    namespace,
+                    f"relation declaration {str(declaration.name)!r}",
+                )
+            )
+        dependents.extend(
+            f"attribute declaration {str(declaration.name)!r}"
+            for declaration in self._attribute_declarations
+            if declaration.name.namespace == namespace
+        )
+        dependents.extend(
+            _namespace_attribute_dependents(self._attributes, namespace, "document")
+        )
+        for index, binary_relation in enumerate(self._relations):
+            if binary_relation.declaration.namespace == namespace or any(
+                _endpoint_uses_namespace(endpoint, namespace)
+                for endpoint in (binary_relation.left, binary_relation.right)
+            ):
+                dependents.append(f"relation instance {index}")
+            dependents.extend(
+                _namespace_attribute_dependents(
+                    binary_relation.attributes, namespace, f"relation instance {index}"
+                )
+            )
+        for index, polyadic_relation in enumerate(self._polyadic_relations):
+            if polyadic_relation.declaration.namespace == namespace or any(
+                _endpoint_uses_namespace(endpoint, namespace)
+                for endpoint in (*polyadic_relation.sources, *polyadic_relation.targets)
+            ):
+                dependents.append(f"polyadic relation instance {index}")
+            dependents.extend(
+                _namespace_attribute_dependents(
+                    polyadic_relation.attributes,
+                    namespace,
+                    f"polyadic relation instance {index}",
+                )
+            )
+        for boundary in self._boundary_values:
+            if _boundary_uses_namespace(boundary.reference, namespace):
+                dependents.append(f"boundary value {str(boundary.reference)!r}")
+            dependents.extend(
+                _namespace_attribute_dependents(
+                    boundary.attributes,
+                    namespace,
+                    f"boundary value {str(boundary.reference)!r}",
+                )
+            )
+        dependents.extend(
+            f"seal on {str(seal.carrier)!r}"
+            for seal in self._seals
+            if isinstance(seal.carrier, QualifiedName)
+            and seal.carrier.namespace == namespace
+        )
+        for layer in self._layers:
+            for fact_index, fact in enumerate(layer.facts):
+                if fact.value.name.namespace == namespace or any(
+                    name.namespace == namespace
+                    for name in _layer_subject_names(fact.subject)
+                ):
+                    dependents.append(
+                        f"layer fact {fact_index} in "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                    )
+        return _stable_unique(dependents)
+
+    def _tier_dependents(self, tier: QualifiedName, tier_index: int) -> tuple[str, ...]:
+        """List all content and declarations that name one tier."""
+        member = self._tiers[tier_index]
+        dependents = [
+            *(f"tier attribute {str(value.name)!r}" for value in member.attributes),
+            *(f"item {str(tier)!r}[{index}]" for index in range(len(member.items))),
+        ]
+        dependents.extend(
+            f"relation declaration {str(declaration.name)!r}"
+            for declaration in self._relation_declarations
+            if _relation_declaration_uses_tier(declaration, tier)
+        )
+        items_by_id = self._items_by_id()
+        for index, binary_relation in enumerate(self._relations):
+            if any(
+                _endpoint_tier(endpoint, items_by_id) == tier
+                for endpoint in (binary_relation.left, binary_relation.right)
+            ):
+                dependents.append(f"relation instance {index}")
+        for index, polyadic_relation in enumerate(self._polyadic_relations):
+            if any(
+                _endpoint_tier(endpoint, items_by_id) == tier
+                for endpoint in (*polyadic_relation.sources, *polyadic_relation.targets)
+            ):
+                dependents.append(f"polyadic relation instance {index}")
+        dependents.extend(
+            f"boundary value {str(boundary.reference)!r}"
+            for boundary in self._boundary_values
+            if _boundary_tier(boundary.reference, items_by_id) == tier
+        )
+        dependents.extend(
+            f"seal on {str(seal.carrier)!r}"
+            for seal in self._seals
+            if seal.carrier == tier
+        )
+        for layer in self._layers:
+            for fact_index, fact in enumerate(layer.facts):
+                if _layer_subject_uses_tier(fact.subject, tier, items_by_id):
+                    dependents.append(
+                        f"layer fact {fact_index} in "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                    )
+        return _stable_unique(dependents)
+
+    def _attribute_dependents(self, name: QualifiedName) -> tuple[str, ...]:
+        """List every base value and layer fact using an attribute declaration."""
+        dependents: list[str] = []
+        dependents.extend(
+            _named_attribute_dependents(self._attributes, name, "document")
+        )
+        for member in self._tiers:
+            tier = member.declaration.name
+            dependents.extend(
+                _named_attribute_dependents(
+                    member.attributes, name, f"tier {str(tier)!r}"
+                )
+            )
+            for index, item in enumerate(member.items):
+                dependents.extend(
+                    _named_attribute_dependents(
+                        item.attributes, name, f"item {str(tier)!r}[{index}]"
+                    )
+                )
+        for declaration in self._relation_declarations:
+            dependents.extend(
+                _named_attribute_dependents(
+                    declaration.attributes,
+                    name,
+                    f"relation declaration {str(declaration.name)!r}",
+                )
+            )
+        for index, binary_relation in enumerate(self._relations):
+            dependents.extend(
+                _named_attribute_dependents(
+                    binary_relation.attributes, name, f"relation instance {index}"
+                )
+            )
+        for index, polyadic_relation in enumerate(self._polyadic_relations):
+            dependents.extend(
+                _named_attribute_dependents(
+                    polyadic_relation.attributes,
+                    name,
+                    f"polyadic relation instance {index}",
+                )
+            )
+        for boundary in self._boundary_values:
+            dependents.extend(
+                _named_attribute_dependents(
+                    boundary.attributes,
+                    name,
+                    f"boundary value {str(boundary.reference)!r}",
+                )
+            )
+        for layer in self._layers:
+            for fact_index, fact in enumerate(layer.facts):
+                if fact.value.name == name:
+                    dependents.append(
+                        f"layer fact {fact_index} in "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                    )
+        return tuple(dependents)
+
+    def _relation_dependents(self, declaration: RelationDeclaration) -> tuple[str, ...]:
+        """List instances, values, facts, and declarations using a relation."""
+        name = declaration.name
+        dependents = list(
+            _named_attribute_dependents(
+                declaration.attributes,
+                None,
+                f"relation declaration {str(name)!r}",
+            )
+        )
+        binary_indexes = [
+            index
+            for index, relation in enumerate(self._relations)
+            if relation.declaration == name
+        ]
+        polyadic_indexes = [
+            index
+            for index, relation in enumerate(self._polyadic_relations)
+            if relation.declaration == name
+        ]
+        dependents.extend(f"relation instance {index}" for index in binary_indexes)
+        dependents.extend(
+            f"polyadic relation instance {index}" for index in polyadic_indexes
+        )
+        relation_seal = self._seal_for(GraphCarrier.RELATIONS)
+        if relation_seal is not None and any(
+            index < relation_seal.sealed for index in binary_indexes
+        ):
+            dependents.append(f"seal on {GraphCarrier.RELATIONS.value!r}")
+        polyadic_seal = self._seal_for(GraphCarrier.POLYADIC_RELATIONS)
+        if polyadic_seal is not None and any(
+            index < polyadic_seal.sealed for index in polyadic_indexes
+        ):
+            dependents.append(f"seal on {GraphCarrier.POLYADIC_RELATIONS.value!r}")
+        for candidate in self._relation_declarations:
+            if candidate.name == name:
+                continue
+            if isinstance(candidate, PolyadicRelationDeclaration) and (
+                candidate.targets_subset_of == name
+            ):
+                dependents.append(f"relation declaration {str(candidate.name)!r}")
+            if (
+                isinstance(declaration, SimpleRelationDeclaration)
+                and isinstance(candidate, BipartiteRelationDeclaration)
+                and declaration.item_type
+                in (
+                    candidate.left_type,
+                    candidate.right_type,
+                )
+            ):
+                dependents.append(f"relation declaration {str(candidate.name)!r}")
+        binary = set(binary_indexes)
+        polyadic = set(polyadic_indexes)
+        binary_ids = {
+            relation.durable_id
+            for index, relation in enumerate(self._relations)
+            if index in binary and relation.durable_id is not None
+        }
+        polyadic_ids = {
+            relation.durable_id
+            for index, relation in enumerate(self._polyadic_relations)
+            if index in polyadic and relation.durable_id is not None
+        }
+        for layer in self._layers:
+            for fact_index, fact in enumerate(layer.facts):
+                subject = fact.subject
+                uses = isinstance(subject, RelationDeclarationRef) and (
+                    subject.relation == name
+                )
+                uses = (
+                    uses
+                    or isinstance(subject, RelationInstanceRef)
+                    and (subject.index in binary)
+                )
+                uses = (
+                    uses
+                    or isinstance(subject, PolyadicInstanceRef)
+                    and (subject.index in polyadic)
+                )
+                uses = (
+                    uses
+                    or isinstance(subject, DurableRelationRef)
+                    and subject.durable_id in binary_ids
+                )
+                uses = (
+                    uses
+                    or isinstance(subject, DurablePolyadicRef)
+                    and subject.durable_id in polyadic_ids
+                )
+                if uses:
+                    dependents.append(
+                        f"layer fact {fact_index} in "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                    )
+        return _stable_unique(dependents)
+
+    def _items_by_id(self) -> dict[str, ItemRef]:
+        """Return current durable item coordinates for dependency preflights."""
+        return {
+            item.durable_id: ItemRef(member.declaration.name, index)
+            for member in self._tiers
+            for index, item in enumerate(member.items)
+            if item.durable_id is not None
+        }
+
     def _member(self, name: QualifiedName, subject: str) -> _MutableTier:
         for member in self._tiers:
             if member.declaration.name == name:
@@ -3509,14 +4004,6 @@ class GraphEditor:
             dict[QualifiedName, Tier],
             {member.declaration.name: member for member in self._tiers},
         )
-
-    def _items_by_id(self) -> dict[str, ItemRef]:
-        return {
-            item.durable_id: ItemRef(member.declaration.name, index)
-            for member in self._tiers
-            for index, item in enumerate(member.items)
-            if item.durable_id is not None
-        }
 
     def _resolve_item(self, reference: ItemRef | DurableItemRef) -> ItemRef:
         if isinstance(reference, ItemRef):
@@ -3832,6 +4319,346 @@ class GraphEditor:
         )
 
 
+def undeclare_with_contents(
+    graph: Graph, target: str | QualifiedName | EditDeclaration
+) -> Graph:
+    """Remove a declaration and all of its content as one atomic derived edit.
+
+    A bare ``str`` selects a namespace prefix; qualified names select the other
+    declaration carriers. Mutually dependent declarations are removed as one
+    strongly connected component.
+
+    The operation applies editing primitives to a private editor and publishes
+    only the final validated graph. A refusal therefore leaves the input graph
+    untouched. Like :meth:`Graph.edit`, this profile-free operation deliberately
+    bypasses clock rebinding; use ``ClockProfile.edit().undeclare_with_contents``
+    when timing must refuse or report through a named policy. Its inverse is
+    supplied by the edit journal in a later slice, not by this function itself.
+    """
+    editor = graph.edit()
+    site = editor._declaration_site(target)
+    _cascade_undeclare(editor, site.declaration, set())
+    return editor.freeze()
+
+
+def _cascade_undeclare(
+    editor: GraphEditor,
+    declaration: EditDeclaration,
+    active: set[tuple[str, str]],
+) -> None:
+    """Compose removal primitives for one declaration and its dependents."""
+    site = editor._declaration_site(declaration)
+    key = (site.kind, site.display)
+    if key in active:
+        raise GraphValidationError(
+            f"declaration dependency cycle reaches {site.kind} {site.display}"
+        )
+    if isinstance(
+        declaration,
+        SimpleRelationDeclaration
+        | BipartiteRelationDeclaration
+        | PolyadicRelationDeclaration,
+    ):
+        component = _relation_declaration_component(editor, declaration)
+        if len(component) > 1:
+            _cascade_relation_component(editor, component, active)
+            return
+    active.add(key)
+    if isinstance(declaration, NamespaceDeclaration):
+        _cascade_namespace(editor, declaration.namespace, active)
+    elif isinstance(declaration, TierDeclaration):
+        _cascade_tier(editor, declaration.name, active)
+    elif isinstance(declaration, AttributeDeclaration):
+        _cascade_attribute(editor, declaration.name)
+    else:
+        _cascade_relation(editor, declaration, active)
+    current: EditDeclaration = declaration
+    if isinstance(
+        declaration,
+        SimpleRelationDeclaration
+        | BipartiteRelationDeclaration
+        | PolyadicRelationDeclaration,
+    ):
+        current = next(
+            candidate
+            for candidate in editor._relation_declarations
+            if candidate.name == declaration.name
+        )
+    editor.undeclare(current)
+    active.remove(key)
+
+
+def _relation_declaration_component(
+    editor: GraphEditor, declaration: RelationDeclaration
+) -> tuple[RelationDeclaration, ...]:
+    """Return the mutually dependent relation component containing a declaration."""
+    declarations = tuple(editor._relation_declarations)
+
+    def _reachable(start: RelationDeclaration) -> set[QualifiedName]:
+        reached: set[QualifiedName] = set()
+        pending = [start]
+        while pending:
+            current = pending.pop()
+            if current.name in reached:
+                continue
+            reached.add(current.name)
+            pending.extend(
+                candidate
+                for candidate in declarations
+                if _relation_declaration_depends_on(candidate, current)
+            )
+        return reached
+
+    forward = _reachable(declaration)
+    return tuple(
+        candidate
+        for candidate in declarations
+        if candidate.name in forward and declaration.name in _reachable(candidate)
+    )
+
+
+def _relation_declaration_depends_on(
+    candidate: RelationDeclaration, declaration: RelationDeclaration
+) -> bool:
+    """Return whether removing a declaration requires removing this candidate."""
+    if candidate.name == declaration.name:
+        return False
+    subset_referrer = isinstance(candidate, PolyadicRelationDeclaration) and (
+        candidate.targets_subset_of == declaration.name
+    )
+    type_referrer = isinstance(declaration, SimpleRelationDeclaration) and (
+        isinstance(candidate, BipartiteRelationDeclaration)
+        and declaration.item_type in (candidate.left_type, candidate.right_type)
+    )
+    return subset_referrer or type_referrer
+
+
+def _cascade_relation_component(
+    editor: GraphEditor,
+    component: tuple[RelationDeclaration, ...],
+    active: set[tuple[str, str]],
+) -> None:
+    """Remove one strongly connected relation component as an atomic unit."""
+    names = {declaration.name for declaration in component}
+    keys = {
+        (site.kind, site.display)
+        for declaration in component
+        for site in (editor._declaration_site(declaration),)
+    }
+    if active & keys:
+        reached = min(active & keys)
+        raise GraphValidationError(
+            f"declaration dependency cycle reaches {reached[0]} {reached[1]}"
+        )
+    active.update(keys)
+    for declaration in component:
+        _cascade_relation(editor, declaration, active, skip=names)
+    editor._relation_declarations = [
+        declaration
+        for declaration in editor._relation_declarations
+        if declaration.name not in names
+    ]
+    active.difference_update(keys)
+
+
+def _cascade_namespace(
+    editor: GraphEditor, namespace: str, active: set[tuple[str, str]]
+) -> None:
+    """Remove every qualified use of one namespace before its binding."""
+    for layer in tuple(editor._layers):
+        for fact in layer.facts:
+            if any(
+                name.namespace == namespace
+                for name in _layer_subject_names(fact.subject)
+            ):
+                editor.remove_fact(layer.name, fact.subject, fact.value.name)
+    for declaration in tuple(editor._relation_declarations):
+        if declaration in editor._relation_declarations and any(
+            name.namespace == namespace
+            for name in _relation_declaration_names(declaration)
+        ):
+            _cascade_undeclare(editor, declaration, active)
+    for member in tuple(editor._tiers):
+        if member.declaration.name.namespace == namespace:
+            _cascade_undeclare(editor, member.declaration, active)
+    for attribute_declaration in tuple(editor._attribute_declarations):
+        if attribute_declaration.name.namespace == namespace:
+            _cascade_undeclare(editor, attribute_declaration, active)
+
+
+def _cascade_tier(
+    editor: GraphEditor, tier: QualifiedName, active: set[tuple[str, str]]
+) -> None:
+    """Remove all content and declaration contracts owned by one tier."""
+    for declaration in tuple(editor._relation_declarations):
+        if _relation_declaration_uses_tier(declaration, tier):
+            _cascade_undeclare(editor, declaration, active)
+    items_by_id = editor._items_by_id()
+    binary = {
+        index
+        for index, binary_relation in enumerate(editor._relations)
+        if any(
+            _endpoint_tier(endpoint, items_by_id) == tier
+            for endpoint in (binary_relation.left, binary_relation.right)
+        )
+    }
+    polyadic = {
+        index
+        for index, polyadic_relation in enumerate(editor._polyadic_relations)
+        if any(
+            _endpoint_tier(endpoint, items_by_id) == tier
+            for endpoint in (*polyadic_relation.sources, *polyadic_relation.targets)
+        )
+    }
+    _remove_relation_instances(editor, binary, polyadic)
+    _remove_facts_if(
+        editor,
+        lambda fact: _layer_subject_uses_tier(
+            fact.subject, tier, editor._items_by_id()
+        ),
+    )
+    if editor._seal_for(tier) is not None:
+        editor.drop_seal(tier)
+    for boundary in tuple(editor._boundary_values):
+        if _boundary_tier(boundary.reference, editor._items_by_id()) == tier:
+            for value in boundary.attributes:
+                editor.remove_attribute(boundary.reference, value.name)
+    member = editor._member(tier, "declaration cascade")
+    for value in tuple(member.attributes):
+        editor.remove_attribute(tier, value.name)
+    if member.items:
+        editor.remove_items(tier, 0, len(member.items))
+
+
+def _cascade_attribute(editor: GraphEditor, name: QualifiedName) -> None:
+    """Remove every value governed by one attribute declaration."""
+    _remove_facts_if(editor, lambda fact: fact.value.name == name)
+    if any(value.name == name for value in editor._attributes):
+        editor.remove_attribute(None, name)
+    for member in tuple(editor._tiers):
+        tier = member.declaration.name
+        if any(value.name == name for value in member.attributes):
+            editor.remove_attribute(tier, name)
+        for index, item in enumerate(tuple(member.items)):
+            if any(value.name == name for value in item.attributes):
+                editor.remove_attribute(ItemRef(tier, index), name)
+    for declaration in tuple(editor._relation_declarations):
+        if any(value.name == name for value in declaration.attributes):
+            editor.remove_attribute(declaration.name, name)
+    for index, binary_relation in enumerate(tuple(editor._relations)):
+        if any(value.name == name for value in binary_relation.attributes):
+            editor.remove_attribute(RelationInstanceRef(index), name)
+    for index, polyadic_relation in enumerate(tuple(editor._polyadic_relations)):
+        if any(value.name == name for value in polyadic_relation.attributes):
+            editor.remove_attribute(PolyadicInstanceRef(index), name)
+    for boundary in tuple(editor._boundary_values):
+        if any(value.name == name for value in boundary.attributes):
+            editor.remove_attribute(boundary.reference, name)
+
+
+def _cascade_relation(
+    editor: GraphEditor,
+    declaration: RelationDeclaration,
+    active: set[tuple[str, str]],
+    *,
+    skip: set[QualifiedName] | None = None,
+) -> None:
+    """Remove relation referrers, instances, facts, and declaration values."""
+    name = declaration.name
+    for candidate in tuple(editor._relation_declarations):
+        if candidate.name == name or skip is not None and candidate.name in skip:
+            continue
+        if _relation_declaration_depends_on(candidate, declaration):
+            _cascade_undeclare(editor, candidate, active)
+    binary = {
+        index
+        for index, relation in enumerate(editor._relations)
+        if relation.declaration == name
+    }
+    polyadic = {
+        index
+        for index, relation in enumerate(editor._polyadic_relations)
+        if relation.declaration == name
+    }
+    _remove_relation_instances(editor, binary, polyadic)
+    _remove_facts_if(
+        editor,
+        lambda fact: (
+            isinstance(fact.subject, RelationDeclarationRef)
+            and fact.subject.relation == name
+        ),
+    )
+    site = editor._declaration_site(declaration)
+    current = cast(RelationDeclaration, site.declaration)
+    for value in tuple(current.attributes):
+        editor.remove_attribute(name, value.name)
+
+
+def _remove_relation_instances(
+    editor: GraphEditor, binary: set[int], polyadic: set[int]
+) -> None:
+    """Remove relation facts, obstructing seals, and selected instances."""
+    binary_ids = {
+        relation.durable_id
+        for index, relation in enumerate(editor._relations)
+        if index in binary and relation.durable_id is not None
+    }
+    polyadic_ids = {
+        relation.durable_id
+        for index, relation in enumerate(editor._polyadic_relations)
+        if index in polyadic and relation.durable_id is not None
+    }
+    _remove_facts_if(
+        editor,
+        lambda fact: _layer_subject_uses_relation_instances(
+            fact.subject, binary, polyadic, binary_ids, polyadic_ids
+        ),
+    )
+    relation_seal = editor._seal_for(GraphCarrier.RELATIONS)
+    if relation_seal is not None and any(
+        index < relation_seal.sealed for index in binary
+    ):
+        editor.drop_seal(GraphCarrier.RELATIONS)
+    polyadic_seal = editor._seal_for(GraphCarrier.POLYADIC_RELATIONS)
+    if polyadic_seal is not None and any(
+        index < polyadic_seal.sealed for index in polyadic
+    ):
+        editor.drop_seal(GraphCarrier.POLYADIC_RELATIONS)
+    for index in sorted(polyadic, reverse=True):
+        editor.remove_relation(PolyadicInstanceRef(index))
+    for index in sorted(binary, reverse=True):
+        editor.remove_relation(RelationInstanceRef(index))
+
+
+def _remove_facts_if(
+    editor: GraphEditor, predicate: Callable[[LayerFact], bool]
+) -> None:
+    """Remove a snapshot-selected set of facts through the public primitive."""
+    for layer in tuple(editor._layers):
+        for fact in layer.facts:
+            if predicate(fact):
+                editor.remove_fact(layer.name, fact.subject, fact.value.name)
+
+
+def _layer_subject_uses_relation_instances(
+    subject: LayerSubject,
+    binary: set[int],
+    polyadic: set[int],
+    binary_ids: set[str],
+    polyadic_ids: set[str],
+) -> bool:
+    """Return whether a fact subject selects one relation being removed."""
+    if isinstance(subject, RelationInstanceRef):
+        return subject.index in binary
+    if isinstance(subject, PolyadicInstanceRef):
+        return subject.index in polyadic
+    if isinstance(subject, DurableRelationRef):
+        return subject.durable_id in binary_ids
+    if isinstance(subject, DurablePolyadicRef):
+        return subject.durable_id in polyadic_ids
+    return False
+
+
 def _boundary_images(
     old_count: int, new_count: int, mapping: dict[int, int]
 ) -> dict[int, int]:
@@ -3993,6 +4820,156 @@ class _MutableTier:
     declaration: TierDeclaration
     items: list[Item]
     attributes: list[Attribute]
+
+
+def _stable_unique(values: Iterable[str]) -> tuple[str, ...]:
+    """Deduplicate diagnostic entries without disturbing discovery order."""
+    return tuple(dict.fromkeys(values))
+
+
+def _named_attribute_dependents(
+    attributes: Iterable[Attribute],
+    name: QualifiedName | None,
+    carrier: str,
+) -> tuple[str, ...]:
+    """Describe selected attribute values on one carrier."""
+    return tuple(
+        f"attribute value {str(value.name)!r} on {carrier}"
+        for value in attributes
+        if name is None or value.name == name
+    )
+
+
+def _namespace_attribute_dependents(
+    attributes: Iterable[Attribute], namespace: str, carrier: str
+) -> tuple[str, ...]:
+    """Describe values whose expanded names use one namespace URI."""
+    return tuple(
+        f"attribute value {str(value.name)!r} on {carrier}"
+        for value in attributes
+        if value.name.namespace == namespace
+    )
+
+
+def _relation_declaration_names(
+    declaration: RelationDeclaration,
+) -> tuple[QualifiedName, ...]:
+    """Return every qualified name spelled by one relation declaration."""
+    if isinstance(declaration, SimpleRelationDeclaration):
+        return (declaration.name, declaration.tier, declaration.item_type)
+    if isinstance(declaration, BipartiteRelationDeclaration):
+        return (declaration.name, declaration.left_type, declaration.right_type)
+    side_tiers = (
+        *(declaration.sources.tiers or ()),
+        *(declaration.targets.tiers or ()),
+    )
+    subset = (
+        ()
+        if declaration.targets_subset_of is None
+        else (declaration.targets_subset_of,)
+    )
+    return (declaration.name, *side_tiers, *subset)
+
+
+def _relation_declaration_uses_tier(
+    declaration: RelationDeclaration, tier: QualifiedName
+) -> bool:
+    """Return whether one relation declaration directly names a tier."""
+    if isinstance(declaration, SimpleRelationDeclaration):
+        return declaration.tier == tier
+    if isinstance(declaration, PolyadicRelationDeclaration):
+        return any(
+            side.tiers is not None and tier in side.tiers
+            for side in (declaration.sources, declaration.targets)
+        )
+    return False
+
+
+def _endpoint_tier(
+    endpoint: RelationEndpointRef, items_by_id: Mapping[str, ItemRef]
+) -> QualifiedName | None:
+    """Resolve an endpoint only far enough to identify its owning tier."""
+    if isinstance(endpoint, ItemRef):
+        return endpoint.tier
+    if isinstance(endpoint, DurableItemRef):
+        coordinate = items_by_id.get(endpoint.durable_id)
+        return None if coordinate is None else coordinate.tier
+    if isinstance(endpoint.anchor, QualifiedName):
+        return endpoint.anchor
+    coordinate = items_by_id.get(endpoint.anchor.durable_id)
+    return None if coordinate is None else coordinate.tier
+
+
+def _boundary_tier(
+    reference: BoundaryRef | DurableBoundaryRef,
+    items_by_id: Mapping[str, ItemRef],
+) -> QualifiedName | None:
+    """Resolve a stored boundary only far enough to identify its tier."""
+    if isinstance(reference, BoundaryRef):
+        return reference.tier
+    if isinstance(reference.anchor, QualifiedName):
+        return reference.anchor
+    coordinate = items_by_id.get(reference.anchor.durable_id)
+    return None if coordinate is None else coordinate.tier
+
+
+def _endpoint_uses_namespace(endpoint: RelationEndpointRef, namespace: str) -> bool:
+    """Return whether an endpoint directly spells a qualified name in a URI."""
+    if isinstance(endpoint, ItemRef):
+        return endpoint.tier.namespace == namespace
+    if isinstance(endpoint, DurableBoundaryRef) and isinstance(
+        endpoint.anchor, QualifiedName
+    ):
+        return endpoint.anchor.namespace == namespace
+    return False
+
+
+def _boundary_uses_namespace(
+    reference: BoundaryRef | DurableBoundaryRef, namespace: str
+) -> bool:
+    """Return whether a boundary directly spells a qualified name in a URI."""
+    if isinstance(reference, BoundaryRef):
+        return reference.tier.namespace == namespace
+    return isinstance(reference.anchor, QualifiedName) and (
+        reference.anchor.namespace == namespace
+    )
+
+
+def _layer_subject_names(subject: LayerSubject) -> tuple[QualifiedName, ...]:
+    """Return every qualified name directly retained by a layer subject."""
+    if isinstance(subject, ItemRef | BoundaryRef):
+        return (subject.tier,)
+    if isinstance(subject, DurableBoundaryRef) and isinstance(
+        subject.anchor, QualifiedName
+    ):
+        return (subject.anchor,)
+    if isinstance(subject, TierRef):
+        return (subject.tier,)
+    if isinstance(subject, RelationDeclarationRef):
+        return (subject.relation,)
+    if isinstance(subject, OrphanedSubject):
+        return tuple(_orphan_names(subject))
+    return ()
+
+
+def _layer_subject_uses_tier(
+    subject: LayerSubject,
+    tier: QualifiedName,
+    items_by_id: Mapping[str, ItemRef],
+) -> bool:
+    """Return whether a live or orphaned fact subject names one tier."""
+    if isinstance(subject, ItemRef | BoundaryRef):
+        return subject.tier == tier
+    if isinstance(subject, DurableItemRef):
+        coordinate = items_by_id.get(subject.durable_id)
+        return coordinate is not None and coordinate.tier == tier
+    if isinstance(subject, DurableBoundaryRef):
+        return _boundary_tier(subject, items_by_id) == tier
+    if isinstance(subject, TierRef):
+        return subject.tier == tier
+    return isinstance(subject, OrphanedSubject) and tier in tuple(
+        _orphan_names(subject)
+    )
 
 
 class _GraphBuilder:

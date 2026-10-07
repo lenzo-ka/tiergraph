@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 242 top-level `tiergraph` exports exactly once.
+It covers 243 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -226,7 +226,9 @@ earlier binding. The named collapsing policy collapses the affected
 span onto its earlier clock boundary and records a tier fact saying
 that the result needs realignment. Untimed tiers need no rebinding
 policy. The clock tier itself cannot be structurally edited in a bound
-session.
+session. A named declaration cascade may explicitly remove this clock
+definition and retire the session; its graph and withdrawal reports
+remain available, but later profile-aware edits refuse.
 
 #### `ClockProfile.is_structural`
 
@@ -366,7 +368,10 @@ Edit one graph while preserving a declared clock profile.
 The editor validates both the graph and the clock profile after every
 operation. Structural edits on timed tiers are atomic: a refusal leaves the
 editor's graph, reports, and profile unchanged. Successful timed-tier edits
-append a :class:`ClockEditReport`; untimed edits need no clock report.
+append a :class:`ClockEditReport`; untimed edits need no clock report. A
+named declaration cascade may explicitly remove the clock definition and
+end the profile-aware session; its graph and reports remain readable, while
+later profile-aware operations refuse.
 
 #### `ClockEditor.profile`
 
@@ -473,6 +478,27 @@ relation itself. ``keep-earlier`` leaves timing unchanged. The named
 collapsing policy conservatively collapses each touched timed tier onto
 its earlier extent and records that realignment is needed.
 
+#### `ClockEditor.undeclare_with_contents`
+
+Method.
+
+```text
+ClockEditor.undeclare_with_contents(self, target: 'str | QualifiedName | EditDeclaration') -> 'ClockEditor'
+```
+
+Cascade one declaration under this session's rebinding policy.
+
+The complete graph-level cascade is staged before this editor changes.
+Removing or changing a clock binding, the clock tier, the binding
+declaration, or items on a bound tier requires a named policy. The
+report records every withdrawn binding under that policy. A withdrawal
+leaves no binding behind, so it does not claim realignment.
+
+A cascade that removes the clock tier or binding contract necessarily
+retires this profile. The resulting graph and reports remain available
+through :meth:`freeze` and :attr:`reports`, but :attr:`profile` and any
+later profile-aware edit refuse.
+
 ### `ClockEditOperation`
 
 ```text
@@ -488,6 +514,7 @@ Name the structural operation summarized by a clock edit report.
 - `ITEM_MOVE` = `item move`
 - `ITEM_SWAP` = `item swap`
 - `REPARENT` = `reparent`
+- `DECLARATION_CASCADE` = `declaration cascade`
 
 ### `ClockRebindingPolicy`
 
@@ -1077,15 +1104,29 @@ Return where every position of this editor's input now stands.
 Method.
 
 ```text
-GraphEditor.declare(self, declaration: 'EditDeclaration') -> 'GraphEditor'
+GraphEditor.declare(self, declaration: 'EditDeclaration', at: 'int | None' = None) -> 'GraphEditor'
 ```
 
-Add one namespace, tier, attribute, or relation declaration.
+Insert one namespace, tier, attribute, or relation declaration.
 
-Declarations are added, never changed or withdrawn.  Retyping or
-withdrawing one retroactively decides the meaning of every value and
-reference that already depends on it, which is a migration of the
-whole graph rather than an edit to a place in it.
+``at`` addresses the selected declaration carrier.  An omitted position
+appends.  Name-keyed carriers retain their graph-defined canonical order
+when frozen; tier positions remain in the supplied order.
+
+#### `GraphEditor.undeclare`
+
+Method.
+
+```text
+GraphEditor.undeclare(self, target: 'str | QualifiedName | EditDeclaration') -> 'GraphEditor'
+```
+
+Remove one unused declaration, listing every current dependent.
+
+A bare ``str`` selects a namespace prefix. Passing a declaration value
+disambiguates equal qualified names in different declaration carriers.
+A refusal is a preflight: no editor carrier or displacement is changed
+unless the complete dependency list is empty.
 
 #### `GraphEditor.promote_item`
 
@@ -1384,6 +1425,25 @@ GraphEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndp
 ```
 
 Replace one instance's endpoints while preserving its other content.
+
+### `undeclare_with_contents`
+
+```text
+undeclare_with_contents(graph: 'Graph', target: 'str | QualifiedName | EditDeclaration') -> 'Graph'
+```
+
+Remove a declaration and all of its content as one atomic derived edit.
+
+A bare ``str`` selects a namespace prefix; qualified names select the other
+declaration carriers. Mutually dependent declarations are removed as one
+strongly connected component.
+
+The operation applies editing primitives to a private editor and publishes
+only the final validated graph. A refusal therefore leaves the input graph
+untouched. Like :meth:`Graph.edit`, this profile-free operation deliberately
+bypasses clock rebinding; use ``ClockProfile.edit().undeclare_with_contents``
+when timing must refuse or report through a named policy. Its inverse is
+supplied by the edit journal in a later slice, not by this function itself.
 
 ## Equivalence
 
@@ -3249,10 +3309,26 @@ validity and the explicit rebinding policy must be preserved.
 Method.
 
 ```text
-Graph.declare(self, declaration: 'EditDeclaration') -> 'Graph'
+Graph.declare(self, declaration: 'EditDeclaration', at: 'int | None' = None) -> 'Graph'
 ```
 
-Return a new graph carrying one more declaration.
+Return a new graph carrying one declaration at its carrier position.
+
+#### `Graph.undeclare`
+
+Method.
+
+```text
+Graph.undeclare(self, target: 'str | QualifiedName | EditDeclaration') -> 'Graph'
+```
+
+Return a graph without one unused declaration.
+
+A bare ``str`` selects a namespace prefix. A qualified name shared by
+declaration kinds is ambiguous; passing the declaration value itself
+selects its kind. The operation refuses, before changing an editor,
+while any graph content or another declaration depends on the selected
+declaration.
 
 #### `Graph.set_attribute`
 

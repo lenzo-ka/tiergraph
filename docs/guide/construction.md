@@ -43,6 +43,14 @@ that `Graph.edit()` returns answers the same operations by changing itself, and
 rewrites or mutates follows from the carrier a caller holds, never from an
 argument, so nothing has to decide at run time which kind of object it has.
 
+Strict `undeclare()` removes only an unused declaration and lists every
+dependent when it refuses. `undeclare_with_contents()` is the destructive
+derived cascade. Like `Graph.edit()`, that graph-level function has no clock
+profile and deliberately bypasses rebinding; use
+`ClockProfile.edit().undeclare_with_contents()` when timing changes must require
+a named policy and produce reports. The cascade does not return its own inverse:
+the edit journal supplies that inverse in a later slice.
+
 `insert_items()` inserts an ordered run of items in one restructure, with the
 same result as repeated `insert_item()` calls. An empty run still validates its
 tier and index. Sets and mappings are refused because they supply no order.

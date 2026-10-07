@@ -78,6 +78,7 @@ from tiergraph.core import (
     TierDeclaration,
     TierRef,
     XsdType,
+    undeclare_with_contents,
 )
 from tiergraph.equivalence import (
     EquivalenceView,
@@ -534,4 +535,5 @@ __all__ = [
     "to_jsonl",
     "to_text",
     "to_textgrid",
+    "undeclare_with_contents",
 ]
