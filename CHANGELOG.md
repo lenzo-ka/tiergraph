@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   facts and zero-length seal records. Machine format version 2 adds the needed
   construction opcodes while retaining version 1 reads unchanged, and
   construction `Program` values refuse removal opcodes.
+- Added deterministic `diff()` patches. Compatible schemas align each ordered
+  tier under unit edit costs, turn reusable delete/insert pairs into moves, and
+  rebuild references in dependency order; incompatible schemas use a guarded
+  rebuild. Applying a diff reaches the requested equivalence view. This
+  graph-level operation does not apply a clock rebinding policy.
 
 ### Changed
 

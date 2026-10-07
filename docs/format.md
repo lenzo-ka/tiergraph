@@ -121,6 +121,28 @@ residual changes, validates the resulting graph, checks the operation target,
 and checks the final target. Current patches use identified fingerprints, so a
 patch refuses a functionally equal base with different or reused durable ids.
 
+`diff(source, target, view)` returns one of these executable patches. It is
+deterministic, returns an empty patch when the inputs already agree in the
+selected view, and otherwise aligns compatible ordered tiers under unit edit
+costs. Reusable paired items outside the retained longest common subsequence
+become moves. References are removed before affected items and restored
+afterward, so every patch operation yields a valid graph. When declarations
+are incompatible, the patch uses a guarded rebuild; a compatible edit may end
+with a guarded whole-graph residue for exact state not expressed by the
+semantic operations. Applying the patch produces a graph equivalent to
+`target` in the selected view; per-tier unit-cost alignment is the only
+minimality guarantee.
+
+An empty diff is a no-op guarded to the source's identified fingerprint. When
+the graphs agree only in the selected view, it is not an exact transition to
+the target and cannot be composed as though its target fingerprint named that
+graph.
+
+This graph-level operation validates graph structure only. It has no clock
+profile and does not apply or report a clock rebinding policy. Construct edits
+through `ClockProfile.edit()` when such a policy must govern structural
+changes.
+
 Both containers share the graph codec's whole-document byte limit, UTF-8 and
 strict-JSON rules, nesting limit, and the independent 1 MiB JSONL line limit.
 Annotations contain optional `author`, `reason`, `stage`, `confidence`,
