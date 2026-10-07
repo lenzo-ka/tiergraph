@@ -40,7 +40,8 @@
     ],
     "editing": [
       "Displacement",
-      "GraphEditor"
+      "GraphEditor",
+      "undeclare_with_contents"
     ],
     "equivalence": [
       "EquivalenceView",

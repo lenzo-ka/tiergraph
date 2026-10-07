@@ -182,10 +182,19 @@ touches a timed tier refuses before changing the editor. The clock tier itself
 cannot be structurally edited through a bound session, even when a rebinding
 policy is present.
 
+Declaration cascades use the same explicit-policy boundary. Call
+`editor.undeclare_with_contents(...)` to stage the complete cascade before any
+session state changes. Removing bindings, the binding declaration, the clock
+tier, or bound-tier items refuses without a named policy; with one, every
+withdrawn binding is reported. A cascade that removes the clock definition ends
+that profile-aware session, so its graph and reports remain available but later
+clock edits refuse.
+
 The ordinary `graph.edit()` API remains the profile-free editor. It bypasses
-clock rebinding policy and validation, so a structural edit can silently leave
-a previously valid `ClockProfile` invalid. Use `ClockProfile.edit()` whenever
-clock validity must be maintained across edits.
+clock rebinding policy and validation. The module-level
+`undeclare_with_contents()` cascade does too, so either can silently leave a
+previously valid `ClockProfile` invalid. Use `ClockProfile.edit()` whenever clock
+validity must be maintained across edits.
 
 ## What the profile checks and leaves open
 
