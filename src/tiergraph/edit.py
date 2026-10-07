@@ -8,7 +8,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from inspect import Parameter, signature
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from tiergraph.patch import Patch
 
 from tiergraph.clock import (
     ClockEditor,
@@ -957,6 +960,9 @@ class JournalRecord:
     _provenance_ownership: _ProvenanceOwnershipDelta | None = field(
         init=False, repr=False, compare=False
     )
+    _patch_operations: _OperationPair | None = field(
+        init=False, repr=False, compare=False
+    )
 
     def __init__(
         self,
@@ -973,6 +979,7 @@ class JournalRecord:
         object.__setattr__(self, "_before_clock_active", True)
         object.__setattr__(self, "_after_clock_active", True)
         object.__setattr__(self, "_provenance_ownership", None)
+        object.__setattr__(self, "_patch_operations", None)
 
     @classmethod
     def _create(
@@ -984,6 +991,7 @@ class JournalRecord:
         before_clock_active: bool,
         after_clock_active: bool,
         provenance_ownership: _ProvenanceOwnershipDelta | None,
+        patch_operations: _OperationPair | None,
     ) -> JournalRecord:
         record = object.__new__(cls)
         object.__setattr__(record, "operation", operation)
@@ -993,6 +1001,7 @@ class JournalRecord:
         object.__setattr__(record, "_before_clock_active", before_clock_active)
         object.__setattr__(record, "_after_clock_active", after_clock_active)
         object.__setattr__(record, "_provenance_ownership", provenance_ownership)
+        object.__setattr__(record, "_patch_operations", patch_operations)
         return record
 
     @property
@@ -1697,6 +1706,73 @@ class Journal:
         self._done.append(record)
         return record
 
+    def to_patch(self) -> Patch:
+        """Return the applied history as a fingerprint-guarded public patch.
+
+        The import is local because the patch container depends on journal
+        annotations. Each emitted opcode carries only guarded document changes,
+        plus the exact reverse changes under the journal's inverse operation name.
+        """
+        from tiergraph.equivalence import (  # noqa: PLC0415
+            EquivalenceView,
+            fingerprint,
+        )
+        from tiergraph.machine import DeltaOpcode  # noqa: PLC0415
+        from tiergraph.patch import Patch, PatchOperation  # noqa: PLC0415
+
+        if self._editor is None:
+            raise GraphValidationError("journal is not attached to an editor")
+        base = self._editor._source
+        cursor = base
+        operations: list[PatchOperation] = []
+        for record in self._done:
+            target = record.inverse._delta.forward(cursor)
+            patch_operations = record._patch_operations
+            if patch_operations is not None:
+                forward_calls = tuple(
+                    (call.method, call.arguments)
+                    for call in patch_operations.forward.calls
+                )
+                inverse_calls = tuple(
+                    (call.method, call.arguments)
+                    for call in patch_operations.inverse.calls
+                )
+            else:
+                forward_calls = ()
+                inverse_calls = ()
+            try:
+                opcode = DeltaOpcode.between(
+                    record.operation, cursor, target, forward_calls
+                )
+            except (GraphValidationError, TypeError, ValueError):
+                opcode = DeltaOpcode.between("delta", cursor, target)
+            try:
+                inverse = DeltaOpcode.between(
+                    record.inverse.operation, target, cursor, inverse_calls
+                )
+            except (GraphValidationError, TypeError, ValueError):
+                inverse = DeltaOpcode.between("delta", target, cursor)
+            operations.append(
+                PatchOperation(
+                    opcode,
+                    inverse,
+                    fingerprint(cursor, EquivalenceView.IDENTIFIED),
+                    fingerprint(target, EquivalenceView.IDENTIFIED),
+                    record.annotations,
+                )
+            )
+            cursor = target
+        if cursor != self._editor._graph:  # pragma: no cover - journal invariant
+            raise GraphValidationError(
+                "journal records do not replay to the attached editor state"
+            )
+        return Patch(
+            fingerprint(base, EquivalenceView.IDENTIFIED),
+            fingerprint(cursor, EquivalenceView.IDENTIFIED),
+            tuple(operations),
+            self._defaults,
+        )
+
     def _annotations(self) -> EditAnnotations:
         result = self._defaults
         for overlay in self._annotation_stack:
@@ -1801,6 +1877,7 @@ class _JournalEditorBase:
         step: Displacement,
         *,
         operations: _OperationPair | None = None,
+        patch_operations: _OperationPair | None = None,
         operation_before: Graph | None = None,
         provenance_subjects: Iterable[LayerSubject] = (),
         clock_reports: tuple[ClockEditReport, ...] = (),
@@ -1872,6 +1949,7 @@ class _JournalEditorBase:
                 if before_owned != after_owned
                 else None
             ),
+            operations if patch_operations is None else patch_operations,
         )
         self._graph = candidate
         self._journal._owned_provenance = set(after_owned)
@@ -1973,6 +2051,48 @@ def _attribute_subject(
     return _stable_subject(graph, subject)
 
 
+def _attribute_at(
+    graph: Graph, target: EditTarget, name: QualifiedName
+) -> Attribute | None:
+    """Return the named value at an edit target, if it is present."""
+    declaration = next(
+        (item for item in graph.attribute_declarations if item.name == name), None
+    )
+    if declaration is None:
+        return None
+    if declaration.domain is AttributeDomain.DOCUMENT:
+        attributes = graph.attributes
+    elif declaration.domain is AttributeDomain.TIER and isinstance(
+        target, QualifiedName
+    ):
+        attributes = graph._tiers_by_name[target].attributes
+    elif declaration.domain is AttributeDomain.ITEM and isinstance(
+        target, ItemRef | DurableItemRef
+    ):
+        attributes = _item_at(graph, graph.resolve_item(target)).attributes
+    elif declaration.domain is AttributeDomain.BOUNDARY and isinstance(
+        target, BoundaryRef | DurableBoundaryRef
+    ):
+        attributes = _boundary_attributes(graph, graph.resolve_boundary(target))
+    elif declaration.domain is AttributeDomain.RELATION_DECLARATION and isinstance(
+        target, QualifiedName
+    ):
+        attributes = next(
+            item.attributes
+            for item in graph.relation_declarations
+            if item.name == target
+        )
+    elif declaration.domain is AttributeDomain.RELATION_INSTANCE:
+        coordinate = _relation_coordinate(graph, cast(RelationTarget, target))
+        if isinstance(coordinate, PolyadicInstanceRef):
+            attributes = graph.polyadic_relations[coordinate.index].attributes
+        else:
+            attributes = graph.relations[coordinate.index].attributes
+    else:
+        return None
+    return next((value for value in attributes if value.name == name), None)
+
+
 def _present_subject(subject: LayerSubject | None) -> tuple[LayerSubject, ...]:
     """Turn one optional resolved subject into an iterable for provenance."""
     return () if subject is None else (subject,)
@@ -2007,6 +2127,7 @@ class JournalEditor(_JournalEditorBase):
         edit: Callable[[GraphEditor], GraphEditor],
         operations: _OperationPair | None = None,
         *,
+        patch_operations: _OperationPair | None = None,
         provenance_subjects: Iterable[LayerSubject] = (),
         retire_subjects: Iterable[LayerSubject] = (),
         retire_all_provenance: bool = False,
@@ -2028,11 +2149,16 @@ class JournalEditor(_JournalEditorBase):
         candidate = editor.freeze()
         if operations is not None and candidate == operation_before:
             operations = _OperationPair(_OperationSequence(), _OperationSequence())
+        if patch_operations is not None and candidate == operation_before:
+            patch_operations = _OperationPair(
+                _OperationSequence(), _OperationSequence()
+            )
         self._finish(
             operation,
             candidate,
             editor.displacement(),
             operations=operations,
+            patch_operations=patch_operations,
             operation_before=operation_before,
             provenance_subjects=acted,
         )
@@ -2257,21 +2383,49 @@ class JournalEditor(_JournalEditorBase):
 
     def add_layer(self, name: LayerName) -> JournalEditor:
         """Add an empty layer and record its inverse."""
-        return self._apply("add_layer", lambda editor: editor.add_layer(name))
+        operations = _operation_pair("add_layer", (name,), "remove_layer", (name,))
+        return self._apply(
+            "add_layer",
+            lambda editor: editor.add_layer(name),
+            patch_operations=operations,
+        )
 
     def remove_layer(self, name: LayerName) -> JournalEditor:
         """Remove an empty layer and record its inverse."""
+        operations = _operation_pair("remove_layer", (name,), "add_layer", (name,))
         return self._apply(
             "remove_layer",
             lambda editor: editor.remove_layer(name),
+            patch_operations=operations,
             retire_all_provenance=name == self._journal._provenance,
         )
 
     def put_fact(self, layer: LayerName, fact: LayerFact) -> JournalEditor:
         """Put one layer fact and record the prior fact state."""
+        current = _layer_by_name(self._graph, layer)
+        prior = (
+            None
+            if current is None
+            else next(
+                (
+                    candidate
+                    for candidate in current.facts
+                    if (candidate.subject, candidate.value.name)
+                    == (fact.subject, fact.value.name)
+                ),
+                None,
+            )
+        )
+        inverse = (
+            _operation("remove_fact", layer, fact.subject, fact.value.name)
+            if prior is None
+            else _operation("put_fact", layer, prior)
+        )
+        operations = _OperationPair(_operation("put_fact", layer, fact), inverse)
         return self._apply(
             "put_fact",
             lambda editor: editor.put_fact(layer, fact),
+            patch_operations=operations,
             provenance_subjects=(fact.subject,),
         )
 
@@ -2279,18 +2433,47 @@ class JournalEditor(_JournalEditorBase):
         self, layer: LayerName, subject: LayerSubject, name: QualifiedName
     ) -> JournalEditor:
         """Remove one layer fact and record it for restoration."""
+        current = _layer_by_name(self._graph, layer)
+        prior = (
+            None
+            if current is None
+            else next(
+                (
+                    fact
+                    for fact in current.facts
+                    if (fact.subject, fact.value.name) == (subject, name)
+                ),
+                None,
+            )
+        )
+        operations = (
+            None
+            if prior is None
+            else _operation_pair(
+                "remove_fact", (layer, subject, name), "put_fact", (layer, prior)
+            )
+        )
         return self._apply(
             "remove_fact",
             lambda editor: editor.remove_fact(layer, subject, name),
+            patch_operations=operations,
             provenance_subjects=(subject,),
         )
 
     def set_attribute(self, target: EditTarget, value: Attribute) -> JournalEditor:
         """Set one attribute and record the prior value or absence."""
         subject = _attribute_subject(self._graph, target, value.name)
+        prior = _attribute_at(self._graph, target, value.name)
+        inverse = (
+            _operation("remove_attribute", target, value.name)
+            if prior is None
+            else _operation("set_attribute", target, prior)
+        )
+        operations = _OperationPair(_operation("set_attribute", target, value), inverse)
         return self._apply(
             "set_attribute",
             lambda editor: editor.set_attribute(target, value),
+            patch_operations=operations,
             provenance_subjects=_present_subject(subject),
         )
 
@@ -2299,9 +2482,21 @@ class JournalEditor(_JournalEditorBase):
     ) -> JournalEditor:
         """Remove one attribute and record it for restoration."""
         subject = _attribute_subject(self._graph, target, name)
+        prior = _attribute_at(self._graph, target, name)
+        operations = (
+            None
+            if prior is None
+            else _operation_pair(
+                "remove_attribute",
+                (target, name),
+                "set_attribute",
+                (target, prior),
+            )
+        )
         return self._apply(
             "remove_attribute",
             lambda editor: editor.remove_attribute(target, name),
+            patch_operations=operations,
             provenance_subjects=_present_subject(subject),
         )
 
@@ -2396,9 +2591,14 @@ class JournalEditor(_JournalEditorBase):
     ) -> JournalEditor:
         """Replace one item and retain its prior value."""
         coordinate = self._graph.resolve_item(reference)
+        prior = _item_at(self._graph, coordinate)
+        operations = _operation_pair(
+            "replace_item", (coordinate, item), "replace_item", (coordinate, prior)
+        )
         return self._apply(
             "replace_item",
             lambda editor: editor.replace_item(reference, item),
+            patch_operations=operations,
             provenance_subjects=_present_subject(
                 _stable_subject(self._graph, coordinate)
             ),

@@ -8,8 +8,10 @@ from typing import BinaryIO
 
 from tiergraph.core import JsonValue
 from tiergraph.machine import (
+    LEGACY_MACHINE_VERSION,
     MACHINE_VERSION,
     Program,
+    Repeat,
     _decode_object,
     _decode_opcode,
 )
@@ -50,12 +52,17 @@ def _program_bytes(source: str | bytes) -> bytes:
     the reader itself splits on, so the diagnostic says where to look exactly
     as every other one this reader raises does.
     """
+    return _jsonl_bytes(source, "program")
+
+
+def _jsonl_bytes(source: str | bytes, container: str) -> bytes:
+    """Encode a JSONL container while preserving the shared refusal order."""
     if isinstance(source, bytes):
         return source
     if len(source) > MAX_DOCUMENT_BYTES:
         raise Refusal(
             RefusalStage.ENVELOPE,
-            f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes",
+            f"JSONL {container} exceeds {MAX_DOCUMENT_BYTES} bytes",
         )
     try:
         return source.encode("utf-8")
@@ -113,6 +120,35 @@ def load_program(stream: BinaryIO) -> Program:
     # bounds is what makes the check arrive first: a delivery that reaches that
     # length has already crossed a bound, so it is refused on what was read
     # rather than on what the rest of the line might have been.
+    records = _load_jsonl_records(stream, "program")
+    header = records[0]
+    if not isinstance(header, dict):
+        raise Refusal(RefusalStage.CONSTRUCTION, "header must be an object")
+    if "machine_version" not in header:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR, "header is missing field 'machine_version'"
+        )
+    version = header["machine_version"]
+    if version != LEGACY_MACHINE_VERSION and version != MACHINE_VERSION:
+        raise Refusal(
+            RefusalStage.DISCRIMINATOR,
+            f"header machine_version must be {MACHINE_VERSION!r}",
+        )
+    _decode_object(header, "header", {"machine_version"})
+    try:
+        decoded = tuple(
+            _decode_opcode(record, f"line {number}")
+            for number, record in enumerate(records[1:], 2)
+        )
+        if version == LEGACY_MACHINE_VERSION:
+            _refuse_v2_opcodes(decoded)
+        return Program(decoded)
+    except TypeError as error:
+        raise Refusal(RefusalStage.CONSTRUCTION, str(error)) from error
+
+
+def _load_jsonl_records(stream: BinaryIO, container: str) -> list[object]:
+    """Read bounded strict-JSON records for either public JSONL container."""
     line_bytes = _JSONL_LINE_BYTES
     request = min(line_bytes, MAX_DOCUMENT_BYTES) + 1
     records: list[object] = []
@@ -124,7 +160,7 @@ def load_program(stream: BinaryIO) -> Program:
         if total > MAX_DOCUMENT_BYTES:
             raise Refusal(
                 RefusalStage.ENVELOPE,
-                f"JSONL program exceeds {MAX_DOCUMENT_BYTES} bytes",
+                f"JSONL {container} exceeds {MAX_DOCUMENT_BYTES} bytes",
             )
         if len(line) > line_bytes:
             raise Refusal(
@@ -144,9 +180,6 @@ def load_program(stream: BinaryIO) -> Program:
             )
         _check_jsonl_depth(line, number)
         try:
-            # The same integer guard the document reader uses: this format is
-            # one format spelled two ways, so a literal too long to convert is
-            # refused here as it is there, not left to escape as a bare ValueError.
             record = json.loads(
                 text,
                 object_pairs_hook=_object_without_duplicate_keys,
@@ -171,30 +204,10 @@ def load_program(stream: BinaryIO) -> Program:
         records.append(record)
     if not records:
         raise Refusal(
-            RefusalStage.DISCRIMINATOR, "JSONL program is missing its header line"
-        )
-    header = records[0]
-    if not isinstance(header, dict):
-        raise Refusal(RefusalStage.CONSTRUCTION, "header must be an object")
-    if "machine_version" not in header:
-        raise Refusal(
-            RefusalStage.DISCRIMINATOR, "header is missing field 'machine_version'"
-        )
-    if header["machine_version"] != MACHINE_VERSION:
-        raise Refusal(
             RefusalStage.DISCRIMINATOR,
-            f"header machine_version must be {MACHINE_VERSION!r}",
+            f"JSONL {container} is missing its header line",
         )
-    _decode_object(header, "header", {"machine_version"})
-    try:
-        return Program(
-            tuple(
-                _decode_opcode(record, f"line {number}")
-                for number, record in enumerate(records[1:], 2)
-            )
-        )
-    except TypeError as error:
-        raise Refusal(RefusalStage.CONSTRUCTION, str(error)) from error
+    return records
 
 
 def program_dumps(program: Program) -> str:
@@ -234,6 +247,34 @@ def program_dumps(program: Program) -> str:
             + "\n"
         )
     return "".join(lines)
+
+
+def _refuse_v2_opcodes(opcodes: tuple[object, ...]) -> None:
+    """Keep version 1's accepted opcode vocabulary unchanged."""
+    legacy = {
+        "declare_namespace",
+        "declare_tier",
+        "declare_relation",
+        "declare_attribute",
+        "add_item",
+        "promote_item",
+        "promote_position",
+        "relate",
+        "attach_value",
+        "repeat",
+    }
+    for opcode in opcodes:
+        data = opcode.to_data()  # type: ignore[attr-defined]
+        name = data["opcode"]
+        if name not in legacy:
+            raise Refusal(
+                RefusalStage.DISCRIMINATOR,
+                f"machine version {LEGACY_MACHINE_VERSION!r} does not define "
+                f"opcode {name!r}",
+            )
+        if isinstance(opcode, Repeat):
+            body = opcode.body
+            _refuse_v2_opcodes(body)
 
 
 def _check_jsonl_depth(line: bytes, number: int) -> None:

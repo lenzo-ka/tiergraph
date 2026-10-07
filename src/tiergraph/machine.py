@@ -17,27 +17,41 @@ from tiergraph.core import (
     Boundary,
     BoundaryRef,
     BoundarySide,
+    DocumentRef,
     DurableBoundaryRef,
     DurableItemRef,
+    DurablePolyadicRef,
+    DurableRelationRef,
     Graph,
+    GraphCarrier,
+    GraphEditor,
     GraphValidationError,
     Item,
     ItemRef,
     JsonAttributeValue,
     JsonType,
     JsonValue,
+    Layer,
+    LayerFact,
+    LayerName,
+    LayerSubject,
     NamespaceDeclaration,
+    OrphanedSubject,
+    PolyadicInstanceRef,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
     RelationDeclaration,
+    RelationDeclarationRef,
     RelationEndpointKind,
     RelationEndpointRef,
     RelationInstance,
+    RelationInstanceRef,
     RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    TierRef,
     XsdType,
     _GraphBuilder,
     _MutableTier,
@@ -65,11 +79,95 @@ from tiergraph.wire import (
     _refuse_unencodable_strings,
     _string,
 )
+from tiergraph.wire import (
+    loads as wire_loads,
+)
+from tiergraph.wire import (
+    to_data as wire_to_data,
+)
 
-MACHINE_VERSION = "1"
+MACHINE_VERSION = "2"
+LEGACY_MACHINE_VERSION = "1"
 MAX_REPEAT_COUNT = 10_000
 # Owner-tunable policy: bound eager traces while leaving ample room for real builds.
 MAX_TOTAL_OPCODES = 2_000_000
+
+EDIT_OPCODE_NAMES = frozenset(
+    {
+        "add_item",
+        "add_layer",
+        "add_relation",
+        "attach_value",
+        "declare",
+        "declare_attribute",
+        "declare_namespace",
+        "declare_relation",
+        "declare_tier",
+        "delta",
+        "demote_boundary",
+        "demote_item",
+        "demote_relation",
+        "drop_seal",
+        "insert_item",
+        "insert_items",
+        "move_item",
+        "promote_boundary",
+        "promote_item",
+        "promote_relation",
+        "put_fact",
+        "relate",
+        "remove_attribute",
+        "remove_fact",
+        "remove_item",
+        "remove_items",
+        "remove_layer",
+        "remove_relation",
+        "reparent",
+        "replace_item",
+        "restore_attribute",
+        "restore_declaration_contents",
+        "restore_fact",
+        "restore_seal",
+        "seal",
+        "set_attribute",
+        "set_endpoints",
+        "swap_items",
+        "undeclare",
+        "undeclare_with_contents",
+        "unseal",
+    }
+)
+EDIT_CALL_NAMES = frozenset(
+    {
+        "add_layer",
+        "add_relation",
+        "declare",
+        "demote_boundary",
+        "demote_item",
+        "demote_relation",
+        "drop_seal",
+        "insert_item",
+        "insert_items",
+        "move_item",
+        "promote_boundary",
+        "promote_item",
+        "promote_relation",
+        "put_fact",
+        "remove_attribute",
+        "remove_fact",
+        "remove_item",
+        "remove_items",
+        "remove_layer",
+        "remove_relation",
+        "replace_item",
+        "seal",
+        "set_attribute",
+        "set_endpoints",
+        "swap_items",
+        "undeclare",
+        "unseal",
+    }
+)
 
 
 class ExecutionError(Refusal):
@@ -341,6 +439,610 @@ class AttachValue:
 
 
 @dataclass(frozen=True, slots=True)
+class SealPrefix:
+    """Add one seal record, including a meaningful zero-length record."""
+
+    carrier: QualifiedName | GraphCarrier
+    sealed: int
+
+    def apply(self, graph: Graph) -> Graph:
+        """Apply the checked seal operation."""
+        return graph.seal(self.carrier, self.sealed)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the opcode as JSON data."""
+        carrier: dict[str, JsonValue]
+        if isinstance(self.carrier, QualifiedName):
+            carrier = {"kind": "tier", "tier": self.carrier.to_data()}
+        else:
+            carrier = {"kind": "graph", "name": self.carrier.value}
+        return {"opcode": "seal", "carrier": carrier, "sealed": self.sealed}
+
+
+@dataclass(frozen=True, slots=True)
+class AddLayer:
+    """Add one empty annotation layer."""
+
+    name: LayerName
+
+    def apply(self, graph: Graph) -> Graph:
+        """Apply the checked layer operation."""
+        return graph.add_layer(self.name)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the opcode as JSON data."""
+        return {"opcode": "add_layer", "name": self.name.to_data()}
+
+
+@dataclass(frozen=True, slots=True)
+class PutFact:
+    """Put one live or orphan layer fact."""
+
+    layer: LayerName
+    fact: LayerFact
+
+    def apply(self, graph: Graph) -> Graph:
+        """Apply the checked fact operation."""
+        return graph.put_fact(self.layer, self.fact)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the opcode as JSON data."""
+        encoded = Layer(self.layer, (self.fact,)).to_data()["facts"]
+        assert isinstance(encoded, list)
+        fact = cast(dict[str, JsonValue], encoded[0])
+        return {"opcode": "put_fact", "layer": self.layer.to_data(), "fact": fact}
+
+
+type _DataPath = tuple[str | int, ...]
+
+
+def _same_json(left: object, right: object) -> bool:
+    """Compare JSON values without equating booleans and integers."""
+    return type(left) is type(right) and left == right
+
+
+def _path_data(path: _DataPath) -> list[JsonValue]:
+    return [cast(JsonValue, part) for part in path]
+
+
+def _decode_data_path(value: object, path: str) -> _DataPath:
+    if not isinstance(value, list):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
+    decoded: list[str | int] = []
+    for index, part in enumerate(value):
+        if isinstance(part, str) or (
+            isinstance(part, int) and not isinstance(part, bool) and part >= 0
+        ):
+            decoded.append(part)
+            continue
+        raise Refusal(
+            RefusalStage.CONSTRUCTION,
+            f"{path}[{index}] must be a string or nonnegative integer",
+        )
+    return tuple(decoded)
+
+
+def _at_data_path(document: JsonValue, path: _DataPath) -> JsonValue:
+    current = document
+    for part in path:
+        if isinstance(part, str) and isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        if isinstance(part, int) and isinstance(current, list) and part < len(current):
+            current = current[part]
+            continue
+        raise Refusal(
+            RefusalStage.SEMANTICS,
+            f"opcode data path {_path_data(path)!r} does not exist",
+        )
+    return current
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplaceData:
+    path: _DataPath
+    before: JsonValue
+    after: JsonValue
+
+    def apply(self, document: JsonValue) -> None:
+        """Replace one existing JSON value after matching its old value."""
+        if not self.path:
+            raise Refusal(RefusalStage.SEMANTICS, "cannot replace the document root")
+        parent = _at_data_path(document, self.path[:-1])
+        part = self.path[-1]
+        if isinstance(part, str) and isinstance(parent, dict) and part in parent:
+            current = parent[part]
+            if not _same_json(current, self.before):
+                raise Refusal(RefusalStage.SEMANTICS, "opcode old value mismatch")
+            parent[part] = self.after
+            return
+        if isinstance(part, int) and isinstance(parent, list) and part < len(parent):
+            current = parent[part]
+            if not _same_json(current, self.before):
+                raise Refusal(RefusalStage.SEMANTICS, "opcode old value mismatch")
+            parent[part] = self.after
+            return
+        raise Refusal(RefusalStage.SEMANTICS, "opcode replacement path is absent")
+
+    def reverse(self) -> _ReplaceData:
+        """Exchange the guarded old and new values."""
+        return _ReplaceData(self.path, self.after, self.before)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this replacement as JSON data."""
+        return {
+            "kind": "replace",
+            "path": _path_data(self.path),
+            "before": self.before,
+            "after": self.after,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _SetMember:
+    path: _DataPath
+    key: str
+    before_present: bool
+    before: JsonValue
+    after_present: bool
+    after: JsonValue
+
+    def apply(self, document: JsonValue) -> None:
+        """Add, remove, or replace one object member with an old-value guard."""
+        parent = _at_data_path(document, self.path)
+        if not isinstance(parent, dict):
+            raise Refusal(RefusalStage.SEMANTICS, "opcode member path is not an object")
+        present = self.key in parent
+        if present != self.before_present or (
+            present and not _same_json(parent[self.key], self.before)
+        ):
+            raise Refusal(RefusalStage.SEMANTICS, "opcode old member mismatch")
+        if self.after_present:
+            parent[self.key] = self.after
+        else:
+            parent.pop(self.key, None)
+
+    def reverse(self) -> _SetMember:
+        """Exchange the guarded old and new member states."""
+        return _SetMember(
+            self.path,
+            self.key,
+            self.after_present,
+            self.after,
+            self.before_present,
+            self.before,
+        )
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this member edit as JSON data."""
+        return {
+            "kind": "member",
+            "path": _path_data(self.path),
+            "key": self.key,
+            "before_present": self.before_present,
+            "before": self.before,
+            "after_present": self.after_present,
+            "after": self.after,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _SpliceData:
+    path: _DataPath
+    index: int
+    before: tuple[JsonValue, ...]
+    after: tuple[JsonValue, ...]
+
+    def apply(self, document: JsonValue) -> None:
+        """Replace one guarded contiguous slice of a JSON array."""
+        parent = _at_data_path(document, self.path)
+        if not isinstance(parent, list):
+            raise Refusal(RefusalStage.SEMANTICS, "opcode splice path is not an array")
+        stop = self.index + len(self.before)
+        if (
+            self.index < 0
+            or stop > len(parent)
+            or not _same_json(parent[self.index : stop], list(self.before))
+        ):
+            raise Refusal(RefusalStage.SEMANTICS, "opcode old array slice mismatch")
+        parent[self.index : stop] = self.after
+
+    def reverse(self) -> _SpliceData:
+        """Exchange the guarded old and new array slices."""
+        return _SpliceData(self.path, self.index, self.after, self.before)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return this array splice as JSON data."""
+        return {
+            "kind": "splice",
+            "path": _path_data(self.path),
+            "index": self.index,
+            "before": list(self.before),
+            "after": list(self.after),
+        }
+
+
+type _DataEdit = _ReplaceData | _SetMember | _SpliceData
+
+
+def _data_edits(
+    before: JsonValue, after: JsonValue, path: _DataPath = ()
+) -> tuple[_DataEdit, ...]:
+    """Return guarded structural edits rather than either complete document."""
+    if _same_json(before, after):
+        return ()
+    if isinstance(before, dict) and isinstance(after, dict):
+        edits: list[_DataEdit] = []
+        for key in sorted(before.keys() & after.keys()):
+            edits.extend(_data_edits(before[key], after[key], (*path, key)))
+        edits.extend(
+            _SetMember(path, key, True, before[key], False, None)
+            for key in sorted(before.keys() - after.keys())
+        )
+        edits.extend(
+            _SetMember(path, key, False, None, True, after[key])
+            for key in sorted(after.keys() - before.keys())
+        )
+        return tuple(edits)
+    if isinstance(before, list) and isinstance(after, list):
+        return _list_data_edits(before, after, path)
+    if not path:
+        raise Refusal(RefusalStage.SEMANTICS, "cannot replace the document root")
+    return (_ReplaceData(path, before, after),)
+
+
+def _list_data_edits(
+    before: list[JsonValue], after: list[JsonValue], path: _DataPath
+) -> tuple[_DataEdit, ...]:
+    """Return compact guarded edits for one JSON array."""
+    edits: list[_DataEdit] = []
+    working = list(before)
+    index = 0
+    while index < len(after):
+        target = after[index]
+        if index < len(working) and _same_json(working[index], target):
+            index += 1
+            continue
+        current = working[index] if index < len(working) else None
+        current_later = (
+            False
+            if index >= len(working)
+            else any(_same_json(current, item) for item in after[index + 1 :])
+        )
+        target_source = next(
+            (
+                slot
+                for slot in range(index + 1, len(working))
+                if _same_json(working[slot], target)
+            ),
+            None,
+        )
+        if index < len(working) and not current_later and target_source is not None:
+            removed = working.pop(index)
+            edits.append(_SpliceData(path, index, (removed,), ()))
+            continue
+        if current_later:
+            if target_source is None:
+                working.insert(index, target)
+                edits.append(_SpliceData(path, index, (), (target,)))
+                index += 1
+                continue
+            destination = next(
+                slot
+                for slot in range(index + 1, len(after))
+                if _same_json(current, after[slot])
+            )
+            moved = working.pop(index)
+            edits.append(_SpliceData(path, index, (moved,), ()))
+            working.insert(destination, moved)
+            edits.append(_SpliceData(path, destination, (), (moved,)))
+            continue
+        if index < len(working):
+            edits.extend(_data_edits(working[index], target, (*path, index)))
+            working[index] = target
+        else:
+            working.append(target)
+            edits.append(_SpliceData(path, index, (), (target,)))
+        index += 1
+    if len(working) > len(after):
+        removed_tail = tuple(working[len(after) :])
+        edits.append(_SpliceData(path, len(after), removed_tail, ()))
+    return tuple(edits)
+
+
+@dataclass(frozen=True, slots=True)
+class _EditCall:
+    method: str
+    arguments: tuple[object, ...]
+
+    def apply(self, editor: GraphEditor) -> None:
+        """Apply this call through the checked public graph editor."""
+        operation = cast(Callable[..., GraphEditor], getattr(editor, self.method))
+        operation(*self.arguments)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the method and typed arguments as JSON data."""
+        return {
+            "method": self.method,
+            "arguments": [_argument_data(value) for value in self.arguments],
+        }
+
+
+def _argument_data(value: object) -> JsonValue:
+    """Encode the closed set of values accepted by public graph edit calls."""
+    if isinstance(value, GraphCarrier):
+        return {"kind": "graph-carrier", "value": value.value}
+    if value is None or isinstance(value, bool | int | str):
+        return {"kind": "scalar", "value": cast(JsonValue, value)}
+    if isinstance(value, tuple):
+        return {"kind": "tuple", "items": [_argument_data(item) for item in value]}
+    if isinstance(value, QualifiedName):
+        return {"kind": "qualified-name", "value": value.to_data()}
+    if isinstance(value, NamespaceDeclaration):
+        return {"kind": "namespace-declaration", "value": value.to_data()}
+    if isinstance(value, TierDeclaration):
+        return {"kind": "tier-declaration", "value": value.to_data()}
+    if isinstance(value, AttributeDeclaration):
+        return {"kind": "attribute-declaration", "value": value.to_data()}
+    if isinstance(
+        value,
+        SimpleRelationDeclaration
+        | BipartiteRelationDeclaration
+        | PolyadicRelationDeclaration,
+    ):
+        return {"kind": "relation-declaration", "value": value.to_data()}
+    if isinstance(value, Item):
+        return {"kind": "item", "value": value.to_data()}
+    if isinstance(value, AttributeValue | JsonAttributeValue):
+        return {"kind": "attribute", "value": value.to_data()}
+    if isinstance(value, RelationInstance | PolyadicRelationInstance):
+        return {"kind": "relation", "value": value.to_data()}
+    if isinstance(value, LayerName):
+        return {"kind": "layer-name", "value": value.to_data()}
+    if isinstance(value, LayerFact):
+        encoded = Layer(
+            LayerName(value.value.name.namespace, "patch"), (value,)
+        ).to_data()
+        facts = cast(list[JsonValue], encoded["facts"])
+        return {"kind": "layer-fact", "value": facts[0]}
+    if isinstance(value, ItemRef):
+        return {"kind": "item-ref", "value": value.to_data()}
+    if isinstance(value, DurableItemRef):
+        return {"kind": "durable-item-ref", "value": value.to_data()}
+    if isinstance(value, BoundaryRef):
+        return {"kind": "boundary-ref", "value": value.to_data()}
+    if isinstance(value, DurableBoundaryRef):
+        return {"kind": "durable-boundary-ref", "value": value.to_data()}
+    if isinstance(value, RelationInstanceRef):
+        return {"kind": "relation-ref", "value": value.index}
+    if isinstance(value, PolyadicInstanceRef):
+        return {"kind": "polyadic-ref", "value": value.index}
+    if isinstance(value, DurableRelationRef):
+        return {"kind": "durable-relation-ref", "value": value.durable_id}
+    if isinstance(value, DurablePolyadicRef):
+        return {"kind": "durable-polyadic-ref", "value": value.durable_id}
+    if isinstance(value, DocumentRef):
+        return {"kind": "document-ref"}
+    if isinstance(value, TierRef):
+        return {"kind": "tier-ref", "value": value.tier.to_data()}
+    if isinstance(value, RelationDeclarationRef):
+        return {"kind": "relation-declaration-ref", "value": value.relation.to_data()}
+    if isinstance(value, OrphanedSubject):
+        layer = Layer(
+            LayerName("urn:tiergraph:patch", "patch"),
+            (
+                LayerFact(
+                    value,
+                    AttributeValue(
+                        QualifiedName("urn:tiergraph:patch", "value"),
+                        XsdType.STRING,
+                        "value",
+                    ),
+                ),
+            ),
+        ).to_data()
+        orphan_facts = cast(list[dict[str, JsonValue]], layer["facts"])
+        return {
+            "kind": "orphaned-subject",
+            "value": orphan_facts[0]["subject"],
+        }
+    raise TypeError(f"cannot encode edit argument {type(value).__name__!r}")
+
+
+def _decode_edit_calls(value: object, path: str) -> tuple[_EditCall, ...]:
+    if not isinstance(value, list):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
+    calls: list[_EditCall] = []
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        obj = _decode_object(item, item_path, {"method", "arguments"})
+        arguments = obj["arguments"]
+        if not isinstance(arguments, list):
+            raise Refusal(
+                RefusalStage.CONSTRUCTION, f"{item_path}.arguments must be an array"
+            )
+        calls.append(
+            _EditCall(
+                _string(obj["method"], f"{item_path}.method"),
+                tuple(
+                    _decode_edit_argument(argument, f"{item_path}.arguments[{slot}]")
+                    for slot, argument in enumerate(arguments)
+                ),
+            )
+        )
+    return tuple(calls)
+
+
+def _decode_edit_argument(value: object, path: str) -> object:
+    if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an argument object")
+    kind = value["kind"]
+    if kind == "document-ref":
+        _decode_object(value, path, {"kind"})
+        return DocumentRef()
+    obj = _decode_object(
+        value, path, {"kind", "value"} if kind != "tuple" else {"kind", "items"}
+    )
+    if kind == "scalar":
+        scalar = obj["value"]
+        if scalar is None or isinstance(scalar, bool | int | str):
+            return scalar
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.value must be scalar")
+    if kind == "tuple":
+        items = obj["items"]
+        if not isinstance(items, list):
+            raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.items must be an array")
+        return tuple(
+            _decode_edit_argument(item, f"{path}.items[{index}]")
+            for index, item in enumerate(items)
+        )
+    item = obj["value"]
+    if kind == "qualified-name":
+        return _decode_qname(item, f"{path}.value")
+    if kind == "namespace-declaration":
+        return _decode_namespace(item, f"{path}.value")
+    if kind == "tier-declaration":
+        return _decode_tier(item, f"{path}.value")
+    if kind == "attribute-declaration":
+        return _decode_attribute_declaration(item, f"{path}.value")
+    if kind == "relation-declaration":
+        return _decode_relation_declaration(item, f"{path}.value")
+    if kind == "item":
+        return _decode_item(item, f"{path}.value")
+    if kind == "attribute":
+        return _decode_attribute_value(item, f"{path}.value")
+    if kind == "relation":
+        return _decode_relation_instance(item, f"{path}.value")
+    if kind == "layer-name":
+        return _decode_layer_name(item, f"{path}.value")
+    if kind == "layer-fact":
+        return _decode_layer_fact(item, f"{path}.value")
+    if kind == "graph-carrier":
+        return _enum(GraphCarrier, item, f"{path}.value")
+    if kind == "item-ref":
+        return _decode_item_ref(item, f"{path}.value")
+    if kind == "durable-item-ref":
+        endpoint = _decode_endpoint(item, f"{path}.value")
+        if isinstance(endpoint, DurableItemRef):
+            return endpoint
+    if kind == "boundary-ref":
+        return _decode_boundary_ref(item, f"{path}.value")
+    if kind == "durable-boundary-ref":
+        endpoint = _decode_endpoint(item, f"{path}.value")
+        if isinstance(endpoint, DurableBoundaryRef):
+            return endpoint
+    if kind == "relation-ref":
+        return RelationInstanceRef(_integer(item, f"{path}.value"))
+    if kind == "polyadic-ref":
+        return PolyadicInstanceRef(_integer(item, f"{path}.value"))
+    if kind == "durable-relation-ref":
+        return DurableRelationRef(_string(item, f"{path}.value"))
+    if kind == "durable-polyadic-ref":
+        return DurablePolyadicRef(_string(item, f"{path}.value"))
+    if kind == "tier-ref":
+        return TierRef(_decode_qname(item, f"{path}.value"))
+    if kind == "relation-declaration-ref":
+        return RelationDeclarationRef(_decode_qname(item, f"{path}.value"))
+    if kind == "orphaned-subject":
+        return _decode_layer_subject(item, f"{path}.value")
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unknown")
+
+
+@dataclass(frozen=True, slots=True)
+class DeltaOpcode:
+    """Apply one named, guarded, change-sized graph-document delta."""
+
+    operation: str
+    calls: tuple[_EditCall, ...]
+    changes: tuple[_DataEdit, ...]
+
+    def __post_init__(self) -> None:
+        if self.operation not in EDIT_OPCODE_NAMES:
+            raise Refusal(
+                RefusalStage.DISCRIMINATOR,
+                f"edit opcode {self.operation!r} is unknown",
+            )
+        if self.calls:
+            unknown = [
+                call.method for call in self.calls if call.method not in EDIT_CALL_NAMES
+            ]
+            if unknown:
+                raise Refusal(
+                    RefusalStage.DISCRIMINATOR,
+                    f"edit call {unknown[0]!r} is unknown",
+                )
+            aliases = {
+                "remove_item": {"remove_item", "remove_items"},
+                "restore_attribute": {"remove_attribute", "set_attribute"},
+                "restore_fact": {"remove_fact", "put_fact"},
+                "restore_seal": {"drop_seal", "unseal"},
+            }
+            admitted = aliases.get(self.operation, {self.operation})
+            if self.calls[0].method not in admitted:
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"edit opcode {self.operation!r} cannot execute call "
+                    f"{self.calls[0].method!r}",
+                )
+        elif self.changes and self.operation != "delta":
+            raise Refusal(
+                RefusalStage.SEMANTICS,
+                f"edit opcode {self.operation!r} requires an executable call",
+            )
+
+    @classmethod
+    def between(
+        cls,
+        operation: str,
+        before: Graph,
+        after: Graph,
+        calls: Iterable[tuple[str, tuple[object, ...]]] = (),
+    ) -> DeltaOpcode:
+        """Capture calls and any remaining guarded document changes."""
+        encoded_calls = tuple(
+            _EditCall(method, arguments) for method, arguments in calls
+        )
+        semantic = before
+        if encoded_calls:
+            editor = GraphEditor(before)
+            for call in encoded_calls:
+                call.apply(editor)
+            semantic = editor.freeze()
+        elif operation != "delta" and before != after:
+            raise ValueError(f"edit opcode {operation!r} requires an executable call")
+        return cls(
+            operation,
+            encoded_calls,
+            _data_edits(wire_to_data(semantic), wire_to_data(after)),
+        )
+
+    def apply(self, graph: Graph) -> Graph:
+        """Apply every guarded data edit and validate the resulting graph."""
+        editor = GraphEditor(graph)
+        for call in self.calls:
+            call.apply(editor)
+        document = cast(JsonValue, wire_to_data(editor.freeze()))
+        for change in self.changes:
+            change.apply(document)
+        encoded = json.dumps(
+            document,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return wire_loads(encoded)
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the opcode as JSON data."""
+        return {
+            "opcode": self.operation,
+            "calls": [call.to_data() for call in self.calls],
+            "changes": [change.to_data() for change in self.changes],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Repeat:
     """Repeat a finite block without adding a primitive consume-tier opcode."""
 
@@ -379,6 +1081,10 @@ type PrimitiveOpcode = (
     | PromoteBoundary
     | Relate
     | AttachValue
+    | SealPrefix
+    | AddLayer
+    | PutFact
+    | DeltaOpcode
 )
 type Opcode = PrimitiveOpcode | Repeat
 
@@ -392,6 +1098,28 @@ _PRIMITIVE_OPCODE_TYPES = (
     PromoteBoundary,
     Relate,
     AttachValue,
+    SealPrefix,
+    AddLayer,
+    PutFact,
+)
+_EXECUTABLE_OPCODE_TYPES = (*_PRIMITIVE_OPCODE_TYPES, DeltaOpcode)
+_REMOVAL_OPCODE_NAMES = frozenset(
+    {
+        "delta",
+        "demote_boundary",
+        "demote_item",
+        "demote_relation",
+        "drop_seal",
+        "remove_attribute",
+        "remove_fact",
+        "remove_item",
+        "remove_items",
+        "remove_layer",
+        "remove_relation",
+        "undeclare",
+        "undeclare_with_contents",
+        "unseal",
+    }
 )
 
 
@@ -405,6 +1133,13 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
     if not isinstance(value, dict) or not isinstance(value.get("opcode"), str):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an opcode object")
     name = value["opcode"]
+    if "changes" in value:
+        obj = _decode_object(value, path, {"opcode", "calls", "changes"})
+        return DeltaOpcode(
+            _string(obj["opcode"], f"{path}.opcode"),
+            _decode_edit_calls(obj["calls"], f"{path}.calls"),
+            _decode_data_edits(obj["changes"], f"{path}.changes"),
+        )
     decoders: dict[str, tuple[set[str], Callable[[dict[str, object]], Opcode]]] = {
         "declare_namespace": (
             {"opcode", "declaration"},
@@ -461,6 +1196,24 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
             {"opcode", "domain", "target", "value"},
             lambda v: _decode_attach(v, path),
         ),
+        "seal": (
+            {"opcode", "carrier", "sealed"},
+            lambda v: SealPrefix(
+                _decode_carrier(v["carrier"], f"{path}.carrier"),
+                _integer(v["sealed"], f"{path}.sealed"),
+            ),
+        ),
+        "add_layer": (
+            {"opcode", "name"},
+            lambda v: AddLayer(_decode_layer_name(v["name"], f"{path}.name")),
+        ),
+        "put_fact": (
+            {"opcode", "layer", "fact"},
+            lambda v: PutFact(
+                _decode_layer_name(v["layer"], f"{path}.layer"),
+                _decode_layer_fact(v["fact"], f"{path}.fact"),
+            ),
+        ),
         "repeat": (
             {"opcode", "count", "body"},
             lambda v: _decode_repeat(v, path, depth),
@@ -470,6 +1223,68 @@ def _decode_opcode(value: object, path: str, depth: int = 1) -> Opcode:
         raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.opcode {name!r} is unknown")
     keys, decoder = decoders[name]
     return decoder(_decode_object(value, path, keys))
+
+
+def _decode_data_edits(value: object, path: str) -> tuple[_DataEdit, ...]:
+    if not isinstance(value, list):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an array")
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise Refusal(RefusalStage.VALUE, f"{path}: {error}") from error
+    return tuple(
+        _decode_data_edit(item, f"{path}[{index}]") for index, item in enumerate(value)
+    )
+
+
+def _decode_data_edit(value: object, path: str) -> _DataEdit:
+    if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a data edit object")
+    kind = value["kind"]
+    if kind == "replace":
+        obj = _decode_object(value, path, {"kind", "path", "before", "after"})
+        return _ReplaceData(
+            _decode_data_path(obj["path"], f"{path}.path"),
+            cast(JsonValue, obj["before"]),
+            cast(JsonValue, obj["after"]),
+        )
+    if kind == "member":
+        obj = _decode_object(
+            value,
+            path,
+            {
+                "kind",
+                "path",
+                "key",
+                "before_present",
+                "before",
+                "after_present",
+                "after",
+            },
+        )
+        return _SetMember(
+            _decode_data_path(obj["path"], f"{path}.path"),
+            _string(obj["key"], f"{path}.key"),
+            _boolean(obj["before_present"], f"{path}.before_present"),
+            cast(JsonValue, obj["before"]),
+            _boolean(obj["after_present"], f"{path}.after_present"),
+            cast(JsonValue, obj["after"]),
+        )
+    if kind == "splice":
+        obj = _decode_object(value, path, {"kind", "path", "index", "before", "after"})
+        before, after = obj["before"], obj["after"]
+        if not isinstance(before, list) or not isinstance(after, list):
+            raise Refusal(
+                RefusalStage.CONSTRUCTION,
+                f"{path}.before and {path}.after must be arrays",
+            )
+        return _SpliceData(
+            _decode_data_path(obj["path"], f"{path}.path"),
+            _integer(obj["index"], f"{path}.index"),
+            tuple(cast(list[JsonValue], before)),
+            tuple(cast(list[JsonValue], after)),
+        )
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unknown")
 
 
 def _decode_object(value: object, path: str, keys: set[str]) -> dict[str, object]:
@@ -493,6 +1308,109 @@ def _decode_qname(value: object, path: str) -> QualifiedName:
     if not isinstance(local_name, str):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path}.local_name must be a string")
     return QualifiedName(namespace, local_name)
+
+
+def _decode_layer_name(value: object, path: str) -> LayerName:
+    obj = _decode_object(value, path, {"vocabulary", "source"})
+    return LayerName(
+        _string(obj["vocabulary"], f"{path}.vocabulary"),
+        _string(obj["source"], f"{path}.source"),
+    )
+
+
+def _decode_carrier(value: object, path: str) -> QualifiedName | GraphCarrier:
+    if not isinstance(value, dict):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an object")
+    kind = value.get("kind")
+    if kind == "tier":
+        obj = _decode_object(value, path, {"kind", "tier"})
+        return _decode_qname(obj["tier"], f"{path}.tier")
+    if kind == "graph":
+        obj = _decode_object(value, path, {"kind", "name"})
+        return _enum(GraphCarrier, obj["name"], f"{path}.name")
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unknown")
+
+
+def _decode_layer_subject(value: object, path: str) -> LayerSubject:
+    if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
+        raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a subject object")
+    kind = value["kind"]
+    if kind == "item-coordinate":
+        obj = _decode_object(value, path, {"kind", "tier", "index"})
+        return ItemRef(
+            _decode_qname(obj["tier"], f"{path}.tier"),
+            _integer(obj["index"], f"{path}.index"),
+        )
+    if kind == "durable-item":
+        obj = _decode_object(value, path, {"kind", "durable_id"})
+        return DurableItemRef(_string(obj["durable_id"], f"{path}.durable_id"))
+    if kind == "boundary-coordinate":
+        obj = _decode_object(value, path, {"kind", "tier", "index"})
+        return BoundaryRef(
+            _decode_qname(obj["tier"], f"{path}.tier"),
+            _integer(obj["index"], f"{path}.index"),
+        )
+    if kind == "durable-boundary":
+        obj = _decode_object(value, path, {"kind", "anchor", "side"})
+        decoded = _decode_endpoint({"anchor": obj["anchor"], "side": obj["side"]}, path)
+        if not isinstance(
+            decoded, DurableBoundaryRef
+        ):  # pragma: no cover - decoder invariant
+            raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be a boundary")
+        return decoded
+    if kind == "tier":
+        obj = _decode_object(value, path, {"kind", "tier"})
+        return TierRef(_decode_qname(obj["tier"], f"{path}.tier"))
+    if kind == "relation-declaration":
+        obj = _decode_object(value, path, {"kind", "relation"})
+        return RelationDeclarationRef(
+            _decode_qname(obj["relation"], f"{path}.relation")
+        )
+    if kind in {"relation-instance", "polyadic-instance"}:
+        obj = _decode_object(value, path, {"kind", "index"})
+        index = _integer(obj["index"], f"{path}.index")
+        return (
+            RelationInstanceRef(index)
+            if kind == "relation-instance"
+            else PolyadicInstanceRef(index)
+        )
+    if kind in {"durable-relation", "durable-polyadic"}:
+        obj = _decode_object(value, path, {"kind", "durable_id"})
+        durable_id = _string(obj["durable_id"], f"{path}.durable_id")
+        return (
+            DurableRelationRef(durable_id)
+            if kind == "durable-relation"
+            else DurablePolyadicRef(durable_id)
+        )
+    if kind == "document":
+        _decode_object(value, path, {"kind"})
+        return DocumentRef()
+    if kind == "orphaned":
+        obj = _decode_object(value, path, {"kind", "carrier", "was"})
+        was_value = obj["was"]
+        if isinstance(was_value, dict) and was_value.get("kind") == "index":
+            was_obj = _decode_object(was_value, f"{path}.was", {"kind", "index"})
+            was: ItemRef | BoundaryRef | int = _integer(
+                was_obj["index"], f"{path}.was.index"
+            )
+        else:
+            decoded_was = _decode_layer_subject(was_value, f"{path}.was")
+            if not isinstance(decoded_was, ItemRef | BoundaryRef):
+                raise Refusal(
+                    RefusalStage.CONSTRUCTION,
+                    f"{path}.was must be an item, boundary, or index",
+                )
+            was = decoded_was
+        return OrphanedSubject(_decode_carrier(obj["carrier"], f"{path}.carrier"), was)
+    raise Refusal(RefusalStage.DISCRIMINATOR, f"{path}.kind {kind!r} is unknown")
+
+
+def _decode_layer_fact(value: object, path: str) -> LayerFact:
+    obj = _decode_object(value, path, {"subject", "value"})
+    return LayerFact(
+        _decode_layer_subject(obj["subject"], f"{path}.subject"),
+        _decode_attribute_value(obj["value"], f"{path}.value"),
+    )
 
 
 class _QNameFields:
@@ -850,8 +1768,22 @@ class Program:
     opcodes: tuple[Opcode, ...]
 
     def __post_init__(self) -> None:
-        """Refuse source procedures whose flattened trace exceeds policy."""
+        """Refuse removal operations and traces beyond the construction policy."""
         _primitive_count(self.opcodes)
+        stack = [self.opcodes]
+        while stack:
+            block = stack.pop()
+            for opcode in block:
+                if isinstance(opcode, Repeat):
+                    stack.append(opcode.body)
+                    continue
+                name = opcode.operation if isinstance(opcode, DeltaOpcode) else None
+                if name not in _REMOVAL_OPCODE_NAMES:
+                    continue
+                raise Refusal(
+                    RefusalStage.SEMANTICS,
+                    f"Program refuses removal opcode {name!r}",
+                )
 
     def unroll(self) -> AsBuilt:
         """Lower procedures and build their authoritative graph in linear time."""
@@ -946,7 +1878,10 @@ class AsBuilt:
 
 def _build_checked(trace: tuple[PrimitiveOpcode, ...]) -> Graph:
     """Build quickly, using reference execution only to localize refusals."""
-    if _has_shift_sensitive_relation_endpoint(trace):
+    if _has_shift_sensitive_relation_endpoint(trace) or any(
+        isinstance(opcode, SealPrefix | AddLayer | PutFact | DeltaOpcode)
+        for opcode in trace
+    ):
         return execute(trace)
     try:
         return _build(trace)
@@ -1042,6 +1977,50 @@ def _build_opcode(builder: _GraphBuilder, opcode: PrimitiveOpcode) -> None:
         _build_attach_value(builder, opcode)
         return
     raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
+
+
+def graph_to_program(graph: Graph) -> Program:
+    """Return a construction-only program whose outcome is exactly ``graph``.
+
+    Qualified names stay expanded in machine data, so replay is independent of
+    document-local prefix spellings. Orphan facts and explicit zero-length seal
+    records are emitted rather than inferred or discarded.
+    """
+    opcodes: list[Opcode] = []
+    opcodes.extend(DeclareNamespace(value) for value in graph.namespaces)
+    opcodes.extend(DeclareTier(tier.declaration) for tier in graph.tiers)
+    opcodes.extend(
+        DeclareAttribute(declaration) for declaration in graph.attribute_declarations
+    )
+    opcodes.extend(
+        DeclareRelation(declaration) for declaration in graph.relation_declarations
+    )
+    for tier in graph.tiers:
+        opcodes.extend(AddItem(tier.declaration.name, item) for item in tier.items)
+    opcodes.extend(Relate(relation) for relation in graph.relations)
+    opcodes.extend(Relate(relation) for relation in graph.polyadic_relations)
+    opcodes.extend(
+        AttachValue(AttributeDomain.TIER, tier.declaration.name, value)
+        for tier in graph.tiers
+        for value in tier.attributes
+    )
+    opcodes.extend(
+        AttachValue(AttributeDomain.BOUNDARY, boundary.reference, value)
+        for boundary in graph.boundary_values
+        for value in boundary.attributes
+    )
+    opcodes.extend(
+        AttachValue(AttributeDomain.DOCUMENT, None, value) for value in graph.attributes
+    )
+    opcodes.extend(SealPrefix(seal.carrier, seal.sealed) for seal in graph.seals)
+    for layer in graph.layers:
+        opcodes.append(AddLayer(layer.name))
+        opcodes.extend(PutFact(layer.name, fact) for fact in layer.facts)
+    program = Program(tuple(opcodes))
+    rebuilt = program.unroll().graph
+    if rebuilt != graph:  # pragma: no cover - construction invariant
+        raise ExecutionError("graph construction program did not replay exactly")
+    return program
 
 
 def _build_declare_relation(
@@ -1367,7 +2346,7 @@ def steps(source: Program | AsBuilt | Iterable[object]) -> Iterator[Step]:
 
 def _apply_opcode(graph: Graph, index: int, opcode: object) -> Graph:
     try:
-        if type(opcode) not in _PRIMITIVE_OPCODE_TYPES:
+        if type(opcode) not in _EXECUTABLE_OPCODE_TYPES:
             raise TypeError(f"unrecognized opcode type {type(opcode).__name__!r}")
         result = cast(PrimitiveOpcode, opcode).apply(graph)
         if not isinstance(result, Graph):

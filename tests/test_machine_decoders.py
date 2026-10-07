@@ -39,10 +39,13 @@ from tiergraph import (
     DeclareNamespace,
     DeclareRelation,
     DeclareTier,
+    DocumentRef,
     DurableBoundaryRef,
     DurableItemRef,
     Item,
     ItemRef,
+    LayerFact,
+    LayerName,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
@@ -66,7 +69,13 @@ from tiergraph import (
     wire,
 )
 from tiergraph.cli import main
-from tiergraph.machine import _PRIMITIVE_OPCODE_TYPES, Opcode
+from tiergraph.machine import (
+    _PRIMITIVE_OPCODE_TYPES,
+    AddLayer,
+    Opcode,
+    PutFact,
+    SealPrefix,
+)
 
 NAMESPACE = "urn:machine-decoder-test"
 
@@ -183,6 +192,15 @@ def _binary_program() -> Program:
                 1,
                 AttributeValue(_name("relation_instance"), XsdType.STRING, "ri"),
             ),
+            SealPrefix(TIER, 0),
+            AddLayer(LayerName(NAMESPACE, "machine")),
+            PutFact(
+                LayerName(NAMESPACE, "machine"),
+                LayerFact(
+                    DocumentRef(),
+                    AttributeValue(_name("document"), XsdType.STRING, "layer"),
+                ),
+            ),
         )
     )
 
@@ -236,6 +254,19 @@ def _polyadic_program() -> Program:
 def seeds() -> tuple[tuple[str, Program], ...]:
     """Return the named witness programs the probe population is derived from."""
     return (("binary", _binary_program()), ("polyadic", _polyadic_program()))
+
+
+def test_orphan_origin_must_be_a_coordinate_or_index() -> None:
+    """An orphan cannot claim a document or other non-coordinate origin."""
+    with pytest.raises(Refusal, match="was must be an item, boundary, or index"):
+        machine._decode_layer_subject(
+            {
+                "kind": "orphaned",
+                "carrier": {"kind": "graph", "name": "relations"},
+                "was": {"kind": "document"},
+            },
+            "subject",
+        )
 
 
 # One value per JSON type, so a substitution says "a value of this type here"
