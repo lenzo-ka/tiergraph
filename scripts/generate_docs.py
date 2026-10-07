@@ -389,6 +389,24 @@ def _json_input_formats() -> str:
         "start_attribute": None,
         "duration_attribute": None,
     }
+    replacement_policies = {
+        "default": "abandon",
+        "correspond": True,
+        "correspondence": [
+            {
+                "old": {"tier": qname, "index": 0},
+                "new": [{"tier": qname, "index": 0}],
+            }
+        ],
+        "relations": [{"name": qname, "action": "follow"}],
+        "layers": [
+            {
+                "name": {"vocabulary": "urn:example", "source": "hand"},
+                "action": "split",
+            }
+        ],
+        "insertion_points": [{"name": qname, "index": 0}],
+    }
     name = tiergraph.QualifiedName("urn:example:grammar", "S")
     text_name = tiergraph.QualifiedName("urn:example:grammar", "text")
     terminal = tiergraph.GrammarTerminal(
@@ -442,6 +460,17 @@ def _json_input_formats() -> str:
         "relation, and unit attribute are qualified names; every other attribute "
         "role is a qualified name or null.\n\n"
         + _json_block(clock_profile)
+        + "\n\n### Editing operands and replacement policies\n\n"
+        "Item, attribute, relation-instance, declaration, and layer-fact files "
+        "use the corresponding public `to_data()` object shape. Every operand is "
+        "bounded strict JSON. A replacement-policy object may contain only the "
+        "fields shown below. `default` and each `action` are `abandon`, `follow`, "
+        "or `split`; `correspond` enables local equal-content alignment; explicit "
+        "`correspondence` entries map one old item reference to an ordered array "
+        "of new item references. Relation, layer, and insertion-point arrays "
+        "override the default for their named carriers. Omitted fields use the "
+        "library's abandonment defaults.\n\n"
+        + _json_block(replacement_policies)
         + "\n\n### Grammar documents and inputs\n\n"
         "A grammar document contains `nonterminals`, `start`, and `rules`. Each rule "
         "has `left`, source and target arrays of tagged `terminal` or `hole` "
@@ -560,8 +589,9 @@ def cli_bytes() -> bytes:
         "2 means command-line usage error, and 3 means an I/O failure or an input "
         "the CLI could not decode. The CLI's own reports refuse a graph the writer "
         "could not write in the same way as the writer, with exit status 1.\n\n"
-        "`--max-steps N` is an opt-in deterministic work guard on `select`, "
-        "`match`, `fold`, `discharge fold`, and the grammar commands that evaluate "
+        "`--max-steps N` is an opt-in deterministic work guard on mutating `edit` "
+        "and `patch apply` commands, `select`, `match`, `fold`, `discharge fold`, "
+        "and the grammar commands that evaluate "
         "a fold (`recognize`, `count`, `best`, and `generate`). `N` is a positive "
         f"integer no greater than {_MAX_USER_STEPS:,}; omission installs no budget "
         "and preserves the unbudgeted behavior. Use it when accepting untrusted "
@@ -619,6 +649,30 @@ def cli_bytes() -> bytes:
         "`PredicateSyntax.for_graph`; `--prefix` chooses the default namespace "
         "prefix for unqualified attribute names. The two input forms are mutually "
         "exclusive, and `--prefix` applies only to `--where`.\n\n"
+        "`edit` runs one checked operation against a validated graph. Direct "
+        "item and boundary operands use TG-PATH. Other feature targets and layer "
+        "fact subjects use `document`, `tier:NS|LOCAL`, "
+        "`relation-declaration:NS|LOCAL`, `relation:N`, `polyadic:N`, "
+        "`relation-id:ID`, or `polyadic-id:ID`. `edit bulk` evaluates "
+        "one selector, predicate, or exhaustive match before applying a delete or "
+        "attribute operation in displacement-safe order. Structural edits on a "
+        "clock-profile graph require both `--clock-profile` and an explicit named "
+        "`--rebinding` policy; commands that cannot preserve that profile refuse "
+        "those options.\n\n"
+        "Every graph-producing edit and patch application can write a dry-run "
+        "report, a forward patch, and an inverse patch. Caller annotations are "
+        "copied into the patch header and operations; timestamps are never "
+        "synthesized. `--max-steps` charges one step for a direct edit, one per "
+        "selected bulk callback in addition to selection work, and one per applied "
+        "patch operation. `--in-place` writes and validates a temporary graph in "
+        "the destination directory before replacing the input atomically. Graph "
+        "and side-artifact destinations must differ from every file operand.\n\n"
+        "`patch show` writes one JSON object with `patch_version`, "
+        "`base_fingerprint`, `target_fingerprint`, `annotations`, and `operations` "
+        "fields. `patch invert` and `patch compose` preserve the versioned "
+        "fingerprint guards. `diff` emits a deterministic executable patch in the "
+        "selected equivalence view, and `program from-graph` emits an exact "
+        "from-empty construction program.\n\n"
         "`action` and `react` are library-only. `ActionDeclaration` binds its "
         "behavior as an `ActionFunction` Python callable, and `ReactDeclaration` "
         "also binds a `DeliveryYield` callable. Neither callable has a declarative "

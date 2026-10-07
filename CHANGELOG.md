@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional work budget covers selection and callback application. This
   graph-level operation records no journal and does not apply a clock rebinding
   policy.
+- Added scriptable graph editing commands for checked item, relation, feature,
+  declaration, identity, seal, layer, subtree, and bulk edits. Mutating commands
+  support dry-run reports, recorded forward and inverse patches, typed caller
+  annotations, deterministic work limits (including one step per applied patch
+  operation), explicit output files, and validated atomic in-place replacement.
+  Commands only build recording state and patch data when an output requires
+  them, and in-place replacement preserves the input file's permissions.
+  Added patch application, inspection, inversion, and composition commands,
+  deterministic graph diff output, and exact graph-to-program export.
 
 ### Changed
 

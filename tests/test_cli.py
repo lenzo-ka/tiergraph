@@ -1807,7 +1807,8 @@ def test_version_default_help_and_every_command_help(
     assert main([]) == 0
     assert (
         "{validate,discharge,render,inspect,convert,schema,run,step,walk,path,"
-        "grammar,clock,span,select,match,fold,semirings}" in capsys.readouterr().out
+        "grammar,clock,span,select,match,fold,semirings,edit,patch,diff,program}"
+        in capsys.readouterr().out
     )
     for command in (
         "validate",
@@ -1827,6 +1828,10 @@ def test_version_default_help_and_every_command_help(
         "match",
         "fold",
         "semirings",
+        "edit",
+        "patch",
+        "diff",
+        "program",
     ):
         with pytest.raises(SystemExit) as raised:
             main([command, "--help"])
@@ -1855,6 +1860,10 @@ def test_version_default_help_and_every_command_help(
         "match",
         "fold",
         "semirings",
+        "edit",
+        "patch",
+        "diff",
+        "program",
     ]
 
 
@@ -1880,7 +1889,81 @@ def _documented_help_examples() -> list[tuple[str, str]]:
 
 def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
     """Write the public input documents named by one help example."""
-    _path_graph(directory / "graph.json")
+    source_graph = _path_graph(directory / "graph.json")
+    tier_name = QualifiedName("urn:path", "tokens")
+    item_type = QualifiedName("urn:path", "Token")
+    members = QualifiedName("urn:path", "members")
+    link = QualifiedName("urn:path", "link")
+    contains = QualifiedName("urn:path", "contains")
+    note = QualifiedName("urn:path", "note")
+    source_graph = tiergraph.Graph(
+        (*source_graph.namespaces, NamespaceDeclaration("extra", "urn:extra")),
+        (
+            Tier(
+                source_graph.tiers[0].declaration,
+                (*source_graph.tiers[0].items, Item("gamma")),
+            ),
+        ),
+        (
+            SimpleRelationDeclaration(members, tier_name, item_type),
+            BipartiteRelationDeclaration(link, item_type, item_type),
+            BipartiteRelationDeclaration(
+                contains, item_type, item_type, single_parent=True, acyclic=True
+            ),
+        ),
+        (RelationInstance(link, ItemRef(tier_name, 0), ItemRef(tier_name, 1)),),
+        (AttributeDeclaration(note, AttributeDomain.ITEM, XsdType.STRING),),
+    )
+    (directory / "graph.json").write_bytes(tiergraph.dump_bytes(source_graph))
+    (directory / "new-graph.json").write_bytes(tiergraph.dump_bytes(source_graph))
+    (directory / "item.json").write_text(
+        json.dumps(Item("inserted").to_data()), encoding="utf-8"
+    )
+    (directory / "replacement-item.json").write_text(
+        json.dumps(
+            Item("alpha", (AttributeValue(note, XsdType.STRING, "new"),)).to_data()
+        ),
+        encoding="utf-8",
+    )
+    (directory / "attribute.json").write_text(
+        json.dumps(AttributeValue(note, XsdType.STRING, "marked").to_data()),
+        encoding="utf-8",
+    )
+    (directory / "declaration.json").write_text(
+        json.dumps(NamespaceDeclaration("added", "urn:added").to_data()),
+        encoding="utf-8",
+    )
+    (directory / "relation.json").write_text(
+        json.dumps(
+            RelationInstance(
+                link, ItemRef(tier_name, 1), ItemRef(tier_name, 0)
+            ).to_data()
+        ),
+        encoding="utf-8",
+    )
+    for name, reference in (
+        ("sources.json", ItemRef(tier_name, 1)),
+        ("targets.json", ItemRef(tier_name, 0)),
+    ):
+        (directory / name).write_text(
+            json.dumps([reference.to_data()]), encoding="utf-8"
+        )
+    changed_graph = source_graph.move_item(ItemRef(tier_name, 0), 1)
+    (directory / "before.json").write_bytes(tiergraph.dump_bytes(source_graph))
+    (directory / "after.json").write_bytes(tiergraph.dump_bytes(changed_graph))
+    first = tiergraph.diff(source_graph, changed_graph, tiergraph.EquivalenceView.EXACT)
+    second = tiergraph.diff(
+        changed_graph, changed_graph, tiergraph.EquivalenceView.EXACT
+    )
+    (directory / "change.jsonl").write_text(
+        tiergraph.patch_dumps(first), encoding="utf-8"
+    )
+    (directory / "first.jsonl").write_text(
+        tiergraph.patch_dumps(first), encoding="utf-8"
+    )
+    (directory / "second.jsonl").write_text(
+        tiergraph.patch_dumps(second), encoding="utf-8"
+    )
     _walk_graph(directory / "walk.json")
     _program(directory / "program.jsonl")
     _grammar(directory / "grammar.json")
@@ -1923,7 +2006,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 33
+    assert len(examples) == 62
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
@@ -2837,6 +2920,7 @@ def test_cli_output_emitters_are_audited() -> None:
         ("_graph_report_bytes", "encode"),
         ("_json_text", "json.dumps"),
         ("_json_bytes", "encode"),
+        ("_strict_text_bytes", "encode"),
         ("_step_bytes", "json.dumps"),
         ("_step_bytes", "encode"),
     }
