@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 261 top-level `tiergraph` exports exactly once.
+It covers 262 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2228,6 +2228,28 @@ compose_patches(first: 'Patch', second: 'Patch') -> 'Patch'
 ```
 
 Compose adjacent identified patches without weakening either guard.
+
+### `diff`
+
+```text
+diff(source: 'Graph', target: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'Patch'
+```
+
+Return a deterministic executable patch from ``source`` toward ``target``.
+
+Compatible schemas use a per-tier unit-cost alignment. Reused equal items
+become moves, unmatched items become replacements, insertions, or removals,
+and references are torn down and rebuilt in dependency order. Incompatible
+declarations use one guarded rebuild delta. Applying the result always
+produces a graph equivalent to ``target`` under ``view``; an already
+equivalent pair produces an empty patch guarded to ``source``. When such a
+pair differs under the identified view, that no-op patch is not an exact
+transition to ``target`` and does not compose as one.
+
+This graph-level operation validates graph structure only. It does not
+preserve or report a clock profile's rebinding policy; construct edits
+through :meth:`ClockProfile.edit` when that policy must govern structural
+changes.
 
 ### `invert_patch`
 

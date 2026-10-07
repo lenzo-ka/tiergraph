@@ -80,6 +80,7 @@ from tiergraph.core import (
     XsdType,
     undeclare_with_contents,
 )
+from tiergraph.diff import diff
 from tiergraph.edit import (
     ClockJournalEditor,
     EditAnnotations,
@@ -538,6 +539,7 @@ __all__ = [
     "best",
     "compose_patches",
     "count",
+    "diff",
     "dump_bytes",
     "dump_compact",
     "dumps",

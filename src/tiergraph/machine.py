@@ -727,15 +727,11 @@ def _list_data_edits(
                 edits.append(_SpliceData(path, index, (), (target,)))
                 index += 1
                 continue
-            destination = next(
-                slot
-                for slot in range(index + 1, len(after))
-                if _same_json(current, after[slot])
-            )
-            moved = working.pop(index)
-            edits.append(_SpliceData(path, index, (moved,), ()))
-            working.insert(destination, moved)
-            edits.append(_SpliceData(path, destination, (), (moved,)))
+            moved = working.pop(target_source)
+            edits.append(_SpliceData(path, target_source, (moved,), ()))
+            working.insert(index, moved)
+            edits.append(_SpliceData(path, index, (), (moved,)))
+            index += 1
             continue
         if index < len(working):
             edits.extend(_data_edits(working[index], target, (*path, index)))
