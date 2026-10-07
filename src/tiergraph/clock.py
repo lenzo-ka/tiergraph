@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast, overload
 
 if TYPE_CHECKING:
     from tiergraph.edit import ClockJournalEditor, Journal
+    from tiergraph.replacement import DetachedDependency, ReplacementPolicies, Subtree
 
 from tiergraph.core import (
     AttributeDeclaration,
@@ -110,6 +111,7 @@ class ClockEditOperation(StrEnum):
     ITEM_SWAP = "item swap"
     REPARENT = "reparent"
     DECLARATION_CASCADE = "declaration cascade"
+    SUBTREE_REPLACEMENT = "subtree replacement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -738,6 +740,7 @@ class _DetachedRelationFact:
     layer: LayerName
     fact: LayerFact
     position: int
+    fact_index: int
 
 
 def _unbind_relations(
@@ -761,7 +764,7 @@ def _unbind_relations(
     layers: list[Layer] = []
     for layer in graph.layers:
         facts: list[LayerFact] = []
-        for fact in layer.facts:
+        for fact_index, fact in enumerate(layer.facts):
             subject = fact.subject
             position: int | None = None
             if isinstance(subject, RelationInstanceRef):
@@ -773,7 +776,9 @@ def _unbind_relations(
             if position is None:
                 facts.append(LayerFact(subject, fact.value))
             else:
-                detached.append(_DetachedRelationFact(layer.name, fact, position))
+                detached.append(
+                    _DetachedRelationFact(layer.name, fact, position, fact_index)
+                )
         layers.append(Layer(layer.name, tuple(facts)))
     return (
         replace(
@@ -826,6 +831,58 @@ _NEEDS_REALIGNMENT = QualifiedName(_CLOCK_EDIT_NAMESPACE, "needs-realignment")
 _REALIGNMENT_LAYER = LayerName(_CLOCK_EDIT_NAMESPACE, "rebinding")
 
 
+def _descendant_indexes(
+    descendants: frozenset[ItemRef],
+) -> dict[QualifiedName, tuple[int, ...]]:
+    """Group subtree coordinates into their ordered tier-local runs."""
+    return {
+        tier: tuple(sorted(item.index for item in descendants if item.tier == tier))
+        for tier in {item.tier for item in descendants}
+    }
+
+
+def _corresponding_boundary_origins(
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+) -> dict[BoundaryRef, int]:
+    """Find old boundaries preserved by an item correspondence.
+
+    A split preserves only its outside boundaries. A merge preserves the first
+    outside boundary and the last outside boundary. Adjacent one-to-one matches
+    agree on their shared boundary; an ambiguous interior boundary is left for
+    the named rebinding policy to synthesize.
+    """
+    before: dict[BoundaryRef, set[int]] = {}
+    after: dict[BoundaryRef, set[int]] = {}
+    for source, raw_targets in correspondence.items():
+        targets = tuple(
+            sorted(
+                (target for target in raw_targets if target.tier == source.tier),
+                key=lambda target: target.index,
+            )
+        )
+        if not targets:
+            continue
+        before.setdefault(BoundaryRef(source.tier, targets[0].index), set()).add(
+            source.index
+        )
+        after.setdefault(BoundaryRef(source.tier, targets[-1].index + 1), set()).add(
+            source.index + 1
+        )
+    result: dict[BoundaryRef, int] = {}
+    for boundary in set(before) | set(after):
+        left = before.get(boundary)
+        right = after.get(boundary)
+        if left is not None and right is not None:
+            shared = left & right
+            if len(shared) == 1:  # pragma: no branch - ordered runs share at most one
+                result[boundary] = next(iter(shared))
+        elif left is not None:
+            result[boundary] = min(left)
+        elif right is not None:  # pragma: no branch - boundary came from this map
+            result[boundary] = max(right)
+    return result
+
+
 class ClockEditor:
     """Edit one graph while preserving a declared clock profile.
 
@@ -866,6 +923,7 @@ class ClockEditor:
         self._graph = profile.graph
         self._policy = policy
         self._reports: list[ClockEditReport] = []
+        self._detached_dependencies: tuple[DetachedDependency, ...] = ()
 
     @property
     def profile(self) -> ClockProfile:
@@ -1158,6 +1216,219 @@ class ClockEditor:
         self._profile = next_profile
         self._reports.extend(reports)
         return self
+
+    def replace_subtree(
+        self,
+        root: ItemRef | DurableItemRef,
+        containment: QualifiedName | Iterable[QualifiedName],
+        new: Subtree,
+        policies: ReplacementPolicies | None = None,
+    ) -> ClockEditor:
+        """Replace descendants while explicitly reconciling every timed tier."""
+        from tiergraph.replacement import (  # noqa: PLC0415
+            _containment_names,
+            _replace_subtree,
+            _shape,
+        )
+
+        self._require_active_profile()
+        names = _containment_names(containment)
+        old_shape = _shape(self._graph, root, set(names))
+        new_shape = _shape(new.graph, new.root, set(names))
+        old_by_tier = _descendant_indexes(old_shape.descendants)
+        source_new_by_tier = _descendant_indexes(new_shape.descendants)
+        affected = tuple(sorted(set(old_by_tier) | set(source_new_by_tier)))
+        if self._profile.clock_tier in affected:
+            raise GraphValidationError(
+                "subtree replacement cannot restructure the clock tier in a bound session"
+            )
+        timed = tuple(tier for tier in affected if self._profile.is_timed(tier))
+        if timed and self._policy is None:
+            self._missing_policy(ClockEditOperation.SUBTREE_REPLACEMENT, timed[0])
+
+        records = tuple(
+            sorted(
+                (record for tier in timed for record in self._binding_records(tier)),
+                key=lambda record: record.position,
+            )
+        )
+        unbound, detached = _unbind_relations(self._graph, records)
+        outcome = _replace_subtree(unbound, root, names, new, policies)
+        candidate = outcome.graph
+        new_by_tier = _descendant_indexes(frozenset(outcome.new_items.values()))
+        candidate, reports, detached_dependencies = self._replacement_bindings(
+            candidate,
+            timed,
+            old_by_tier,
+            new_by_tier,
+            outcome.correspondence,
+            records,
+            detached,
+            outcome.detached,
+        )
+        next_profile = self._profile_for(candidate)
+        self._graph = candidate
+        self._profile = next_profile
+        self._detached_dependencies = detached_dependencies
+        self._reports.extend(reports)
+        return self
+
+    def _replacement_bindings(  # noqa: PLR0915 -- rebuilds one atomic clock edit
+        self,
+        graph: Graph,
+        tiers: tuple[QualifiedName, ...],
+        old_by_tier: Mapping[QualifiedName, tuple[int, ...]],
+        new_by_tier: Mapping[QualifiedName, tuple[int, ...]],
+        correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+        records: tuple[_BindingRecord, ...],
+        detached: tuple[_DetachedRelationFact, ...],
+        detached_dependencies: tuple[DetachedDependency, ...],
+    ) -> tuple[Graph, tuple[ClockEditReport, ...], tuple[DetachedDependency, ...]]:
+        """Rebuild all affected binding sets after one multi-tier replacement."""
+        by_tier: dict[QualifiedName, dict[int, _BindingRecord]] = {
+            tier: {
+                record.boundary.index: record
+                for record in records
+                if record.boundary.tier == tier
+            }
+            for tier in tiers
+        }
+        rebuilt: list[RelationInstance] = []
+        original_to_final: dict[int, int] = {}
+        reports: list[ClockEditReport] = []
+        relation_offset = len(graph.relations)
+        corresponding_boundaries = _corresponding_boundary_origins(correspondence)
+        for tier in tiers:
+            old_indexes = old_by_tier.get(tier, ())
+            new_indexes = new_by_tier.get(tier, ())
+            old_count = len(old_indexes)
+            new_count = len(new_indexes)
+            start = old_indexes[0] if old_indexes else new_indexes[0]
+            old_records = by_tier[tier]
+            changes: list[ClockBindingChange] = []
+            used: set[int] = set()
+            new_tier_count = len(graph._tiers_by_name[tier].items)
+            for boundary_index in range(new_tier_count + 1):
+                template_origin: int | None
+                target_origin: int
+                if boundary_index < start:
+                    template_origin = boundary_index
+                    target_origin = template_origin
+                elif boundary_index == start:
+                    template_origin = start
+                    target_origin = template_origin
+                elif boundary_index < start + new_count:
+                    corresponding_origin = (
+                        corresponding_boundaries.get(BoundaryRef(tier, boundary_index))
+                        if self._policy is ClockRebindingPolicy.KEEP_EARLIER
+                        else None
+                    )
+                    target_origin = (
+                        start if corresponding_origin is None else corresponding_origin
+                    )
+                    template_origin = (
+                        corresponding_origin
+                        if corresponding_origin not in {start, start + old_count}
+                        else None
+                    )
+                elif boundary_index == start + new_count:
+                    template_origin = start + old_count
+                    target_origin = template_origin
+                else:
+                    template_origin = boundary_index - new_count + old_count
+                    target_origin = template_origin
+                target = old_records[target_origin]
+                template = (
+                    None if template_origin is None else old_records[template_origin]
+                )
+                if template_origin is not None:
+                    used.add(template_origin)
+                boundary = BoundaryRef(tier, boundary_index)
+                source = anchored_boundary(graph, boundary)
+                relation = RelationInstance(
+                    target.relation.declaration,
+                    source,
+                    target.relation.right,
+                    None if template is None else template.relation.durable_id,
+                    () if template is None else template.relation.attributes,
+                )
+                final_index = relation_offset + len(rebuilt)
+                rebuilt.append(relation)
+                if template is not None:
+                    original_to_final[template.position] = final_index
+                previous_clock = (
+                    None
+                    if template is None
+                    else self._profile.clock_index(template.boundary)
+                )
+                clock_index = self._profile.clock_index(target.boundary)
+                if template is None or template.relation.left != source:
+                    changes.append(
+                        ClockBindingChange(
+                            None if template is None else template.boundary,
+                            boundary,
+                            None if template is None else template.relation.left,
+                            source,
+                            previous_clock,
+                            clock_index,
+                            template is None,
+                        )
+                    )
+            changes.extend(
+                ClockBindingChange(
+                    record.boundary,
+                    None,
+                    record.relation.left,
+                    None,
+                    self._profile.clock_index(record.boundary),
+                    None,
+                    False,
+                )
+                for origin, record in old_records.items()
+                if origin not in used
+            )
+            needs_realignment = any(change.provisional for change in changes)
+            reports.append(
+                ClockEditReport(
+                    ClockEditOperation.SUBTREE_REPLACEMENT,
+                    cast(ClockRebindingPolicy, self._policy),
+                    tier,
+                    tuple(changes),
+                    needs_realignment,
+                )
+            )
+        retained_detached = tuple(
+            held for held in detached if held.position in original_to_final
+        )
+        dropped_detached = tuple(
+            held for held in detached if held.position not in original_to_final
+        )
+        if dropped_detached:
+            from tiergraph.replacement import DetachedDependency  # noqa: PLC0415
+
+            detached_dependencies = (
+                *detached_dependencies,
+                *(
+                    DetachedDependency(
+                        "layer",
+                        held.fact_index,
+                        layer=held.layer,
+                        subject=held.fact.subject,
+                    )
+                    for held in dropped_detached
+                ),
+            )
+        layers = _rebuilt_layers(
+            graph.layers,
+            {index: index for index in range(len(graph.relations))},
+            retained_detached,
+            original_to_final,
+        )
+        result = replace(graph, relations=(*graph.relations, *rebuilt), layers=layers)
+        for report in reports:
+            if report.needs_realignment:
+                result = _record_needs_realignment(result, report.tier)
+        return result, tuple(reports), detached_dependencies
 
     def undeclare_with_contents(
         self, target: str | QualifiedName | EditDeclaration

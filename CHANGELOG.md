@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuild references in dependency order; incompatible schemas use a guarded
   rebuild. Applying a diff reaches the requested equivalence view. This
   graph-level operation does not apply a clock rebinding policy.
+- Added guarded containment-subtree replacement with abandon-by-default and
+  opt-in per-tier correspondence. Replacements preserve the root, copy the new
+  subtree's items, internal relations, boundary values, and layer facts, and
+  either carry or report every dependency on departing descendants. Journal
+  edits undo and redo replacements exactly and expose detached dependencies in
+  their reports. Subtree swaps compose replacements and refuse nested roots.
+  Clock-aware replacement requires a named rebinding policy, creates
+  provisional bindings for unmatched boundaries, and carries unambiguous
+  corresponding timings under `keep-earlier`.
 
 ### Changed
 
