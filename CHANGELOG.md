@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added reversible item-run removal, item-value replacement, durable identity
   promotion and demotion, seal-record editing, and layer/fact editing to frozen
   graphs and mutable editors.
+- Added profile-aware clock editing with explicit `keep-earlier` and
+  `drop-to-provisional` rebinding policies, atomic bound-tier removal, and
+  structured reports for every timed-tier policy outcome. Provisional spans are
+  durably marked under either policy, while untimed-tier edits retain the plain
+  editor's cost model.
 
 ### Changed
 

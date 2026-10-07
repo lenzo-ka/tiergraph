@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, Set
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from enum import StrEnum
 from math import gcd
+from typing import cast
 
 from tiergraph.core import (
+    AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
@@ -16,9 +20,21 @@ from tiergraph.core import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    GraphEditor,
+    GraphValidationError,
+    Item,
     ItemRef,
+    LayerFact,
+    LayerName,
+    NamespaceDeclaration,
+    PolyadicRelationInstance,
     QualifiedName,
+    RefusalStage,
     RelationEndpointKind,
+    RelationEndpointRef,
+    RelationInstance,
+    RelationTarget,
+    TierRef,
     XsdType,
     _canonical_lexical,
     _scalar_attribute,
@@ -67,6 +83,64 @@ class PhysicalTiming:
             "duration": _canonical_lexical(XsdType.DECIMAL, format(self.duration, "f")),
             "unit": self.unit,
         }
+
+
+class ClockRebindingPolicy(StrEnum):
+    """Choose how a structural edit reconciles clock-bound boundaries."""
+
+    KEEP_EARLIER = "keep-earlier"
+    DROP_TO_PROVISIONAL = "drop-to-provisional"
+
+
+class ClockEditOperation(StrEnum):
+    """Name the structural operation summarized by a clock edit report."""
+
+    ITEM_INSERTION = "item insertion"
+    ITEM_REMOVAL = "item removal"
+    ITEM_MOVE = "item move"
+    ITEM_SWAP = "item swap"
+    REPARENT = "reparent"
+
+
+@dataclass(frozen=True, slots=True)
+class ClockBindingChange:
+    """Report one binding that a clock-aware structural edit changed.
+
+    ``previous_boundary`` and ``boundary`` are the old and new logical tier
+    boundaries; either is ``None`` when the binding was inserted or withdrawn.
+    ``previous_source`` and ``source`` are their durable anchor forms.
+    ``previous_clock_index`` and ``clock_index`` are the old and new integral
+    clock targets. The final boolean field says that the resulting binding now
+    holds a synthesized or collapsed value that needs later realignment; it is
+    always false for a withdrawn binding.
+    """
+
+    previous_boundary: BoundaryRef | None
+    boundary: BoundaryRef | None
+    previous_source: RelationEndpointRef | None
+    source: RelationEndpointRef | None
+    previous_clock_index: int | None
+    clock_index: int | None
+    provisional: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ClockEditReport:
+    """Report one policy outcome on one clock-bound tier.
+
+    ``operation`` identifies the structural operation. ``policy`` is the named
+    rebinding policy that governed it, and ``tier`` is the affected timed tier.
+    ``changes`` lists every inserted, changed, or withdrawn clock binding.
+    ``needs_realignment`` says that the graph carries synthesized or collapsed
+    timing which is also durably marked by the tier's ``needs-realignment``
+    fact.
+    """
+
+    operation: ClockEditOperation
+    policy: ClockRebindingPolicy
+    tier: QualifiedName
+    changes: tuple[ClockBindingChange, ...]
+    needs_realignment: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +566,20 @@ class ClockProfile:
                 timings[reference] = timing
         return timings
 
+    def edit(self, rebinding: ClockRebindingPolicy | str | None = None) -> ClockEditor:
+        """Return an editor that keeps this clock profile valid after every edit.
+
+        Structural edits to a timed tier refuse unless ``rebinding`` names a
+        policy. ``keep-earlier`` keeps the tier's ordered boundary times while
+        items move through them, resolving an anchor collision in favor of the
+        earlier binding. The named collapsing policy collapses the affected
+        span onto its earlier clock boundary and records a tier fact saying
+        that the result needs realignment. Untimed tiers need no rebinding
+        policy. The clock tier itself cannot be structurally edited in a bound
+        session.
+        """
+        return ClockEditor(self, rebinding)
+
     @property
     def is_structural(self) -> bool:
         """Report whether this profile derives only a renderable clock spine."""
@@ -602,6 +690,668 @@ class ClockProfile:
         return end.tick - start.tick, self._rate
 
 
+@dataclass(frozen=True, slots=True)
+class _BindingRecord:
+    position: int
+    boundary: BoundaryRef
+    relation: RelationInstance
+
+
+_CLOCK_EDIT_NAMESPACE = "urn:tiergraph:clock-edit"
+_NEEDS_REALIGNMENT = QualifiedName(_CLOCK_EDIT_NAMESPACE, "needs-realignment")
+_REALIGNMENT_LAYER = LayerName(_CLOCK_EDIT_NAMESPACE, "rebinding")
+
+
+class ClockEditor:
+    """Edit one graph while preserving a declared clock profile.
+
+    The editor validates both the graph and the clock profile after every
+    operation. Structural edits on timed tiers are atomic: a refusal leaves the
+    editor's graph, reports, and profile unchanged. Successful timed-tier edits
+    append a :class:`ClockEditReport`; untimed edits need no clock report.
+    """
+
+    def __init__(
+        self,
+        profile: ClockProfile,
+        rebinding: ClockRebindingPolicy | str | None = None,
+    ) -> None:
+        """Start a profile-aware session with an optional named policy."""
+        if profile.is_structural:
+            raise ValueError(
+                "a structural clock-spine profile has no tier bindings to edit"
+            )
+        if rebinding is None:
+            policy = None
+        else:
+            try:
+                policy = ClockRebindingPolicy(rebinding)
+            except ValueError as error:
+                names = ", ".join(policy.value for policy in ClockRebindingPolicy)
+                raise ValueError(
+                    f"unknown clock rebinding policy {rebinding!r}; choose {names}"
+                ) from error
+        self._profile = profile
+        self._graph = profile.graph
+        self._policy = policy
+        self._reports: list[ClockEditReport] = []
+
+    @property
+    def profile(self) -> ClockProfile:
+        """Return the clock profile validated for the current graph."""
+        return self._profile
+
+    @property
+    def reports(self) -> tuple[ClockEditReport, ...]:
+        """Return every successful timed-tier policy outcome in order."""
+        return tuple(self._reports)
+
+    def freeze(self) -> Graph:
+        """Return the current fully validated graph without consuming the editor."""
+        return self._graph
+
+    def insert_item(self, tier: QualifiedName, index: int, item: Item) -> ClockEditor:
+        """Insert one item and atomically bind every resulting timed boundary."""
+        return self.insert_items(tier, index, (item,))
+
+    def insert_items(
+        self, tier: QualifiedName, index: int, items: Iterable[Item]
+    ) -> ClockEditor:
+        """Insert ordered items and atomically bind resulting timed boundaries."""
+        if isinstance(items, Set | Mapping):
+            raise GraphValidationError(
+                "item insertion items must be an ordered iterable"
+            )
+        new_items = tuple(items)
+        operation = ClockEditOperation.ITEM_INSERTION
+        old_count = self._item_count(tier, operation)
+        if index < 0 or index > old_count:
+            raise GraphValidationError(
+                f"item insertion index {index} is outside tier {str(tier)!r}"
+            )
+        if not new_items:
+            return self._no_op(operation, tier)
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.insert_items(tier, index, new_items)
+
+        if self._route_plain_tier_edit(operation, tier, _edit):
+            return self
+        amount = len(new_items)
+        targets = tuple(
+            boundary
+            if boundary <= index
+            else index
+            if boundary <= index + amount
+            else boundary - amount
+            for boundary in range(old_count + amount + 1)
+        )
+        templates: list[int | None] = [None] * (old_count + amount + 1)
+        for boundary in range(old_count + 1):
+            if boundary == 0:
+                image = 0
+            elif boundary == old_count:
+                image = old_count + amount
+            else:
+                image = boundary + amount if boundary >= index else boundary
+            templates[image] = boundary
+        return self._tier_edit(
+            operation,
+            tier,
+            _edit,
+            tuple(templates),
+            targets,
+            targets,
+        )
+
+    def remove_item(self, reference: ItemRef | DurableItemRef) -> ClockEditor:
+        """Remove one item together with its departing clock anchor."""
+        coordinate = self._graph.resolve_item(reference)
+        return self.remove_items(coordinate.tier, coordinate.index, 1)
+
+    def remove_items(self, tier: QualifiedName, index: int, count: int) -> ClockEditor:
+        """Remove a run and keep one reported binding on its merged boundary."""
+        operation = ClockEditOperation.ITEM_REMOVAL
+        old_count = self._item_count(tier, operation)
+        if count < 0:
+            raise GraphValidationError("item removal count must not be negative")
+        if index < 0 or index > old_count or index + count > old_count:
+            raise GraphValidationError(
+                f"item removal range {index}:{index + count} is outside tier "
+                f"{str(tier)!r} with {old_count} items"
+            )
+        if count == 0:
+            return self._no_op(operation, tier)
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.remove_items(tier, index, count)
+
+        if self._route_plain_tier_edit(operation, tier, _edit):
+            return self
+        records = self._binding_records(tier)
+        candidates: dict[int, _BindingRecord] = {}
+        for record in records:
+            boundary = record.boundary.index
+            if boundary < index:
+                image = boundary
+            elif boundary <= index + count:
+                image = index
+            else:
+                image = boundary - count
+            previous = candidates.get(image)
+            if previous is None or record.position < previous.position:
+                candidates[image] = record
+        templates = tuple(
+            candidates[boundary].boundary.index
+            for boundary in range(old_count - count + 1)
+        )
+        keep_targets = templates
+        drop_targets = list(keep_targets)
+        drop_targets[index] = index
+        return self._tier_edit(
+            operation,
+            tier,
+            _edit,
+            templates,
+            keep_targets,
+            tuple(drop_targets),
+        )
+
+    def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> ClockEditor:
+        """Move an item through fixed boundary times under the named policy."""
+        operation = ClockEditOperation.ITEM_MOVE
+        coordinate = self._graph.resolve_item(reference)
+        count = self._item_count(coordinate.tier, operation)
+        if index < 0 or index >= count:
+            raise GraphValidationError(
+                f"item move index {index} is outside tier {str(coordinate.tier)!r}"
+            )
+        if coordinate.index == index:
+            return self._no_op(operation, coordinate.tier)
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.move_item(reference, index)
+
+        if self._route_plain_tier_edit(operation, coordinate.tier, _edit):
+            return self
+        lower = min(coordinate.index, index)
+        upper = max(coordinate.index, index) + 1
+        templates = tuple(range(count + 1))
+        drop_targets = list(templates)
+        drop_targets[lower : upper + 1] = [lower] * (upper - lower + 1)
+        return self._tier_edit(
+            operation,
+            coordinate.tier,
+            _edit,
+            templates,
+            templates,
+            tuple(drop_targets),
+        )
+
+    def swap_items(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+    ) -> ClockEditor:
+        """Exchange two items through fixed boundary times under the policy."""
+        left = self._graph.resolve_item(first)
+        right = self._graph.resolve_item(second)
+        if left.tier != right.tier:
+            raise GraphValidationError(
+                f"item swap names {str(left)!r} and {str(right)!r} in different "
+                "tiers; an item's tier decides its type"
+            )
+        if left.index == right.index:
+            return self._no_op(ClockEditOperation.ITEM_SWAP, left.tier)
+        operation = ClockEditOperation.ITEM_SWAP
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.swap_items(first, second)
+
+        if self._route_plain_tier_edit(operation, left.tier, _edit):
+            return self
+        count = self._item_count(left.tier, operation)
+        lower = min(left.index, right.index)
+        upper = max(left.index, right.index) + 1
+        templates = tuple(range(count + 1))
+        drop_targets = list(templates)
+        drop_targets[lower : upper + 1] = [lower] * (upper - lower + 1)
+        return self._tier_edit(
+            operation,
+            left.tier,
+            _edit,
+            templates,
+            templates,
+            tuple(drop_targets),
+        )
+
+    def reparent(
+        self,
+        target: RelationTarget,
+        sources: RelationEndpointRef | Iterable[RelationEndpointRef],
+        targets: RelationEndpointRef | Iterable[RelationEndpointRef],
+    ) -> ClockEditor:
+        """Replace relation endpoints under the named policy for touched tiers.
+
+        This operation is for structural parent relations, not the clock binding
+        relation itself. ``keep-earlier`` leaves timing unchanged. The named
+        collapsing policy conservatively collapses each touched timed tier onto
+        its earlier extent and records that realignment is needed.
+        """
+        source_values = _endpoint_tuple(sources)
+        target_values = _endpoint_tuple(targets)
+        current = _target_relation(self._graph, target)
+        if current.declaration == self._profile.binding_relation:
+            raise GraphValidationError(
+                "reparent cannot edit the clock binding relation; structural "
+                "edits reconcile that relation through a named policy"
+            )
+        endpoints = (
+            *(
+                (current.left, current.right)
+                if isinstance(current, RelationInstance)
+                else (*current.sources, *current.targets)
+            ),
+            *source_values,
+            *target_values,
+        )
+        timed_tiers = tuple(
+            sorted(
+                {
+                    tier
+                    for endpoint in endpoints
+                    if (tier := _endpoint_tier(self._graph, endpoint))
+                    != self._profile.clock_tier
+                    and self._profile.is_timed(tier)
+                }
+            )
+        )
+        if timed_tiers and self._policy is None:
+            self._missing_policy(ClockEditOperation.REPARENT, timed_tiers[0])
+        editor = self._graph.edit()
+        if isinstance(current, RelationInstance):
+            if len(source_values) != 1 or len(target_values) != 1:
+                raise GraphValidationError(
+                    "bipartite endpoints must each be one endpoint reference"
+                )
+            editor.set_endpoints(target, source_values[0], target_values[0])
+        else:
+            editor.set_endpoints(target, source_values, target_values)
+        candidate = editor.freeze()
+        next_profile = self._profile_for(candidate)
+        reports: list[ClockEditReport] = []
+        if self._policy is ClockRebindingPolicy.DROP_TO_PROVISIONAL:
+            for tier in timed_tiers:
+                count = self._item_count(tier, ClockEditOperation.REPARENT)
+                templates = tuple(range(count + 1))
+                records = self._binding_records(tier)
+                positions = {record.position for record in records}
+                candidate = replace(
+                    candidate,
+                    relations=tuple(
+                        relation
+                        for index, relation in enumerate(candidate.relations)
+                        if index not in positions
+                    ),
+                )
+                candidate, changes = self._rebuild_bindings(
+                    candidate,
+                    tier,
+                    templates,
+                    tuple(0 for _ in templates),
+                    records=records,
+                )
+                candidate = _record_needs_realignment(candidate, tier)
+                next_profile = self._profile_for(candidate)
+                reports.append(
+                    ClockEditReport(
+                        ClockEditOperation.REPARENT,
+                        self._policy,
+                        tier,
+                        changes,
+                        True,
+                    )
+                )
+        else:
+            reports.extend(
+                ClockEditReport(
+                    ClockEditOperation.REPARENT,
+                    ClockRebindingPolicy.KEEP_EARLIER,
+                    tier,
+                    (),
+                    False,
+                )
+                for tier in timed_tiers
+            )
+        self._graph = candidate
+        self._profile = next_profile
+        self._reports.extend(reports)
+        return self
+
+    def _no_op(self, operation: ClockEditOperation, tier: QualifiedName) -> ClockEditor:
+        """Report a timed no-op without inventing a timing change."""
+        if tier == self._profile.clock_tier:
+            raise GraphValidationError(
+                f"{operation} cannot restructure the clock tier in a bound session"
+            )
+        if not self._profile.is_timed(tier):
+            return self
+        if self._policy is None:
+            self._missing_policy(operation, tier)
+        self._reports.append(
+            ClockEditReport(
+                operation,
+                cast(ClockRebindingPolicy, self._policy),
+                tier,
+                (),
+                False,
+            )
+        )
+        return self
+
+    def _tier_edit(
+        self,
+        operation: ClockEditOperation,
+        tier: QualifiedName,
+        edit: Callable[[GraphEditor], GraphEditor],
+        template_origins: tuple[int | None, ...],
+        keep_targets: tuple[int, ...],
+        provisional_targets: tuple[int, ...],
+    ) -> ClockEditor:
+        """Apply one tier restructure on temporary state, then adopt it."""
+        if self._policy is None:
+            self._missing_policy(operation, tier)
+        policy = cast(ClockRebindingPolicy, self._policy)
+        records = self._binding_records(tier)
+        positions = {record.position for record in records}
+        unbound = replace(
+            self._graph,
+            relations=tuple(
+                relation
+                for index, relation in enumerate(self._graph.relations)
+                if index not in positions
+            ),
+        )
+        editor = unbound.edit()
+        edit(editor)
+        candidate = editor.freeze()
+        targets = (
+            keep_targets
+            if policy is ClockRebindingPolicy.KEEP_EARLIER
+            else provisional_targets
+        )
+        candidate, changes = self._rebuild_bindings(
+            candidate,
+            tier,
+            template_origins,
+            targets,
+            records=records,
+        )
+        needs_realignment = policy is ClockRebindingPolicy.DROP_TO_PROVISIONAL or any(
+            change.provisional for change in changes
+        )
+        if needs_realignment:
+            candidate = _record_needs_realignment(candidate, tier)
+        next_profile = self._profile_for(candidate)
+        report = ClockEditReport(
+            operation,
+            policy,
+            tier,
+            changes,
+            needs_realignment,
+        )
+        self._graph = candidate
+        self._profile = next_profile
+        self._reports.append(report)
+        return self
+
+    def _rebuild_bindings(
+        self,
+        graph: Graph,
+        tier: QualifiedName,
+        template_origins: tuple[int | None, ...],
+        target_origins: tuple[int, ...],
+        *,
+        records: tuple[_BindingRecord, ...] | None = None,
+    ) -> tuple[Graph, tuple[ClockBindingChange, ...]]:
+        """Rebuild one tier's binding relations and report every changed one."""
+        old_records = self._binding_records(tier) if records is None else records
+        by_boundary = {record.boundary.index: record for record in old_records}
+        rebuilt: list[tuple[int | None, RelationInstance]] = []
+        changes: list[ClockBindingChange] = []
+        used_templates: set[int] = set()
+        for boundary_index, (template_origin, target_origin) in enumerate(
+            zip(template_origins, target_origins, strict=True)
+        ):
+            target_record = by_boundary[target_origin]
+            template = None if template_origin is None else by_boundary[template_origin]
+            if template_origin is not None:
+                used_templates.add(template_origin)
+            boundary = BoundaryRef(tier, boundary_index)
+            source = anchored_boundary(graph, boundary)
+            relation = RelationInstance(
+                target_record.relation.declaration,
+                source,
+                target_record.relation.right,
+                None if template is None else template.relation.durable_id,
+                () if template is None else template.relation.attributes,
+            )
+            rebuilt.append((template_origin, relation))
+            previous_source = None if template is None else template.relation.left
+            previous_clock = (
+                None
+                if template is None
+                else self._profile.clock_index(template.boundary)
+            )
+            clock_index = self._profile.clock_index(target_record.boundary)
+            if (
+                template is None
+                or previous_source != source
+                or previous_clock != clock_index
+            ):
+                changes.append(
+                    ClockBindingChange(
+                        None if template is None else template.boundary,
+                        boundary,
+                        previous_source,
+                        source,
+                        previous_clock,
+                        clock_index,
+                        template_origin is None or template_origin != target_origin,
+                    )
+                )
+        changes.extend(
+            ClockBindingChange(
+                record.boundary,
+                None,
+                record.relation.left,
+                None,
+                self._profile.clock_index(record.boundary),
+                None,
+                False,
+            )
+            for record in old_records
+            if record.boundary.index not in used_templates
+        )
+
+        replacements = {
+            origin: relation for origin, relation in rebuilt if origin is not None
+        }
+        extras = [relation for origin, relation in rebuilt if origin is None]
+        positions = {record.position: record for record in old_records}
+        other_relations = iter(graph.relations)
+        relations: list[RelationInstance] = []
+        last_position = max(positions)
+        for position in range(len(self._graph.relations)):
+            record = positions.get(position)
+            if record is None:
+                relations.append(next(other_relations))
+            else:
+                replacement = replacements.get(record.boundary.index)
+                if replacement is not None:
+                    relations.append(replacement)
+            if position == last_position:
+                relations.extend(extras)
+        relations.extend(other_relations)
+        result = replace(graph, relations=tuple(relations))
+        return result, tuple(changes)
+
+    def _binding_records(self, tier: QualifiedName) -> tuple[_BindingRecord, ...]:
+        """Return this profile's binding relations for one tier."""
+        return tuple(
+            _BindingRecord(
+                index,
+                self._graph.resolve_boundary(cast(DurableBoundaryRef, relation.left)),
+                relation,
+            )
+            for index, relation in enumerate(self._graph.relations)
+            if relation.declaration == self._profile.binding_relation
+            and self._graph.resolve_boundary(
+                cast(DurableBoundaryRef, relation.left)
+            ).tier
+            == tier
+        )
+
+    def _route_plain_tier_edit(
+        self,
+        operation: ClockEditOperation,
+        tier: QualifiedName,
+        edit: Callable[[GraphEditor], GraphEditor],
+    ) -> bool:
+        """Refuse the clock tier or apply an untimed edit without profile rebuild."""
+        if tier == self._profile.clock_tier:
+            raise GraphValidationError(
+                f"{operation} cannot restructure the clock tier in a bound session"
+            )
+        if self._profile.is_timed(tier):
+            return False
+        editor = self._graph.edit()
+        edit(editor)
+        candidate = editor.freeze()
+        self._graph = candidate
+        self._profile = self._profile_with_graph(candidate)
+        return True
+
+    def _profile_with_graph(self, graph: Graph) -> ClockProfile:
+        """Retarget validated profile caches after an untimed-tier restructure."""
+        profile = object.__new__(ClockProfile)
+        for name in (
+            "clock_tier",
+            "binding_relation",
+            "rate_attribute",
+            "unit_attribute",
+            "tick_attribute",
+            "gap_attribute",
+            "untimed_attribute",
+            "start_attribute",
+            "duration_attribute",
+            "_rate",
+            "_unit",
+            "_bindings",
+            "_clock_coordinates",
+            "_timings",
+            "_untimed_tiers",
+            "_structural",
+        ):
+            object.__setattr__(profile, name, getattr(self._profile, name))
+        object.__setattr__(profile, "graph", graph)
+        return profile
+
+    def _item_count(self, tier: QualifiedName, operation: ClockEditOperation) -> int:
+        """Return a declared tier's item count or refuse with editor wording."""
+        member = next(
+            (item for item in self._graph.tiers if item.declaration.name == tier), None
+        )
+        if member is None:
+            raise GraphValidationError(
+                f"{operation} names undeclared tier {str(tier)!r}"
+            )
+        return len(member.items)
+
+    def _profile_for(self, graph: Graph) -> ClockProfile:
+        """Rebuild this session's profile declaration against another graph."""
+        return ClockProfile(
+            graph,
+            self._profile.clock_tier,
+            self._profile.binding_relation,
+            self._profile.rate_attribute,
+            self._profile.unit_attribute,
+            self._profile.tick_attribute,
+            self._profile.gap_attribute,
+            self._profile.untimed_attribute,
+            self._profile.start_attribute,
+            self._profile.duration_attribute,
+        )
+
+    @staticmethod
+    def _missing_policy(operation: ClockEditOperation, tier: QualifiedName) -> None:
+        """Refuse a timed restructure before any editor state is created."""
+        raise GraphValidationError(
+            f"{operation} on clock-bound tier {str(tier)!r} requires a named "
+            "rebinding policy"
+        )
+
+
+def _endpoint_tuple(
+    endpoints: RelationEndpointRef | Iterable[RelationEndpointRef],
+) -> tuple[RelationEndpointRef, ...]:
+    """Materialize one endpoint side without iterating a scalar reference."""
+    if isinstance(
+        endpoints, ItemRef | DurableItemRef | BoundaryRef | DurableBoundaryRef
+    ):
+        return (endpoints,)
+    return tuple(endpoints)
+
+
+def _endpoint_tier(graph: Graph, endpoint: RelationEndpointRef) -> QualifiedName:
+    """Return the tier that owns one item or boundary endpoint."""
+    if isinstance(endpoint, ItemRef | DurableItemRef):
+        return graph.resolve_item(endpoint).tier
+    return graph.resolve_boundary(endpoint).tier
+
+
+def _target_relation(
+    graph: Graph, target: RelationTarget
+) -> RelationInstance | PolyadicRelationInstance:
+    """Resolve an editor relation target without changing the graph."""
+    polyadic, index = graph.edit()._relation_site(target)
+    return graph.polyadic_relations[index] if polyadic else graph.relations[index]
+
+
+def _record_needs_realignment(graph: Graph, tier: QualifiedName) -> Graph:
+    """Record the standard tier fact required by collapsed rebinding."""
+    editor = graph.edit()
+    if not any(
+        namespace.namespace == _CLOCK_EDIT_NAMESPACE for namespace in graph.namespaces
+    ):
+        prefixes = {namespace.prefix for namespace in graph.namespaces}
+        prefix = "clock-edit"
+        suffix = 2
+        while prefix in prefixes:
+            prefix = f"clock-edit-{suffix}"
+            suffix += 1
+        editor.declare(NamespaceDeclaration(prefix, _CLOCK_EDIT_NAMESPACE))
+    if not any(
+        declaration.name == _NEEDS_REALIGNMENT
+        for declaration in graph.attribute_declarations
+    ):
+        editor.declare(
+            AttributeDeclaration(
+                _NEEDS_REALIGNMENT, AttributeDomain.TIER, XsdType.BOOLEAN
+            )
+        )
+    if not any(layer.name == _REALIGNMENT_LAYER for layer in graph.layers):
+        editor.add_layer(_REALIGNMENT_LAYER)
+    editor.put_fact(
+        _REALIGNMENT_LAYER,
+        LayerFact(
+            TierRef(tier),
+            AttributeValue(_NEEDS_REALIGNMENT, XsdType.BOOLEAN, "true"),
+        ),
+    )
+    return editor.freeze()
+
+
 def _decimal_times_rate_equals(value: Decimal, rate: Decimal, tick: int) -> bool:
     """Compare ``value * rate`` with an integer using exact integer products."""
     value_numerator, value_denominator = value.as_integer_ratio()
@@ -680,7 +1430,7 @@ def _collapse_shared_boundaries(
 
 
 def anchored_boundary(graph: Graph, boundary: BoundaryRef) -> DurableBoundaryRef:
-    """Name an existing boundary by its anchor without changing the graph."""
+    """Name a boundary by either adjacent durable anchor without changing it."""
     tier = next(
         (
             candidate
@@ -690,14 +1440,21 @@ def anchored_boundary(graph: Graph, boundary: BoundaryRef) -> DurableBoundaryRef
         None,
     )
     if tier is None or boundary.index < 0 or boundary.index > len(tier.items):
-        raise ValueError(f"boundary {boundary.to_data()!r} is outside its tier")
+        raise GraphValidationError(
+            f"boundary {boundary.to_data()!r} is outside its tier",
+            RefusalStage.REFERENCE,
+        )
     if boundary.index == 0:
         return DurableBoundaryRef(boundary.tier, BoundarySide.BEFORE)
     if boundary.index == len(tier.items):
         return DurableBoundaryRef(boundary.tier, BoundarySide.AFTER)
     anchor = tier.items[boundary.index].durable_id
-    if anchor is None:
-        raise ValueError(
-            f"boundary {boundary.to_data()!r} needs a durable right-hand anchor"
-        )
-    return DurableBoundaryRef(DurableItemRef(anchor), BoundarySide.BEFORE)
+    if anchor is not None:
+        return DurableBoundaryRef(DurableItemRef(anchor), BoundarySide.BEFORE)
+    previous_anchor = tier.items[boundary.index - 1].durable_id
+    if previous_anchor is not None:
+        return DurableBoundaryRef(DurableItemRef(previous_anchor), BoundarySide.AFTER)
+    raise GraphValidationError(
+        f"boundary {boundary.to_data()!r} has no adjacent durable anchor",
+        RefusalStage.REFERENCE,
+    )

@@ -2192,6 +2192,11 @@ class Graph:
         them in place: one validation runs at ``freeze()`` instead of one per
         operation.  Whether an operation rewrites or mutates follows from the
         carrier the caller holds, never from an argument passed to it.
+
+        This editor has no clock profile. Structural edits can therefore leave
+        an existing :class:`tiergraph.clock.ClockProfile` invalid without a
+        rebinding refusal or report. Use ``ClockProfile.edit()`` when clock
+        validity and the explicit rebinding policy must be preserved.
         """
         return GraphEditor(self)
 

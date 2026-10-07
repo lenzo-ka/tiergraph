@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from decimal import ROUND_DOWN, Decimal, Inexact, localcontext
 from typing import cast
@@ -16,22 +17,38 @@ from tiergraph import (
     BipartiteRelationDeclaration,
     Boundary,
     BoundaryRef,
+    BoundarySide,
+    ClockBindingChange,
     ClockCoordinate,
+    ClockEditOperation,
+    ClockEditor,
     ClockProfile,
+    ClockRebindingPolicy,
     DurableBoundaryRef,
     DurableItemRef,
+    EquivalenceView,
     Graph,
+    GraphValidationError,
     Item,
+    ItemRef,
     NamespaceDeclaration,
     PhysicalTiming,
+    PolyadicInstanceRef,
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
     QualifiedName,
+    RefusalStage,
     RelationEndpointKind,
     RelationInstance,
+    RelationInstanceRef,
+    RelationSideDeclaration,
     SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    TierRef,
     XsdType,
     anchored_boundary,
+    equivalent,
 )
 
 # A Decimal context is more than its precision. The sweeps below name the three
@@ -84,6 +101,9 @@ START = QualifiedName(NS, "physical-start")
 DURATION = QualifiedName(NS, "physical-duration")
 SYNTAX = QualifiedName(NS, "syntax")
 ALTERNATE = QualifiedName(NS, "alternate")
+PARENT = QualifiedName(NS, "parent")
+BOUNDARY_PARENT = QualifiedName(NS, "boundary-parent")
+POLYADIC_PARENT = QualifiedName(NS, "polyadic-parent")
 
 
 def fixture(rate: str = "10") -> Graph:
@@ -137,6 +157,88 @@ def fixture(rate: str = "10") -> Graph:
     )
 
 
+def fixture_with_parent() -> Graph:
+    """Add one structural relation whose endpoints can be reparented."""
+    graph = fixture()
+    declaration = BipartiteRelationDeclaration(
+        PARENT,
+        SEGMENT_TYPE,
+        SEGMENT_TYPE,
+        RelationEndpointKind.ITEM,
+        RelationEndpointKind.ITEM,
+    )
+    return replace(
+        graph,
+        relation_declarations=(*graph.relation_declarations, declaration),
+        relations=(
+            *graph.relations,
+            RelationInstance(
+                PARENT,
+                DurableItemRef("segment-0"),
+                DurableItemRef("segment-1"),
+            ),
+        ),
+    )
+
+
+def fixture_with_unpromoted_item() -> Graph:
+    """Bind an interior boundary through the preceding item's after side."""
+    editor = fixture().edit()
+    editor.insert_item(SEGMENT, 1, Item())
+    graph = editor.freeze()
+    binding = RelationInstance(
+        BINDING,
+        anchored_boundary(graph, BoundaryRef(SEGMENT, 1)),
+        anchored_boundary(graph, BoundaryRef(CLOCK, 2)),
+    )
+    return replace(graph, relations=(*graph.relations, binding))
+
+
+def fixture_with_boundary_parent() -> Graph:
+    """Add a non-clock relation between boundaries on the timed tier."""
+    graph = fixture()
+    declaration = BipartiteRelationDeclaration(
+        BOUNDARY_PARENT,
+        SEGMENT_TYPE,
+        SEGMENT_TYPE,
+        RelationEndpointKind.BOUNDARY,
+        RelationEndpointKind.BOUNDARY,
+    )
+    return replace(
+        graph,
+        relation_declarations=(*graph.relation_declarations, declaration),
+        relations=(
+            *graph.relations,
+            RelationInstance(
+                BOUNDARY_PARENT,
+                anchored_boundary(graph, BoundaryRef(SEGMENT, 0)),
+                anchored_boundary(graph, BoundaryRef(SEGMENT, 1)),
+            ),
+        ),
+    )
+
+
+def fixture_with_polyadic_parent() -> Graph:
+    """Add an ordered structural parent relation on timed-tier items."""
+    graph = fixture()
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,),
+        (SEGMENT,),
+    )
+    declaration = PolyadicRelationDeclaration(POLYADIC_PARENT, side, side)
+    return replace(
+        graph,
+        relation_declarations=(*graph.relation_declarations, declaration),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                POLYADIC_PARENT,
+                (DurableItemRef("segment-0"),),
+                (DurableItemRef("segment-1"),),
+            ),
+        ),
+    )
+
+
 def test_real_reference_rate_derives_timing_on_a_partial_document_tier() -> None:
     """The source fixture's 0.1-second units occupy clock coordinates 1 through 3."""
     profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
@@ -145,6 +247,407 @@ def test_real_reference_rate_derives_timing_on_a_partial_document_tier() -> None
     assert profile.clock_index(BoundaryRef(SEGMENT, 1)) == 2
     assert profile.duration(SEGMENT, 0) == (1, Decimal("10.0"))
     assert profile.duration(SEGMENT, 1) == (1, Decimal("10.0"))
+
+
+@pytest.mark.parametrize(
+    "edit",
+    (
+        lambda editor: editor.move_item(ItemRef(SEGMENT, 0), 1),
+        lambda editor: editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1)),
+        lambda editor: editor.insert_item(SEGMENT, 1, Item("inserted")),
+        lambda editor: editor.remove_item(ItemRef(SEGMENT, 0)),
+    ),
+    ids=("move", "swap", "insert", "remove"),
+)
+def test_bound_tier_structural_edits_require_a_policy_and_change_nothing(
+    edit: Callable[[ClockEditor], object],
+) -> None:
+    """Every covered timed-tier restructure refuses atomically without policy."""
+    graph = fixture()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit()
+    with pytest.raises(GraphValidationError, match="requires a named rebinding policy"):
+        edit(editor)
+    assert editor.freeze() is graph
+    assert editor.reports == ()
+
+
+def test_bound_tier_reparent_requires_a_policy_and_changes_nothing() -> None:
+    """Reparenting endpoints on a timed tier has the same policy gate."""
+    graph = fixture_with_parent()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit()
+    with pytest.raises(GraphValidationError, match="requires a named rebinding policy"):
+        editor.reparent(
+            RelationInstanceRef(3),
+            DurableItemRef("segment-1"),
+            DurableItemRef("segment-0"),
+        )
+    assert editor.freeze() is graph
+    assert editor.reports == ()
+
+
+def test_keep_earlier_moves_items_across_fixed_times_and_reports_rebinding() -> None:
+    """Keep-earlier preserves ordered times while boundary anchors follow items."""
+    graph = fixture()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit(
+        ClockRebindingPolicy.KEEP_EARLIER
+    )
+    editor.move_item(ItemRef(SEGMENT, 0), 1)
+    changed = editor.freeze()
+    profile = ClockProfile(changed, CLOCK, BINDING, RATE, UNIT)
+    assert [item.durable_id for item in changed.tiers[1].items] == [
+        "segment-1",
+        "segment-0",
+    ]
+    assert [profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(3)] == [
+        1,
+        2,
+        3,
+    ]
+    assert editor.reports == (editor.reports[0],)
+    report = editor.reports[0]
+    assert report.operation is ClockEditOperation.ITEM_MOVE
+    assert report.policy is ClockRebindingPolicy.KEEP_EARLIER
+    assert report.tier == SEGMENT
+    assert report.needs_realignment is False
+    assert report.changes
+    assert all(isinstance(change, ClockBindingChange) for change in report.changes)
+    assert all(change.provisional is False for change in report.changes)
+
+
+def test_drop_to_provisional_collapses_times_and_records_realigning_fact() -> None:
+    """The provisional policy makes its timing loss visible in report and graph."""
+    graph = fixture()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("drop-to-provisional")
+    editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+    changed = editor.freeze()
+    profile = ClockProfile(changed, CLOCK, BINDING, RATE, UNIT)
+    assert [profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(3)] == [
+        1,
+        1,
+        1,
+    ]
+    report = editor.reports[0]
+    assert report.policy is ClockRebindingPolicy.DROP_TO_PROVISIONAL
+    assert report.needs_realignment is True
+    assert report.changes
+    fact = next(
+        fact
+        for layer in changed.layers
+        for fact in layer.facts
+        if fact.value.name.local_name == "needs-realignment"
+    )
+    assert fact.subject == TierRef(SEGMENT)
+    assert cast(AttributeValue, fact.value).lexical == "true"
+
+
+def test_insert_and_bound_remove_keep_clock_profile_valid_and_reported() -> None:
+    """Insertion binds its new boundary and removal keeps a surviving binding."""
+    profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
+    inserted_editor = profile.edit("keep-earlier")
+    inserted_editor.insert_item(SEGMENT, 1, Item("inserted"))
+    inserted = inserted_editor.freeze()
+    inserted_profile = ClockProfile(inserted, CLOCK, BINDING, RATE, UNIT)
+    assert [
+        inserted_profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(4)
+    ] == [1, 2, 2, 3]
+    insertion_report = inserted_editor.reports[0]
+    assert insertion_report.needs_realignment is True
+    assert any(change.provisional for change in insertion_report.changes)
+    assert any(
+        fact.subject == TierRef(SEGMENT)
+        and fact.value.name.local_name == "needs-realignment"
+        for layer in inserted.layers
+        for fact in layer.facts
+    )
+
+    removed_editor = profile.edit("keep-earlier")
+    removed_editor.remove_item(DurableItemRef("segment-0"))
+    removed = removed_editor.freeze()
+    removed_profile = ClockProfile(removed, CLOCK, BINDING, RATE, UNIT)
+    assert [
+        removed_profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(2)
+    ] == [1, 3]
+    assert [item.durable_id for item in removed.tiers[1].items] == ["segment-1"]
+    assert removed_editor.reports[0].changes
+
+
+def test_reparent_policies_keep_clock_profile_valid_and_report_outcomes() -> None:
+    """Both named policies validate after changing a timed tier's parent link."""
+    graph = fixture_with_parent()
+    keep = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    keep.reparent(
+        RelationInstanceRef(3),
+        DurableItemRef("segment-1"),
+        DurableItemRef("segment-0"),
+    )
+    kept = keep.freeze()
+    kept_profile = ClockProfile(kept, CLOCK, BINDING, RATE, UNIT)
+    assert kept_profile.extent(SEGMENT) == (
+        ClockCoordinate(1),
+        ClockCoordinate(3),
+    )
+    assert keep.reports[0].changes == ()
+
+    provisional = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit(
+        "drop-to-provisional"
+    )
+    provisional.reparent(
+        RelationInstanceRef(3),
+        DurableItemRef("segment-1"),
+        DurableItemRef("segment-0"),
+    )
+    provisional_profile = ClockProfile(provisional.freeze(), CLOCK, BINDING, RATE, UNIT)
+    assert [
+        provisional_profile.clock_index(BoundaryRef(SEGMENT, index))
+        for index in range(3)
+    ] == [1, 1, 1]
+    assert provisional.reports[0].needs_realignment is True
+
+
+def test_keep_earlier_move_and_swap_inverses_restore_every_s1_view() -> None:
+    """Move and swap inverses restore functional, identified, and exact views."""
+    graph = fixture()
+    moved = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    moved.move_item(ItemRef(SEGMENT, 0), 1)
+    moved.move_item(ItemRef(SEGMENT, 1), 0)
+    swapped = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    swapped.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+    swapped.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+    for view in EquivalenceView:
+        assert equivalent(graph, moved.freeze(), view)
+        assert equivalent(graph, swapped.freeze(), view)
+
+
+def test_clock_editor_constructor_refusals_are_explicit() -> None:
+    """Structural profiles and unknown policy names cannot start a session."""
+    structural = ClockProfile.from_boundary_values(
+        spine_fixture(((0, 0), (1, 0))),
+        CLOCK,
+        tick_attribute=SPINE_TICK,
+        gap_attribute=SPINE_GAP,
+    )
+    with pytest.raises(ValueError, match="structural clock-spine profile"):
+        structural.edit()
+    with pytest.raises(ValueError, match="unknown clock rebinding policy"):
+        ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT).edit("guess")
+
+
+def test_timed_no_ops_require_and_report_the_named_policy() -> None:
+    """Even a no-op is an explicit, reported clock-policy outcome."""
+    profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
+    without_policy = profile.edit()
+    with pytest.raises(GraphValidationError, match="requires a named rebinding policy"):
+        without_policy.move_item(ItemRef(SEGMENT, 0), 0)
+
+    editor = profile.edit("keep-earlier")
+    editor.insert_items(SEGMENT, 1, ())
+    editor.remove_items(SEGMENT, 1, 0)
+    editor.move_item(ItemRef(SEGMENT, 0), 0)
+    editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 0))
+    assert editor.freeze() is profile.graph
+    assert tuple(report.operation for report in editor.reports) == (
+        ClockEditOperation.ITEM_INSERTION,
+        ClockEditOperation.ITEM_REMOVAL,
+        ClockEditOperation.ITEM_MOVE,
+        ClockEditOperation.ITEM_SWAP,
+    )
+    assert all(report.changes == () for report in editor.reports)
+
+
+def test_clock_and_untimed_tiers_take_their_distinct_edit_paths() -> None:
+    """Clock structure refuses while declared untimed structure edits normally."""
+    profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
+    with pytest.raises(GraphValidationError, match="cannot restructure the clock tier"):
+        profile.edit("keep-earlier").insert_item(CLOCK, 1, Item("new-clock"))
+    with pytest.raises(GraphValidationError, match="cannot restructure the clock tier"):
+        profile.edit("keep-earlier").insert_items(CLOCK, 1, ())
+    with pytest.raises(GraphValidationError, match="cannot restructure the clock tier"):
+        profile.edit("keep-earlier").remove_item(ItemRef(CLOCK, 0))
+    with pytest.raises(GraphValidationError, match="cannot restructure the clock tier"):
+        profile.edit("keep-earlier").remove_items(CLOCK, 0, 1)
+
+    untimed = advanced_profile(reference_shape()).edit()
+    untimed.insert_item(SYNTAX, 1, Item("syntax-1"))
+    untimed.insert_items(SYNTAX, 2, ())
+    untimed.move_item(ItemRef(SYNTAX, 0), 1)
+    untimed.swap_items(ItemRef(SYNTAX, 0), ItemRef(SYNTAX, 1))
+    assert [item.durable_id for item in untimed.freeze().tiers[3].items] == [
+        "syntax-0",
+        "syntax-1",
+    ]
+    assert untimed.reports == ()
+    assert untimed.profile.is_timed(SYNTAX) is False
+
+    removed_one = advanced_profile(reference_shape()).edit()
+    removed_one.remove_item(ItemRef(SYNTAX, 0))
+    assert removed_one.freeze().tiers[3].items == ()
+    assert removed_one.reports == ()
+
+    removed_run = advanced_profile(reference_shape()).edit()
+    removed_run.remove_items(SYNTAX, 0, 1)
+    assert removed_run.freeze().tiers[3].items == ()
+    assert removed_run.reports == ()
+
+
+def test_unpromoted_items_use_the_other_adjacent_anchor_during_rebinding() -> None:
+    """Timed insertion and movement accept the previous item's after anchor."""
+    graph = fixture_with_unpromoted_item()
+    profile = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT)
+
+    inserted = profile.edit("keep-earlier")
+    inserted.insert_item(SEGMENT, 1, Item("inserted"))
+    assert [
+        inserted.profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(5)
+    ] == [1, 2, 2, 2, 3]
+
+    moved = profile.edit("keep-earlier")
+    moved.move_item(DurableItemRef("segment-1"), 0)
+    assert [item.durable_id for item in moved.freeze().tiers[1].items] == [
+        "segment-1",
+        "segment-0",
+        None,
+    ]
+    assert moved.profile.graph is moved.freeze()
+
+
+def test_rebinding_without_either_adjacent_anchor_is_a_staged_refusal() -> None:
+    """An unavoidable anchor failure is a documented atomic graph refusal."""
+    graph = fixture_with_unpromoted_item()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    with pytest.raises(
+        GraphValidationError, match="no adjacent durable anchor"
+    ) as caught:
+        editor.insert_item(SEGMENT, 1, Item())
+    assert caught.value.stage is RefusalStage.REFERENCE
+    assert editor.freeze() is graph
+    assert editor.reports == ()
+
+
+@pytest.mark.parametrize("items", [{Item("new")}, {"new": Item("new")}])
+def test_clock_insert_items_refuses_unordered_inputs(items: object) -> None:
+    """The clock editor preserves the plain editor's ordered-input contract."""
+    graph = fixture()
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    with pytest.raises(GraphValidationError, match="ordered iterable"):
+        editor.insert_items(SEGMENT, 1, cast(Iterable[Item], items))
+    assert editor.freeze() is graph
+    assert editor.reports == ()
+
+
+def test_clock_editor_validates_coordinates_before_any_edit() -> None:
+    """Invalid tiers, ranges, and cross-tier swaps fail without state changes."""
+    graph = fixture()
+    profile = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT)
+    editor = profile.edit("keep-earlier")
+    missing = QualifiedName(NS, "missing")
+    failures: tuple[Callable[[], object], ...] = (
+        lambda: editor.insert_items(missing, 0, ()),
+        lambda: editor.insert_item(SEGMENT, 3, Item()),
+        lambda: editor.remove_items(SEGMENT, 0, -1),
+        lambda: editor.remove_items(SEGMENT, 2, 1),
+        lambda: editor.move_item(ItemRef(SEGMENT, 0), 2),
+        lambda: editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(CLOCK, 0)),
+    )
+    for fail in failures:
+        with pytest.raises(GraphValidationError):
+            fail()
+    assert editor.freeze() is graph
+    assert editor.reports == ()
+
+
+def test_removing_the_last_item_withdraws_its_departing_anchor() -> None:
+    """A trailing removal retains the earlier binding at the merged boundary."""
+    editor = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
+    editor.remove_item(ItemRef(SEGMENT, 1))
+    profile = editor.profile
+    assert [profile.clock_index(BoundaryRef(SEGMENT, index)) for index in range(2)] == [
+        1,
+        2,
+    ]
+    assert editor.reports[0].changes
+
+
+def test_reparent_validates_relation_shape_and_supports_all_endpoint_forms() -> None:
+    """Binding, arity, boundary, and polyadic reparent paths stay explicit."""
+    binding_editor = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT).edit(
+        "keep-earlier"
+    )
+    with pytest.raises(GraphValidationError, match="clock binding relation"):
+        binding_editor.reparent(
+            RelationInstanceRef(0),
+            fixture().relations[0].left,
+            fixture().relations[0].right,
+        )
+
+    binary_graph = fixture_with_parent()
+    binary_editor = ClockProfile(binary_graph, CLOCK, BINDING, RATE, UNIT).edit(
+        "keep-earlier"
+    )
+    with pytest.raises(GraphValidationError, match="must each be one"):
+        binary_editor.reparent(
+            RelationInstanceRef(3),
+            (DurableItemRef("segment-0"), DurableItemRef("segment-1")),
+            (DurableItemRef("segment-0"),),
+        )
+
+    boundary_graph = fixture_with_boundary_parent()
+    boundary_relation = boundary_graph.relations[3]
+    boundary_editor = ClockProfile(boundary_graph, CLOCK, BINDING, RATE, UNIT).edit(
+        "keep-earlier"
+    )
+    boundary_editor.reparent(
+        RelationInstanceRef(3),
+        (cast(DurableBoundaryRef, boundary_relation.right),),
+        (cast(DurableBoundaryRef, boundary_relation.left),),
+    )
+    assert boundary_editor.profile.extent(SEGMENT) == (
+        ClockCoordinate(1),
+        ClockCoordinate(3),
+    )
+
+    polyadic_graph = fixture_with_polyadic_parent()
+    polyadic_editor = ClockProfile(polyadic_graph, CLOCK, BINDING, RATE, UNIT).edit(
+        "keep-earlier"
+    )
+    polyadic_editor.reparent(
+        PolyadicInstanceRef(0),
+        (DurableItemRef("segment-1"),),
+        (DurableItemRef("segment-0"),),
+    )
+    changed = polyadic_editor.freeze().polyadic_relations[0]
+    assert changed.sources == (DurableItemRef("segment-1"),)
+    assert changed.targets == (DurableItemRef("segment-0"),)
+
+
+def test_realigning_fact_reuses_declarations_and_avoids_prefix_collisions() -> None:
+    """Repeated collapses reuse their vocabulary and preserve namespace prefixes."""
+    graph = fixture()
+    graph = replace(
+        graph,
+        namespaces=(
+            *graph.namespaces,
+            NamespaceDeclaration("clock-edit", "urn:example:occupied-prefix"),
+        ),
+    )
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("drop-to-provisional")
+    editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+    editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+    changed = editor.freeze()
+    assert any(namespace.prefix == "clock-edit-2" for namespace in changed.namespaces)
+    assert (
+        len(
+            [
+                declaration
+                for declaration in changed.attribute_declarations
+                if declaration.name.local_name == "needs-realignment"
+            ]
+        )
+        == 1
+    )
+    assert (
+        len([layer for layer in changed.layers if layer.name.source == "rebinding"])
+        == 1
+    )
 
 
 def test_rate_changes_the_derived_measure_without_moving_structure() -> None:
@@ -379,21 +882,37 @@ def test_profile_declaration_and_lookup_refusals_are_explicit() -> None:
         )
 
 
-def test_anchor_helper_refuses_missing_tiers_positions_and_anchors() -> None:
+def test_anchor_helper_uses_either_side_and_stages_unavoidable_refusals() -> None:
     """Stored bindings always use semantic boundary anchors, including interiors."""
     graph = fixture()
     missing = QualifiedName(NS, "missing")
-    with pytest.raises(ValueError, match="outside its tier"):
+    with pytest.raises(GraphValidationError, match="outside its tier") as missing_tier:
         anchored_boundary(graph, BoundaryRef(missing, 0))
-    with pytest.raises(ValueError, match="outside its tier"):
+    assert missing_tier.value.stage is RefusalStage.REFERENCE
+    with pytest.raises(GraphValidationError, match="outside its tier") as position:
         anchored_boundary(graph, BoundaryRef(SEGMENT, 3))
+    assert position.value.stage is RefusalStage.REFERENCE
+    fallback = replace(
+        graph,
+        tiers=(
+            graph.tiers[0],
+            replace(graph.tiers[1], items=(Item("left"), Item())),
+        ),
+        relations=(),
+    )
+    assert anchored_boundary(fallback, BoundaryRef(SEGMENT, 1)) == (
+        DurableBoundaryRef(DurableItemRef("left"), BoundarySide.AFTER)
+    )
     unanchored = replace(
         graph,
         tiers=(graph.tiers[0], replace(graph.tiers[1], items=(Item(), Item()))),
         relations=(),
     )
-    with pytest.raises(ValueError, match="needs a durable right-hand anchor"):
+    with pytest.raises(
+        GraphValidationError, match="no adjacent durable anchor"
+    ) as anchor:
         anchored_boundary(unanchored, BoundaryRef(SEGMENT, 1))
+    assert anchor.value.stage is RefusalStage.REFERENCE
     assert isinstance(
         anchored_boundary(graph, BoundaryRef(SEGMENT, 0)), DurableBoundaryRef
     )
