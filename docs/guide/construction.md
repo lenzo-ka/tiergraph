@@ -48,8 +48,11 @@ dependent when it refuses. `undeclare_with_contents()` is the destructive
 derived cascade. Like `Graph.edit()`, that graph-level function has no clock
 profile and deliberately bypasses rebinding; use
 `ClockProfile.edit().undeclare_with_contents()` when timing changes must require
-a named policy and produce reports. The cascade does not return its own inverse:
-the edit journal supplies that inverse in a later slice.
+a named policy and produce reports. The cascade does not return its own inverse;
+when an edit journal is active, its captured data delta supplies that inverse.
+Operations with exact structural inverses instead retain the inverse operation
+and its change-sized arguments. Their touched-coordinate reports are expanded
+from compact runs only when requested.
 
 `insert_items()` inserts an ordered run of items in one restructure, with the
 same result as repeated `insert_item()` calls. An empty run still validates its

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 243 top-level `tiergraph` exports exactly once.
+It covers 251 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -214,7 +214,7 @@ caller's spine byte-identical.
 Method.
 
 ```text
-ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None) -> 'ClockEditor'
+ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None, *, journal: 'Journal | None' = None) -> 'ClockEditor | ClockJournalEditor'
 ```
 
 Return an editor that keeps this clock profile valid after every edit.
@@ -1042,6 +1042,21 @@ Displacement.then(self, later: 'Displacement') -> 'Displacement'
 
 Compose two displacements into the one the pair of edits performed.
 
+#### `Displacement.to_data`
+
+Method.
+
+```text
+Displacement.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the four total position maps and their departed positions.
+
+JSON objects cannot use structural references as keys, so every map is
+represented as an ordered array of ``from``/``to`` records.  Relation
+positions are integers; item and boundary positions use their public
+reference encodings.
+
 #### `Displacement.stationary`
 
 Class method.
@@ -1426,6 +1441,706 @@ GraphEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndp
 
 Replace one instance's endpoints while preserving its other content.
 
+### `Journal`
+
+```text
+Journal(annotations: 'EditAnnotations | None' = None, *, provenance: 'LayerName | None' = None, protected: 'Iterable[LayerName]' = (), author: 'str | None' = None, reason: 'str | None' = None, stage: 'str | None' = None, confidence: 'float | None' = None, iteration: 'int | None' = None, tool: 'str | None' = None, timestamp: 'str | None' = None, fields: 'Mapping[str, JsonValue] | None' = None) -> 'None'
+```
+
+Own opt-in edit history and bind it to one editor session.
+
+Every successful record remains undoable for the lifetime of the journal.
+``provenance`` names a layer that receives typed JSON facts only on the
+durably addressable subjects an operation directly acts on.  Those facts
+travel with their subjects and are retired, undoably, when a later journal
+operation removes or demotes the subject.  Operations without a stable graph
+subject remain attributable through their journal record. :meth:`protect`
+prevents edits to facts and the content they describe.
+
+#### `Journal.records`
+
+Property.
+
+```text
+Journal.records(self) -> 'tuple[JournalRecord, ...]'
+```
+
+Return applied records in operation order.
+
+#### `Journal.reports`
+
+Property.
+
+```text
+Journal.reports(self) -> 'tuple[EditReport, ...]'
+```
+
+Return reports for all currently applied records.
+
+#### `Journal.redo_records`
+
+Property.
+
+```text
+Journal.redo_records(self) -> 'tuple[JournalRecord, ...]'
+```
+
+Return undone records in the order :meth:`redo` will restore them.
+
+#### `Journal.protect`
+
+Method.
+
+```text
+Journal.protect(self, layer: 'LayerName') -> 'Journal'
+```
+
+Protect one existing layer's facts and described live content.
+
+Structural edits may move a protected fact and its unchanged subject to
+new coordinates. A missing layer is an error rather than an inactive
+protection rule, and no edit may create, remove, or replace protected
+facts.
+
+#### `Journal.annotate`
+
+Method.
+
+```text
+Journal.annotate(self, annotations: 'EditAnnotations | None' = None, **fields: 'object') -> 'Iterator[Journal]'
+```
+
+Apply caller metadata to every successful operation in this context.
+
+#### `Journal.undo`
+
+Method.
+
+```text
+Journal.undo(self) -> 'JournalRecord'
+```
+
+Undo the latest applied operation, retaining it for redo.
+
+#### `Journal.redo`
+
+Method.
+
+```text
+Journal.redo(self) -> 'JournalRecord'
+```
+
+Reapply the most recently undone operation.
+
+### `JournalEditor`
+
+```text
+JournalEditor(graph: 'Graph', journal: 'Journal') -> 'None'
+```
+
+Apply fully validated graph edits while recording an opt-in journal.
+
+#### `JournalEditor.freeze`
+
+Method.
+
+```text
+JournalEditor.freeze(self) -> 'Graph'
+```
+
+Return the current fully validated graph.
+
+#### `JournalEditor.displacement`
+
+Method.
+
+```text
+JournalEditor.displacement(self) -> 'Displacement'
+```
+
+Return where every position of this session's input now stands.
+
+#### `JournalEditor.undo`
+
+Method.
+
+```text
+JournalEditor.undo(self) -> 'JournalRecord'
+```
+
+Undo the latest operation in this editor's journal.
+
+#### `JournalEditor.redo`
+
+Method.
+
+```text
+JournalEditor.redo(self) -> 'JournalRecord'
+```
+
+Redo the latest operation undone in this editor's journal.
+
+#### `JournalEditor.dry_run`
+
+Method.
+
+```text
+JournalEditor.dry_run(self, operation: 'Callable[[Any], object]') -> 'tuple[EditReport, ...]'
+```
+
+Apply, validate, report, and roll back new operations by inverses.
+
+#### `JournalEditor.declare`
+
+Method.
+
+```text
+JournalEditor.declare(self, declaration: 'EditDeclaration', at: 'int | None' = None) -> 'JournalEditor'
+```
+
+Declare one schema member and record its inverse.
+
+#### `JournalEditor.undeclare`
+
+Method.
+
+```text
+JournalEditor.undeclare(self, target: 'str | QualifiedName | EditDeclaration') -> 'JournalEditor'
+```
+
+Undeclare one unused schema member and record its inverse.
+
+#### `JournalEditor.undeclare_with_contents`
+
+Method.
+
+```text
+JournalEditor.undeclare_with_contents(self, target: 'str | QualifiedName | EditDeclaration') -> 'JournalEditor'
+```
+
+Cascade one declaration and record the complete inverse delta.
+
+#### `JournalEditor.promote_item`
+
+Method.
+
+```text
+JournalEditor.promote_item(self, reference: 'ItemRef', durable_id: 'str') -> 'JournalEditor'
+```
+
+Promote one item and record its inverse.
+
+#### `JournalEditor.promote_boundary`
+
+Method.
+
+```text
+JournalEditor.promote_boundary(self, reference: 'BoundaryRef', durable_id: 'str') -> 'JournalEditor'
+```
+
+Promote one boundary and record its inverse.
+
+#### `JournalEditor.promote_relation`
+
+Method.
+
+```text
+JournalEditor.promote_relation(self, target: 'RelationTarget', durable_id: 'str') -> 'JournalEditor'
+```
+
+Promote one relation instance and record its inverse.
+
+#### `JournalEditor.demote_item`
+
+Method.
+
+```text
+JournalEditor.demote_item(self, reference: 'DurableItemRef') -> 'JournalEditor'
+```
+
+Demote one item and record its inverse.
+
+#### `JournalEditor.demote_boundary`
+
+Method.
+
+```text
+JournalEditor.demote_boundary(self, reference: 'DurableBoundaryRef') -> 'JournalEditor'
+```
+
+Demote one boundary and record its inverse.
+
+#### `JournalEditor.demote_relation`
+
+Method.
+
+```text
+JournalEditor.demote_relation(self, reference: 'DurableRelationRef | DurablePolyadicRef') -> 'JournalEditor'
+```
+
+Demote one relation instance and record its inverse.
+
+#### `JournalEditor.seal`
+
+Method.
+
+```text
+JournalEditor.seal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'JournalEditor'
+```
+
+Advance a seal and record its previous state.
+
+#### `JournalEditor.unseal`
+
+Method.
+
+```text
+JournalEditor.unseal(self, carrier: 'SealedCarrier', sealed: 'int') -> 'JournalEditor'
+```
+
+Retreat a seal and record its previous state.
+
+#### `JournalEditor.drop_seal`
+
+Method.
+
+```text
+JournalEditor.drop_seal(self, carrier: 'SealedCarrier') -> 'JournalEditor'
+```
+
+Drop a seal and record its previous state.
+
+#### `JournalEditor.add_layer`
+
+Method.
+
+```text
+JournalEditor.add_layer(self, name: 'LayerName') -> 'JournalEditor'
+```
+
+Add an empty layer and record its inverse.
+
+#### `JournalEditor.remove_layer`
+
+Method.
+
+```text
+JournalEditor.remove_layer(self, name: 'LayerName') -> 'JournalEditor'
+```
+
+Remove an empty layer and record its inverse.
+
+#### `JournalEditor.put_fact`
+
+Method.
+
+```text
+JournalEditor.put_fact(self, layer: 'LayerName', fact: 'LayerFact') -> 'JournalEditor'
+```
+
+Put one layer fact and record the prior fact state.
+
+#### `JournalEditor.remove_fact`
+
+Method.
+
+```text
+JournalEditor.remove_fact(self, layer: 'LayerName', subject: 'LayerSubject', name: 'QualifiedName') -> 'JournalEditor'
+```
+
+Remove one layer fact and record it for restoration.
+
+#### `JournalEditor.set_attribute`
+
+Method.
+
+```text
+JournalEditor.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'JournalEditor'
+```
+
+Set one attribute and record the prior value or absence.
+
+#### `JournalEditor.remove_attribute`
+
+Method.
+
+```text
+JournalEditor.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'JournalEditor'
+```
+
+Remove one attribute and record it for restoration.
+
+#### `JournalEditor.insert_item`
+
+Method.
+
+```text
+JournalEditor.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'JournalEditor'
+```
+
+Insert one item and record its structural inverse.
+
+#### `JournalEditor.insert_items`
+
+Method.
+
+```text
+JournalEditor.insert_items(self, tier: 'QualifiedName', index: 'int', items: 'Iterable[Item]') -> 'JournalEditor'
+```
+
+Insert ordered items and record their structural inverse.
+
+#### `JournalEditor.remove_item`
+
+Method.
+
+```text
+JournalEditor.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'JournalEditor'
+```
+
+Remove one item and retain it in the inverse delta.
+
+#### `JournalEditor.remove_items`
+
+Method.
+
+```text
+JournalEditor.remove_items(self, tier: 'QualifiedName', index: 'int', count: 'int') -> 'JournalEditor'
+```
+
+Remove an item run and retain it in the inverse delta.
+
+#### `JournalEditor.replace_item`
+
+Method.
+
+```text
+JournalEditor.replace_item(self, reference: 'ItemRef | DurableItemRef', item: 'Item') -> 'JournalEditor'
+```
+
+Replace one item and retain its prior value.
+
+#### `JournalEditor.move_item`
+
+Method.
+
+```text
+JournalEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'JournalEditor'
+```
+
+Move one item and record the reverse move.
+
+#### `JournalEditor.swap_items`
+
+Method.
+
+```text
+JournalEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'JournalEditor'
+```
+
+Swap two items and record the same swap as inverse.
+
+#### `JournalEditor.add_relation`
+
+Method.
+
+```text
+JournalEditor.add_relation(self, instance: 'RelationInstance | PolyadicRelationInstance', at: 'int | None' = None) -> 'JournalEditor'
+```
+
+Add one relation instance and record its removal.
+
+#### `JournalEditor.remove_relation`
+
+Method.
+
+```text
+JournalEditor.remove_relation(self, target: 'RelationTarget') -> 'JournalEditor'
+```
+
+Remove one relation instance and retain it for reinsertion.
+
+#### `JournalEditor.set_endpoints`
+
+Method.
+
+```text
+JournalEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndpointRef | Iterable[RelationEndpointRef]', targets: 'RelationEndpointRef | Iterable[RelationEndpointRef]') -> 'JournalEditor'
+```
+
+Replace endpoints and retain their previous ordered values.
+
+### `ClockJournalEditor`
+
+```text
+ClockJournalEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None', journal: 'Journal') -> 'None'
+```
+
+Record atomic edits that preserve an explicit clock profile.
+
+#### `ClockJournalEditor.profile`
+
+Property.
+
+```text
+ClockJournalEditor.profile(self) -> 'ClockProfile'
+```
+
+Return the clock profile validated for the current graph.
+
+#### `ClockJournalEditor.reports`
+
+Property.
+
+```text
+ClockJournalEditor.reports(self) -> 'tuple[ClockEditReport, ...]'
+```
+
+Return clock-policy reports for currently applied records.
+
+#### `ClockJournalEditor.freeze`
+
+Method.
+
+```text
+ClockJournalEditor.freeze(self) -> 'Graph'
+```
+
+Return the current fully validated graph.
+
+#### `ClockJournalEditor.displacement`
+
+Method.
+
+```text
+ClockJournalEditor.displacement(self) -> 'Displacement'
+```
+
+Return where every position of this session's input now stands.
+
+#### `ClockJournalEditor.undo`
+
+Method.
+
+```text
+ClockJournalEditor.undo(self) -> 'JournalRecord'
+```
+
+Undo the latest operation in this editor's journal.
+
+#### `ClockJournalEditor.redo`
+
+Method.
+
+```text
+ClockJournalEditor.redo(self) -> 'JournalRecord'
+```
+
+Redo the latest operation undone in this editor's journal.
+
+#### `ClockJournalEditor.dry_run`
+
+Method.
+
+```text
+ClockJournalEditor.dry_run(self, operation: 'Callable[[Any], object]') -> 'tuple[EditReport, ...]'
+```
+
+Apply, validate, report, and roll back new operations by inverses.
+
+#### `ClockJournalEditor.insert_item`
+
+Method.
+
+```text
+ClockJournalEditor.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'ClockJournalEditor'
+```
+
+Insert and bind one item under the session policy.
+
+#### `ClockJournalEditor.insert_items`
+
+Method.
+
+```text
+ClockJournalEditor.insert_items(self, tier: 'QualifiedName', index: 'int', items: 'Iterable[Item]') -> 'ClockJournalEditor'
+```
+
+Insert and bind ordered items under the session policy.
+
+#### `ClockJournalEditor.remove_item`
+
+Method.
+
+```text
+ClockJournalEditor.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'ClockJournalEditor'
+```
+
+Remove one item and its binding under the session policy.
+
+#### `ClockJournalEditor.remove_items`
+
+Method.
+
+```text
+ClockJournalEditor.remove_items(self, tier: 'QualifiedName', index: 'int', count: 'int') -> 'ClockJournalEditor'
+```
+
+Remove an item run and reconcile its bindings.
+
+#### `ClockJournalEditor.move_item`
+
+Method.
+
+```text
+ClockJournalEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'ClockJournalEditor'
+```
+
+Move one item under the named rebinding policy.
+
+#### `ClockJournalEditor.swap_items`
+
+Method.
+
+```text
+ClockJournalEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'ClockJournalEditor'
+```
+
+Swap two items under the named rebinding policy.
+
+#### `ClockJournalEditor.reparent`
+
+Method.
+
+```text
+ClockJournalEditor.reparent(self, target: 'RelationTarget', sources: 'RelationEndpointRef | Iterable[RelationEndpointRef]', targets: 'RelationEndpointRef | Iterable[RelationEndpointRef]') -> 'ClockJournalEditor'
+```
+
+Reparent one relation under the named rebinding policy.
+
+#### `ClockJournalEditor.undeclare_with_contents`
+
+Method.
+
+```text
+ClockJournalEditor.undeclare_with_contents(self, target: 'str | QualifiedName | EditDeclaration') -> 'ClockJournalEditor'
+```
+
+Run and record one clock-aware declaration cascade.
+
+### `JournalRecord`
+
+```text
+JournalRecord(operation: 'str', inverse: 'EditInverse', report: 'EditReport', annotations: 'EditAnnotations') -> 'None'
+```
+
+Keep one operation, its change-sized inverse, and lazy report recipe.
+
+#### `JournalRecord.report`
+
+Property.
+
+```text
+JournalRecord.report(self) -> 'EditReport'
+```
+
+Compute the expanded public report only when it is requested.
+
+#### `JournalRecord.to_data`
+
+Method.
+
+```text
+JournalRecord.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the public journal record as JSON-compatible data.
+
+### `EditInverse`
+
+```text
+EditInverse(operation: 'str', carriers: 'tuple[str, ...]') -> None
+```
+
+Name one recorded inverse and the graph carriers it restores.
+
+#### `EditInverse.to_data`
+
+Method.
+
+```text
+EditInverse.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Describe the inverse without exposing retained Python values.
+
+### `EditReport`
+
+```text
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = ()) -> None
+```
+
+Describe the content one recorded operation touched.
+
+#### `EditReport.to_data`
+
+Method.
+
+```text
+EditReport.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return this report in deterministic JSON-compatible form.
+
+### `EditAnnotations`
+
+```text
+EditAnnotations(author: 'str | None' = None, reason: 'str | None' = None, stage: 'str | None' = None, confidence: 'float | None' = None, iteration: 'int | None' = None, tool: 'str | None' = None, timestamp: 'str | None' = None, fields: 'Mapping[str, JsonValue]' = <factory>) -> None
+```
+
+Carry caller-supplied edit metadata without inventing a timestamp.
+
+``fields`` accepts ordinary typed JSON values.  A timestamp is an opaque
+caller-supplied string: constructing annotations never reads a clock.
+
+#### `EditAnnotations.merged`
+
+Method.
+
+```text
+EditAnnotations.merged(self, other: 'EditAnnotations') -> 'EditAnnotations'
+```
+
+Return these defaults with non-``None`` values from ``other``.
+
+#### `EditAnnotations.to_data`
+
+Method.
+
+```text
+EditAnnotations.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return only supplied metadata as detached JSON data.
+
+### `RelationTouch`
+
+```text
+RelationTouch(carrier: 'str', index: 'int') -> None
+```
+
+Name one touched binary or polyadic relation position.
+
+#### `RelationTouch.to_data`
+
+Method.
+
+```text
+RelationTouch.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the carrier and structural index.
+
 ### `undeclare_with_contents`
 
 ```text
@@ -1443,7 +2158,8 @@ only the final validated graph. A refusal therefore leaves the input graph
 untouched. Like :meth:`Graph.edit`, this profile-free operation deliberately
 bypasses clock rebinding; use ``ClockProfile.edit().undeclare_with_contents``
 when timing must refuse or report through a named policy. Its inverse is
-supplied by the edit journal in a later slice, not by this function itself.
+available when the operation runs through an edit journal, not from this
+function itself.
 
 ## Equivalence
 
@@ -3289,7 +4005,7 @@ Report whether this coordinate stands inside its carrier's seal.
 Method.
 
 ```text
-Graph.edit(self) -> 'GraphEditor'
+Graph.edit(self, journal: 'Journal | None' = None) -> 'GraphEditor | JournalEditor'
 ```
 
 Return a mutable editor holding a copy of this graph's content.
