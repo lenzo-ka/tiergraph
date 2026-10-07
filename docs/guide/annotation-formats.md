@@ -182,10 +182,54 @@ the physical face refuses `scale=`.
 ## From the command line
 
 `tiergraph span render GRAPH --profile PROFILE --format textgrid` writes a
-TextGrid from a stored graph and a span-view profile document, the JSON form
-that `SpanViewProfile.from_data` reads. Reading a TextGrid is a Python
-operation; save the graph it returns with `tiergraph.dumps` to use it with the
-other commands.
+TextGrid from a stored graph and a span-view profile document. Reading a
+TextGrid is a Python operation. Save both values returned by `from_textgrid` so
+the CLI can use them. This executed example uses a temporary directory:
+
+```python
+import json
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from tiergraph import dumps
+
+with TemporaryDirectory() as directory:
+    graph_path = Path(directory) / "textgrid.json"
+    profile_path = Path(directory) / "span-profile.json"
+    graph_path.write_text(dumps(graph), encoding="utf-8")
+    profile_path.write_text(
+        json.dumps(read.profile.to_data(), indent=2) + "\n", encoding="utf-8"
+    )
+    rendered = subprocess.run(
+        (
+            Path(sys.executable).with_name("tiergraph"),
+            "span",
+            "render",
+            graph_path,
+            "--profile",
+            profile_path,
+            "--format",
+            "textgrid",
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+print(rendered.splitlines()[0])
+```
+
+```text
+File type = "ooTextFile"
+```
+
+With the two files in the current directory, the shell command is:
+
+```console
+$ tiergraph span render textgrid.json --profile span-profile.json \
+    --format textgrid > rendered.TextGrid
+```
 
 ## Other formats
 

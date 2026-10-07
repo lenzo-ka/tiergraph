@@ -167,36 +167,23 @@ def fixture(*, offsets: bool = True) -> tuple[Graph, SpanViewProfile]:
 
 def profile_data(profile: SpanViewProfile) -> dict[str, object]:
     """Encode the declarative profile shape used by decoder and CLI tests."""
-    assert profile.base_surface_attribute is not None
-    return {
-        "base_tier": profile.base_tier.to_data(),
-        "span_tiers": [name.to_data() for name in profile.span_tiers],
-        "coverage_relation": profile.coverage_relation.to_data(),
-        "score_attribute": profile.score_attribute.to_data(),
-        "value_attribute": profile.value_attribute.to_data(),
-        "base_surface_attribute": profile.base_surface_attribute.to_data(),
-        "char_offset_attribute": (
-            None
-            if profile.char_offset_attribute is None
-            else profile.char_offset_attribute.to_data()
-        ),
-        "alternative_relation": (
-            None
-            if profile.alternative_relation is None
-            else profile.alternative_relation.to_data()
-        ),
-        "point_tiers": [name.to_data() for name in profile.point_tiers],
-        "point_coverage_relation": (
-            None
-            if profile.point_coverage_relation is None
-            else profile.point_coverage_relation.to_data()
-        ),
-        "value_attributes": {
-            str(tier): attribute.to_data()
-            for tier, attribute in profile.value_attributes
-        },
-        "clock_face": profile.clock_face,
-    }
+    data: dict[str, object] = {}
+    data.update(profile.to_data())
+    return data
+
+
+def test_profile_to_data_round_trips_every_field() -> None:
+    """The public encoder writes the complete document accepted by the decoder."""
+    _, profile = fixture()
+    assert SpanViewProfile.from_data(profile.to_data()) == profile
+
+    sparse = replace(
+        profile,
+        base_surface_attribute=None,
+        char_offset_attribute=None,
+        alternative_relation=None,
+    )
+    assert SpanViewProfile.from_data(sparse.to_data()) == sparse
 
 
 def test_profile_from_data_is_strict_and_hardens_every_qname() -> None:

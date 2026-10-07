@@ -4162,6 +4162,16 @@ when the tier is untyped.  A profile names what a reading has to be
 selected among, and a tier carries at most one simple membership, so there
 is nothing there to select.
 
+#### `SpanViewProfile.to_data`
+
+Method.
+
+```text
+SpanViewProfile.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the declarative span-view profile document used by the CLI.
+
 #### `SpanViewProfile.from_data`
 
 Class method.
@@ -7863,6 +7873,16 @@ through :meth:`Graph.item_type` and falling back to the tier's short name
 when the tier is untyped.  A profile names what a reading has to be
 selected among, and a tier carries at most one simple membership, so there
 is nothing there to select.
+
+#### `SpanViewProfile.to_data`
+
+Method.
+
+```text
+SpanViewProfile.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the declarative span-view profile document used by the CLI.
 
 #### `SpanViewProfile.from_data`
 

@@ -15,6 +15,7 @@ Selecting the word `cat` and walking that relation reaches its phones.
 
 ```python
 from dataclasses import replace
+from pathlib import Path
 
 from tiergraph import (
     AttributeValue,
