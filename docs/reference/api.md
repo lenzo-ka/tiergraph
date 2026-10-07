@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 232 top-level `tiergraph` exports exactly once.
+It covers 237 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1005,6 +1005,69 @@ Remove one relation instance by index, reference, or durable id.
 
 A structural reference names a current position; reread
 ``displacement()`` after removal before reusing one.
+
+## Equivalence
+
+### `EquivalenceView`
+
+```text
+EquivalenceView(*values)
+```
+
+Choose which observable graph identity an equivalence query compares.
+
+``FUNCTIONAL`` ignores namespace prefixes and carried durable ids, and
+resolves durable references to structural coordinates. ``IDENTIFIED`` adds
+carried durable ids while retaining those resolved references. ``EXACT``
+is graph equality (``==``), including prefixes and reference spellings.
+
+#### `EquivalenceView` members
+
+- `FUNCTIONAL` = `functional`
+- `IDENTIFIED` = `identified`
+- `EXACT` = `exact`
+
+### `abstract_form`
+
+```text
+abstract_form(graph: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'tuple[tuple[str, str], ...]'
+```
+
+Return the view's canonical named elements in comparison order.
+
+Values use deterministic strict-JSON spellings. Functional and identified
+forms resolve durable references to coordinates; the identified form then
+adds carried durable ids. The exact form retains reference spellings and
+includes the complete graph value used by graph equality. It does not
+require the graph to be encodable as wire bytes.
+
+### `equivalent`
+
+```text
+equivalent(left: 'Graph', right: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'bool'
+```
+
+Report whether two graphs are equal under the selected public view.
+
+### `fingerprint`
+
+```text
+fingerprint(graph: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'str'
+```
+
+Return a view-tagged, versioned SHA-256 fingerprint.
+
+The payload version is ``tiergraph-equivalence/1``. A fingerprint is stable
+only within that version, and two views intentionally have distinct digests
+even when their canonical forms otherwise contain the same elements.
+
+### `first_difference`
+
+```text
+first_difference(left: 'Graph', right: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'str | None'
+```
+
+Name and render the first differing element, or return ``None``.
 
 ## Fold
 

@@ -1729,7 +1729,7 @@ class Graph:
     def disagreements(self, delivery: Delivery) -> tuple[Consensus, ...]:
         """Return only delivered subject/name rows carrying unequal readings."""
         keys = {
-            (fact.subject, fact.value.name)
+            (_resolve_layer_subject(self, fact.subject), fact.value.name)
             for layer in self._delivered(delivery)
             for fact in layer.facts
             if not isinstance(fact.subject, OrphanedSubject)
@@ -1905,11 +1905,14 @@ class Graph:
     ) -> tuple[tuple[LayerName, Attribute], ...]:
         if isinstance(subject, OrphanedSubject):
             return ()
+        resolved_subject = _resolve_layer_subject(self, subject)
         return tuple(
             (layer.name, fact.value)
             for layer in self._delivered(delivery)
             for fact in layer.facts
-            if fact.subject == subject and fact.value.name == name
+            if not isinstance(fact.subject, OrphanedSubject)
+            and _resolve_layer_subject(self, fact.subject) == resolved_subject
+            and fact.value.name == name
         )
 
     def boundaries(self, tier: QualifiedName) -> tuple[Boundary, ...]:
@@ -4066,7 +4069,7 @@ def _validate_orphaned_subject(layer: Layer, subject: OrphanedSubject) -> None:
         )
 
 
-def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
+def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> LayerSubject:
     if isinstance(subject, ItemRef):
         _validate_reference(
             subject, "item reference", graph._tiers_by_name, GraphValidationError
@@ -4091,7 +4094,7 @@ def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
             raise GraphValidationError(
                 f"layer subject names undeclared tier {str(subject.tier)!r}"
             )
-        return subject.tier
+        return subject
     if isinstance(subject, RelationDeclarationRef):
         if not any(
             item.name == subject.relation for item in graph.relation_declarations
@@ -4099,35 +4102,49 @@ def _resolve_layer_subject(graph: Graph, subject: LayerSubject) -> object:
             raise GraphValidationError(
                 f"layer subject names undeclared relation {str(subject.relation)!r}"
             )
-        return subject.relation
+        return subject
     if isinstance(subject, RelationInstanceRef):
         if subject.index < 0 or subject.index >= len(graph.relations):
             raise GraphValidationError(
                 f"layer subject relation index {subject.index} is outside the graph"
             )
-        return subject.index
+        return subject
     if isinstance(subject, PolyadicInstanceRef):
         if subject.index < 0 or subject.index >= len(graph.polyadic_relations):
             raise GraphValidationError(
                 f"layer subject polyadic relation index {subject.index} is outside the graph"
             )
-        return subject.index
+        return subject
     if isinstance(subject, DurableRelationRef):
-        if not any(item.durable_id == subject.durable_id for item in graph.relations):
+        index = next(
+            (
+                index
+                for index, item in enumerate(graph.relations)
+                if item.durable_id == subject.durable_id
+            ),
+            None,
+        )
+        if index is None:
             raise GraphValidationError(
                 f"unknown durable relation id {subject.durable_id!r}"
             )
-        return subject.durable_id
+        return RelationInstanceRef(index)
     if isinstance(subject, DurablePolyadicRef):
-        if not any(
-            item.durable_id == subject.durable_id for item in graph.polyadic_relations
-        ):
+        index = next(
+            (
+                index
+                for index, item in enumerate(graph.polyadic_relations)
+                if item.durable_id == subject.durable_id
+            ),
+            None,
+        )
+        if index is None:
             raise GraphValidationError(
                 f"unknown durable polyadic relation id {subject.durable_id!r}"
             )
-        return subject.durable_id
+        return PolyadicInstanceRef(index)
     if isinstance(subject, DocumentRef):
-        return None
+        return subject
     raise GraphValidationError(  # pragma: no cover - callers exclude orphans
         "an orphaned layer subject has no live coordinate"
     )
