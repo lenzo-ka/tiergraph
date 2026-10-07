@@ -585,7 +585,10 @@ def test_a_gated_end_anchor_is_skipped_before_the_scope_end() -> None:
 
 def test_a_gated_end_anchor_alternative_is_skipped_in_an_open_right_scope() -> None:
     """An open right edge never satisfies an end-anchor alternative in a gated closure."""
-    alternatives = (*(atom(f"w{index}") for index in range(1, 40)), EndPattern())
+    alternatives: tuple[Pattern, ...] = (
+        *(atom(f"w{index}") for index in range(1, 40)),
+        EndPattern(),
+    )
     compiled = compile_pattern(SeqPattern((atom("w0"), AltPattern(alternatives))))
     raw_scopes, truth = compiled._prepare(
         graph(("w0",)), TierOrder(TIER), _PatternOperation.EXISTS
@@ -593,4 +596,5 @@ def test_a_gated_end_anchor_alternative_is_skipped_in_an_open_right_scope() -> N
     scopes = (_Scope(raw_scopes[0].nodes),)
     assert compiled._count_over(scopes, truth) == 1
     open_count = compiled._count_over(scopes, truth, open_right=True)
+    assert isinstance(open_count, match_module.OpenPatternResult)
     assert open_count.result == 0
