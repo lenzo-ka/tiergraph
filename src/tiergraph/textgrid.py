@@ -55,6 +55,7 @@ _SHORT_HEADER = 'File type = "ooTextFile short"'
 _OBJECT_HEADER = 'Object class = "TextGrid"'
 _SHORT_OBJECT_HEADER = '"TextGrid"'
 _LONG_VALUE = re.compile(r"^\s*[^=]+?=\s*(.*?)\s*$")
+_LONG_PROBE = re.compile(r"^\s*xmin\s*=")
 _INTEGER = re.compile(r"[0-9]+\Z")
 _HEADER_LINE_COUNT = 2
 _CONTAINMENT_RULES = ("enclosure", "endpoint_coincidence")
@@ -191,29 +192,97 @@ class _Values:
         return value
 
 
+def _has_closing_quote(value: str, start: int) -> bool:
+    """Say whether one value fragment contains a non-doubled quote."""
+    index = start
+    while index < len(value):
+        if value[index] != '"':
+            index += 1
+        elif index + 1 < len(value) and value[index + 1] == '"':
+            index += 2
+        else:
+            return True
+    return False
+
+
+def _continued_value(lines: list[str], index: int, value: str) -> tuple[str, int]:
+    """Join physical lines belonging to one quoted TextGrid value."""
+    if not value.startswith('"'):
+        return value.strip(), index
+    parts = [value]
+    start = 1
+    while not _has_closing_quote(parts[-1], start):
+        index += 1
+        if index == len(lines):
+            break
+        parts.append(lines[index])
+        start = 0
+    return "\n".join(parts).strip(), index
+
+
+def _short_values(lines: list[str]) -> list[str]:
+    """Read bare short-form values, retaining newlines inside strings."""
+    values: list[str] = []
+    index = 0
+    while index < len(lines):
+        value = lines[index].strip()
+        if value:
+            value, index = _continued_value(lines, index, value)
+            values.append(value)
+        index += 1
+    return values
+
+
+def _long_values(lines: list[str]) -> list[str]:
+    """Read values from the labeled long form and ignore its scaffolding."""
+    values: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped.startswith("tiers?"):
+            values.append(stripped.removeprefix("tiers?").strip())
+        elif (match := _LONG_VALUE.match(lines[index])) is not None:
+            value, index = _continued_value(lines, index, match.group(1))
+            values.append(value)
+        index += 1
+    return values
+
+
 def _parse(  # noqa: PLR0915 -- the two ordered TextGrid grammars share one cursor
     document: str | bytes,
 ) -> tuple[Decimal, Decimal, tuple[_Tier, ...]]:
-    lines = _text(document).splitlines()
+    lines = _text(document).replace("\r\n", "\n").split("\n")
     while lines and not lines[-1].strip():
         lines.pop()
     if len(lines) < _HEADER_LINE_COUNT:
         raise ValueError("TextGrid document lacks its two-line header")
     header, object_header = lines[0].strip(), lines[1].strip()
-    if (header, object_header) == (_LONG_HEADER, _OBJECT_HEADER):
-        values = []
-        for line in lines[2:]:
-            stripped = line.strip()
-            if stripped.startswith("tiers?"):
-                values.append(stripped.removeprefix("tiers?").strip())
-            elif (match := _LONG_VALUE.match(line)) is not None:
-                values.append(match.group(1))
-    elif (header, object_header) == (_SHORT_HEADER, _SHORT_OBJECT_HEADER):
-        values = [line.strip() for line in lines[2:] if line.strip()]
-    else:
+    header_pair = (header, object_header)
+    if header_pair not in {
+        (_LONG_HEADER, _OBJECT_HEADER),
+        (_SHORT_HEADER, _SHORT_OBJECT_HEADER),
+    }:
         raise ValueError(
             f"TextGrid header {(header, object_header)!r} names an unsupported form"
         )
+    body = lines[_HEADER_LINE_COUNT:]
+    probe_index = next(
+        (
+            index
+            for index, line in enumerate(body)
+            if line.strip() and not line.lstrip().startswith("!")
+        ),
+        None,
+    )
+    if probe_index is not None:
+        body = body[probe_index:]
+    first_body_line = body[0] if body else None
+    labeled = (
+        _LONG_PROBE.match(first_body_line) is not None
+        if first_body_line is not None
+        else header_pair == (_LONG_HEADER, _OBJECT_HEADER)
+    )
+    values = _long_values(body) if labeled else _short_values(body)
     stream = _Values(values)
     xmin = _decimal(stream.take("xmin"), "TextGrid xmin")
     xmax = _decimal(stream.take("xmax"), "TextGrid xmax")
