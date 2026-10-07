@@ -1066,8 +1066,8 @@ class DurableBoundaryRef:
     the anchor, a boundary whose anchor is gone has no identity left to keep,
     and the kernel will not choose a replacement anchor on a caller's behalf.
     An edit that would remove such an item is therefore refused, immediately by
-    a frozen graph's operation and at ``GraphEditor.freeze()`` by the editor's,
-    and a caller who means to keep the boundary anchors it elsewhere first.
+    either a frozen graph's operation or the mutable editor's removal call, and
+    a caller who means to keep the boundary anchors it elsewhere first.
     """
 
     anchor: DurableItemRef | QualifiedName
@@ -2031,7 +2031,14 @@ class Graph:
         id is as-built content, so adding it changes canonical bytes and the
         construction fingerprint.  An anchor carrying a different id refuses
         the requested boundary identity rather than replacing its own.
+
+        Demotion restores a stored boundary value to coordinate addressing. If
+        no value is stored, demotion is a no-op because there is no boundary
+        record to rewrite. It is an exact inverse when the interior anchor
+        already carried the id. If promotion created that item id, demote the
+        item separately for exact restoration.
         """
+        _require_durable_id(durable_id, "durable id")
         _validate_boundary(reference, self._tiers_by_name, ValueError)
         tier = self._tiers_by_name[reference.tier]
         if reference.index == 0:
@@ -2065,6 +2072,38 @@ class Graph:
             for candidate in promoted.boundary_values
         )
         return promoted._replace(boundary_values=values), durable
+
+    def promote_relation(
+        self, target: RelationTarget, durable_id: str
+    ) -> tuple[Graph, DurableRelationRef | DurablePolyadicRef]:
+        """Return a graph carrying the caller's semantic id for one instance."""
+        editor = self.edit()
+        polyadic, _ = editor._relation_site(target)
+        promoted = editor.promote_relation(target, durable_id).freeze()
+        durable: DurableRelationRef | DurablePolyadicRef = (
+            DurablePolyadicRef(durable_id)
+            if polyadic
+            else DurableRelationRef(durable_id)
+        )
+        return promoted, durable
+
+    def demote_item(self, reference: DurableItemRef) -> Graph:
+        """Return a graph without this item's durable identity."""
+        return self.edit().demote_item(reference).freeze()
+
+    def demote_boundary(self, reference: DurableBoundaryRef) -> Graph:
+        """Return a graph storing this boundary value by coordinate.
+
+        A valid durable boundary with no stored value has no boundary record to
+        rewrite, so demotion is a no-op.
+        """
+        return self.edit().demote_boundary(reference).freeze()
+
+    def demote_relation(
+        self, reference: DurableRelationRef | DurablePolyadicRef
+    ) -> Graph:
+        """Return a graph without this relation instance's durable identity."""
+        return self.edit().demote_relation(reference).freeze()
 
     def _replace(
         self,
@@ -2131,6 +2170,10 @@ class Graph:
             )
         return self._with_seal(carrier, sealed)
 
+    def drop_seal(self, carrier: SealedCarrier) -> Graph:
+        """Return a graph with no seal record for this carrier."""
+        return self.edit().drop_seal(carrier).freeze()
+
     def is_sealed(self, coordinate: ItemRef | BoundaryRef) -> bool:
         """Report whether this coordinate stands inside its carrier's seal."""
         return any(
@@ -2191,6 +2234,14 @@ class Graph:
         """Return a new graph without this item."""
         return self.edit().remove_item(reference).freeze()
 
+    def remove_items(self, tier: QualifiedName, index: int, count: int) -> Graph:
+        """Return a new graph without one contiguous run of items."""
+        return self.edit().remove_items(tier, index, count).freeze()
+
+    def replace_item(self, reference: ItemRef | DurableItemRef, item: Item) -> Graph:
+        """Return a new graph with this item's values replaced."""
+        return self.edit().replace_item(reference, item).freeze()
+
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> Graph:
         """Return a new graph with this item at another index of its own tier."""
         return self.edit().move_item(reference, index).freeze()
@@ -2204,10 +2255,12 @@ class Graph:
         return self.edit().swap_items(first, second).freeze()
 
     def add_relation(
-        self, instance: RelationInstance | PolyadicRelationInstance
+        self,
+        instance: RelationInstance | PolyadicRelationInstance,
+        at: int | None = None,
     ) -> Graph:
-        """Return a new graph carrying one more relation instance."""
-        return self.edit().add_relation(instance).freeze()
+        """Return a new graph carrying one relation instance at a position."""
+        return self.edit().add_relation(instance, at).freeze()
 
     def remove_relation(self, target: RelationTarget) -> Graph:
         """Return a new graph without the relation instance this names.
@@ -2216,6 +2269,33 @@ class Graph:
         relation content.
         """
         return self.edit().remove_relation(target).freeze()
+
+    def set_endpoints(
+        self,
+        target: RelationTarget,
+        sources: RelationEndpointRef | Iterable[RelationEndpointRef],
+        targets: RelationEndpointRef | Iterable[RelationEndpointRef],
+    ) -> Graph:
+        """Return a graph with one instance's endpoint side or sides replaced."""
+        return self.edit().set_endpoints(target, sources, targets).freeze()
+
+    def add_layer(self, name: LayerName) -> Graph:
+        """Return a graph carrying a new empty layer."""
+        return self.edit().add_layer(name).freeze()
+
+    def remove_layer(self, name: LayerName) -> Graph:
+        """Return a graph without this empty layer."""
+        return self.edit().remove_layer(name).freeze()
+
+    def put_fact(self, layer: LayerName, fact: LayerFact) -> Graph:
+        """Return a graph with this layer fact added or replaced."""
+        return self.edit().put_fact(layer, fact).freeze()
+
+    def remove_fact(
+        self, layer: LayerName, subject: LayerSubject, name: QualifiedName
+    ) -> Graph:
+        """Return a graph without this exactly addressed layer fact."""
+        return self.edit().remove_fact(layer, subject, name).freeze()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2437,6 +2517,252 @@ class GraphEditor:
             )
         return self
 
+    def promote_item(self, reference: ItemRef, durable_id: str) -> GraphEditor:
+        """Give one item durable identity, refusing a conflict before writing."""
+        coordinate = self._resolve_item(reference)
+        member = self._member(coordinate.tier, "item promotion")
+        item = member.items[coordinate.index]
+        if item.durable_id is not None:
+            if item.durable_id != durable_id:
+                raise GraphValidationError(
+                    f"item {str(coordinate)!r} already carries durable id "
+                    f"{item.durable_id!r}; refused conflicting durable id "
+                    f"{durable_id!r}"
+                )
+            return self
+        self._require_unused_durable_id(durable_id)
+        member.items[coordinate.index] = Item(durable_id, item.attributes)
+        return self
+
+    def promote_boundary(self, reference: BoundaryRef, durable_id: str) -> GraphEditor:
+        """Give a boundary a durable anchor and store its values by that anchor.
+
+        Demotion restores a stored boundary value to coordinate addressing. If
+        no value is stored, demotion is a no-op because there is no boundary
+        record to rewrite. It is an exact inverse when the interior anchor
+        already carried the id. If promotion created that item id, demote the
+        item separately for exact restoration.
+        """
+        _require_durable_id(durable_id, "durable id")
+        _validate_boundary(reference, self._tier_views(), GraphValidationError)
+        member = self._member(reference.tier, "boundary promotion")
+        if reference.index == 0:
+            durable = DurableBoundaryRef(reference.tier, BoundarySide.BEFORE)
+            anchor_index = None
+        elif reference.index == len(member.items):
+            durable = DurableBoundaryRef(reference.tier, BoundarySide.AFTER)
+            anchor_index = None
+        else:
+            anchor_index = reference.index
+            anchor = member.items[anchor_index]
+            if anchor.durable_id is not None and anchor.durable_id != durable_id:
+                raise GraphValidationError(
+                    f"boundary {str(reference)!r} is before an anchor carrying "
+                    f"durable id {anchor.durable_id!r}; refused conflicting "
+                    f"boundary durable id {durable_id!r}"
+                )
+            if anchor.durable_id is None:
+                self._require_unused_durable_id(durable_id)
+            durable = DurableBoundaryRef(
+                DurableItemRef(anchor.durable_id or durable_id), BoundarySide.BEFORE
+            )
+        boundary_index = self._boundary_index(reference)
+        if anchor_index is not None:
+            anchor = member.items[anchor_index]
+            if anchor.durable_id is None:
+                member.items[anchor_index] = Item(durable_id, anchor.attributes)
+        if boundary_index is not None:
+            boundary = self._boundary_values[boundary_index]
+            if not isinstance(boundary.reference, DurableBoundaryRef):
+                self._boundary_values[boundary_index] = Boundary(
+                    durable, boundary.attributes
+                )
+        return self
+
+    def promote_relation(self, target: RelationTarget, durable_id: str) -> GraphEditor:
+        """Give one bipartite or polyadic instance durable identity."""
+        polyadic, index = self._relation_site(target)
+        relation = (
+            self._polyadic_relations[index] if polyadic else self._relations[index]
+        )
+        if relation.durable_id is not None:
+            if relation.durable_id != durable_id:
+                raise GraphValidationError(
+                    f"relation instance already carries durable id "
+                    f"{relation.durable_id!r}; refused conflicting durable id "
+                    f"{durable_id!r}"
+                )
+            return self
+        self._require_unused_durable_id(durable_id)
+        if polyadic:
+            self._polyadic_relations[index] = replace(
+                self._polyadic_relations[index], durable_id=durable_id
+            )
+        else:
+            self._relations[index] = replace(
+                self._relations[index], durable_id=durable_id
+            )
+        return self
+
+    def demote_item(self, reference: DurableItemRef) -> GraphEditor:
+        """Remove an unreferenced item's durable identity."""
+        coordinate = self._resolve_item(reference)
+        self._refuse_durable_item_reference(reference.durable_id)
+        member = self._member(coordinate.tier, "item demotion")
+        item = member.items[coordinate.index]
+        member.items[coordinate.index] = Item(None, item.attributes)
+        return self
+
+    def demote_boundary(self, reference: DurableBoundaryRef) -> GraphEditor:
+        """Store one boundary value by coordinate while retaining its anchor id.
+
+        Retaining the anchor is exact when it was durable before promotion. If
+        promotion created that item id, this inverse is functional rather than
+        identified until the caller separately demotes the item. A valid durable
+        boundary with no stored value has no boundary record to rewrite, so
+        demotion is a no-op.
+        """
+        coordinate = self._resolve_boundary(reference)
+        index = next(
+            (
+                position
+                for position, boundary in enumerate(self._boundary_values)
+                if boundary.reference == reference
+            ),
+            None,
+        )
+        if index is None:
+            return self
+        self._refuse_durable_boundary_reference(reference)
+        boundary = self._boundary_values[index]
+        self._boundary_values[index] = Boundary(coordinate, boundary.attributes)
+        return self
+
+    def demote_relation(
+        self, reference: DurableRelationRef | DurablePolyadicRef
+    ) -> GraphEditor:
+        """Remove an unreferenced relation instance's durable identity."""
+        polyadic, index = self._relation_site(reference)
+        durable_id = reference.durable_id
+        for layer in self._layers:
+            for fact in layer.facts:
+                if (
+                    isinstance(fact.subject, DurableRelationRef | DurablePolyadicRef)
+                    and fact.subject.durable_id == durable_id
+                ):
+                    raise GraphValidationError(
+                        f"relation demotion would invalidate a fact in layer "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r} that names "
+                        f"durable id {durable_id!r}"
+                    )
+        if polyadic:
+            self._polyadic_relations[index] = replace(
+                self._polyadic_relations[index], durable_id=None
+            )
+        else:
+            self._relations[index] = replace(self._relations[index], durable_id=None)
+        return self
+
+    def seal(self, carrier: SealedCarrier, sealed: int) -> GraphEditor:
+        """Seal this much of one carrier, refusing a retreat."""
+        self._validate_seal_extent(carrier, sealed)
+        current = self._seal_for(carrier)
+        if current is not None and sealed < current.sealed:
+            raise GraphValidationError(
+                f"seal on {str(carrier)!r} stands at {current.sealed} and cannot be "
+                f"set to {sealed}; sealing advances. Use unseal to say that what you "
+                "were given is what you mean to change."
+            )
+        self._put_seal(carrier, sealed)
+        return self
+
+    def unseal(self, carrier: SealedCarrier, sealed: int) -> GraphEditor:
+        """Retreat an existing seal without dropping its record."""
+        self._validate_seal_extent(carrier, sealed)
+        current = self._seal_for(carrier)
+        if current is None:
+            raise GraphValidationError(
+                f"cannot unseal {str(carrier)!r} to {sealed}: this graph carries no "
+                "seal on that carrier"
+            )
+        if sealed >= current.sealed:
+            raise GraphValidationError(
+                f"cannot unseal {str(carrier)!r} from {current.sealed} to {sealed}: "
+                "the requested seal is not lower"
+            )
+        self._put_seal(carrier, sealed)
+        return self
+
+    def drop_seal(self, carrier: SealedCarrier) -> GraphEditor:
+        """Remove one seal record, including a zero-length record."""
+        current = self._seal_for(carrier)
+        if current is None:
+            raise GraphValidationError(
+                f"cannot drop seal on {str(carrier)!r}: this graph carries no seal "
+                "on that carrier"
+            )
+        self._seals = [seal for seal in self._seals if seal.carrier != carrier]
+        return self
+
+    def add_layer(self, name: LayerName) -> GraphEditor:
+        """Add one empty layer, refusing a duplicate name."""
+        if any(layer.name == name for layer in self._layers):
+            raise GraphValidationError(
+                f"duplicate layer {name.vocabulary!r}/{name.source!r}; names must be unique"
+            )
+        self._layers.append(Layer(name, ()))
+        return self
+
+    def remove_layer(self, name: LayerName) -> GraphEditor:
+        """Remove one empty layer, refusing to discard its facts."""
+        index = self._layer_index(name)
+        layer = self._layers[index]
+        if layer.facts:
+            raise GraphValidationError(
+                f"cannot remove layer {name.vocabulary!r}/{name.source!r}: it still "
+                f"holds {len(layer.facts)} fact(s)"
+            )
+        del self._layers[index]
+        return self
+
+    def put_fact(self, layer: LayerName, fact: LayerFact) -> GraphEditor:
+        """Add or replace one exactly addressed fact in an existing layer.
+
+        A supplied valid ``OrphanedSubject`` is retained as content. Invalid
+        orphan coordinates and unresolved live subjects refuse before writing.
+        """
+        index = self._layer_index(layer)
+        current = self._layers[index]
+        self._validate_fact(current, fact)
+        key = (fact.subject, fact.value.name)
+        facts = [
+            candidate
+            for candidate in current.facts
+            if (candidate.subject, candidate.value.name) != key
+        ]
+        facts.append(fact)
+        self._layers[index] = Layer(layer, tuple(facts))
+        return self
+
+    def remove_fact(
+        self, layer: LayerName, subject: LayerSubject, name: QualifiedName
+    ) -> GraphEditor:
+        """Remove one fact by its exact subject spelling and attribute name."""
+        index = self._layer_index(layer)
+        current = self._layers[index]
+        facts = tuple(
+            fact
+            for fact in current.facts
+            if (fact.subject, fact.value.name) != (subject, name)
+        )
+        if len(facts) == len(current.facts):
+            raise GraphValidationError(
+                f"layer {layer.vocabulary!r}/{layer.source!r} carries no fact "
+                f"{str(name)!r} at {str(subject)!r}"
+            )
+        self._layers[index] = Layer(layer, facts)
+        return self
+
     def set_attribute(self, target: EditTarget, value: Attribute) -> GraphEditor:
         """Give one carrier this value, replacing any value of the same name.
 
@@ -2613,16 +2939,68 @@ class GraphEditor:
         coordinate = self._resolve_item(reference)
         member = self._member(coordinate.tier, "item removal")
         count = len(member.items)
+        mapping = {
+            old: old if old < coordinate.index else old - 1
+            for old in range(count)
+            if old != coordinate.index
+        }
         self._restructure(
             member,
             [*member.items[: coordinate.index], *member.items[coordinate.index + 1 :]],
-            {
-                old: old if old < coordinate.index else old - 1
-                for old in range(count)
-                if old != coordinate.index
-            },
+            mapping,
             "item removal",
         )
+        return self
+
+    def remove_items(self, tier: QualifiedName, index: int, count: int) -> GraphEditor:
+        """Remove a contiguous item run in one restructure.
+
+        This equals removing ``count`` items at ``index`` one at a time when
+        every removal is admitted. A zero count validates the tier and range,
+        then leaves both graph content and displacement untouched.
+        """
+        member = self._member(tier, "item removal")
+        size = len(member.items)
+        if count < 0:
+            raise GraphValidationError("item removal count must not be negative")
+        if index < 0 or index > size or index + count > size:
+            raise GraphValidationError(
+                f"item removal range {index}:{index + count} is outside tier "
+                f"{str(tier)!r} with {size} items"
+            )
+        if count == 0:
+            return self
+        departed = set(range(index, index + count))
+        mapping = {
+            old: old if old < index else old - count
+            for old in range(size)
+            if old not in departed
+        }
+        self._restructure(
+            member,
+            [*member.items[:index], *member.items[index + count :]],
+            mapping,
+            "item removal",
+        )
+        return self
+
+    def replace_item(
+        self, reference: ItemRef | DurableItemRef, item: Item
+    ) -> GraphEditor:
+        """Replace one item's values while preserving its durable identity.
+
+        Promotion and demotion are separate operations, so replacement refuses
+        an item whose durable id differs from the item already at the coordinate.
+        """
+        coordinate = self._resolve_item(reference)
+        member = self._member(coordinate.tier, "item replacement")
+        current = member.items[coordinate.index]
+        if item.durable_id != current.durable_id:
+            raise GraphValidationError(
+                f"item replacement at {str(coordinate)!r} must preserve durable id "
+                f"{current.durable_id!r}; use promote_item or demote_item to change identity"
+            )
+        member.items[coordinate.index] = item
         return self
 
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:
@@ -2674,13 +3052,48 @@ class GraphEditor:
         return self
 
     def add_relation(
-        self, instance: RelationInstance | PolyadicRelationInstance
+        self,
+        instance: RelationInstance | PolyadicRelationInstance,
+        at: int | None = None,
     ) -> GraphEditor:
-        """Add one relation instance to the collection its arity belongs to."""
-        if isinstance(instance, RelationInstance):
-            self._relations.append(instance)
+        """Insert one relation instance in the collection its arity belongs to."""
+        polyadic = isinstance(instance, PolyadicRelationInstance)
+        count = len(self._polyadic_relations) if polyadic else len(self._relations)
+        index = count if at is None else at
+        if isinstance(index, bool) or index < 0 or index > count:
+            kind = "polyadic" if polyadic else "bipartite"
+            raise GraphValidationError(
+                f"relation insertion index {index!r} is outside the graph's "
+                f"{count} {kind} relation instances"
+            )
+        carrier = (
+            GraphCarrier.POLYADIC_RELATIONS if polyadic else GraphCarrier.RELATIONS
+        )
+        seal = self._seal_for(carrier)
+        if seal is not None and index < seal.sealed:
+            self._refuse_seal_move("relation insertion", carrier, index, seal.sealed)
+        if index == count:
+            if polyadic:
+                self._polyadic_relations.append(
+                    cast(PolyadicRelationInstance, instance)
+                )
+            else:
+                self._relations.append(cast(RelationInstance, instance))
+            return self
+        mapping = {old: old if old < index else old + 1 for old in range(count)}
+        step = self._current_displacement(
+            polyadic_relations=mapping if polyadic else None,
+            relations=None if polyadic else mapping,
+        )
+        layers = [_remap_layer(layer, step) for layer in self._layers]
+        if polyadic:
+            self._polyadic_relations.insert(
+                index, cast(PolyadicRelationInstance, instance)
+            )
         else:
-            self._polyadic_relations.append(instance)
+            self._relations.insert(index, cast(RelationInstance, instance))
+        self._layers = layers
+        self._advance_displacement(step)
         return self
 
     def remove_relation(self, target: RelationTarget) -> GraphEditor:
@@ -2696,6 +3109,14 @@ class GraphEditor:
         seal = self._seal_for(carrier)
         if seal is not None and index < seal.sealed:
             self._refuse_seal_move("relation removal", carrier, index, seal.sealed)
+        relation = (
+            self._polyadic_relations[index] if polyadic else self._relations[index]
+        )
+        departed_durable_relations = (
+            frozenset({relation.durable_id})
+            if relation.durable_id is not None
+            else frozenset()
+        )
         if polyadic:
             mapping = {
                 old: old if old < index else old - 1
@@ -2706,15 +3127,14 @@ class GraphEditor:
                 polyadic_relations=mapping,
                 departed_polyadic_relations=frozenset({index}),
             )
-            self._layers = [_remap_layer(layer, step) for layer in self._layers]
-            durable_id = self._polyadic_relations[index].durable_id
-            if durable_id is not None:
-                self._layers = [
-                    _orphan_durable_relation(
-                        layer, durable_id, GraphCarrier.POLYADIC_RELATIONS, index
-                    )
-                    for layer in self._layers
-                ]
+            layers = [
+                _remap_layer(
+                    layer,
+                    step,
+                    departed_durable_relations=departed_durable_relations,
+                )
+                for layer in self._layers
+            ]
             del self._polyadic_relations[index]
         else:
             mapping = {
@@ -2725,18 +3145,240 @@ class GraphEditor:
             step = self._current_displacement(
                 relations=mapping, departed_relations=frozenset({index})
             )
-            self._layers = [_remap_layer(layer, step) for layer in self._layers]
-            durable_id = self._relations[index].durable_id
-            if durable_id is not None:
-                self._layers = [
-                    _orphan_durable_relation(
-                        layer, durable_id, GraphCarrier.RELATIONS, index
-                    )
-                    for layer in self._layers
-                ]
+            layers = [
+                _remap_layer(
+                    layer,
+                    step,
+                    departed_durable_relations=departed_durable_relations,
+                )
+                for layer in self._layers
+            ]
             del self._relations[index]
+        self._layers = layers
         self._advance_displacement(step)
         return self
+
+    def set_endpoints(
+        self,
+        target: RelationTarget,
+        sources: RelationEndpointRef | Iterable[RelationEndpointRef],
+        targets: RelationEndpointRef | Iterable[RelationEndpointRef],
+    ) -> GraphEditor:
+        """Replace one instance's endpoints while preserving its other content."""
+        polyadic, index = self._relation_site(target)
+        if polyadic:
+            if isinstance(
+                sources, (str, bytes, ItemRef, DurableItemRef, DurableBoundaryRef)
+            ) or isinstance(
+                targets, (str, bytes, ItemRef, DurableItemRef, DurableBoundaryRef)
+            ):
+                raise GraphValidationError(
+                    "polyadic endpoint sides must be ordered iterables"
+                )
+            if isinstance(sources, Set | Mapping) or isinstance(targets, Set | Mapping):
+                raise GraphValidationError(
+                    "polyadic endpoint sides must be ordered iterables"
+                )
+            source_side = tuple(sources)
+            target_side = tuple(targets)
+            polyadic_relation = self._polyadic_relations[index]
+            self._polyadic_relations[index] = PolyadicRelationInstance(
+                polyadic_relation.declaration,
+                source_side,
+                target_side,
+                polyadic_relation.durable_id,
+                polyadic_relation.attributes,
+            )
+        else:
+            if not isinstance(
+                sources, (ItemRef, DurableItemRef, DurableBoundaryRef)
+            ) or not isinstance(targets, (ItemRef, DurableItemRef, DurableBoundaryRef)):
+                raise GraphValidationError(
+                    "bipartite endpoints must each be one endpoint reference"
+                )
+            binary_relation = self._relations[index]
+            self._relations[index] = RelationInstance(
+                binary_relation.declaration,
+                sources,
+                targets,
+                binary_relation.durable_id,
+                binary_relation.attributes,
+            )
+        return self
+
+    def _validate_fact(self, layer: Layer, fact: LayerFact) -> None:
+        if fact.value.name.namespace != layer.name.vocabulary:
+            raise GraphValidationError(
+                f"layer {layer.name.vocabulary!r}/{layer.name.source!r} states "
+                f"{str(fact.value.name)!r}; a layer writes in its named vocabulary"
+            )
+        declaration = self._declared(fact.value.name)
+        if declaration.value_type is not fact.value.value_type:
+            raise GraphValidationError(
+                f"attribute {str(fact.value.name)!r} requires "
+                f"{declaration.value_type.value}, not {fact.value.value_type.value}"
+            )
+        domain = _layer_subject_domain(fact.subject)
+        if declaration.domain is not domain:
+            raise GraphValidationError(
+                f"layer {layer.name.vocabulary!r}/{layer.name.source!r} states "
+                f"{str(fact.value.name)!r} at {_domain_article(domain)}, but that "
+                f"name is declared for the {declaration.domain.value} domain; a "
+                "value is carried where its declaration says it is carried"
+            )
+        subject = fact.subject
+        if isinstance(subject, OrphanedSubject):
+            _validate_orphaned_subject(layer, subject)
+        elif isinstance(subject, ItemRef | DurableItemRef):
+            self._resolve_item(subject)
+        elif isinstance(subject, BoundaryRef | DurableBoundaryRef):
+            self._resolve_boundary(subject)
+        elif isinstance(subject, TierRef):
+            self._member(subject.tier, "layer subject")
+        elif isinstance(subject, RelationDeclarationRef):
+            self._declaration_index(subject.relation)
+        elif isinstance(
+            subject,
+            RelationInstanceRef
+            | DurableRelationRef
+            | PolyadicInstanceRef
+            | DurablePolyadicRef,
+        ):
+            self._relation_site(subject)
+
+    def _layer_index(self, name: LayerName) -> int:
+        for index, layer in enumerate(self._layers):
+            if layer.name == name:
+                return index
+        raise GraphValidationError(
+            f"graph carries no layer {name.vocabulary!r}/{name.source!r}"
+        )
+
+    def _require_unused_durable_id(self, durable_id: str) -> None:
+        _require_durable_id(durable_id, "durable id")
+        for member in self._tiers:
+            for index, item in enumerate(member.items):
+                if item.durable_id == durable_id:
+                    coordinate = ItemRef(member.declaration.name, index)
+                    raise GraphValidationError(
+                        f"duplicate durable id {durable_id!r}; item "
+                        f"{str(coordinate)!r} already carries it"
+                    )
+        for index, binary_relation in enumerate(self._relations):
+            if binary_relation.durable_id == durable_id:
+                raise GraphValidationError(
+                    f"duplicate durable id {durable_id!r}; relation instance "
+                    f"{index} already carries it"
+                )
+        for index, polyadic_relation in enumerate(self._polyadic_relations):
+            if polyadic_relation.durable_id == durable_id:
+                raise GraphValidationError(
+                    f"duplicate durable id {durable_id!r}; polyadic relation "
+                    f"instance {index} already carries it"
+                )
+
+    @staticmethod
+    def _endpoint_names_departure(
+        endpoint: RelationEndpointRef,
+        departed_items: frozenset[ItemRef],
+        durable_ids: frozenset[str],
+    ) -> bool:
+        if isinstance(endpoint, ItemRef):
+            return endpoint in departed_items
+        if isinstance(endpoint, DurableItemRef):
+            return endpoint.durable_id in durable_ids
+        return (
+            isinstance(endpoint.anchor, DurableItemRef)
+            and endpoint.anchor.durable_id in durable_ids
+        )
+
+    def _refuse_durable_item_reference(self, durable_id: str) -> None:
+        ids = frozenset({durable_id})
+        empty: frozenset[ItemRef] = frozenset()
+        for binary_relation in self._relations:
+            if any(
+                self._endpoint_names_departure(endpoint, empty, ids)
+                for endpoint in (binary_relation.left, binary_relation.right)
+            ):
+                raise GraphValidationError(
+                    f"item demotion would invalidate relation "
+                    f"{str(binary_relation.declaration)!r}"
+                )
+        for polyadic_relation in self._polyadic_relations:
+            if any(
+                self._endpoint_names_departure(endpoint, empty, ids)
+                for endpoint in (
+                    *polyadic_relation.sources,
+                    *polyadic_relation.targets,
+                )
+            ):
+                raise GraphValidationError(
+                    f"item demotion would invalidate polyadic relation "
+                    f"{str(polyadic_relation.declaration)!r}"
+                )
+        for boundary in self._boundary_values:
+            if _durable_boundary_names_any(boundary.reference, ids):
+                raise GraphValidationError(
+                    "item demotion would invalidate a stored durable boundary value"
+                )
+        for layer in self._layers:
+            for fact in layer.facts:
+                subject = fact.subject
+                if (
+                    isinstance(subject, DurableItemRef)
+                    and subject.durable_id == durable_id
+                    or isinstance(subject, DurableBoundaryRef)
+                    and _durable_boundary_names_any(subject, ids)
+                ):
+                    raise GraphValidationError(
+                        f"item demotion would invalidate a fact in layer "
+                        f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                    )
+
+    def _refuse_durable_boundary_reference(self, reference: DurableBoundaryRef) -> None:
+        for binary_relation in self._relations:
+            if reference in (binary_relation.left, binary_relation.right):
+                raise GraphValidationError(
+                    f"boundary demotion would invalidate relation "
+                    f"{str(binary_relation.declaration)!r}"
+                )
+        for polyadic_relation in self._polyadic_relations:
+            if reference in (
+                *polyadic_relation.sources,
+                *polyadic_relation.targets,
+            ):
+                raise GraphValidationError(
+                    f"boundary demotion would invalidate polyadic relation "
+                    f"{str(polyadic_relation.declaration)!r}"
+                )
+        for layer in self._layers:
+            if any(fact.subject == reference for fact in layer.facts):
+                raise GraphValidationError(
+                    f"boundary demotion would invalidate a fact in layer "
+                    f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                )
+
+    def _validate_seal_extent(self, carrier: SealedCarrier, sealed: int) -> None:
+        if isinstance(carrier, QualifiedName):
+            count = len(self._member(carrier, "seal").items)
+        elif carrier is GraphCarrier.RELATIONS:
+            count = len(self._relations)
+        elif carrier is GraphCarrier.POLYADIC_RELATIONS:
+            count = len(self._polyadic_relations)
+        else:
+            raise GraphValidationError(f"unknown seal carrier {carrier!r}")
+        if sealed < 0:
+            raise GraphValidationError(f"seal on {str(carrier)!r} must not be negative")
+        if sealed > count:
+            raise GraphValidationError(
+                f"seal on {str(carrier)!r} at {sealed} names more members than the "
+                f"{_carrier_kind(carrier)} holds, which is {count}; a seal covers "
+                "members that exist"
+            )
+
+    def _put_seal(self, carrier: SealedCarrier, sealed: int) -> None:
+        self._seals = [seal for seal in self._seals if seal.carrier != carrier]
+        self._seals.append(Seal(carrier, sealed))
 
     def _declared(self, name: QualifiedName) -> AttributeDeclaration:
         for declaration in self._attribute_declarations:
@@ -2916,6 +3558,14 @@ class GraphEditor:
         # Everything a refusal can see is computed before anything is written,
         # so a refused operation leaves this editor exactly as it was.
         name = member.declaration.name
+        departed_items = frozenset(
+            ItemRef(name, old) for old in range(len(member.items)) if old not in mapping
+        )
+        departed_durable_ids = frozenset(
+            durable_id
+            for coordinate in departed_items
+            if (durable_id := member.items[coordinate.index].durable_id) is not None
+        )
         seal = self._seal_for(name)
         if seal is not None:
             moved = next(
@@ -2925,17 +3575,28 @@ class GraphEditor:
             if moved is not None:
                 self._refuse_seal_move(subject, name, moved, seal.sealed)
         images = _boundary_images(len(member.items), len(items), mapping)
-        boundaries = [
-            self._remapped_boundary(boundary, name, images, subject)
-            for boundary in self._boundary_values
-        ]
+        departed_boundaries = frozenset(
+            BoundaryRef(name, old)
+            for old in range(len(member.items) + 1)
+            if old not in images
+        )
         relations = [
-            self._remapped_relation(relation, name, mapping, subject)
+            self._remapped_relation(
+                relation, name, mapping, departed_durable_ids, subject
+            )
             for relation in self._relations
         ]
         polyadic = [
-            self._remapped_polyadic(relation, name, mapping, subject)
+            self._remapped_polyadic(
+                relation, name, mapping, departed_durable_ids, subject
+            )
             for relation in self._polyadic_relations
+        ]
+        boundaries = [
+            self._remapped_boundary(
+                boundary, name, images, departed_durable_ids, subject
+            )
+            for boundary in self._boundary_values
         ]
         if stationary_inputs:
             member.items = items
@@ -2946,32 +3607,19 @@ class GraphEditor:
         item_mapping = {
             ItemRef(name, old): ItemRef(name, new) for old, new in mapping.items()
         }
-        departed_items = frozenset(
-            ItemRef(name, old) for old in range(len(member.items)) if old not in mapping
-        )
         boundary_mapping = {
             BoundaryRef(name, old): BoundaryRef(name, new)
             for old, new in images.items()
         }
-        departed_boundaries = frozenset(
-            BoundaryRef(name, old)
-            for old in range(len(member.items) + 1)
-            if old not in images
-        )
         step = self._current_displacement(
             items=item_mapping,
             boundaries=boundary_mapping,
             departed_items=departed_items,
             departed_boundaries=departed_boundaries,
         )
-        layers = [_remap_layer(layer, step) for layer in self._layers]
-        for coordinate in departed_items:
-            durable_id = member.items[coordinate.index].durable_id
-            if durable_id is not None:
-                layers = [
-                    _orphan_durable_item(layer, durable_id, coordinate)
-                    for layer in layers
-                ]
+        layers = [
+            _remap_layer(layer, step, departed_durable_ids) for layer in self._layers
+        ]
         member.items = items
         self._boundary_values = boundaries
         self._relations = relations
@@ -3085,9 +3733,15 @@ class GraphEditor:
         boundary: Boundary,
         name: QualifiedName,
         images: dict[int, int],
+        departed_durable_ids: frozenset[str],
         subject: str,
     ) -> Boundary:
         reference = boundary.reference
+        if _durable_boundary_names_any(reference, departed_durable_ids):
+            raise GraphValidationError(
+                f"{subject} would invalidate a stored boundary value whose "
+                "durable anchor is being removed"
+            )
         if not isinstance(reference, BoundaryRef) or reference.tier != name:
             return boundary
         image = images.get(reference.index)
@@ -3103,8 +3757,15 @@ class GraphEditor:
         endpoint: RelationEndpointRef,
         name: QualifiedName,
         mapping: dict[int, int],
+        departed_durable_ids: frozenset[str],
         subject: str,
     ) -> RelationEndpointRef:
+        if GraphEditor._endpoint_names_departure(
+            endpoint, frozenset(), departed_durable_ids
+        ):
+            raise GraphValidationError(
+                f"{subject} would drop an item that the graph still references"
+            )
         if not isinstance(endpoint, ItemRef) or endpoint.tier != name:
             return endpoint
         image = mapping.get(endpoint.index)
@@ -3120,10 +3781,15 @@ class GraphEditor:
         relation: RelationInstance,
         name: QualifiedName,
         mapping: dict[int, int],
+        departed_durable_ids: frozenset[str],
         subject: str,
     ) -> RelationInstance:
-        left = self._remapped_endpoint(relation.left, name, mapping, subject)
-        right = self._remapped_endpoint(relation.right, name, mapping, subject)
+        left = self._remapped_endpoint(
+            relation.left, name, mapping, departed_durable_ids, subject
+        )
+        right = self._remapped_endpoint(
+            relation.right, name, mapping, departed_durable_ids, subject
+        )
         if left is relation.left and right is relation.right:
             return relation
         return RelationInstance(
@@ -3135,14 +3801,19 @@ class GraphEditor:
         relation: PolyadicRelationInstance,
         name: QualifiedName,
         mapping: dict[int, int],
+        departed_durable_ids: frozenset[str],
         subject: str,
     ) -> PolyadicRelationInstance:
         sources = tuple(
-            self._remapped_endpoint(endpoint, name, mapping, subject)
+            self._remapped_endpoint(
+                endpoint, name, mapping, departed_durable_ids, subject
+            )
             for endpoint in relation.sources
         )
         targets = tuple(
-            self._remapped_endpoint(endpoint, name, mapping, subject)
+            self._remapped_endpoint(
+                endpoint, name, mapping, departed_durable_ids, subject
+            )
             for endpoint in relation.targets
         )
         if sources == relation.sources and targets == relation.targets:
@@ -3185,6 +3856,17 @@ def _boundary_images(
         elif right == left + 1:
             images[boundary] = right
     return images
+
+
+def _durable_boundary_names_any(
+    reference: BoundaryRef | DurableBoundaryRef, durable_ids: frozenset[str]
+) -> bool:
+    """Report whether a durable boundary is anchored by one of these item ids."""
+    return (
+        isinstance(reference, DurableBoundaryRef)
+        and isinstance(reference.anchor, DurableItemRef)
+        and reference.anchor.durable_id in durable_ids
+    )
 
 
 type _Coordinate = ItemRef | BoundaryRef | int
@@ -4218,72 +4900,70 @@ def _layer_fact_key(fact: LayerFact) -> tuple[str, str, str]:
     return _layer_key((fact.subject, fact.value.name))
 
 
-def _remap_layer(layer: Layer, displacement: Displacement) -> Layer:
+def _remap_layer(
+    layer: Layer,
+    displacement: Displacement,
+    departed_durable_items: frozenset[str] = frozenset(),
+    departed_durable_relations: frozenset[str] = frozenset(),
+) -> Layer:
     facts: list[LayerFact] = []
     for fact in layer.facts:
         subject = fact.subject
         if isinstance(subject, ItemRef):
-            subject = (
-                OrphanedSubject(subject.tier, subject)
-                if subject in displacement.departed_items
-                else displacement.items[subject]
+            if subject in displacement.departed_items:
+                raise GraphValidationError(
+                    f"item removal would invalidate a live fact in layer "
+                    f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                )
+            subject = displacement.items[subject]
+        elif (
+            isinstance(subject, DurableItemRef)
+            and subject.durable_id in departed_durable_items
+        ):
+            raise GraphValidationError(
+                f"item removal would invalidate a live fact in layer "
+                f"{layer.name.vocabulary!r}/{layer.name.source!r}"
             )
         elif isinstance(subject, BoundaryRef):
-            subject = (
-                OrphanedSubject(subject.tier, subject)
-                if subject in displacement.departed_boundaries
-                else displacement.boundaries[subject]
+            if subject in displacement.departed_boundaries:
+                raise GraphValidationError(
+                    f"item removal would invalidate a live fact in layer "
+                    f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                )
+            subject = displacement.boundaries[subject]
+        elif isinstance(subject, DurableBoundaryRef) and _durable_boundary_names_any(
+            subject, departed_durable_items
+        ):
+            raise GraphValidationError(
+                f"item removal would invalidate a live fact in layer "
+                f"{layer.name.vocabulary!r}/{layer.name.source!r}"
             )
         elif isinstance(subject, RelationInstanceRef):
-            subject = (
-                OrphanedSubject(GraphCarrier.RELATIONS, subject.index)
-                if subject.index in displacement.departed_relations
-                else RelationInstanceRef(displacement.relations[subject.index])
-            )
+            if subject.index in displacement.departed_relations:
+                raise GraphValidationError(
+                    f"relation removal would invalidate a live fact in layer "
+                    f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                )
+            subject = RelationInstanceRef(displacement.relations[subject.index])
         elif isinstance(subject, PolyadicInstanceRef):
-            subject = (
-                OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, subject.index)
-                if subject.index in displacement.departed_polyadic_relations
-                else PolyadicInstanceRef(displacement.polyadic_relations[subject.index])
+            if subject.index in displacement.departed_polyadic_relations:
+                raise GraphValidationError(
+                    f"relation removal would invalidate a live fact in layer "
+                    f"{layer.name.vocabulary!r}/{layer.name.source!r}"
+                )
+            subject = PolyadicInstanceRef(
+                displacement.polyadic_relations[subject.index]
+            )
+        elif (
+            isinstance(subject, DurableRelationRef | DurablePolyadicRef)
+            and subject.durable_id in departed_durable_relations
+        ):
+            raise GraphValidationError(
+                f"relation removal would invalidate a live fact in layer "
+                f"{layer.name.vocabulary!r}/{layer.name.source!r}"
             )
         facts.append(LayerFact(subject, fact.value))
     return Layer(layer.name, tuple(facts))
-
-
-def _orphan_durable_relation(
-    layer: Layer, durable_id: str, carrier: GraphCarrier, index: int
-) -> Layer:
-    """Retain a durable fact when removal takes away the identity it names."""
-    return Layer(
-        layer.name,
-        tuple(
-            LayerFact(
-                OrphanedSubject(carrier, index)
-                if isinstance(fact.subject, DurableRelationRef | DurablePolyadicRef)
-                and fact.subject.durable_id == durable_id
-                else fact.subject,
-                fact.value,
-            )
-            for fact in layer.facts
-        ),
-    )
-
-
-def _orphan_durable_item(layer: Layer, durable_id: str, coordinate: ItemRef) -> Layer:
-    """Retain a durable item fact when removal takes away its identity."""
-    return Layer(
-        layer.name,
-        tuple(
-            LayerFact(
-                OrphanedSubject(coordinate.tier, coordinate)
-                if isinstance(fact.subject, DurableItemRef)
-                and fact.subject.durable_id == durable_id
-                else fact.subject,
-                fact.value,
-            )
-            for fact in layer.facts
-        ),
-    )
 
 
 def _carrier_kind(carrier: SealedCarrier) -> str:

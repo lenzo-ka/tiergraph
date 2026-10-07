@@ -23,7 +23,6 @@ from tiergraph import (
     LayerFact,
     LayerName,
     NamespaceDeclaration,
-    OrphanedSubject,
     PolyadicInstanceRef,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
@@ -313,15 +312,19 @@ def test_frozen_twins_equal_editor_routes(reference: RelationTarget) -> None:
 
 
 def test_anonymous_polyadic_removal_remaps_layers_and_displacement() -> None:
-    """O5: removal remaps later facts and orphans the departed coordinate."""
+    """O5: removal refuses a live fact, then remaps later coordinates."""
     editor = fixture().edit()
+    before = editor.freeze()
+    with pytest.raises(GraphValidationError, match="live fact in layer"):
+        editor.remove_relation(PolyadicInstanceRef(0))
+    assert editor.freeze() == before
+    editor.remove_fact(LAYER, PolyadicInstanceRef(0), NOTE)
     editor.remove_relation(PolyadicInstanceRef(0))
     displacement = editor.displacement()
     assert displacement.polyadic_relations == {1: 0, 2: 1, 3: 2, 4: 3}
     assert displacement.departed_polyadic_relations == frozenset({0})
     facts = editor.freeze().layers[0].facts
     subjects = tuple(fact.subject for fact in facts)
-    assert OrphanedSubject(GraphCarrier.POLYADIC_RELATIONS, 0) in subjects
     assert PolyadicInstanceRef(3) in subjects
     assert RelationInstanceRef(2) in subjects
 
@@ -541,7 +544,21 @@ def test_relation_references_honor_geometric_seals(
     with pytest.raises(GraphValidationError, match="relation removal would move"):
         editor.remove_relation(inside)  # type: ignore[arg-type]
     assert editor.freeze() == before
-    assert sealed.remove_relation(outside)  # type: ignore[arg-type]
+    nonremoved = (
+        PolyadicInstanceRef(0)
+        if carrier is GraphCarrier.POLYADIC_RELATIONS
+        else RelationInstanceRef(0)
+    )
+    with_nonremoved_fact = replace(
+        sealed,
+        layers=(
+            Layer(
+                LAYER,
+                (LayerFact(nonremoved, relation_value(NOTE, "still-live")),),
+            ),
+        ),
+    )
+    assert with_nonremoved_fact.remove_relation(outside)  # type: ignore[arg-type]
     changed = sealed.set_attribute(inside, relation_value(ORDER, "4"))  # type: ignore[arg-type]
     assert changed.seals == sealed.seals
 
