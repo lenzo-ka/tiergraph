@@ -74,6 +74,13 @@ from tiergraph.core import (
     TierRef,
     XsdType,
 )
+from tiergraph.equivalence import (
+    EquivalenceView,
+    abstract_form,
+    equivalent,
+    fingerprint,
+    first_difference,
+)
 from tiergraph.fold import (
     AttributeValuation,
     ChildCombination,
@@ -343,6 +350,7 @@ __all__ = [
     "DurableRelationRef",
     "EffectRefusal",
     "Emissions",
+    "EquivalenceView",
     "ExactnessRefusal",
     "ExecutionError",
     "Exhaustion",
@@ -480,6 +488,7 @@ __all__ = [
     "YieldNormalization",
     "ZeroClosedStar",
     "__version__",
+    "abstract_form",
     "anchored_boundary",
     "best",
     "count",
@@ -487,8 +496,11 @@ __all__ = [
     "dump_compact",
     "dumps",
     "embed_json_value",
+    "equivalent",
     "evaluate_selection",
     "execute",
+    "fingerprint",
+    "first_difference",
     "from_textgrid",
     "generate",
     "grammar_loads",

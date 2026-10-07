@@ -37,6 +37,13 @@
       "Displacement",
       "GraphEditor"
     ],
+    "equivalence": [
+      "EquivalenceView",
+      "abstract_form",
+      "equivalent",
+      "fingerprint",
+      "first_difference"
+    ],
     "fold": [
       "AmbiguityPolicy",
       "AlgebraOrder",

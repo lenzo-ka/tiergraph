@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added public `EquivalenceView` graph comparison views.
+- Added public `abstract_form()` canonical graph forms.
+- Added public `equivalent()` graph comparison.
+- Added public `fingerprint()` deterministic graph fingerprints.
+- Added public `first_difference()` stable graph difference diagnostics.
+
 ### Fixed
 
+- Made layer reads resolve coordinate and durable references to the same live
+  subject consistently in `layer_values()`, `consensus()` and `disagreements()`.
 - Select Praat TextGrid long or short syntax from its body, independently of the
   supported header spelling.
 
