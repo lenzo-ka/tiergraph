@@ -128,6 +128,7 @@ _STDLIB_IMPORTS = {
     "enum",
     "fractions",
     "functools",
+    "gc",
     "getpass",
     "hashlib",
     "heapq",
@@ -145,6 +146,7 @@ _STDLIB_IMPORTS = {
     "re",
     "shutil",
     "signal",
+    "statistics",
     "subprocess",
     "sys",
     "tarfile",
@@ -155,6 +157,7 @@ _STDLIB_IMPORTS = {
     "typing",
     "unicodedata",
     "urllib",
+    "venv",
 }
 # This distribution's packages and its in-repository runnable/test modules.
 _PROJECT_IMPORTS = {

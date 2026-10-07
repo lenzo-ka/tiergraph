@@ -26,7 +26,7 @@ export PYTHONPATH := $(MAKEFILE_DIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 # and runs nothing. A target left off this line is silent until something in the
 # tree happens to share its name, which is why `format-semantics` and
 # `corpus-capture` sat missing here without ever being noticed.
-.PHONY: venv lint format-check types test determinism-seed determinism determinism-seed-0 determinism-seed-12345 determinism-seed-999 schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate-fast gate check
+.PHONY: venv lint format-check types test benchmark-edit-overhead determinism-seed determinism determinism-seed-0 determinism-seed-12345 determinism-seed-999 schema schema-check format-growth format-semantics corpus-capture docs docs-check tracked-clean documented reservations changelog-claims gate-fast gate check
 
 # Development happens in an isolated environment: a shared interpreter drags in
 # packages this project does not depend on, and they surface as type errors in
@@ -49,6 +49,12 @@ types:
 
 test:
 	@$(VENV_PYTHON) -m pytest --cov=tiergraph --cov=tiergraph_dot --cov=scripts --cov-report=term-missing
+
+# Timing is an explicit gate because scheduler noise makes it unsuitable for the
+# default test suite. The script installs the released wheel in a temporary
+# virtualenv and removes that environment when the comparison finishes.
+benchmark-edit-overhead:
+	@$(VENV_PYTHON) scripts/benchmark_edit_overhead.py
 
 # Separate processes: interpreter hash state is fixed at startup and cannot be
 # changed honestly inside one run.
