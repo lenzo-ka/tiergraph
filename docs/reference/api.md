@@ -1010,28 +1010,9 @@ A structural reference names a current position; reread
 
 ### `AmbiguityPolicy`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type AmbiguityPolicy = tiergraph.pathoutput.Unambiguous | tiergraph.pathoutput.Determinize
+```
 
 ### `AlgebraOrder`
 
@@ -1396,7 +1377,7 @@ Read string-token tuples from one item attribute, with absence silent.
 ### `LatticeMatch`
 
 ```text
-LatticeMatch(emissions: 'Emissions[object]', pattern: 'CompiledPattern', _boolean_cache: 'list[_BooleanProduct]' = <factory>, _ambiguity_cache: 'list[bool]' = <factory>, _subset_cache: 'dict[int, _SubsetProduct]' = <factory>) -> None
+LatticeMatch(emissions: 'Emissions[object]', pattern: 'CompiledPattern') -> None
 ```
 
 Match one compiled regular pattern against every root-to-sink path.
@@ -1487,7 +1468,7 @@ Return deterministic strict-JSON data using the carrier encoding.
 ### `OutputPlan`
 
 ```text
-OutputPlan(base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'tuple[tuple[str, ...], ...]', plan: 'PathPlan[Value]', base_index: 'Mapping[ItemRef, ItemRef]', accepted: 'tuple[bool, ...]', _product_base: 'tuple[int | None, ...]', _accept_indices: 'tuple[int, ...]', _residual_index: 'int', _conditioned_cache: 'dict[int, tuple[PathPlan[Value], tuple[int, ...]]]' = <factory>) -> None
+OutputPlan(base: 'PathPlan[Value]', emissions: 'Emissions[Value]', candidates: 'tuple[tuple[str, ...], ...]', plan: 'PathPlan[Value]', base_index: 'Mapping[ItemRef, ItemRef]', accepted: 'tuple[bool, ...]') -> None
 ```
 
 A cached product plan for complete output candidates and their residual.
@@ -1587,7 +1568,7 @@ have. The result records the readout it applied. A zero total reports
 ### `PathPlan`
 
 ```text
-PathPlan(declaration: 'FoldDeclaration[Value]', items: 'tuple[ItemRef, ...]', labels: 'tuple[str, ...]', values: 'tuple[Value, ...]', children: 'tuple[tuple[int, ...], ...]', parents: 'tuple[tuple[int, ...], ...]', roots: 'tuple[int, ...]', order: 'tuple[int, ...]', _compiled: '_Compiled') -> None
+PathPlan(declaration: 'FoldDeclaration[Value]', items: 'tuple[ItemRef, ...]', labels: 'tuple[str, ...]', values: 'tuple[Value, ...]', children: 'tuple[tuple[int, ...], ...]', parents: 'tuple[tuple[int, ...], ...]', roots: 'tuple[int, ...]', order: 'tuple[int, ...]') -> None
 ```
 
 A fold declaration compiled to its path topology, evaluable under new values.
@@ -2430,53 +2411,15 @@ Use lexical strings so every XSD value remains valid JSON.
 
 ### `Attribute`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Attribute = tiergraph.core.AttributeValue | tiergraph.core.JsonAttributeValue
+```
 
 ### `AttributeType`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type AttributeType = tiergraph.core.XsdType | tiergraph.core.JsonType
+```
 
 ### `JsonAttributeValue`
 
@@ -3312,28 +3255,9 @@ Demand that the result honor the source's seals, or refuse.
 
 ### `SealedCarrier`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type SealedCarrier = tiergraph.core.QualifiedName | tiergraph.core.GraphCarrier
+```
 
 ### `SimpleRelationDeclaration`
 
@@ -3536,28 +3460,9 @@ Choose how a delivery answers a subject several layers describe.
 
 ### `LayerSubject`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type LayerSubject = tiergraph.core.ItemRef | tiergraph.core.DurableItemRef | tiergraph.core.BoundaryRef | tiergraph.core.DurableBoundaryRef | tiergraph.core.TierRef | tiergraph.core.RelationDeclarationRef | tiergraph.core.RelationInstanceRef | tiergraph.core.DurableRelationRef | tiergraph.core.PolyadicInstanceRef | tiergraph.core.DurablePolyadicRef | tiergraph.core.DocumentRef | tiergraph.core.OrphanedSubject
+```
 
 ### `OrphanedSubject`
 
@@ -3659,28 +3564,9 @@ Request resolution of one structural or durable item reference.
 
 ### `PathBinding`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type PathBinding = tiergraph.path.ItemBinding | tiergraph.path.BoundaryBinding | tiergraph.path.AlternativeRef
+```
 
 ### `PathKind`
 
@@ -4180,53 +4066,15 @@ and still left something undecided.
 
 ### `RoleBinding`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type RoleBinding = collections.abc.Mapping[str, RoleValue]
+```
 
 ### `RoleValue`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type RoleValue = tiergraph.core.QualifiedName | tuple[tiergraph.core.QualifiedName, ...] | ValueAttributeBindings | str
+```
 
 ### `SpanViewProfile`
 
@@ -4898,28 +4746,9 @@ Return the ordered set as strict-JSON data.
 
 ### `Selector`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Selector = tiergraph.selection.TierSelector | tiergraph.selection.TypeSelector | tiergraph.selection.ItemsSelector | tiergraph.selection.BoundariesSelector | tiergraph.selection.ItemSelector | tiergraph.selection.BoundarySelector | tiergraph.selection.ItemPathSelector | tiergraph.selection.BoundaryPathSelector | tiergraph.selection.AttributeSelector | tiergraph.selection.WhereSelector | tiergraph.selection.SequenceSelector | tiergraph.selection.UnionSelector | tiergraph.selection.IntersectionSelector | tiergraph.selection.DifferenceSelector
+```
 
 ### `SequenceSelector`
 
@@ -5104,28 +4933,9 @@ Refuse a closure the declaring algebra does not license for this operand.
 
 ### `StarSelector`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type StarSelector[T] = tiergraph.semiring.ZeroClosedStar[T]
+```
 
 ### `ZeroClosedStar`
 
@@ -6374,28 +6184,9 @@ Decode lossless hexadecimal log-weight text.
 
 ### `Path`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Path = tuple[str, ...]
+```
 
 ### `PathSemiring`
 
@@ -6427,28 +6218,9 @@ Report preservation of the exact decimal cost ordering.
 
 ### `PathValue`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type PathValue = tuple[decimal.Decimal, tuple[Path, ...]]
+```
 
 ### `PathWitnessSemiring`
 
@@ -7024,28 +6796,9 @@ Refuse a closure the declaring algebra does not license for this operand.
 
 ### `StarSelector`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type StarSelector[T] = tiergraph.semiring.ZeroClosedStar[T]
+```
 
 ### `TropicalSemiring`
 
@@ -7289,12 +7042,11 @@ Consume one item when a value predicate holds on it.
 BoundOrdering(graph: 'Graph', ordering: 'Ordering') -> None
 ```
 
-Read one ordering's default scopes once, for any number of patterns.
+Read one ordering's scopes once for reuse by any number of patterns.
 
-Because this handle is shared across compiled patterns, it necessarily uses
-the module's default scope reader rather than a ``CompiledPattern._scopes``
-override. Pass a raw ordering to ``CompiledPattern.bind`` when an override
-must participate in preparation.
+Pass this prepared value to :meth:`CompiledPattern.bind` to share ordering
+validation and scope construction across patterns. Pass a raw ordering when
+each pattern should prepare the ordering independently.
 
 ### `BoundPattern`
 
@@ -7305,12 +7057,11 @@ BoundPattern(compiled: 'CompiledPattern', graph: 'Graph', ordering: 'Ordering | 
 Answer every match view from one eager preparation on one graph.
 
 With a valid raw ordering, each view equals the corresponding per-call
-``CompiledPattern`` method and honors any ``_scopes`` override. Predicates
-bind before scopes are read, but each view is checked only when called. A
-prebuilt ``BoundOrdering`` instead supplies the default scopes shared across
-patterns; its construction validates ordering before this handle binds
-predicates or a view validates its operation. This handle holds its deeply
-immutable graph strongly for its own lifetime.
+:class:`CompiledPattern` method. Predicates bind before scopes are read, but
+each view is checked only when called. A prebuilt :class:`BoundOrdering`
+instead supplies scopes shared across patterns; its construction validates
+ordering before this handle binds predicates or a view validates its
+operation. This handle holds its deeply immutable graph for its own lifetime.
 
 #### `BoundPattern.exists`
 
@@ -7360,10 +7111,9 @@ CompiledPattern(pattern: 'Pattern', start: 'int', accept: 'int', epsilon: 'tuple
 
 Hold one Thompson epsilon-NFA and its deduplicated atom table.
 
-Each integer in ``epsilon`` packs its target above a two-bit guard.  Each
-integer in ``atom_edges`` packs its target above a 14-bit atom-table index
-and one focus bit.  Construction still accepts the former unpacked private
-edge values for compatibility, but compiled patterns expose packed integers.
+``epsilon`` and ``atom_edges`` store compact integer edges. Compilation
+validates the pattern size and refuses inputs that exceed the documented
+AST-node or NFA-state ceilings before returning this value.
 
 #### `CompiledPattern.max_width`
 
@@ -7385,13 +7135,11 @@ CompiledPattern.bind(self, graph: 'Graph', ordering: 'Ordering | BoundOrdering',
 
 Bind predicates, read scopes and evaluate atoms once on one graph.
 
-A raw ordering uses this pattern's ``_scopes`` method and binds
-predicates before reading scopes, as the per-call path does. View checks
-happen only when that view is called, so a combined ordering and view
-defect reports the ordering first. A prebuilt ``BoundOrdering`` contains the
-default scopes; its construction reports an ordering defect before this
-method can report a predicate-bind defect or a bound view can report an
-operation defect.
+With a raw ordering, predicates bind before the ordering scopes are
+prepared. View checks happen only when that view is called, so a combined
+ordering and view defect reports the ordering first. A prebuilt
+:class:`BoundOrdering` has already validated and prepared its scopes, so
+an ordering defect is reported when that value is constructed.
 
 #### `CompiledPattern.exists`
 
@@ -7447,7 +7195,13 @@ Read each selected container's direct children as a separate scope.
 DeclaredOrder(successor: 'QualifiedName', members: 'Selector', open_left: 'bool' = False, chain: 'Selector | None' = None) -> None
 ```
 
-Read one explicitly declared polyadic successor chain as one scope.
+Read an explicitly declared polyadic successor chain as one scope.
+
+``successor`` names the ordered polyadic relation. ``members`` selects the
+items returned to matching views. ``chain`` may select a larger complete
+chain from which those members are projected; when omitted, ``members`` is
+also the complete chain. ``open_left`` admits a chain whose predecessor lies
+outside the selected members.
 
 #### `DeclaredOrder.project`
 
@@ -7499,53 +7253,15 @@ Carry a settled open-edge result and one watermark per ordering scope.
 
 ### `Ordering`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Ordering = tiergraph.match.TierOrder | tiergraph.match.ContainerOrder | tiergraph.match.AdjacentRuns | tiergraph.match.DeclaredOrder
+```
 
 ### `Pattern`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Pattern = tiergraph.match.AtomPattern | tiergraph.match.SeqPattern | tiergraph.match.AltPattern | tiergraph.match.RepeatPattern | tiergraph.match.FocusPattern | tiergraph.match.StartPattern | tiergraph.match.EndPattern
+```
 
 ### `RepeatPattern`
 
@@ -7655,7 +7371,7 @@ Return canonical text for one representable sequence pattern.
 ordering_to_data(ordering: 'Ordering') -> 'JsonValue'
 ```
 
-Return one declared chain ordering as strict JSON data.
+Return any supported sequence ordering as strict JSON data.
 
 ### `parse_pattern`
 
@@ -7839,28 +7555,9 @@ Name one directed relation between half-open integer intervals.
 
 ### `Literal`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Literal = str | int | decimal.Decimal | bool | None | tiergraph.predicate.Double | tiergraph.predicate.Bare
+```
 
 ### `Matches`
 
@@ -7888,28 +7585,9 @@ Name an origin and exactly one integer measure, with a partition.
 
 ### `Operand`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Operand = tiergraph.predicate.Cell | tiergraph.predicate.Current
+```
 
 ### `Or`
 
@@ -7936,28 +7614,9 @@ Name an exact ordered comparison.
 
 ### `Predicate`
 
-Type alias.
-
-Type aliases are created through the type statement::
-
-    type Alias = int
-
-In this example, Alias and int will be treated equivalently by static
-type checkers.
-
-At runtime, Alias is an instance of TypeAliasType. The __name__
-attribute holds the name of the type alias. The value of the type alias
-is stored in the __value__ attribute. It is evaluated lazily, so the
-value is computed only if the attribute is accessed.
-
-Type aliases can also be generic::
-
-    type ListOrSet[T] = list[T] | set[T]
-
-In this case, the type parameters of the alias are stored in the
-__type_params__ attribute.
-
-See PEP 695 for more information.
+```text
+type Predicate = tiergraph.predicate.Has | tiergraph.predicate.Equals | tiergraph.predicate.Compare | tiergraph.predicate.Matches | tiergraph.predicate.Elements | tiergraph.predicate.Related | tiergraph.predicate.Spans | tiergraph.predicate.And | tiergraph.predicate.Or | tiergraph.predicate.Not
+```
 
 ### `PredicateSyntax`
 
