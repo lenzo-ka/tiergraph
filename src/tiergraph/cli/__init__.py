@@ -39,32 +39,92 @@ _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
 }
 _MATCH_MIN_ARGS = 3
 
+_EXIT_STATUS_HELP = """Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input"""
+
+
+def _help_epilog(details: str, *examples: str) -> str:
+    """Build one raw help epilog from explanatory text and runnable examples."""
+    rendered = "\n".join(f"  $ {example}" for example in examples)
+    return f"{details}Examples:\n{rendered}\n\n{_EXIT_STATUS_HELP}"
+
+
+def _subcommand(
+    subparsers: Any,
+    name: str,
+    *,
+    summary: str,
+    description: str,
+    examples: tuple[str, ...],
+    details: str = "",
+) -> argparse.ArgumentParser:
+    """Add a documented subcommand without changing its parsing behavior."""
+    return cast(
+        argparse.ArgumentParser,
+        subparsers.add_parser(
+            name,
+            help=summary,
+            description=description,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=_help_epilog(details, *examples),
+        ),
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabulary
     """Return the argument parser."""
-    parser = argparse.ArgumentParser(prog="tiergraph")
+    parser = argparse.ArgumentParser(
+        prog="tiergraph",
+        description="Validate, query, transform, and render tiergraph documents.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_help_epilog("", "tiergraph validate graph.json"),
+    )
     parser.add_argument("--version", action="store_true", help="print the version")
     subparsers = parser.add_subparsers(dest="command")
 
-    validate = subparsers.add_parser("validate", help="validate a graph document")
+    validate = _subcommand(
+        subparsers,
+        "validate",
+        summary="validate a graph document",
+        description="Validate one graph document and print 'ok' when it is accepted.",
+        examples=("tiergraph validate graph.json",),
+    )
     validate.set_defaults(handler=_handle_validate)
     validate.add_argument("file", metavar="FILE", help="graph file, or - for stdin")
 
-    discharge = subparsers.add_parser(
-        "discharge", help="discharge a declaration against its inputs"
+    discharge = _subcommand(
+        subparsers,
+        "discharge",
+        summary="discharge a declaration against its inputs",
+        description="Check a declared seal, rewrite effect, or fold exactness claim.",
+        examples=("tiergraph discharge seals source.json --result result.json",),
     )
     discharge_subparsers = discharge.add_subparsers(
         dest="discharge_command", required=True
     )
-    seals = discharge_subparsers.add_parser(
-        "seals", help="discharge a source graph's seals against a result graph"
+    seals = _subcommand(
+        discharge_subparsers,
+        "seals",
+        summary="discharge a source graph's seals against a result graph",
+        description="Check that a result graph honors every seal on its source graph.",
+        examples=("tiergraph discharge seals source.json --result result.json",),
     )
     seals.set_defaults(handler=_handle_discharge)
     _graph_pair_arguments(seals)
     _output_argument(seals)
 
-    discharge_rewrite = discharge_subparsers.add_parser(
-        "rewrite", help="discharge a rewrite's effect claim against the pair it read"
+    discharge_rewrite = _subcommand(
+        discharge_subparsers,
+        "rewrite",
+        summary="discharge a rewrite's effect claim against the pair it read",
+        description="Check a rewrite effect claim against its source and result graphs.",
+        examples=(
+            "tiergraph discharge rewrite source.json --result result.json "
+            "--effect decorate",
+        ),
     )
     discharge_rewrite.set_defaults(handler=_handle_discharge)
     _graph_pair_arguments(discharge_rewrite)
@@ -79,8 +139,16 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     _output_argument(discharge_rewrite)
 
-    discharge_fold = discharge_subparsers.add_parser(
-        "fold", help="discharge a fold's exactness claim against its graph"
+    discharge_fold = _subcommand(
+        discharge_subparsers,
+        "fold",
+        summary="discharge a fold's exactness claim against its graph",
+        description="Check a fold exactness claim against the graph and valuation.",
+        examples=(
+            "tiergraph discharge fold fold.json --attribute-namespace urn:test:fold "
+            "--attribute-local cost --tier urn:test:fold tasks --semiring counting "
+            "--lift one --transition urn:test:fold depends or --exactness distributive",
+        ),
     )
     discharge_fold.set_defaults(handler=_handle_discharge)
     _fold_arguments(discharge_fold)
@@ -95,35 +163,75 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     _output_argument(discharge_fold)
 
-    render = subparsers.add_parser("render", help="render a graph as DOT")
+    render = _subcommand(
+        subparsers,
+        "render",
+        summary="render a graph as DOT",
+        description="Render one graph document in Graphviz DOT notation.",
+        examples=("tiergraph render graph.json -o graph.dot",),
+    )
     render.set_defaults(handler=_handle_render)
     _document_arguments(render)
     render.add_argument(
         "--include-empty-tiers", action="store_true", help="include empty tiers"
     )
 
-    inspect = subparsers.add_parser("inspect", help="inspect a graph document")
+    inspect = _subcommand(
+        subparsers,
+        "inspect",
+        summary="inspect a graph document",
+        description="Print graph_summary counts and per-tier and per-relation details.",
+        examples=("tiergraph inspect graph.json",),
+    )
     inspect.set_defaults(handler=_handle_inspect)
     _document_arguments(inspect)
 
-    convert = subparsers.add_parser("convert", help="canonicalize a graph document")
+    convert = _subcommand(
+        subparsers,
+        "convert",
+        summary="canonicalize a graph document",
+        description="Validate and rewrite a graph in one canonical output encoding.",
+        examples=("tiergraph convert graph.json --to json-compact -o compact.json",),
+    )
     convert.set_defaults(handler=_handle_convert)
     _document_arguments(convert)
     convert.add_argument(
-        "--to", choices=("json", "json-compact", "bytes"), required=True
+        "--to",
+        choices=("json", "json-compact", "bytes"),
+        required=True,
+        help="output encoding",
     )
 
-    schema = subparsers.add_parser("schema", help="print the graph document schema")
-    schema.add_argument("--format-version", metavar="VERSION")
+    schema = _subcommand(
+        subparsers,
+        "schema",
+        summary="print the graph document schema",
+        description="Print the JSON Schema or its deterministic shape hash.",
+        examples=("tiergraph schema --hash",),
+    )
+    schema.add_argument(
+        "--format-version",
+        metavar="VERSION",
+        help="format version to request (default: current)",
+    )
     schema.set_defaults(handler=_handle_schema)
     schema.add_argument("--hash", action="store_true", help="print the shape hash")
     _output_argument(schema)
 
-    run = subparsers.add_parser("run", help="execute a JSONL machine program")
+    run = _subcommand(
+        subparsers,
+        "run",
+        summary="execute a JSONL machine program",
+        description="Execute a JSONL machine program and emit its final graph.",
+        examples=("tiergraph run program.jsonl --to json -o graph.json",),
+    )
     run.set_defaults(handler=_handle_run)
     _document_arguments(run, input_help="JSONL program file, or - for stdin")
     run.add_argument(
-        "--to", choices=("json", "json-compact", "bytes", "dot"), required=True
+        "--to",
+        choices=("json", "json-compact", "bytes", "dot"),
+        required=True,
+        help="final graph encoding",
     )
     run.add_argument(
         "--include-empty-tiers",
@@ -131,7 +239,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         help="include empty tiers in DOT output",
     )
 
-    step = subparsers.add_parser("step", help="step through a JSONL machine program")
+    step = _subcommand(
+        subparsers,
+        "step",
+        summary="step through a JSONL machine program",
+        description="Emit each machine step or enter the interactive debugger.",
+        examples=("tiergraph step program.jsonl -o steps.jsonl",),
+    )
     step.set_defaults(handler=_handle_step)
     _document_arguments(step, input_help="JSONL program file, or - for stdin")
     step.add_argument(
@@ -140,19 +254,62 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         help="use the interactive debugger (also enabled when stdin is a TTY)",
     )
 
-    walk = subparsers.add_parser("walk", help="traverse a transitive relation")
+    walk = _subcommand(
+        subparsers,
+        "walk",
+        summary="traverse a transitive relation",
+        description="Traverse one declared acyclic relation from one or more paths.",
+        examples=(
+            "tiergraph walk walk.json --source "
+            "/items/structural/urn:test:traversal/nodes/0 "
+            "--relation-namespace urn:test:traversal --relation-local contains",
+        ),
+    )
     walk.set_defaults(handler=_handle_walk)
     walk.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    walk.add_argument("--source", action="append", required=True, metavar="PATH")
-    walk.add_argument("--relation-namespace", required=True, metavar="NS")
-    walk.add_argument("--relation-local", required=True, metavar="LOCAL")
-    walk.add_argument("--direction", choices=("forward", "inverse"), default="forward")
-    walk.add_argument("--cap", type=int, metavar="N")
+    walk.add_argument(
+        "--source",
+        action="append",
+        required=True,
+        metavar="PATH",
+        help="source TG-PATH; repeatable",
+    )
+    walk.add_argument(
+        "--relation-namespace",
+        required=True,
+        metavar="NS",
+        help="relation namespace URI",
+    )
+    walk.add_argument(
+        "--relation-local",
+        required=True,
+        metavar="LOCAL",
+        help="relation local name",
+    )
+    walk.add_argument(
+        "--direction",
+        choices=("forward", "inverse"),
+        default="forward",
+        help="traversal direction (default: forward)",
+    )
+    walk.add_argument("--cap", type=int, metavar="N", help="maximum traversal depth")
     _output_argument(walk)
 
-    path = subparsers.add_parser("path", help="resolve and spell tiergraph paths")
+    path = _subcommand(
+        subparsers,
+        "path",
+        summary="resolve and spell tiergraph paths",
+        description="Resolve TG-PATH text or spell a structural or durable path.",
+        examples=("tiergraph path resolve graph.json /items/durable/alpha",),
+    )
     path_subparsers = path.add_subparsers(dest="path_command", required=True)
-    resolve = path_subparsers.add_parser("resolve", help="resolve a tiergraph path")
+    resolve = _subcommand(
+        path_subparsers,
+        "resolve",
+        summary="resolve a tiergraph path",
+        description="Resolve one TG-PATH against a graph and print its binding.",
+        examples=("tiergraph path resolve graph.json /items/durable/alpha",),
+    )
     resolve.set_defaults(handler=_handle_path)
     resolve.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     resolve.add_argument("tgpath", metavar="TGPATH", help="tiergraph path to resolve")
@@ -161,33 +318,81 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     _output_argument(resolve)
 
-    spell = path_subparsers.add_parser("spell", help="spell a tiergraph path")
+    spell = _subcommand(
+        path_subparsers,
+        "spell",
+        summary="spell a tiergraph path",
+        description="Spell a durable or structural TG-PATH for an item or boundary.",
+        examples=("tiergraph path spell graph.json --kind item --durable-id alpha",),
+    )
     spell.set_defaults(handler=_handle_path)
     spell.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    spell.add_argument("--kind", choices=("item", "boundary"), required=True)
-    spell.add_argument("--tier-namespace", metavar="NS")
-    spell.add_argument("--tier-local", metavar="LOCAL")
-    spell.add_argument("--index", type=int, metavar="N")
-    spell.add_argument("--durable-id", metavar="ID")
-    spell.add_argument("--anchor-item-id", metavar="ID")
-    spell.add_argument("--anchor-tier-namespace", metavar="NS")
-    spell.add_argument("--anchor-tier-local", metavar="LOCAL")
-    spell.add_argument("--side", choices=("before", "after"))
+    spell.add_argument(
+        "--kind",
+        choices=("item", "boundary"),
+        required=True,
+        help="kind of graph position to spell",
+    )
+    spell.add_argument("--tier-namespace", metavar="NS", help="tier namespace URI")
+    spell.add_argument("--tier-local", metavar="LOCAL", help="tier local name")
+    spell.add_argument("--index", type=int, metavar="N", help="structural index")
+    spell.add_argument("--durable-id", metavar="ID", help="durable item identifier")
+    spell.add_argument(
+        "--anchor-item-id", metavar="ID", help="durable boundary anchor item"
+    )
+    spell.add_argument(
+        "--anchor-tier-namespace",
+        metavar="NS",
+        help="durable boundary anchor tier namespace URI",
+    )
+    spell.add_argument(
+        "--anchor-tier-local",
+        metavar="LOCAL",
+        help="durable boundary anchor tier local name",
+    )
+    spell.add_argument(
+        "--side", choices=("before", "after"), help="side of the anchor item"
+    )
     _output_argument(spell)
 
-    grammar = subparsers.add_parser("grammar", help="work with tiergraph grammars")
+    grammar = _subcommand(
+        subparsers,
+        "grammar",
+        summary="work with tiergraph grammars",
+        description="Recognize, count, rank, or generate with a grammar document.",
+        examples=("tiergraph grammar recognize grammar.json --tokens-json '[\"x\"]'",),
+        details="JSON formats: see docs/reference/cli.md#json-input-formats.\n\n",
+    )
     grammar_subparsers = grammar.add_subparsers(dest="grammar_command", required=True)
     for grammar_command, help_text in (
         ("recognize", "recognize a token sequence"),
         ("count", "count token-sequence derivations"),
         ("best", "find best token-sequence derivations"),
     ):
-        grammar_parser = grammar_subparsers.add_parser(grammar_command, help=help_text)
+        grammar_parser = _subcommand(
+            grammar_subparsers,
+            grammar_command,
+            summary=help_text,
+            description=f"{help_text.capitalize()} with one grammar declaration.",
+            examples=(
+                f"tiergraph grammar {grammar_command} grammar.json "
+                "--tokens-json '[\"x\"]'",
+            ),
+            details=(
+                "--tokens-json is a JSON array of strings. Grammar document fields "
+                "are in docs/reference/cli.md#json-input-formats.\n\n"
+            ),
+        )
         grammar_parser.set_defaults(handler=_handle_grammar)
         grammar_parser.add_argument(
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
         )
-        grammar_parser.add_argument("--tokens-json", required=True, metavar="JSON")
+        grammar_parser.add_argument(
+            "--tokens-json",
+            required=True,
+            metavar="JSON",
+            help="JSON array of source token strings",
+        )
         _max_steps_argument(grammar_parser)
         if grammar_command == "recognize":
             grammar_parser.add_argument(
@@ -196,13 +401,35 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
                 help="emit the complete parse forest",
             )
         if grammar_command == "best":
-            grammar_parser.add_argument("--count", type=int, default=1, metavar="N")
+            grammar_parser.add_argument(
+                "--count",
+                type=int,
+                default=1,
+                metavar="N",
+                help="maximum derivations to emit (default: 1)",
+            )
         _output_argument(grammar_parser)
     for grammar_command, help_text in (
         ("generate", "generate experimental target derivations"),
         ("lattice", "emit an experimental target lattice"),
     ):
-        grammar_parser = grammar_subparsers.add_parser(grammar_command, help=help_text)
+        grammar_parser = _subcommand(
+            grammar_subparsers,
+            grammar_command,
+            summary=help_text,
+            description=f"{help_text.capitalize()} from typed grammar input.",
+            examples=(
+                f"tiergraph grammar {grammar_command} grammar.json --input-json "
+                '\'{"tokens":[{"symbol":"x","realization":['
+                '{"tokens":["x"]}],"span":{"partition":null,'
+                '"origin":0,"end":1}}]}\'',
+            ),
+            details=(
+                "--input-json is a typed GrammarInput object. Its fields and the "
+                "grammar document fields are in "
+                "docs/reference/cli.md#json-input-formats.\n\n"
+            ),
+        )
         grammar_parser.set_defaults(handler=_handle_grammar)
         grammar_parser.add_argument(
             "file", metavar="GRAMMAR", help="grammar JSON file, or - for stdin"
@@ -224,7 +451,16 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
             _max_steps_argument(grammar_parser)
         _output_argument(grammar_parser)
 
-    clock = subparsers.add_parser("clock", help="query declarative clock timing")
+    clock = _subcommand(
+        subparsers,
+        "clock",
+        summary="query declarative clock timing",
+        description="Query structural and physical time through a clock profile.",
+        examples=(
+            "tiergraph clock coordinates clock.json --profile clock-profile.json",
+        ),
+        details="Profile fields are in docs/reference/cli.md#json-input-formats.\n\n",
+    )
     clock_subparsers = clock.add_subparsers(dest="clock_command", required=True)
     for clock_command, help_text in (
         ("coordinates", "list refined clock coordinates"),
@@ -232,69 +468,222 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         ("extent", "query a timed tier extent"),
         ("item", "query one timed item"),
     ):
-        clock_parser = clock_subparsers.add_parser(clock_command, help=help_text)
+        clock_examples = {
+            "coordinates": (
+                "tiergraph clock coordinates clock.json --profile clock-profile.json"
+            ),
+            "boundary": (
+                "tiergraph clock boundary clock.json --profile clock-profile.json "
+                "--boundary "
+                "/positions/structural/urn:tiergraph:profile:clock:test/segment/1"
+            ),
+            "extent": (
+                "tiergraph clock extent clock.json --profile clock-profile.json "
+                "--tier-namespace urn:tiergraph:profile:clock:test "
+                "--tier-local segment"
+            ),
+            "item": (
+                "tiergraph clock item clock.json --profile clock-profile.json "
+                "--item /items/structural/urn:tiergraph:profile:clock:test/segment/1"
+            ),
+        }
+        clock_parser = _subcommand(
+            clock_subparsers,
+            clock_command,
+            summary=help_text,
+            description=f"{help_text.capitalize()} through a clock profile.",
+            examples=(clock_examples[clock_command],),
+            details="Profile fields are in docs/reference/cli.md#json-input-formats.\n\n",
+        )
         clock_parser.set_defaults(handler=_handle_clock)
         clock_parser.add_argument(
             "file", metavar="GRAPH", help="graph file, or - for stdin"
         )
-        clock_parser.add_argument("--profile", required=True, metavar="FILE")
+        clock_parser.add_argument(
+            "--profile",
+            required=True,
+            metavar="FILE",
+            help="clock profile JSON file, or - for stdin",
+        )
         if clock_command == "boundary":
-            clock_parser.add_argument("--boundary", required=True, metavar="PATH")
+            clock_parser.add_argument(
+                "--boundary",
+                required=True,
+                metavar="PATH",
+                help="boundary TG-PATH to query",
+            )
         elif clock_command == "extent":
-            clock_parser.add_argument("--tier-namespace", required=True, metavar="NS")
-            clock_parser.add_argument("--tier-local", required=True, metavar="LOCAL")
+            clock_parser.add_argument(
+                "--tier-namespace",
+                required=True,
+                metavar="NS",
+                help="timed tier namespace URI",
+            )
+            clock_parser.add_argument(
+                "--tier-local",
+                required=True,
+                metavar="LOCAL",
+                help="timed tier local name",
+            )
         elif clock_command == "item":
-            clock_parser.add_argument("--item", required=True, metavar="PATH")
+            clock_parser.add_argument(
+                "--item", required=True, metavar="PATH", help="item TG-PATH to query"
+            )
         _output_argument(clock_parser)
 
-    span = subparsers.add_parser("span", help="render declarative span views")
+    span = _subcommand(
+        subparsers,
+        "span",
+        summary="render declarative span views",
+        description="Render span-oriented projections selected by a profile.",
+        examples=(
+            "tiergraph span render spans.json --profile span-profile.json --format text",
+        ),
+        details="Profile fields are in docs/reference/cli.md#json-input-formats.\n\n",
+    )
     span_subparsers = span.add_subparsers(dest="span_command", required=True)
-    span_render = span_subparsers.add_parser("render", help="render a span view")
+    span_render = _subcommand(
+        span_subparsers,
+        "render",
+        summary="render a span view",
+        description="Render one declarative span view in the selected format.",
+        examples=(
+            "tiergraph span render spans.json --profile span-profile.json --format text",
+        ),
+        details="Profile fields are in docs/reference/cli.md#json-input-formats.\n\n",
+    )
     span_render.set_defaults(handler=_handle_span)
     span_render.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
-    span_render.add_argument("--profile", required=True, metavar="FILE")
+    span_render.add_argument(
+        "--profile",
+        required=True,
+        metavar="FILE",
+        help="span profile JSON file, or - for stdin",
+    )
     span_render.add_argument(
         "--format",
         choices=("text", "json", "jsonl", "html", "dot", "textgrid"),
         required=True,
+        help="output format",
     )
-    span_render.add_argument("--alternatives", action="store_true")
-    span_render.add_argument("--jsonl-record", choices=("input", "span"), default=None)
-    span_render.add_argument("--include-empty-tiers", action="store_true")
+    span_render.add_argument(
+        "--alternatives",
+        action="store_true",
+        help="include alternative span readings where supported",
+    )
+    span_render.add_argument(
+        "--jsonl-record",
+        choices=("input", "span"),
+        default=None,
+        help="JSONL record unit; requires --format jsonl",
+    )
+    span_render.add_argument(
+        "--include-empty-tiers",
+        action="store_true",
+        help="include empty tiers; requires --format dot",
+    )
     _output_argument(span_render)
 
-    selection = subparsers.add_parser("select", help="evaluate a selector")
+    selection = _subcommand(
+        subparsers,
+        "select",
+        summary="evaluate a selector",
+        description="Evaluate selector JSON or a value predicate against a graph.",
+        examples=("tiergraph select graph.json --selector selector.json",),
+        details="Selector JSON fields are in docs/reference/cli.md#json-input-formats.\n\n",
+    )
     selection.set_defaults(handler=_handle_select)
     selection.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     selection_input = selection.add_mutually_exclusive_group(required=True)
-    selection_input.add_argument("--selector", metavar="FILE")
-    selection_input.add_argument("--where", metavar="TEXT")
-    selection.add_argument("--prefix", metavar="P")
+    selection_input.add_argument(
+        "--selector", metavar="FILE", help="strict selector JSON file, or - for stdin"
+    )
+    selection_input.add_argument(
+        "--where", metavar="TEXT", help="value predicate applied to every item"
+    )
+    selection.add_argument(
+        "--prefix",
+        metavar="P",
+        help="default graph prefix for unqualified --where attributes",
+    )
     _max_steps_argument(selection)
     _output_argument(selection)
 
-    match = subparsers.add_parser("match", help="match a regular item sequence")
+    match = _subcommand(
+        subparsers,
+        "match",
+        summary="match a regular item sequence",
+        description="Evaluate a regular item pattern over one declared ordering.",
+        examples=(
+            "tiergraph match graph.json --pattern . --ordering "
+            '\'{"order":"tier","tier":{"namespace":"urn:path",'
+            '"local_name":"tokens"}}\' exists',
+        ),
+        details=(
+            "Pattern text: '.' matches one item; '{predicate}' tests one item; "
+            "'( )' groups; '|' or '/' alternates; '*', '+', '?', and '{n}' repeat; "
+            "'^' and '$' anchor; '_' marks focus. Request and ordering JSON fields "
+            "are in docs/reference/cli.md#json-input-formats.\n\n"
+        ),
+    )
     match.set_defaults(handler=_handle_match)
     match.add_argument("file", metavar="GRAPH", help="graph file, or - for stdin")
     match_input = match.add_mutually_exclusive_group(required=True)
-    match_input.add_argument("--request", metavar="FILE")
-    match_input.add_argument("--pattern", metavar="TEXT")
-    match.add_argument("--ordering", metavar="JSON")
-    match.add_argument("--prefix", metavar="P")
-    match.add_argument("--limit", type=int)
+    match_input.add_argument(
+        "--request",
+        metavar="FILE",
+        help="strict match request JSON file, or - for stdin",
+    )
+    match_input.add_argument(
+        "--pattern", metavar="TEXT", help="regular sequence pattern text"
+    )
+    match.add_argument(
+        "--ordering",
+        metavar="JSON",
+        help="ordering JSON object for --pattern",
+    )
+    match.add_argument(
+        "--prefix",
+        metavar="P",
+        help="default graph prefix for unqualified pattern attributes",
+    )
+    match.add_argument(
+        "--limit", type=int, help="maximum spans to emit; valid only for spans"
+    )
     _max_steps_argument(match)
     match.add_argument(
-        "match_operation", nargs="?", choices=("exists", "focus", "spans", "count")
+        "match_operation",
+        nargs="?",
+        choices=("exists", "focus", "spans", "count"),
+        help="view to evaluate with --pattern",
     )
     _output_argument(match)
 
-    fold = subparsers.add_parser("fold", help="fold a dependency relation")
+    fold = _subcommand(
+        subparsers,
+        "fold",
+        summary="fold a dependency relation",
+        description="Evaluate a finite dependency relation with a named semiring.",
+        examples=(
+            "tiergraph fold fold.json --attribute-namespace urn:test:fold "
+            "--attribute-local cost --tier urn:test:fold tasks --semiring counting "
+            "--lift one --transition urn:test:fold depends or",
+        ),
+        details=(
+            "Fold requests are assembled from these flags; fold does not read a "
+            "separate request JSON document.\n\n"
+        ),
+    )
     fold.set_defaults(handler=_handle_fold, exactness=None)
     _fold_arguments(fold)
     _output_argument(fold)
 
-    semirings = subparsers.add_parser(
-        "semirings", help="list the semirings this shell can name"
+    semirings = _subcommand(
+        subparsers,
+        "semirings",
+        summary="list the semirings this shell can name",
+        description="List the named semirings accepted by fold commands.",
+        examples=("tiergraph semirings",),
     )
     semirings.set_defaults(handler=_handle_semirings)
     _output_argument(semirings)
@@ -321,10 +710,7 @@ def _max_steps_argument(parser: argparse.ArgumentParser) -> None:
         "--max-steps",
         type=_positive_step_count,
         metavar="N",
-        help=(
-            "refuse after N work steps; guards untrusted pattern text "
-            f"(maximum: {_MAX_USER_STEPS})"
-        ),
+        help=(f"refuse after N deterministic work steps (maximum: {_MAX_USER_STEPS})"),
     )
 
 
@@ -382,8 +768,18 @@ def _fold_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--name", default="fold", metavar="NAME", help="name used in refusals"
     )
-    parser.add_argument("--attribute-namespace", required=True, metavar="NS")
-    parser.add_argument("--attribute-local", required=True, metavar="LOCAL")
+    parser.add_argument(
+        "--attribute-namespace",
+        required=True,
+        metavar="NS",
+        help="valuation attribute namespace URI",
+    )
+    parser.add_argument(
+        "--attribute-local",
+        required=True,
+        metavar="LOCAL",
+        help="valuation attribute local name",
+    )
     parser.add_argument(
         "--tier",
         action="append",
@@ -392,7 +788,12 @@ def _fold_arguments(parser: argparse.ArgumentParser) -> None:
         metavar=("NS", "LOCAL"),
         help="one valuation domain tier; repeatable",
     )
-    parser.add_argument("--semiring", choices=tuple(_SEMIRINGS), required=True)
+    parser.add_argument(
+        "--semiring",
+        choices=tuple(_SEMIRINGS),
+        required=True,
+        help="named algebra used by the fold",
+    )
     parser.add_argument(
         "--lift",
         choices=("one", "value"),

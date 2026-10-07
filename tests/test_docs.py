@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import inspect
 import json
@@ -24,6 +25,7 @@ from scripts.generate_docs import main as docs_main
 
 import tiergraph.schema
 import tiergraph_dot
+from tiergraph.cli import build_parser
 from tiergraph.machine import MACHINE_VERSION
 
 # Local runs of the cli_bytes child take at most 0.18 seconds; 30 seconds leaves
@@ -64,6 +66,27 @@ def test_entry_fallbacks_cover_undocumented_objects() -> None:
     assert "type alias" in generate_docs._entry(module, "Path", {})
     assert "singleton" in generate_docs._entry(module, "singleton", {})
     assert generate_docs._signature(object()) == ""
+
+
+def test_type_alias_entries_render_their_definitions() -> None:
+    """TypeAliasType entries show the alias value, not the interpreter's docstring."""
+    rendered = generate_docs._entry(tiergraph, "Selector", {})
+    assert "type Selector = tiergraph.selection.TierSelector" in rendered
+    assert "Type aliases are created through the type statement" not in rendered
+
+    generic = generate_docs._entry(tiergraph, "StarSelector", {})
+    assert "type StarSelector[T] = tiergraph.semiring.ZeroClosedStar[T]" in generic
+
+
+def test_signatures_hide_private_constructor_parameters() -> None:
+    """Generated public signatures omit implementation-only dataclass fields."""
+
+    class Example:
+        def __init__(self, public: int, _cache: object | None = None) -> None:
+            self.public = public
+            self._cache = _cache
+
+    assert generate_docs._signature(Example) == "(public: 'int') -> 'None'"
 
 
 def test_class_entries_include_public_members_once_in_definition_order() -> None:
@@ -172,6 +195,44 @@ def test_cli_stepping_example_does_not_read_a_terminal() -> None:
     finally:
         os.close(master)
     assert process.returncode == 0, (stdout, stderr)
+
+
+def test_cli_help_metadata_failures_are_rejected() -> None:
+    """Descriptions and structured epilogs are required on every command."""
+    parser = build_parser()
+    parser.description = None
+    with pytest.raises(ValueError, match="tiergraph has no help description"):
+        generate_docs.validate_cli_help(parser)
+
+    parser = build_parser()
+    parser.epilog = None
+    with pytest.raises(ValueError, match="examples and exit-code epilog"):
+        generate_docs.validate_cli_help(parser)
+
+
+@pytest.mark.parametrize("missing", [None, argparse.SUPPRESS])
+def test_cli_argument_help_failures_are_rejected(missing: str | None) -> None:
+    """An absent or suppressed argument explanation fails the generated-doc gate."""
+    parser = build_parser()
+    version = next(action for action in parser._actions if action.dest == "version")
+    version.help = missing
+    with pytest.raises(ValueError, match="argument '--version' has no help text"):
+        generate_docs.validate_cli_help(parser)
+
+
+def test_prose_constant_gate_reads_files_and_rejects_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A declared prose phrase is checked even when its page is not generated."""
+    page = tmp_path / "guide.md"
+    page.write_text("The limit is 3.\n", encoding="utf-8")
+    monkeypatch.setattr(generate_docs, "ROOT", tmp_path)
+    entries = ((page, "The limit is {value}.", 3),)
+    generate_docs.check_prose_constants({}, entries)
+
+    page.write_text("The limit is 4.\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="prose constant mismatch"):
+        generate_docs.check_prose_constants({}, entries)
 
 
 def test_missing_generated_directive_is_rejected() -> None:

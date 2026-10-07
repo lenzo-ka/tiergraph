@@ -217,7 +217,14 @@ class AdjacentRuns:
 
 @dataclass(frozen=True, slots=True)
 class DeclaredOrder:
-    """Read one explicitly declared polyadic successor chain as one scope."""
+    """Read an explicitly declared polyadic successor chain as one scope.
+
+    ``successor`` names the ordered polyadic relation. ``members`` selects the
+    items returned to matching views. ``chain`` may select a larger complete
+    chain from which those members are projected; when omitted, ``members`` is
+    also the complete chain. ``open_left`` admits a chain whose predecessor lies
+    outside the selected members.
+    """
 
     successor: QualifiedName
     members: Selector
@@ -1073,12 +1080,11 @@ class SpanMatches:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class BoundOrdering:
-    """Read one ordering's default scopes once, for any number of patterns.
+    """Read one ordering's scopes once for reuse by any number of patterns.
 
-    Because this handle is shared across compiled patterns, it necessarily uses
-    the module's default scope reader rather than a ``CompiledPattern._scopes``
-    override. Pass a raw ordering to ``CompiledPattern.bind`` when an override
-    must participate in preparation.
+    Pass this prepared value to :meth:`CompiledPattern.bind` to share ordering
+    validation and scope construction across patterns. Pass a raw ordering when
+    each pattern should prepare the ordering independently.
     """
 
     graph: Graph
@@ -1106,10 +1112,9 @@ class BoundOrdering:
 class CompiledPattern:
     """Hold one Thompson epsilon-NFA and its deduplicated atom table.
 
-    Each integer in ``epsilon`` packs its target above a two-bit guard.  Each
-    integer in ``atom_edges`` packs its target above a 14-bit atom-table index
-    and one focus bit.  Construction still accepts the former unpacked private
-    edge values for compatibility, but compiled patterns expose packed integers.
+    ``epsilon`` and ``atom_edges`` store compact integer edges. Compilation
+    validates the pattern size and refuses inputs that exceed the documented
+    AST-node or NFA-state ceilings before returning this value.
     """
 
     pattern: Pattern
@@ -1459,13 +1464,11 @@ class CompiledPattern:
     ) -> BoundPattern:
         """Bind predicates, read scopes and evaluate atoms once on one graph.
 
-        A raw ordering uses this pattern's ``_scopes`` method and binds
-        predicates before reading scopes, as the per-call path does. View checks
-        happen only when that view is called, so a combined ordering and view
-        defect reports the ordering first. A prebuilt ``BoundOrdering`` contains the
-        default scopes; its construction reports an ordering defect before this
-        method can report a predicate-bind defect or a bound view can report an
-        operation defect.
+        With a raw ordering, predicates bind before the ordering scopes are
+        prepared. View checks happen only when that view is called, so a combined
+        ordering and view defect reports the ordering first. A prebuilt
+        :class:`BoundOrdering` has already validated and prepared its scopes, so
+        an ordering defect is reported when that value is constructed.
         """
         with _metered(budget, "pattern.bind"):
             return BoundPattern(self, graph, ordering)
@@ -2077,12 +2080,11 @@ class BoundPattern:
     """Answer every match view from one eager preparation on one graph.
 
     With a valid raw ordering, each view equals the corresponding per-call
-    ``CompiledPattern`` method and honors any ``_scopes`` override. Predicates
-    bind before scopes are read, but each view is checked only when called. A
-    prebuilt ``BoundOrdering`` instead supplies the default scopes shared across
-    patterns; its construction validates ordering before this handle binds
-    predicates or a view validates its operation. This handle holds its deeply
-    immutable graph strongly for its own lifetime.
+    :class:`CompiledPattern` method. Predicates bind before scopes are read, but
+    each view is checked only when called. A prebuilt :class:`BoundOrdering`
+    instead supplies scopes shared across patterns; its construction validates
+    ordering before this handle binds predicates or a view validates its
+    operation. This handle holds its deeply immutable graph for its own lifetime.
     """
 
     compiled: CompiledPattern
@@ -2499,7 +2501,7 @@ def _nonnegative_integer(value: JsonValue, path: str) -> int:
 
 
 def ordering_to_data(ordering: Ordering) -> JsonValue:
-    """Return one declared chain ordering as strict JSON data."""
+    """Return any supported sequence ordering as strict JSON data."""
     if isinstance(ordering, TierOrder):
         return {"order": "tier", "tier": ordering.tier.to_data()}
     if isinstance(ordering, ContainerOrder):

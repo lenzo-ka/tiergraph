@@ -1857,6 +1857,90 @@ def test_version_default_help_and_every_command_help(
     ]
 
 
+def _documented_help_examples() -> list[tuple[str, str]]:
+    """Return every command line printed in a parser help epilog."""
+    found: list[tuple[str, str]] = []
+
+    def visit(parser: argparse.ArgumentParser, path: str) -> None:
+        assert parser.epilog is not None
+        found.extend(
+            (path, line.removeprefix("  $ "))
+            for line in parser.epilog.splitlines()
+            if line.startswith("  $ ")
+        )
+        for candidate in parser._actions:
+            if isinstance(candidate, argparse._SubParsersAction):
+                for name, child in candidate.choices.items():
+                    visit(child, f"{path} {name}")
+
+    visit(build_parser(), "tiergraph")
+    return found
+
+
+def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
+    """Write the public input documents named by one help example."""
+    _path_graph(directory / "graph.json")
+    _walk_graph(directory / "walk.json")
+    _program(directory / "program.jsonl")
+    _grammar(directory / "grammar.json")
+    _fold_graph(directory / "fold.json", *DIAMOND)
+    (directory / "selector.json").write_text(
+        json.dumps(
+            {
+                "select": "items",
+                "tier": {"namespace": "urn:path", "local_name": "tokens"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    clock_graph = reference_shape()
+    (directory / "clock.json").write_bytes(tiergraph.dump_bytes(clock_graph))
+    (directory / "clock-profile.json").write_text(
+        json.dumps(clock_profile_data()), encoding="utf-8"
+    )
+
+    span_graph, span_profile = span_fixture()
+    (directory / "spans.json").write_bytes(tiergraph.dump_bytes(span_graph))
+    (directory / "span-profile.json").write_text(
+        json.dumps(span_profile_data(span_profile)), encoding="utf-8"
+    )
+
+    if arguments[:2] == ["discharge", "seals"]:
+        _, source = _sealed_source(directory)
+        (directory / "result.json").write_bytes(tiergraph.dump_bytes(source))
+    elif arguments[:2] == ["discharge", "rewrite"]:
+        _, source = _rewrite_source(directory)
+        result = source.insert_item(REWRITE_TIER, 3, Item("w3"))
+        (directory / "result.json").write_bytes(tiergraph.dump_bytes(result))
+
+
+def test_every_help_epilog_example_runs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every example printed by every help screen is an exit-zero invocation."""
+    examples = _documented_help_examples()
+    assert len(examples) == 33
+    for index, (path, example) in enumerate(examples):
+        words = [
+            word[1:-1]
+            if len(word) >= 2 and word.startswith("'") and word.endswith("'")
+            else word
+            for word in example.split()
+        ]
+        assert words[0] == "tiergraph"
+        arguments = words[1:]
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        _prepare_help_example(directory, arguments)
+        with monkeypatch.context() as scoped:
+            scoped.chdir(directory)
+            assert main(arguments) == 0, (path, example, capsys.readouterr())
+        capsys.readouterr()
+
+
 def test_walk_forward_inverse_capped_and_multiple_sources(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

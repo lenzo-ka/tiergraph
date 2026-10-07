@@ -12,10 +12,10 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeAliasType, cast
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -27,6 +27,15 @@ import tiergraph_dot  # noqa: E402
 from tiergraph.budget import _MAX_USER_STEPS  # noqa: E402
 from tiergraph.cli import build_parser  # noqa: E402
 from tiergraph.machine import MACHINE_VERSION  # noqa: E402
+from tiergraph.machine_codec import _JSONL_LINE_BYTES  # noqa: E402
+from tiergraph.match import (  # noqa: E402
+    _MAX_PATTERN_DEPTH,
+    _MAX_PATTERN_NODES,
+    MAX_PATTERN_STATES,
+)
+from tiergraph.match_text import _MAX_PATTERN_NESTING  # noqa: E402
+from tiergraph.predicate import _MAX_REGEX_NESTING  # noqa: E402
+from tiergraph.predicate_text import _MAX_PREDICATE_NESTING  # noqa: E402
 
 MANIFEST_PATH = ROOT / "docs" / "manifest.json"
 API_PATH = ROOT / "docs" / "reference" / "api.md"
@@ -39,6 +48,21 @@ DIRECTIVE = re.compile(
     re.DOTALL,
 )
 GATE_TARGET = re.compile(r"^gate:(?P<steps>.*)$", re.MULTILINE)
+
+# Each entry pins one reader-visible phrase to the code value it describes. Add
+# guide entries here only after the docs-guides lane has settled the destination
+# page and wording; its patterns and work-budgets pages should cover the NFA-state,
+# AST-node, and four nesting ceilings represented in the generated reference.
+PROSE_CONSTANTS: tuple[tuple[Path, str, int], ...] = (
+    (CLI_PATH, "Maximum CLI work budget: {value:,} steps.", _MAX_USER_STEPS),
+    (CLI_PATH, "Maximum compiled pattern states: {value:,}.", MAX_PATTERN_STATES),
+    (CLI_PATH, "Maximum pattern AST nodes: {value:,}.", _MAX_PATTERN_NODES),
+    (CLI_PATH, "Pattern text nesting limit: {value}.", _MAX_PATTERN_NESTING),
+    (CLI_PATH, "Pattern AST nesting limit: {value}.", _MAX_PATTERN_DEPTH),
+    (CLI_PATH, "Predicate text nesting limit: {value}.", _MAX_PREDICATE_NESTING),
+    (CLI_PATH, "Regular-expression nesting limit: {value}.", _MAX_REGEX_NESTING),
+    (CLI_PATH, "JSONL program line cap: {value:,} bytes.", _JSONL_LINE_BYTES),
+)
 
 # What each gate step is for, keyed by the makefile target that runs it. The
 # order and the membership of the list are the makefile's; only the gloss is
@@ -123,9 +147,15 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
 
 def _signature(value: object) -> str:
     try:
-        return str(inspect.signature(cast(Callable[..., object], value)))
+        signature = inspect.signature(cast(Callable[..., object], value))
     except (TypeError, ValueError):
         return ""
+    public = tuple(
+        parameter
+        for parameter in signature.parameters.values()
+        if not parameter.name.startswith("_")
+    )
+    return str(signature.replace(parameters=public))
 
 
 def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
@@ -133,6 +163,17 @@ def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
     heading = f"### `{name}`"
     if name in descriptions:
         return f"{heading}\n\n{descriptions[name]} Current value: `{value}`."
+    if isinstance(value, TypeAliasType):
+        parameters = ""
+        if value.__type_params__:
+            parameters = (
+                "["
+                + ", ".join(parameter.__name__ for parameter in value.__type_params__)
+                + "]"
+            )
+        return (
+            f"{heading}\n\n```text\ntype {name}{parameters} = {value.__value__!r}\n```"
+        )
     doc = inspect.getdoc(value)
     if not doc:
         # These aliases have no runtime marker that distinguishes them from values;
@@ -239,9 +280,176 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
     return ("\n".join(parts).rstrip() + "\n").encode()
 
 
+def _walk_cli_parsers(
+    parser: argparse.ArgumentParser, path: str = "tiergraph"
+) -> Iterator[tuple[str, argparse.ArgumentParser]]:
+    """Yield the root and every nested command parser in display order."""
+    yield path, parser
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, child in action.choices.items():
+                yield from _walk_cli_parsers(child, f"{path} {name}")
+
+
+def validate_cli_help(parser: argparse.ArgumentParser) -> None:
+    """Require descriptions, examples, exit codes, and help for every argument."""
+    for path, command in _walk_cli_parsers(parser):
+        if not command.description:
+            raise ValueError(f"{path} has no help description")
+        epilog = command.epilog or ""
+        if "Examples:\n" not in epilog or "Exit codes:\n" not in epilog:
+            raise ValueError(f"{path} has no examples and exit-code epilog")
+        for action in command._actions:
+            if isinstance(action, argparse._SubParsersAction) or action.dest == "help":
+                continue
+            if action.help is None or action.help is argparse.SUPPRESS:
+                spelling = (
+                    action.option_strings[0] if action.option_strings else action.dest
+                )
+                raise ValueError(f"{path} argument {spelling!r} has no help text")
+
+
+def _json_block(value: object) -> str:
+    """Render one deterministic indented JSON example."""
+    return "```json\n" + json.dumps(value, indent=2, sort_keys=True) + "\n```"
+
+
+def _json_input_formats() -> str:
+    """Render the strict JSON forms accepted directly by CLI arguments."""
+    qname = {"namespace": "urn:example", "local_name": "tokens"}
+    selector = {"select": "items", "tier": qname}
+    ordering = {"order": "tier", "tier": qname}
+    any_item = {"pattern": "atom", "predicate": {"test": "and", "args": []}}
+    match_request = {
+        "match": "spans",
+        "ordering": ordering,
+        "pattern": any_item,
+        "limit": 20,
+        "max_steps": 100_000,
+    }
+    span_profile = {
+        "base_tier": qname,
+        "span_tiers": [
+            {"namespace": "urn:example", "local_name": "words"},
+        ],
+        "coverage_relation": {
+            "namespace": "urn:example",
+            "local_name": "coverage",
+        },
+        "score_attribute": {"namespace": "urn:example", "local_name": "score"},
+        "value_attribute": {"namespace": "urn:example", "local_name": "text"},
+        "char_offset_attribute": None,
+        "alternative_relation": None,
+    }
+    clock_profile = {
+        "clock_tier": {"namespace": "urn:example", "local_name": "clock"},
+        "binding_relation": {
+            "namespace": "urn:example",
+            "local_name": "clock-binding",
+        },
+        "rate_attribute": None,
+        "unit_attribute": {"namespace": "urn:example", "local_name": "unit"},
+        "tick_attribute": None,
+        "gap_attribute": None,
+        "untimed_attribute": None,
+        "start_attribute": None,
+        "duration_attribute": None,
+    }
+    name = tiergraph.QualifiedName("urn:example:grammar", "S")
+    text_name = tiergraph.QualifiedName("urn:example:grammar", "text")
+    terminal = tiergraph.GrammarTerminal(
+        tiergraph.AttributeValue(text_name, tiergraph.XsdType.STRING, "x")
+    )
+    grammar = tiergraph.GrammarDeclaration(
+        (name,), name, (tiergraph.GrammarRule(name, (terminal,), (terminal,)),)
+    ).to_data()
+    grammar_input = tiergraph.GrammarInput.from_symbols(("x",)).to_data()
+    return (
+        "## JSON input formats\n\n"
+        "All objects are strict: unknown or missing fields are refused. A qualified "
+        "name is an object with string `namespace` and `local_name` fields.\n\n"
+        "### Selector documents\n\n"
+        "`select --selector` accepts one selector object. Leaf forms are `tier`, "
+        "`type`, `items`, `boundaries`, `item`, `boundary`, and `attribute`. "
+        "`item` and `boundary` carry a `path`; the tier-based forms carry a "
+        "qualified name. `where` carries `base` and `predicate`; `sequence` carries "
+        "`ordering` and `pattern`. Compound forms use `op` equal to `union` or "
+        "`intersection` with a nonempty `args` array, or `difference` with `left` "
+        "and `right`.\n\n"
+        + _json_block(selector)
+        + "\n\n### Ordering and match requests\n\n"
+        "`match --ordering` accepts `tier` with `tier`; `containers` with `relation` "
+        "and `containers`; `adjacent-runs` with `source` and `offsets`; or `declared` "
+        "with `successor`, `members`, optional `chain`, and optional boolean "
+        "`open_left`. Qualified-name fields use the shape shown below; selector "
+        "fields use the selector shapes above.\n\n" + _json_block(ordering) + "\n\n"
+        "`match --request` accepts `match` equal to `exists`, `focus`, `spans`, or "
+        "`count`, plus `ordering` and a tagged pattern AST. `spans` may add a "
+        "nonnegative `limit`. Every operation may add positive `max_steps`. Pattern "
+        "tags are `atom` with `predicate`, `seq` or `alt` with `parts`, `repeat` "
+        "with `body`, `min`, and optional `max`, `focus` with `body`, and the "
+        "field-only `start` and `end` forms.\n\n" + _json_block(match_request) + "\n\n"
+        "The `pairs` request instead requires selector fields `left` and `right`, "
+        "an interval `relation`, and an `offsets` object with qualified-name "
+        "`origin`, exactly one of `extent` or `end`, and optional `partition`; it "
+        "may add `limit` and `max_steps`. The `lattice` request requires one "
+        "qualified name in `transitions`, an array of item references in `roots`, "
+        "qualified-name `emission`, `pattern`, and `policy`. Policy is "
+        '`{"policy": "unambiguous"}` or `determinize` with positive '
+        "`max_states`; `max_steps` is optional.\n\n"
+        "### Span and clock profiles\n\n"
+        "A span profile requires the seven fields shown below. Optional fields are "
+        "`base_surface_attribute`, `point_tiers`, `point_coverage_relation`, "
+        "`value_attributes`, and `clock_face` (`tick` or `physical`). Nullable "
+        "qualified-name roles are written as JSON null.\n\n"
+        + _json_block(span_profile)
+        + "\n\n"
+        "A clock profile requires all nine fields below. The clock tier, binding "
+        "relation, and unit attribute are qualified names; every other attribute "
+        "role is a qualified name or null.\n\n"
+        + _json_block(clock_profile)
+        + "\n\n### Grammar documents and inputs\n\n"
+        "A grammar document contains `nonterminals`, `start`, and `rules`. Each rule "
+        "has `left`, source and target arrays of tagged `terminal` or `hole` "
+        "elements, `boundary`, `awaited_variables`, and nullable `weight`; optional "
+        "`provenance` is an array. Attribute values contain `name`, `value_type`, "
+        "and `lexical`.\n\n" + _json_block(grammar) + "\n\n"
+        "`--tokens-json` is a JSON array of strings. `--input-json` is an object "
+        "with a `tokens` array. Each typed token requires string `symbol` and a "
+        "nonempty `realization` array; optional fields are `provenance`, `source`, "
+        "and `span`. Each realization requires a string `tokens` array and may add "
+        "string `provenance` and decimal-string `weight`.\n\n"
+        + _json_block(grammar_input)
+        + "\n\n### Fold requests\n\n"
+        "`fold` and `discharge fold` do not read request JSON. They assemble the "
+        "request from `--name`, the attribute namespace and local name, repeatable "
+        "`--tier` and `--transition`, `--semiring`, `--lift`, repeatable `--root`, "
+        "`--ranked`, `--output-cap`, and `--max-steps`. `discharge fold` also reads "
+        "`--exactness`.\n"
+    )
+
+
+def _implementation_limits() -> str:
+    """Render reader-visible ceilings directly from their code constants."""
+    mebibytes = _JSONL_LINE_BYTES // (1024 * 1024)
+    return (
+        "## Implementation limits\n\n"
+        f"- Maximum CLI work budget: {_MAX_USER_STEPS:,} steps.\n"
+        f"- Maximum compiled pattern states: {MAX_PATTERN_STATES:,}.\n"
+        f"- Maximum pattern AST nodes: {_MAX_PATTERN_NODES:,}.\n"
+        f"- Pattern text nesting limit: {_MAX_PATTERN_NESTING}.\n"
+        f"- Pattern AST nesting limit: {_MAX_PATTERN_DEPTH}.\n"
+        f"- Predicate text nesting limit: {_MAX_PREDICATE_NESTING}.\n"
+        f"- Regular-expression nesting limit: {_MAX_REGEX_NESTING}.\n"
+        f"- JSONL program line cap: {_JSONL_LINE_BYTES:,} bytes. "
+        f"This is {mebibytes} MiB.\n"
+    )
+
+
 def cli_bytes() -> bytes:
     """Render normalized parser help and the checked command contracts."""
     parser = build_parser()
+    validate_cli_help(parser)
     # argparse exposes no public traversal API for nested subparser actions.
     action = next(
         candidate
@@ -342,7 +550,8 @@ def cli_bytes() -> bytes:
         f"`{machine_header}` and each later line has one opcode's public "
         "`to_data()` shape (a repeat body remains nested on that line). Header-only "
         "programs are valid, CRLF and a final line without a newline are accepted, "
-        "and whitespace-only lines are rejected. The decoder caps each line at 1 MiB "
+        "and whitespace-only lines are rejected. The decoder caps each line at "
+        f"{_JSONL_LINE_BYTES // (1024 * 1024)} MiB "
         "and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce "
         "repeat and total expansion bounds.\n\n"
         "`step` reads that same JSONL program and drives the public `steps()` "
@@ -381,6 +590,10 @@ def cli_bytes() -> bytes:
         "also binds a `DeliveryYield` callable. Neither callable has a declarative "
         "or wire form for the CLI to read, so the shell cannot construct either "
         "declaration without inventing an executable callback format.\n\n"
+        + _json_input_formats()
+        + "\n"
+        + _implementation_limits()
+        + "\n"
         "## Deterministic stepping example\n\n"
         "For a program whose first opcode declares prefix `s` for `urn:step`, dump "
         "its exact public step states:\n\n"
@@ -466,6 +679,24 @@ def generated(manifest: Mapping[str, Any]) -> dict[Path, bytes]:
         MIXING_PATH: mixing_bytes(),
         CONTRIBUTING_PATH: contributing_bytes(),
     }
+
+
+def check_prose_constants(
+    artifacts: Mapping[Path, bytes],
+    entries: Sequence[tuple[Path, str, int]] = PROSE_CONSTANTS,
+) -> None:
+    """Require each declared phrase to contain its current code constant once."""
+    for path, phrase, value in entries:
+        content = (
+            artifacts[path].decode()
+            if path in artifacts
+            else path.read_text(encoding="utf-8")
+        )
+        expected = phrase.format(value=value)
+        if content.count(expected) != 1:
+            raise ValueError(
+                f"prose constant mismatch in {path.relative_to(ROOT)}: {expected!r}"
+            )
 
 
 def check_cli() -> None:
@@ -638,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
         check_live_claims(manifest)
         check_cli()
         artifacts = generated(manifest)
+        check_prose_constants(artifacts)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise SystemExit(str(error)) from error
     if args.check:
