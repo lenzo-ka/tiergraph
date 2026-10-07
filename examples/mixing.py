@@ -38,7 +38,6 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
-from tiergraph.core import _scalar_attribute
 from tiergraph.semiring import DECIMAL_TROPICAL
 
 NAMESPACE = "https://tiergraph.dev/examples/mixing"
@@ -122,9 +121,11 @@ def _deliveries(graph: Graph, provenance: object) -> tuple[OrderedDelivery, ...]
     delivery = name("delivery")
     values = {
         item.durable_id: int(
-            _scalar_attribute(
-                next(value for value in item.attributes if value.name == delivery)
-            ).lexical
+            next(
+                value.lexical
+                for value in item.attributes
+                if isinstance(value, AttributeValue) and value.name == delivery
+            )
         )
         for tier in graph.tiers
         for item in tier.items

@@ -18,14 +18,12 @@ tuple that gives each dependency relation an `AND` or `OR` meaning. `AND`
 combines a node's children as joint requirements; `OR` combines them as
 alternatives. Import concrete semirings from `tiergraph.semiring`.
 
-Use selection when the payload is invariant across optimal paths: `SelectionSemiring` keeps the payload attached to the winning cost and resolves a cost tie by operand order. The declaration covers ties created by floating-point rounding as well as exact ties. A payload that is the path itself can differ between tied optima and therefore wants accumulation with `PATH`. Selection requires the caller to declare tie invariance, and `tiergraph semirings` does not list it because its payload identity, payload combination, codecs, and declaration are supplied by Python callers rather than nameable by `tiergraph fold`.
-
-`LexicographicSemiring` lifts an approximate component law only with `exact_workload=True` and separately lifts missing strict multiplication order preservation only with `order_preserving_workload=True`. `DECIMAL_TROPICAL` is the exact alternative and needs neither declaration.
-
-Each transition must name a bipartite declaration, because a fold reads one
-parent and one child per incidence. A declared relation of another kind is
-refused and named for the kind it is, rather than being reported as undeclared
-or quietly contributing no incidence.
+A transition names either a bipartite declaration, read as one parent and one
+child per instance, or an ordered polyadic declaration with
+`unique_sources=True`, exactly one item on its source side, and item-only
+targets, read as one parent and its ordered children per instance. Any other
+declaration is refused and named for the kind it is;
+[folding a polyadic relation](#folding-a-polyadic-relation) has an example.
 
 The example graph is a diamond: `a` depends on `b` and `c`, both of which depend
 on `d`. Each task has a decimal `cost`.
@@ -157,11 +155,100 @@ paths: 2
 
 Nothing about the graph changed; only the algebra did.
 
+### Choosing a semiring
+
+`tiergraph semirings` lists the algebras the command line can name, with their
+carrier boundaries and declared laws. Others are reached only from Python,
+among them these two.
+
+`SelectionSemiring` keeps a payload attached to the winning cost and resolves a
+cost tie by operand order. Use it when the payload is the same on every optimal
+path; the caller declares that tie invariance, and the declaration covers ties
+created by floating-point rounding as well as exact ones. A payload that is the
+path itself can differ between tied optima, so it wants accumulation with
+`PATH` instead.
+
+`LexicographicSemiring` pairs a selective first component with a second
+component that aggregates the tied candidates. It admits a component with
+approximate laws only when the caller declares `exact_workload=True`, and a
+first component that cannot promise to preserve strict order under
+multiplication only when the caller declares `order_preserving_workload=True`.
+Exact components, such as `DECIMAL_TROPICAL`, need neither declaration.
+
+## Folding a polyadic relation
+
+An ordered polyadic relation lists each parent's children in order, and a child
+may repeat. Here a frame is made of two wheels and a seat, and the seat of two
+bolts. An `AND` fold under `DECIMAL_TROPICAL` multiplies, which in min-plus
+arithmetic adds, so it totals every part, counting a repeated child each time
+it is listed.
+
+```python
+from tiergraph import (
+    PolyadicRelationDeclaration,
+    PolyadicRelationInstance,
+    RelationEndpointKind,
+    RelationSideDeclaration,
+)
+
+parts = QualifiedName(ns, "parts")
+made_of = QualifiedName(ns, "made-of")
+part_refs = tuple(ItemRef(parts, index) for index in range(4))
+one_part = RelationSideDeclaration((RelationEndpointKind.ITEM,), (parts,), 1, 1)
+some_parts = RelationSideDeclaration((RelationEndpointKind.ITEM,), (parts,), 1, None)
+assembly = Graph(
+    (NamespaceDeclaration("plan", ns),),
+    (
+        Tier(
+            TierDeclaration(parts, "Parts"),
+            (
+                task("frame", "4"),
+                task("wheel", "1"),
+                task("seat", "2"),
+                task("bolt", "0.5"),
+            ),
+        ),
+    ),
+    (
+        PolyadicRelationDeclaration(
+            made_of, one_part, some_parts, unique_sources=True, acyclic=True
+        ),
+    ),
+    polyadic_relations=(
+        PolyadicRelationInstance(
+            made_of, (part_refs[0],), (part_refs[1], part_refs[1], part_refs[2])
+        ),
+        PolyadicRelationInstance(
+            made_of, (part_refs[2],), (part_refs[3], part_refs[3])
+        ),
+    ),
+    attribute_declarations=(
+        AttributeDeclaration(cost, AttributeDomain.ITEM, XsdType.DECIMAL),
+    ),
+)
+bill = FoldDeclaration(
+    "bill-of-materials",
+    assembly,
+    AttributeValuation("cost", cost, (parts,)),
+    DECIMAL_TROPICAL,
+    lambda value, _label: cast(Decimal, value),
+    (FoldTransition(made_of, ChildCombination.AND),),
+    roots=(part_refs[0],),
+)
+print("total:", bill.run().value)
+```
+
+```text
+total: 9.0
+```
+
+The frame costs `4`, its wheels `1 + 1`, and its seat `2 + 0.5 + 0.5`.
+
 ## Exactness is a declared claim
 
-A fold evaluates shared structure once and reuses it. Whether the value that
-comes out is the same as combining every derivation separately is a real
-question with a real answer, and `exactness` is where a declaration answers it.
+A fold evaluates shared structure once and reuses it. A declaration's
+`exactness` states whether the value that comes out equals the combination of
+every derivation taken separately.
 `FoldExactness` has four values. `DISTRIBUTIVE` says the value *is* that
 combination. `APPROXIMATE` says it is a sound approximation of it, which is a
 fact about the published result rather than a footnote about the algebra.
@@ -169,10 +256,9 @@ fact about the published result rather than a footnote about the algebra.
 derivation set infinite and the starred fixpoint equations are the
 specification. `UNDECLARED` is the default.
 
-`check_exactness()` demands the claim and returns a `FoldCertificate`. The two
-ways of getting it wrong are answered differently on purpose: **omitting** the
-claim is answered with the declaration to be made, and **asserting it falsely**
-is answered with a semantic counterexample.
+`check_exactness()` demands the claim and returns a `FoldCertificate`. A
+missing claim is refused with the declaration to be made, and a false claim with
+a semantic counterexample.
 
 ```python
 from tiergraph import FoldExactness
@@ -542,48 +628,17 @@ which is reported by its closing edge.
 
 ## Work budgets
 
-`FoldDeclaration.run` and `check_exactness`, and `PathPlan.evaluate` and
-`marginals`, accept an optional `WorkBudget` or shared `WorkMeter`. There is no
-default. Exhaustion raises `BudgetExhausted`; a fold or plan never publishes a
-partial carrier value.
-
-Fold steps checkpoint each evaluated state or cyclic equation. They charge
-carrier additions, multiplications, and witness operations multiplied by the
-declaration's `carrier_operation_cost`, plus Cartesian provenance products,
-ranked-candidate construction and copied path labels, and cycle-enumeration
-pushes. Built-in PATH carriers also charge the total labels retained in their
-values. One carrier call is indivisible: a budget cannot interrupt arbitrary
-user carrier code, and the charge occurs at the surrounding checkpoint.
-Compiled path plans charge each gather or scatter operation and the size of a
-built-in PATH result.
-
-`OutputPlan.prepare`, `masses`, `conditioned`, and `item_marginals` use the
-same budget. They charge candidate-trie tokens, reachable product topology,
-conditioned reverse traversal, compiled path-plan work, and pooled carrier
-additions. Budgeted conditioning bypasses its cache so its threshold is
-independent of call history.
-
-The synchronous-grammar entries `recognize`, `count`, `best`, and `generate`,
-and the corresponding `ParseForest` and `TargetLattice` run methods, also
-accept `budget=`. Chart search charges each key, rule probe, and recursive
-candidate state before constructing the forest; later aggregation and target
-materialization share the grammar entry's ambient meter. These aggregate
-entries refuse on exhaustion and never return partial counts, derivations, or
-target strings.
-
-A work budget is distinct from every existing fold bound. `derivation_budget`
-still makes an exactness certificate report `compared=False` when its oracle
-cannot enumerate all derivations; work-budget exhaustion raises instead.
-`output_cap` limits reported witnesses only, and `FoldResult.truncated` keeps
-that meaning after a complete carrier value has been computed. `FoldCost` is
-retrospective accounting rather than a stopping condition.
+`FoldDeclaration.run`, `check_exactness`, and the `PathPlan` and `OutputPlan`
+methods accept a `WorkBudget` or `WorkMeter`, and never return a partial value
+when it runs out. [Work budgets](work-budgets.md) describes what each charges and
+how a budget differs from `output_cap`, `derivation_budget`, and `FoldCost`.
 
 ## From the command line
 
 `tiergraph semirings` lists the algebras the `tiergraph fold` shell can name,
 with their carrier boundaries and declared laws, and `tiergraph fold` runs the
-declaration the flags describe over a stored document. The two folds above read
-as:
+declaration the flags describe over a stored document. The closest shell
+equivalents of the two diamond folds above are:
 
 ```console
 tiergraph fold plan.json \
@@ -601,6 +656,11 @@ tiergraph fold plan.json \
   --semiring counting --lift one \
   --transition https://example.com/plan depends or
 ```
+
+The first differs from the Python fold in how it reports a winner: `--ranked`
+uses ranked output, described below, so it reports every witness up to the cap
+in ranked order rather than the one `CHOOSE_FIRST` keeps, and its cost account
+differs accordingly.
 
 The shell names one of two lifts: `value` embeds the read value, and `one`
 embeds the semiring's multiplicative identity whatever the value is. A general

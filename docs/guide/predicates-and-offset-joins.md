@@ -1,10 +1,18 @@
-# Matching with existing pieces
+# Predicates and offset joins
 
-Tiergraph can answer several matching questions by composing its existing
-selection, traversal, and folding operations. A selector produces a canonical
-`NodeSet`; set operations combine those results, and `Walk` relates one
-selection to another. `AttributeSelector` selects carriers where an attribute
-is present. It does not compare the stored value.
+A value predicate decides something about one node: whether an attribute is
+present, what it holds, whether a related item satisfies another predicate, or
+how its offset interval relates to other items'. Predicates live in
+`tiergraph.predicate`, have a graph-free text form, and plug into selection
+through `WhereSelector`, into [sequence patterns](patterns.md) as item tests,
+and into the command line through `tiergraph select --where`. An offset join
+pairs the items of two selections whose intervals stand in a declared relation.
+
+Some of these questions can also be answered by composing selection and
+traversal. A selector produces a canonical `NodeSet`; set operations combine
+those results, and `Walk` relates one selection to another.
+`AttributeSelector` selects carriers where an attribute is present. It does not
+compare the stored value.
 
 This graph has three segment items and two annotation items. The `host`
 relation connects both annotations to segments. Two segments carry `stress`;
@@ -222,6 +230,32 @@ The command-line equivalent uses `--where` in place of a selector JSON file:
 the predicate over every item and writes the selected node references as JSON.
 `--selector` and `--where` are mutually exclusive.
 
+## The text form and JSON
+
+The text form covers comparisons (`=`, `!=`, `<`, `<=`, `>`, `>=`), regular
+expression matches written `cell~"regex"`, negation with `!`, conjunction with
+`&`, disjunction with `|`, and parentheses. `format_predicate` writes the
+canonical text of a predicate, and `predicate_to_data` and `predicate_loads`
+write and read its strict JSON form, which selector JSON embeds.
+
+```python
+import json
+
+from tiergraph.predicate import format_predicate, predicate_loads, predicate_to_data
+
+for text in ("start>=4", 'stress~"pri.*"', "!(start=0 & end=8)"):
+    predicate = parse_predicate(text, syntax)
+    selector = WhereSelector(ItemsSelector(segments), predicate)
+    selected = evaluate_selection(graph, selector)
+    same = predicate_loads(json.dumps(predicate_to_data(predicate))) == predicate
+    print(f"{format_predicate(predicate, syntax)}: {labels(selected)} {same}")
+```
+```text
+start>=4: ['s1'] True
+stress~"pri.*": ['s0'] True
+!(start=0 & end=8): ['s0', 's1'] True
+```
+
 ## Quantifying related items
 
 `Related` tests one relation step from each candidate. `ANY` needs a related
@@ -310,228 +344,5 @@ precede its origin. Supplying `extent=` in place of `end=` gives the same
 intervals when the stored extent is `end - origin`. When `partition` is present,
 only items with equal partition values can match.
 
-## Matching complete outputs and folding alternatives
-
-`OutputPlan` matches complete emitted token sequences against a finite
-candidate set supplied by the caller. It keeps a residual for paths that match
-none of those candidates. A semiring fold answers a different question over the
-same path topology. `COUNTING` counts alternatives, while `BOOLEAN` records
-whether any alternative exists.
-
-The next graph is a diamond with the paths `a -> b -> d` and
-`a -> c -> d`.
-
-```python
-from typing import Any
-
-from tiergraph import (
-    BOOLEAN,
-    COUNTING,
-    AttributeValuation,
-    ChildCombination,
-    Emissions,
-    FoldDeclaration,
-    FoldTransition,
-    OutputPlan,
-    PathPlan,
-)
-from tiergraph.semiring import Semiring
-
-nodes = q("nodes")
-node_type = q("node")
-next_relation = q("next")
-value_attribute = q("value")
-node_refs = tuple(ItemRef(nodes, index) for index in range(4))
-diamond = Graph(
-    (NamespaceDeclaration("ex", ns),),
-    (
-        Tier(
-            TierDeclaration(nodes, "Nodes"),
-            tuple(
-                Item(
-                    label,
-                    (AttributeValue(value_attribute, XsdType.STRING, "present"),),
-                )
-                for label in ("a", "b", "c", "d")
-            ),
-        ),
-    ),
-    (
-        SimpleRelationDeclaration(q("membership"), nodes, node_type),
-        BipartiteRelationDeclaration(next_relation, node_type, node_type, acyclic=True),
-    ),
-    (
-        RelationInstance(next_relation, node_refs[0], node_refs[1]),
-        RelationInstance(next_relation, node_refs[0], node_refs[2]),
-        RelationInstance(next_relation, node_refs[1], node_refs[3]),
-        RelationInstance(next_relation, node_refs[2], node_refs[3]),
-    ),
-    (AttributeDeclaration(value_attribute, AttributeDomain.ITEM, XsdType.STRING),),
-)
-
-
-def prepare(semiring: Semiring[Any]) -> PathPlan[Any]:
-    declaration = FoldDeclaration[Any](
-        "diamond",
-        diamond,
-        AttributeValuation("value", value_attribute, (nodes,)),
-        semiring,
-        lambda _value, _label: semiring.one,
-        (FoldTransition(next_relation, ChildCombination.OR),),
-        roots=(node_refs[0],),
-    )
-    return PathPlan.prepare(declaration)
-
-
-counting_plan = prepare(COUNTING)
-count = counting_plan.evaluate().value
-exists = prepare(BOOLEAN).evaluate().value
-emissions = Emissions.bind(
-    counting_plan,
-    {label: (label,) for label in ("a", "b", "c", "d")},
-)
-output = OutputPlan.prepare(
-    counting_plan,
-    emissions,
-    (("a", "b", "d"), ("a", "c", "d")),
-).masses()
-
-print("folds:", count, exists)
-print("candidate masses:", output.per_candidate, "residual:", output.residual)
-```
-```text
-folds: 2 True
-candidate masses: (1, 1) residual: 0
-```
-
-`OutputPlan` compares whole outputs only with the candidates it is given. The
-residual accounts for every other output. Regular sequence patterns answer a
-different question over graph items in a declared order. An `AtomPattern`
-consumes one item when its predicate holds, and a `FocusPattern` marks the items
-returned by `focus` or a `SequenceSelector`.
-
-```python
-from tiergraph.match import (
-    AtomPattern,
-    FocusPattern,
-    SeqPattern,
-    TierOrder,
-    compile_pattern,
-)
-from tiergraph.predicate import Cell, Equals, Has, Not
-
-primary_then_missing = SeqPattern(
-    (
-        FocusPattern(AtomPattern(Equals(Cell(stress), ("primary",)))),
-        AtomPattern(Not(Has(Cell(stress), alias="none"))),
-    )
-)
-focused = compile_pattern(primary_then_missing).focus(graph, TierOrder(segments))
-
-print("primary before a missing stress:", labels(focused))
-```
-```text
-primary before a missing stress: ['s0']
-```
-
-```python
-bound = compile_pattern(primary_then_missing).bind(graph, TierOrder(segments))
-print("bound focus:", labels(bound.focus()))
-print(
-    "bound spans:",
-    [(match.start, match.end) for match in bound.spans().matches],
-)
-
-missing_stress = compile_pattern(
-    FocusPattern(AtomPattern(Not(Has(Cell(stress), alias="none"))))
-).bind(graph, bound.ordering)
-print("reused ordering:", labels(missing_stress.focus()))
-```
-```text
-bound focus: ['s0']
-bound spans: [(0, 2)]
-reused ordering: ['s1']
-```
-
-Binding prepares predicates and scopes once for repeated views. A bound
-ordering can serve other patterns only with the identical graph object, and a
-bound pattern holds that deeply immutable graph for the handle's lifetime.
-
-`TierOrder` treats a tier as one scope. `ContainerOrder` makes one scope from
-each selected container's direct children, and `AdjacentRuns` splits selected
-items where their declared offsets are not adjacent. Matches never cross a
-scope. `exists` and `focus` admit nullable patterns; `spans` and `count` refuse
-them because an empty match has no item span.
-
-## Work budgets
-
-Matching has no default work limit. Callers that need one pass
-`WorkBudget(steps=..., seconds=...)` to a compiled or bound pattern view,
-`CompiledPattern.bind`, `BoundPredicate.holds` or `select`, `span_pairs`, or a
-`LatticeMatch` method. `OutputPlan.prepare`, `masses`, `conditioned`, and
-`item_marginals` accept the same keyword. `evaluate_selection` accepts it too;
-in particular, selector scans, canonical set construction, and set operations
-around a nested `SequenceSelector` share the pattern's meter. A `WorkMeter`
-shares one declaration across calls and exposes the accumulated `spent`; it is
-intended for one thread or task at a time. A step-only budget is deterministic
-within a release. Deadlines use a monotonic clock, are checked periodically,
-and can only refuse.
-
-Most exhaustion raises `BudgetExhausted` at the `SEMANTICS` stage. Only an
-outermost `spans` or `span_pairs` call with its own step budget may return a
-nonempty completed prefix, marked `Extent.CUT_AT_BUDGET`. An empty prefix, a
-deadline, or exhaustion under an enclosing metered operation refuses. Thus a
-cut witness list can never silently enter a fold or another semiring
-aggregate. `limit` remains an output bound: finding a further witness reports
-`CUT_AT_BOUND`, while scanning to the end with exactly `limit` witnesses stays
-`EXHAUSTIVE`. Open-right spans compute every `pending_from` watermark before
-the truncatable scan.
-
-Steps charge logical work: predicate decisions and relation-instance scans;
-offset records and interval candidates; NFA active sets and epsilon closures;
-copied span items; lattice product pairs, incidences, count entries, reverse
-edges, ambiguity pairs, and full per-state epsilon closures. Budgeted lattice
-calls bypass their caches, so thresholds do not depend on call history. A
-bound pattern charges its truth table at `bind`; its later views charge only
-simulation. Output plans charge candidate tokens, reachable product pairs and
-incidences, derived-plan construction, conditioned reverse edges, compiled
-path-plan operations, and pooled carrier additions. Budgeted conditioning
-bypasses its topology cache. Passing the same `WorkMeter` across entries
-records their combined work.
-
-Large pattern alternations use bounded lookahead to omit successors that cannot
-accept. Steps for a gated alternation count lookups at one unit per successor,
-charged with the enclosing epsilon closure. When lookahead prunes work, the
-closure's total charge is no greater than the corresponding full-NFA charge.
-This lowers charged steps for large alternations, but measurements show no
-wall-time gain. At the step-budget boundary, an outermost span call that
-previously refused can therefore return a nonempty `CUT_AT_BUDGET` partial
-result; a call that previously returned a result never changes to a refusal.
-
-Compilation itself is not metered. Instead, pattern text allows at most 256
-nested groups, a directly constructed pattern AST at most 256 levels, and a
-compiled pattern at most `MAX_PATTERN_POSITIONS` item positions and
-`MAX_PATTERN_STATES` (1,000,000) NFA states. Predicate regexes have the same
-state ceiling. The pattern and embedded-predicate text parsers, and the pattern
-validation and compilation walks, are iterative, so these bounds give typed
-refusals independently of the caller's Python stack depth. The output paths
-`pattern_to_data` and `format_pattern` remain recursive over already constructed
-ASTs.
-
-The text-group and pattern-tree bounds interact. Every text group adds at least
-one level above its innermost atom, so a 256-group text always exceeds the
-256-level pattern-tree bound when compiled. Compilable text therefore nests at
-most 255 groups, or fewer when the innermost body is a sequence or alternation.
-
-The state and position ceilings are otherwise independent: nesting can create
-hundreds of states per position, so the state cap can refuse well below the
-position cap. For
-example, the reachable 772-character text shape
-`"(" + "(" * 254 + "." + ")?" * 254 + "){10000}"` has 10,000 positions but
-5,100,002 states; the analogous predicate shape has 2,000,002 states.
-
-Ordinary matching scope reading remains an unmetered near-linear pass over the
-size-limited graph. A metered selection charges one logical visit per scanned
-carrier and deterministic size-based work for canonical node sets; this also
-covers the traversal surrounding a nested `SequenceSelector`. Likewise, a
-predicate or matching step does not preempt arbitrary user code.
+For regular patterns over item sequences, see [Sequence patterns](patterns.md).
+To bound the work a predicate or join may do, see [Work budgets](work-budgets.md).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tiergraph import (
+    AttributeValue,
     ItemRef,
     ItemSelector,
     Walk,
@@ -11,7 +12,6 @@ from tiergraph import (
     evaluate_selection,
 )
 from tiergraph.build import document, item
-from tiergraph.core import _scalar_attribute
 
 NAMESPACE = "https://tiergraph.dev/examples/caption-alignment"
 
@@ -53,9 +53,9 @@ def aligned_phones() -> list[str]:
     label_name = builder.qname("label")
     return [
         next(
-            _scalar_attribute(value).lexical
+            value.lexical
             for value in phone_tier.items[reference.index].attributes
-            if value.name == label_name
+            if isinstance(value, AttributeValue) and value.name == label_name
         )
         for node in reached.nodes
         if isinstance(reference := node.reference, ItemRef)

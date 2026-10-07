@@ -82,50 +82,57 @@ model and a versioned interchange format.
 
 ## What you can do with it
 
-**Hold aligned layers without drift.** One store, computed views. This is the base
-case and covers most use. Build a graph directly, or record an ordered edit stream
-as a `Program` and run it — see [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md).
+**Store aligned layers that stay valid.** Tiers, items, typed attributes, and
+declared relations live in one immutable graph that refuses an invalid state
+when it is built. Build one with the `tiergraph.build` builder or the direct
+constructors, edit it with `GraphEditor`, or read one from a Praat TextGrid.
+See [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md) and
+[annotation formats](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/annotation-formats.md).
 
-**Match values and structure.** Selection with set algebra, `WhereSelector`
-value predicates, one-step relation images, `Related` quantifiers, half-open
-interval predicates and span-pair joins, `Walk` over declared relation incidence,
-and ordered containment replace hand-written index arithmetic. See [selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md)
-and [matching with existing pieces](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/matching-with-existing-pieces.md).
+**Query it.** Selectors with set algebra, typed value predicates, quantifiers
+over related items, offset-interval joins, and walks over declared relations
+return canonical node sets. See
+[selection and traversal](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/selection-and-traversal.md) and
+[predicates and offset joins](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/predicates-and-offset-joins.md).
 
-**Measure and recognize by fold.** A fold evaluates a finite dependency relation
-with a semiring you supply: min-plus for least cost, counting for path counts,
-boolean for recognition, path semirings for witnesses. This is the capability with
-no common substitute — most alternatives make you write the traversal and the
-accumulation by hand, separately, for each question. See
-[folding](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/folding.md) and
-[recognize and act](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/recognize-and-act.md).
+**Match sequences.** Regular patterns of item tests run over a tier, over each
+container's children, or over an order the graph declares across tiers and
+boundaries, and over every path of a lattice. See
+[sequence patterns](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/patterns.md).
 
-**Interchange that does not rot.** Canonical JSON, explicit format and machine
-version stamps, a SHA-pinned schema. Documents round-trip, and two graphs differing
-only in the order their declarations were supplied serialize identically, while tier
-and item order stay data — see [serialization](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/serialization.md).
+**Fold and parse.** A fold evaluates a dependency relation under a semiring
+you choose: least cost, path counts, recognition, posteriors, or witnesses from
+the same graph. Synchronous grammars parse token input into a chart graph and
+fold over it. See [folding](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/folding.md) and
+[grammars](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/grammars.md).
 
-Timing and projection build on those: attach a clock profile to resolve physical
-timing ([timing](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/timing.md)), or project segmentation graphs into
-deterministic span views for JSON, JSON Lines, text, HTML, or DOT
-([span views](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/span-views.md)).
+**Interchange.** Canonical JSON with an explicit format version and a published
+schema, TextGrid in and out, and span views as JSON, JSON Lines, text, HTML, or
+DOT. See [serialization](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/serialization.md) and
+[span views](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/span-views.md).
 
-It is not good for unordered graphs, for mutable working stores with high edit
-rates, or for anything whose layer structure is not known in advance. `Graph` is a
-frozen value validated when it is built; an edit-heavy workload should record a
-`Program` and execute it once.
+Queries that come from someone else can carry a
+[work budget](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/work-budgets.md).
+
+tiergraph is a library and a format rather than a database or an annotation
+tool. It suits structure whose layers are declared in advance. A workload that
+edits a graph many times should collect the edits in a `GraphEditor` and freeze
+once, since every frozen `Graph` is validated when it is built.
+[What tiergraph is for](https://github.com/lenzo-ka/tiergraph/blob/main/docs/what-tiergraph-is-for.md) compares it with
+related tools and lists what it does not try to do.
 
 ## Command line
 
-The `tiergraph` command validates graph documents, renders them, and exposes the
-same span-view and folding machinery as the Python API. For example:
+The `tiergraph` command reads graph documents from files or stdin and runs the
+same machinery as the Python API. For example:
 
 ```console
 tiergraph validate graph.json
-tiergraph render graph.json -o graph.dot
+tiergraph inspect graph.json
 tiergraph select graph.json --where 'score>=0.5' --prefix ex
-tiergraph span render graph.json --profile span-profile.json --format text
-tiergraph semirings
+tiergraph match graph.json --pattern '{class=V} / {class=C} _' --prefix ex \
+  --ordering '{"order":"tier","tier":{"namespace":"urn:ex","local_name":"phones"}}' focus
+tiergraph span render graph.json --profile span-profile.json --format textgrid
 ```
 
 See the generated [CLI reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) for every command and
@@ -133,11 +140,13 @@ its options.
 
 ## Documentation
 
-Start with the [documentation map](https://github.com/lenzo-ka/tiergraph/blob/main/docs/README.md), then
-[concepts](https://github.com/lenzo-ka/tiergraph/blob/main/docs/concepts.md) for the data model and [getting
-started](https://github.com/lenzo-ka/tiergraph/blob/main/docs/getting-started.md) for a worked walkthrough. The [API
-reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/api.md) covers every top-level export and the documented secondary surfaces; the [CLI
-reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) is generated from the parser.
+Start with [getting started](https://github.com/lenzo-ka/tiergraph/blob/main/docs/getting-started.md), which reads a TextGrid,
+queries it, and writes it back, then builds a graph and uses the command line.
+[Concepts](https://github.com/lenzo-ka/tiergraph/blob/main/docs/concepts.md) describes the data model, and the
+[documentation map](https://github.com/lenzo-ka/tiergraph/blob/main/docs/README.md) lists every guide by task. The
+[API reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/api.md) covers every top-level export and the
+documented secondary surfaces; the [CLI reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) is
+generated from the parser.
 
 The companion `tiergraph_dot` package renders any `Graph` as deterministic
 Graphviz DOT and ships in the same distribution. Continuing from the example
@@ -178,32 +187,8 @@ Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
 later release is not supported.
 
-Within a release line the format only grows. Fields are added; none is removed,
-narrowed, or redefined, so a document written earlier in the line stays valid
-and no field a reader already understands changes meaning underneath it. A
-change that would break that is permitted, and it costs a step in the version
-position that carries breaking changes — before 1.0 the minor position, after
-1.0 the major one. A gate in this repository compares the committed schema
-against the last released one and refuses a break that takes no such step, so
-for the structural shape that schema describes, the version alone tells a reader
-whether the format grew or moved.
-
-The gate reads the schema, and the schema is not the whole format. The decoder is
-the authority for semantic constraints such as declaration compatibility,
-acyclicity, and reference validity, and a release that tightened one of those
-would refuse a document the previous release accepted without changing a schema
-byte. A second gate replays a frozen corpus of accepted documents through the
-current decoder, and fails on any refusal the corpus entry's disposition does not
-already account for. Each entry records the version its capture ran under, and
-every entry the corpus holds today was captured from the development tree
-rather than from a published release: what this gate catches is a decoder that
-has tightened since that capture, and it enforces nothing about cross-release
-compatibility yet. The semantic half of *only grows* is therefore partly
-enforced — over the documents the corpus holds, which are the ones this
-repository's own test suite happened to construct rather than a survey of the
-format. Corpus capture is a separate, reviewed change rather than a release
-step; the release runbook records why. A reader deciding whether an existing
-document still loads should read the changelog, not the version alone.
+Within a release line the format only grows; the [format notes](https://github.com/lenzo-ka/tiergraph/blob/main/docs/format.md)
+describe the version policy and the canonical spelling.
 
 ## License
 

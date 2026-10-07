@@ -72,31 +72,28 @@ accepts documents of the version it implements and refuses any other, naming
 the version it found and the one it expected.
 
 The version names **the release at which the format last changed**, not the
-release that wrote the document. This release stamps `"0.3.0"`, and later
-releases in the 0.3 line will keep stamping `"0.3.0"` until the format itself
-moves again.
+release that wrote the document. `FORMAT_VERSION` holds it, and every release
+writes that stamp until the format itself moves again.
 
-It is worth being clear about why it is not simply the writing package's version,
-which is the obvious reading. Versions are compared by string equality, so a
-reader built at `0.3.0` would refuse a document written by `0.3.1` even though
-the two formats are identical -- every patch release would break document
-reading. Repairing that needs compatibility ranges, which is more machinery than
-the plain counter it replaced rather than less. The rare thing must not inherit
-the frequent thing's cadence.
+It is not the writing package's version because versions are compared by string
+equality: a reader built at one release would otherwise refuse a document
+written by the next even when the two formats are identical, so every patch
+release would break document reading. Repairing that would need compatibility
+ranges, which is more machinery than a stamp that moves only with the format.
 
 The form also says something a bare counter could not. A reader that refuses now
 names the release to go and look at, instead of sending someone to a table to
 find out what format `7` was.
 
-Within a release line the format may only grow: a change that shrinks what an
-existing document may say is legal, but it costs the version position that
-carries breaking changes -- the minor while the major is zero, the major after
-that. The 0.2 line spent one to drop `position` from the attribute-domain
-vocabulary in favor of `boundary`. This release spends the next one, moving
-from `"0.2.0"` to `"0.3.0"` because the schema grows by the JSON attribute
-record. Its shape otherwise does not shrink against the 0.2 line, but the
-exact-match reader makes the discriminator move itself a break: it refuses
-every document that still declares `"0.2.0"`.
+Within a release line the format may only grow. A change that shrinks what an
+existing document may say is legal, but it costs a step in the version position
+that carries breaking changes: the minor while the major is zero, the major
+after that. Because the reader matches the version exactly, any move of the
+stamp is itself a break, so a reader refuses every document written under an
+earlier stamp. The [changelog](../CHANGELOG.md) records each move and its
+reason. The repository's gates compare the committed schema against the last
+released one and replay a corpus of accepted documents through the current
+decoder; [Contributing](../CONTRIBUTING.md) describes them.
 
 Documents are versioned interchange: they move data between tools that agree on
 a version. They are not an archival format, and reading a document written by a
@@ -147,9 +144,7 @@ grammar-specific conditions are not — an unimplemented discriminator, a value
 outside the declared language, an undeclared nonterminal, and the declaration
 contract, ranks 5, 7, 8 and 9, are answered with a bare `ValueError` carrying no
 stage. A caller routing on `RefusalStage` should not expect one from
-`grammar_loads` for those four. Staging them changes what that reader refuses
-with and is deliberately not done here; the four sites are pinned by tests that
-fail the day someone does it.
+`grammar_loads` for those four.
 
 The stages rank the conditions of one node. Nodes are read from the outside in
 and members in their declared order, so an enclosing node's condition precedes
@@ -169,7 +164,7 @@ parses.
 A further condition is reported beside the primary one only while it stays
 applicable once the primary is known. A document announcing a format this
 release does not implement is refused for its version alone, because the field
-set of a declaration the document never selected cannot honestly be judged. The
+set of a declaration the document never selected cannot be judged. The
 one condition currently carried beside another is the field set of a single
 node: a node both missing required fields and carrying unknown ones has the two
 named in one message and the unknown-field half repeated on `also` as a refusal

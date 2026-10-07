@@ -6,16 +6,11 @@ strict: it validates structure and every reference on read, and it refuses a
 document whose `format_version` it does not implement rather than migrating it
 silently.
 
-Graph-contract validation performed while `loads()` reconstructs an immutable
-graph raises `GraphValidationError`, a `Refusal` and so a `ValueError`
-subclass; it is the last rank of the
-[refusal order](../format.md#refusal-order), which `except Refusal` catches
-whole. Decoding is one construction boundary among several rather than the only
-one: the editing operations on `Graph` and `GraphEditor` build a graph as well,
-and refuse with the same error. Invalid lookup, resolution, and profile
-arguments against an already-valid `Graph` remain plain `ValueError` carrying no
-stage, and wrong Python argument kinds may raise `TypeError`. See
-[Construction](construction.md#error-boundary) for the whole boundary.
+Reading refuses with a `Refusal` carrying its stage in the
+[refusal order](../format.md#refusal-order), and a document that decodes but
+breaks a graph rule refuses with `GraphValidationError`, the last rank of that
+order. [Construction](construction.md#error-boundary) describes the whole error
+boundary.
 
 ## JSON round-trip
 
@@ -97,21 +92,12 @@ accepts: canonical text running past `MAX_DOCUMENT_BYTES` is written in full
 and refused at `ENVELOPE` on the way back, because the offending size belongs
 to the text rather than to any member a constructor could have bounded.
 
-Supply order is not preserved everywhere, and a writer that emitted every
-collection in the order it was handed would not produce canonical bytes.
-Collections whose order carries no graph meaning are sorted first: namespaces by
-namespace URI, relation and attribute declarations by qualified name, attribute
-values by name, seals, layers and the facts within each layer, sparse boundary
-values by tier and index, and a relation side's endpoint kinds and allowed
-tiers. Two graphs that differ only in the order those were supplied compare
-equal and serialize to the same bytes.
-
-The orders that remain are data. Tier order, tier item order, relation instance
-order, polyadic endpoint order, qualified names, and boundary indexes all carry
-graph meaning and are written as supplied; two graphs whose tiers arrive in
-different orders are unequal and serialize differently. A reader must not infer
-a relation's meaning from its name or collapse an ordered relation into an
-unordered set.
+Collections whose order carries no graph meaning, such as namespaces and
+declarations, are sorted before writing, so two graphs that differ only in the
+order those were supplied compare equal and serialize to the same bytes. Tier
+order, item order, relation instance order, and polyadic endpoint order are
+data and are written as supplied. The [format notes](../format.md) list which
+collections are which.
 
 ## The DOT view
 

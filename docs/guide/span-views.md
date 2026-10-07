@@ -37,6 +37,15 @@ appears inside a span's range without a corresponding coverage edge, projection
 refuses the hole, forcing the caller to decide how membership changes instead
 of silently absorbing the item or splitting the span.
 
-Point tiers use `point_tiers` and a boundary-left `point_coverage_relation`; every selected point must project with equal bounds, while every selected span must have positive width. `value_attributes` can override the default value attribute by tier. Omitting `base_surface_attribute` gives every base item an empty surface. `clock_face` selects structural ticks or physical timing for renderers that support both.
+## Points, values, and clocks
 
-`from_textgrid` reads Praat long and short forms and returns the graph with the profile that selects its imported tiers. Its `containment_rule` defaults to `"enclosure"`, which relates a later-tier interval within an earlier-tier interval. `"endpoint_coincidence"` requires both child endpoints to be boundaries of the parent. `to_textgrid` writes long form by projecting each declared tier separately, fills uncovered interval-tier ranges with empty labels, and reads the requested clock face from that profile.
+A point tier holds anchors with no extent. Name such tiers in `point_tiers` and
+give a bipartite `point_coverage_relation` whose left endpoint is a base
+boundary; every selected point must project with equal bounds, while every
+selected span must have positive width. `value_attributes` overrides the
+default value attribute for particular tiers. Omitting `base_surface_attribute`
+gives every base item an empty surface. `clock_face` selects structural ticks or
+physical timing for renderers that support both.
+
+Praat TextGrid output is one of those renderers; reading and writing TextGrid
+files is covered in [Interchange with annotation formats](annotation-formats.md).

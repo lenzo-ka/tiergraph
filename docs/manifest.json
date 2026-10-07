@@ -304,7 +304,19 @@
     ],
     "docs/getting-started.md": [
       "python",
+      "text",
       "python",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "console"
+    ],
+    "docs/guide/construction.md": [
       "python",
       "text",
       "python",
@@ -314,9 +326,8 @@
       "python",
       "text"
     ],
-    "docs/guide/construction.md": [
+    "docs/guide/selection-and-traversal.md": [
       "python",
-      "text",
       "python",
       "text",
       "python",
@@ -342,9 +353,47 @@
       "text",
       "python",
       "text",
+      "python",
+      "text",
       "console"
     ],
-    "docs/guide/matching-with-existing-pieces.md": [
+    "docs/guide/grammars.md": [
+      "python",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "console",
+      "console"
+    ],
+    "docs/guide/work-budgets.md": [
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text"
+    ],
+    "docs/guide/predicates-and-offset-joins.md": [
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text"
+    ],
+    "docs/guide/patterns.md": [
+      "python",
       "python",
       "text",
       "python",
@@ -359,6 +408,27 @@
       "text",
       "python",
       "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "python",
+      "text",
+      "console"
+    ],
+    "docs/guide/recognize-and-act.md": [
+      "python",
+      "json"
+    ],
+    "docs/guide/timing.md": [
+      "python",
+      "text"
+    ],
+    "docs/guide/serialization.md": [
       "python",
       "text",
       "python",
@@ -372,26 +442,11 @@
       "python",
       "text"
     ],
-    "docs/guide/recognize-and-act.md": [
-      "python",
-      "json"
-    ],
-    "docs/guide/selection-and-traversal.md": [
-      "python",
+    "docs/guide/annotation-formats.md": [
       "python",
       "text",
       "python",
       "text",
-      "python",
-      "text"
-    ],
-    "docs/guide/serialization.md": [
-      "python",
-      "text",
-      "python",
-      "text"
-    ],
-    "docs/guide/timing.md": [
       "python",
       "text"
     ]
@@ -419,14 +474,19 @@
     "docs/README.md",
     "docs/concepts.md",
     "docs/getting-started.md",
+    "docs/what-tiergraph-is-for.md",
     "docs/guide/construction.md",
     "docs/guide/selection-and-traversal.md",
     "docs/guide/folding.md",
-    "docs/guide/matching-with-existing-pieces.md",
+    "docs/guide/grammars.md",
+    "docs/guide/work-budgets.md",
+    "docs/guide/predicates-and-offset-joins.md",
+    "docs/guide/patterns.md",
     "docs/guide/recognize-and-act.md",
     "docs/guide/timing.md",
     "docs/guide/serialization.md",
     "docs/guide/profiles.md",
+    "docs/guide/annotation-formats.md",
     "docs/guide/span-views.md",
     "docs/format.md",
     "docs/contributing-docs.md",

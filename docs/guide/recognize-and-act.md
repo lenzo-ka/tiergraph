@@ -1,8 +1,11 @@
-# Recognize and act: mixing deliveries
+# Advanced: recognize and act
 
-This is an advanced example that leads with reactions, semimodules, and tie
-policies. Newcomers should start with the caption alignment, text segmentation,
-and critical-path examples.
+This example builds on [Folding](folding.md) and uses reactions, semimodules,
+and tie policies. Read the folding guide first; the
+[caption alignment](../../examples/caption_alignment.py),
+[text segmentation](../../examples/text_segmentation.py), and
+[critical path](../../examples/critical_path.py) examples are gentler starting
+points.
 
 This example keeps three claims separate. First, a tropical-semiring fold finds
 the least-cost path through a dependency diamond and retains provenance. Second,
@@ -56,7 +59,6 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
-from tiergraph.core import _scalar_attribute
 from tiergraph.semiring import DECIMAL_TROPICAL
 
 NAMESPACE = "https://tiergraph.dev/examples/mixing"
@@ -140,9 +142,11 @@ def _deliveries(graph: Graph, provenance: object) -> tuple[OrderedDelivery, ...]
     delivery = name("delivery")
     values = {
         item.durable_id: int(
-            _scalar_attribute(
-                next(value for value in item.attributes if value.name == delivery)
-            ).lexical
+            next(
+                value.lexical
+                for value in item.attributes
+                if isinstance(value, AttributeValue) and value.name == delivery
+            )
         )
         for tier in graph.tiers
         for item in tier.items
