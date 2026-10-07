@@ -134,6 +134,59 @@ graph. Boundary 1 of the `events` tier is the edge before `verse`, so it is
 reported as the `before` side of that item's anchor. Anchored references are how
 a boundary keeps its identity across edits that shift structural indexes.
 
+## Editing a clock-bound tier
+
+Use `ClockProfile.edit()` when a session must keep the clock profile valid after
+every operation. Structural edits on a timed tier refuse unless the session
+names a rebinding policy:
+
+```python
+editor = clock.edit("keep-earlier")
+editor.move_item(ItemRef(events, 0), 1)
+edited = editor.freeze()
+updated_clock = editor.profile
+report = editor.reports[-1]
+
+assert updated_clock.graph is edited
+assert report.policy.value == "keep-earlier"
+```
+
+`keep-earlier` keeps the ordered boundary times in place while items move
+through them. When two anchors resolve to the same boundary, the binding that
+occurred earlier in the relation order wins; every changed, inserted, or
+dropped binding appears in the operation report.
+
+`drop-to-provisional` collapses the affected boundaries onto their earlier
+clock position. Its report sets `needs_realignment`, and the graph carries a
+tier fact with the same meaning so the requirement survives serialization.
+Insertion under either policy synthesizes a zero-length provisional span at the
+insertion boundary, so it also sets `needs_realignment` and records the durable
+tier fact. Removal first withdraws a binding whose anchor departs, then retains
+the surviving binding on the merged boundary. Reparenting is also policy-gated
+even when `keep-earlier` leaves every clock binding unchanged.
+
+`ClockEditReport.operation` is a `ClockEditOperation`; `policy` is the selected
+`ClockRebindingPolicy`; `tier` is the affected timed tier; `changes` contains
+every inserted, changed, or withdrawn binding; and `needs_realignment` says the
+result contains durably marked provisional timing. In each
+`ClockBindingChange`, the `previous_boundary`/`boundary`,
+`previous_source`/`source`, and `previous_clock_index`/`clock_index` pairs name
+the old and new logical boundary, durable anchor, and integral clock target.
+Either old or new side is `None` for insertion or withdrawal. `provisional`
+means that this resulting binding now holds a synthesized or collapsed value;
+it is not merely a marker that its boundary lay inside the edited span.
+
+Calling `clock.edit()` without a policy is useful for sessions that edit only
+untimed tiers. A move, swap, insertion, removal, or reparenting operation that
+touches a timed tier refuses before changing the editor. The clock tier itself
+cannot be structurally edited through a bound session, even when a rebinding
+policy is present.
+
+The ordinary `graph.edit()` API remains the profile-free editor. It bypasses
+clock rebinding policy and validation, so a structural edit can silently leave
+a previously valid `ClockProfile` invalid. Use `ClockProfile.edit()` whenever
+clock validity must be maintained across edits.
+
 ## What the profile checks and leaves open
 
 Constructing the profile validates the declarations, the totality of the

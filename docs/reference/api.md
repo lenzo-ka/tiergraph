@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 237 top-level `tiergraph` exports exactly once.
+It covers 242 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -209,6 +209,25 @@ its closing boundary, coincident with the next tick's opening boundary
 The default is off, leaving the raw boundaries and keeping every other
 caller's spine byte-identical.
 
+#### `ClockProfile.edit`
+
+Method.
+
+```text
+ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None) -> 'ClockEditor'
+```
+
+Return an editor that keeps this clock profile valid after every edit.
+
+Structural edits to a timed tier refuse unless ``rebinding`` names a
+policy. ``keep-earlier`` keeps the tier's ordered boundary times while
+items move through them, resolving an anchor collision in favor of the
+earlier binding. The named collapsing policy collapses the affected
+span onto its earlier clock boundary and records a tier fact saying
+that the result needs realignment. Untimed tiers need no rebinding
+policy. The clock tier itself cannot be structurally edited in a bound
+session.
+
 #### `ClockProfile.is_structural`
 
 Property.
@@ -336,6 +355,184 @@ ClockProfile.duration(self, tier: 'QualifiedName', index: 'int') -> 'tuple[int, 
 
 Return the legacy coarse-tick span and rate when a rate exists.
 
+### `ClockEditor`
+
+```text
+ClockEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None' = None) -> 'None'
+```
+
+Edit one graph while preserving a declared clock profile.
+
+The editor validates both the graph and the clock profile after every
+operation. Structural edits on timed tiers are atomic: a refusal leaves the
+editor's graph, reports, and profile unchanged. Successful timed-tier edits
+append a :class:`ClockEditReport`; untimed edits need no clock report.
+
+#### `ClockEditor.profile`
+
+Property.
+
+```text
+ClockEditor.profile(self) -> 'ClockProfile'
+```
+
+Return the clock profile validated for the current graph.
+
+#### `ClockEditor.reports`
+
+Property.
+
+```text
+ClockEditor.reports(self) -> 'tuple[ClockEditReport, ...]'
+```
+
+Return every successful timed-tier policy outcome in order.
+
+#### `ClockEditor.freeze`
+
+Method.
+
+```text
+ClockEditor.freeze(self) -> 'Graph'
+```
+
+Return the current fully validated graph without consuming the editor.
+
+#### `ClockEditor.insert_item`
+
+Method.
+
+```text
+ClockEditor.insert_item(self, tier: 'QualifiedName', index: 'int', item: 'Item') -> 'ClockEditor'
+```
+
+Insert one item and atomically bind every resulting timed boundary.
+
+#### `ClockEditor.insert_items`
+
+Method.
+
+```text
+ClockEditor.insert_items(self, tier: 'QualifiedName', index: 'int', items: 'Iterable[Item]') -> 'ClockEditor'
+```
+
+Insert ordered items and atomically bind resulting timed boundaries.
+
+#### `ClockEditor.remove_item`
+
+Method.
+
+```text
+ClockEditor.remove_item(self, reference: 'ItemRef | DurableItemRef') -> 'ClockEditor'
+```
+
+Remove one item together with its departing clock anchor.
+
+#### `ClockEditor.remove_items`
+
+Method.
+
+```text
+ClockEditor.remove_items(self, tier: 'QualifiedName', index: 'int', count: 'int') -> 'ClockEditor'
+```
+
+Remove a run and keep one reported binding on its merged boundary.
+
+#### `ClockEditor.move_item`
+
+Method.
+
+```text
+ClockEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'ClockEditor'
+```
+
+Move an item through fixed boundary times under the named policy.
+
+#### `ClockEditor.swap_items`
+
+Method.
+
+```text
+ClockEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'ClockEditor'
+```
+
+Exchange two items through fixed boundary times under the policy.
+
+#### `ClockEditor.reparent`
+
+Method.
+
+```text
+ClockEditor.reparent(self, target: 'RelationTarget', sources: 'RelationEndpointRef | Iterable[RelationEndpointRef]', targets: 'RelationEndpointRef | Iterable[RelationEndpointRef]') -> 'ClockEditor'
+```
+
+Replace relation endpoints under the named policy for touched tiers.
+
+This operation is for structural parent relations, not the clock binding
+relation itself. ``keep-earlier`` leaves timing unchanged. The named
+collapsing policy conservatively collapses each touched timed tier onto
+its earlier extent and records that realignment is needed.
+
+### `ClockEditOperation`
+
+```text
+ClockEditOperation(*values)
+```
+
+Name the structural operation summarized by a clock edit report.
+
+#### `ClockEditOperation` members
+
+- `ITEM_INSERTION` = `item insertion`
+- `ITEM_REMOVAL` = `item removal`
+- `ITEM_MOVE` = `item move`
+- `ITEM_SWAP` = `item swap`
+- `REPARENT` = `reparent`
+
+### `ClockRebindingPolicy`
+
+```text
+ClockRebindingPolicy(*values)
+```
+
+Choose how a structural edit reconciles clock-bound boundaries.
+
+#### `ClockRebindingPolicy` members
+
+- `KEEP_EARLIER` = `keep-earlier`
+- `DROP_TO_PROVISIONAL` = `drop-to-provisional`
+
+### `ClockEditReport`
+
+```text
+ClockEditReport(operation: 'ClockEditOperation', policy: 'ClockRebindingPolicy', tier: 'QualifiedName', changes: 'tuple[ClockBindingChange, ...]', needs_realignment: 'bool') -> None
+```
+
+Report one policy outcome on one clock-bound tier.
+
+``operation`` identifies the structural operation. ``policy`` is the named
+rebinding policy that governed it, and ``tier`` is the affected timed tier.
+``changes`` lists every inserted, changed, or withdrawn clock binding.
+``needs_realignment`` says that the graph carries synthesized or collapsed
+timing which is also durably marked by the tier's ``needs-realignment``
+fact.
+
+### `ClockBindingChange`
+
+```text
+ClockBindingChange(previous_boundary: 'BoundaryRef | None', boundary: 'BoundaryRef | None', previous_source: 'RelationEndpointRef | None', source: 'RelationEndpointRef | None', previous_clock_index: 'int | None', clock_index: 'int | None', provisional: 'bool') -> None
+```
+
+Report one binding that a clock-aware structural edit changed.
+
+``previous_boundary`` and ``boundary`` are the old and new logical tier
+boundaries; either is ``None`` when the binding was inserted or withdrawn.
+``previous_source`` and ``source`` are their durable anchor forms.
+``previous_clock_index`` and ``clock_index`` are the old and new integral
+clock targets. The final boolean field says that the resulting binding now
+holds a synthesized or collapsed value that needs later realignment; it is
+always false for a withdrawn binding.
+
 ### `ClockCoordinate`
 
 ```text
@@ -382,7 +579,7 @@ Encode this exact physical timing with canonical decimal lexemes.
 anchored_boundary(graph: 'Graph', boundary: 'BoundaryRef') -> 'DurableBoundaryRef'
 ```
 
-Name an existing boundary by its anchor without changing the graph.
+Name a boundary by either adjacent durable anchor without changing it.
 
 ## Construction
 
@@ -3041,6 +3238,11 @@ The editor answers the same operations this graph answers, and answers
 them in place: one validation runs at ``freeze()`` instead of one per
 operation.  Whether an operation rewrites or mutates follows from the
 carrier the caller holds, never from an argument passed to it.
+
+This editor has no clock profile. Structural edits can therefore leave
+an existing :class:`tiergraph.clock.ClockProfile` invalid without a
+rebinding refusal or report. Use ``ClockProfile.edit()`` when clock
+validity and the explicit rebinding policy must be preserved.
 
 #### `Graph.declare`
 

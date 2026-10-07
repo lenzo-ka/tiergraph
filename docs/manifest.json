@@ -11,6 +11,11 @@
     ],
     "clock": [
       "ClockProfile",
+      "ClockEditor",
+      "ClockEditOperation",
+      "ClockRebindingPolicy",
+      "ClockEditReport",
+      "ClockBindingChange",
       "ClockCoordinate",
       "PhysicalTiming",
       "anchored_boundary"
@@ -433,7 +438,8 @@
     ],
     "docs/guide/timing.md": [
       "python",
-      "text"
+      "text",
+      "python"
     ],
     "docs/guide/serialization.md": [
       "python",

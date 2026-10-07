@@ -14,8 +14,13 @@ from tiergraph.action import (
 )
 from tiergraph.budget import BudgetExhausted, Exhaustion, WorkBudget, WorkMeter
 from tiergraph.clock import (
+    ClockBindingChange,
     ClockCoordinate,
+    ClockEditOperation,
+    ClockEditor,
+    ClockEditReport,
     ClockProfile,
+    ClockRebindingPolicy,
     PhysicalTiming,
     anchored_boundary,
 )
@@ -331,8 +336,13 @@ __all__ = [
     "BudgetExhausted",
     "CanonicalPath",
     "ChildCombination",
+    "ClockBindingChange",
     "ClockCoordinate",
+    "ClockEditOperation",
+    "ClockEditReport",
+    "ClockEditor",
     "ClockProfile",
+    "ClockRebindingPolicy",
     "Consensus",
     "DeclareAttribute",
     "DeclareNamespace",
