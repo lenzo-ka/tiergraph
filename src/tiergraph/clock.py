@@ -8,7 +8,10 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 from math import gcd
-from typing import cast
+from typing import TYPE_CHECKING, cast, overload
+
+if TYPE_CHECKING:
+    from tiergraph.edit import ClockJournalEditor, Journal
 
 from tiergraph.core import (
     AttributeDeclaration,
@@ -17,14 +20,17 @@ from tiergraph.core import (
     BipartiteRelationDeclaration,
     BoundaryRef,
     BoundarySide,
+    Displacement,
     DurableBoundaryRef,
     DurableItemRef,
+    DurableRelationRef,
     EditDeclaration,
     Graph,
     GraphEditor,
     GraphValidationError,
     Item,
     ItemRef,
+    Layer,
     LayerFact,
     LayerName,
     NamespaceDeclaration,
@@ -34,6 +40,7 @@ from tiergraph.core import (
     RelationEndpointKind,
     RelationEndpointRef,
     RelationInstance,
+    RelationInstanceRef,
     RelationTarget,
     TierRef,
     XsdType,
@@ -569,7 +576,27 @@ class ClockProfile:
                 timings[reference] = timing
         return timings
 
+    @overload
     def edit(self, rebinding: ClockRebindingPolicy | str | None = None) -> ClockEditor:
+        """Return a plain clock editor when no journal is attached."""
+        ...
+
+    @overload
+    def edit(
+        self,
+        rebinding: ClockRebindingPolicy | str | None = None,
+        *,
+        journal: Journal,
+    ) -> ClockJournalEditor:
+        """Return an opt-in journaled clock editor."""
+        ...
+
+    def edit(
+        self,
+        rebinding: ClockRebindingPolicy | str | None = None,
+        *,
+        journal: Journal | None = None,
+    ) -> ClockEditor | ClockJournalEditor:
         """Return an editor that keeps this clock profile valid after every edit.
 
         Structural edits to a timed tier refuse unless ``rebinding`` names a
@@ -583,7 +610,9 @@ class ClockProfile:
         definition and retire the session; its graph and withdrawal reports
         remain available, but later profile-aware edits refuse.
         """
-        return ClockEditor(self, rebinding)
+        if journal is None:
+            return ClockEditor(self, rebinding)
+        return journal._attach_clock(self, rebinding)
 
     @property
     def is_structural(self) -> bool:
@@ -702,6 +731,96 @@ class _BindingRecord:
     relation: RelationInstance
 
 
+@dataclass(frozen=True, slots=True)
+class _DetachedRelationFact:
+    """Carry one fact across the temporary removal of its relation."""
+
+    layer: LayerName
+    fact: LayerFact
+    position: int
+
+
+def _unbind_relations(
+    graph: Graph, records: tuple[_BindingRecord, ...]
+) -> tuple[Graph, tuple[_DetachedRelationFact, ...]]:
+    """Remove selected relations while remapping or temporarily holding facts."""
+    positions = {record.position for record in records}
+    mapping: dict[int, int] = {}
+    removed = 0
+    for old in range(len(graph.relations)):
+        if old in positions:
+            removed += 1
+        else:
+            mapping[old] = old - removed
+    durable_positions = {
+        record.relation.durable_id: record.position
+        for record in records
+        if record.relation.durable_id is not None
+    }
+    detached: list[_DetachedRelationFact] = []
+    layers: list[Layer] = []
+    for layer in graph.layers:
+        facts: list[LayerFact] = []
+        for fact in layer.facts:
+            subject = fact.subject
+            position: int | None = None
+            if isinstance(subject, RelationInstanceRef):
+                position = subject.index if subject.index in positions else None
+                if position is None:
+                    subject = RelationInstanceRef(mapping[subject.index])
+            elif isinstance(subject, DurableRelationRef):
+                position = durable_positions.get(subject.durable_id)
+            if position is None:
+                facts.append(LayerFact(subject, fact.value))
+            else:
+                detached.append(_DetachedRelationFact(layer.name, fact, position))
+        layers.append(Layer(layer.name, tuple(facts)))
+    return (
+        replace(
+            graph,
+            relations=tuple(
+                relation
+                for index, relation in enumerate(graph.relations)
+                if index not in positions
+            ),
+            layers=tuple(layers),
+        ),
+        tuple(detached),
+    )
+
+
+def _rebuilt_layers(
+    layers: tuple[Layer, ...],
+    unbound_to_final: Mapping[int, int],
+    detached: tuple[_DetachedRelationFact, ...],
+    original_to_final: Mapping[int, int],
+) -> tuple[Layer, ...]:
+    """Remap surviving facts and restore facts whose relations survived rebuild."""
+    by_name: dict[LayerName, list[LayerFact]] = {}
+    for layer in layers:
+        by_name[layer.name] = [
+            LayerFact(
+                RelationInstanceRef(unbound_to_final[fact.subject.index])
+                if isinstance(fact.subject, RelationInstanceRef)
+                else fact.subject,
+                fact.value,
+            )
+            for fact in layer.facts
+        ]
+    for held in detached:
+        position = original_to_final.get(held.position)
+        if position is None:
+            raise GraphValidationError(
+                "relation removal would invalidate a live fact in layer "
+                f"{held.layer.vocabulary!r}/{held.layer.source!r}"
+            )
+        subject = held.fact.subject
+        if isinstance(subject, RelationInstanceRef):
+            subject = RelationInstanceRef(position)
+        by_name[held.layer].append(LayerFact(subject, held.fact.value))
+    return tuple(Layer(layer.name, tuple(by_name[layer.name])) for layer in layers)
+
+
 _CLOCK_EDIT_NAMESPACE = "urn:tiergraph:clock-edit"
 _NEEDS_REALIGNMENT = QualifiedName(_CLOCK_EDIT_NAMESPACE, "needs-realignment")
 _REALIGNMENT_LAYER = LayerName(_CLOCK_EDIT_NAMESPACE, "rebinding")
@@ -718,6 +837,9 @@ class ClockEditor:
     end the profile-aware session; its graph and reports remain readable, while
     later profile-aware operations refuse.
     """
+
+    _capture_journal_displacement: bool
+    _journal_displacement: Displacement
 
     def __init__(
         self,
@@ -1001,21 +1123,14 @@ class ClockEditor:
                 count = self._item_count(tier, ClockEditOperation.REPARENT)
                 templates = tuple(range(count + 1))
                 records = self._binding_records(tier)
-                positions = {record.position for record in records}
-                candidate = replace(
-                    candidate,
-                    relations=tuple(
-                        relation
-                        for index, relation in enumerate(candidate.relations)
-                        if index not in positions
-                    ),
-                )
+                candidate, detached = _unbind_relations(candidate, records)
                 candidate, changes = self._rebuild_bindings(
                     candidate,
                     tier,
                     templates,
                     tuple(0 for _ in templates),
                     records=records,
+                    detached=detached,
                 )
                 candidate = _record_needs_realignment(candidate, tier)
                 next_profile = self._profile_for(candidate)
@@ -1188,6 +1303,8 @@ class ClockEditor:
             return self
         if self._policy is None:
             self._missing_policy(operation, tier)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = Displacement.stationary(self._graph)
         self._reports.append(
             ClockEditReport(
                 operation,
@@ -1213,17 +1330,11 @@ class ClockEditor:
             self._missing_policy(operation, tier)
         policy = cast(ClockRebindingPolicy, self._policy)
         records = self._binding_records(tier)
-        positions = {record.position for record in records}
-        unbound = replace(
-            self._graph,
-            relations=tuple(
-                relation
-                for index, relation in enumerate(self._graph.relations)
-                if index not in positions
-            ),
-        )
+        unbound, detached = _unbind_relations(self._graph, records)
         editor = unbound.edit()
         edit(editor)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
         candidate = editor.freeze()
         targets = (
             keep_targets
@@ -1236,6 +1347,7 @@ class ClockEditor:
             template_origins,
             targets,
             records=records,
+            detached=detached,
         )
         needs_realignment = policy is ClockRebindingPolicy.DROP_TO_PROVISIONAL or any(
             change.provisional for change in changes
@@ -1263,6 +1375,7 @@ class ClockEditor:
         target_origins: tuple[int, ...],
         *,
         records: tuple[_BindingRecord, ...] | None = None,
+        detached: tuple[_DetachedRelationFact, ...] = (),
     ) -> tuple[Graph, tuple[ClockBindingChange, ...]]:
         """Rebuild one tier's binding relations and report every changed one."""
         old_records = self._binding_records(tier) if records is None else records
@@ -1331,19 +1444,34 @@ class ClockEditor:
         positions = {record.position: record for record in old_records}
         other_relations = iter(graph.relations)
         relations: list[RelationInstance] = []
+        unbound_to_final: dict[int, int] = {}
+        original_to_final: dict[int, int] = {}
+        unbound_position = 0
         last_position = max(positions)
         for position in range(len(self._graph.relations)):
             record = positions.get(position)
             if record is None:
+                unbound_to_final[unbound_position] = len(relations)
                 relations.append(next(other_relations))
+                unbound_position += 1
             else:
                 replacement = replacements.get(record.boundary.index)
                 if replacement is not None:
+                    original_to_final[position] = len(relations)
                     relations.append(replacement)
             if position == last_position:
                 relations.extend(extras)
         relations.extend(other_relations)
-        result = replace(graph, relations=tuple(relations))
+        result = replace(
+            graph,
+            relations=tuple(relations),
+            layers=_rebuilt_layers(
+                graph.layers,
+                unbound_to_final,
+                detached,
+                original_to_final,
+            ),
+        )
         return result, tuple(changes)
 
     def _binding_records(self, tier: QualifiedName) -> tuple[_BindingRecord, ...]:
@@ -1377,6 +1505,8 @@ class ClockEditor:
             return False
         editor = self._graph.edit()
         edit(editor)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
         candidate = editor.freeze()
         self._graph = candidate
         self._profile = self._profile_with_graph(candidate)

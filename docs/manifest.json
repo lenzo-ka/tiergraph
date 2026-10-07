@@ -41,6 +41,14 @@
     "editing": [
       "Displacement",
       "GraphEditor",
+      "Journal",
+      "JournalEditor",
+      "ClockJournalEditor",
+      "JournalRecord",
+      "EditInverse",
+      "EditReport",
+      "EditAnnotations",
+      "RelationTouch",
       "undeclare_with_contents"
     ],
     "equivalence": [

@@ -12,7 +12,10 @@ from decimal import Decimal
 from enum import IntEnum, StrEnum
 from functools import total_ordering
 from types import MappingProxyType
-from typing import NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, NamedTuple, Protocol, cast, overload
+
+if TYPE_CHECKING:
+    from tiergraph.edit import Journal, JournalEditor
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -28,6 +31,10 @@ _DOUBLE_LEXICAL = re.compile(
     r"(?:NaN|[+-]?INF|[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\Z"
 )
 _COLLAPSED_WHITESPACE = re.compile(r"[ \t\r\n]+")
+
+
+class _ImmutableMapping:
+    """Mark an internal mapping whose implementation cannot be mutated."""
 
 
 class RefusalStage(IntEnum):
@@ -952,7 +959,14 @@ class Displacement:
     def __post_init__(self) -> None:
         """Detach the maps and require exclusive source-space partitions."""
         for name in ("items", "boundaries", "relations", "polyadic_relations"):
-            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+            mapping = getattr(self, name)
+            object.__setattr__(
+                self,
+                name,
+                mapping
+                if isinstance(mapping, _ImmutableMapping)
+                else MappingProxyType(dict(mapping)),
+            )
         for mapped_name, departed_name in (
             ("items", "departed_items"),
             ("boundaries", "departed_boundaries"),
@@ -1002,6 +1016,57 @@ class Displacement:
             departed_relations,
             departed_polyadic_relations,
         )
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the four total position maps and their departed positions.
+
+        JSON objects cannot use structural references as keys, so every map is
+        represented as an ordered array of ``from``/``to`` records.  Relation
+        positions are integers; item and boundary positions use their public
+        reference encodings.
+        """
+
+        def reference_key(reference: ItemRef | BoundaryRef) -> tuple[str, int]:
+            """Order structural references by tier spelling and index."""
+            return str(reference.tier), reference.index
+
+        return {
+            "items": [
+                {"from": source.to_data(), "to": target.to_data()}
+                for source, target in sorted(
+                    self.items.items(), key=lambda pair: reference_key(pair[0])
+                )
+            ],
+            "boundaries": [
+                {"from": source.to_data(), "to": target.to_data()}
+                for source, target in sorted(
+                    self.boundaries.items(), key=lambda pair: reference_key(pair[0])
+                )
+            ],
+            "relations": [
+                {"from": source, "to": target}
+                for source, target in sorted(self.relations.items())
+            ],
+            "polyadic_relations": [
+                {"from": source, "to": target}
+                for source, target in sorted(self.polyadic_relations.items())
+            ],
+            "departed_items": [
+                reference.to_data()
+                for reference in sorted(self.departed_items, key=reference_key)
+            ],
+            "departed_boundaries": [
+                reference.to_data()
+                for reference in sorted(self.departed_boundaries, key=reference_key)
+            ],
+            "departed_relations": [
+                cast(JsonValue, value) for value in sorted(self.departed_relations)
+            ],
+            "departed_polyadic_relations": [
+                cast(JsonValue, value)
+                for value in sorted(self.departed_polyadic_relations)
+            ],
+        }
 
     @classmethod
     def stationary(cls, graph: Graph) -> Displacement:
@@ -2185,7 +2250,17 @@ class Graph:
         kept = tuple(item for item in self.seals if item.carrier != carrier)
         return replace(self, seals=(*kept, Seal(carrier, sealed)))
 
+    @overload
     def edit(self) -> GraphEditor:
+        """Return a plain editor when no journal is attached."""
+        ...
+
+    @overload
+    def edit(self, journal: Journal) -> JournalEditor:
+        """Return an opt-in journaled editor."""
+        ...
+
+    def edit(self, journal: Journal | None = None) -> GraphEditor | JournalEditor:
         """Return a mutable editor holding a copy of this graph's content.
 
         The editor answers the same operations this graph answers, and answers
@@ -2198,7 +2273,9 @@ class Graph:
         rebinding refusal or report. Use ``ClockProfile.edit()`` when clock
         validity and the explicit rebinding policy must be preserved.
         """
-        return GraphEditor(self)
+        if journal is None:
+            return GraphEditor(self)
+        return journal._attach_graph(self)
 
     def declare(self, declaration: EditDeclaration, at: int | None = None) -> Graph:
         """Return a new graph carrying one declaration at its carrier position."""
@@ -4333,7 +4410,8 @@ def undeclare_with_contents(
     untouched. Like :meth:`Graph.edit`, this profile-free operation deliberately
     bypasses clock rebinding; use ``ClockProfile.edit().undeclare_with_contents``
     when timing must refuse or report through a named policy. Its inverse is
-    supplied by the edit journal in a later slice, not by this function itself.
+    available when the operation runs through an edit journal, not from this
+    function itself.
     """
     editor = graph.edit()
     site = editor._declaration_site(target)

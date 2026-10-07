@@ -29,10 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frozen graphs and mutable editors. Removal reports all current dependents
   before writing, and `undeclare_with_contents()` provides an atomic derived
   cascade composed from editing primitives, including mutually dependent
-  declaration components. Its inverse is supplied by the edit journal in a
-  later slice, not by the function itself. The graph-level cascade explicitly
+  declaration components. Its inverse is available when the operation runs
+  through an edit journal, not from the function itself. The graph-level cascade
+  explicitly
   bypasses clock rebinding like `Graph.edit()`; the clock-session form requires
   a named policy before timing is removed and records binding withdrawals.
+- Added opt-in `Journal` editing through `graph.edit(journal=...)` and clock
+  sessions. Reversible graph structure records its inverse operation and only
+  its change-sized arguments; value edits and declaration cascades retain
+  positional deltas within changed tuple and dataclass fields. Typed caller
+  annotations, detached references, touched-coordinate runs, and per-operation
+  displacement remain available, while public reports expand lazily instead of
+  being retained per record. Journals provide undo, redo, inverse-based dry
+  runs, provenance-layer stamping on durably addressable subjects, and
+  protected-layer preflight. Plain editors keep their existing state shape and
+  build none of this recording state.
+- Added `Displacement.to_data()` for deterministic JSON-compatible edit reports.
 
 ### Changed
 
@@ -44,6 +56,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   live layer fact into an orphan now also refuse at the removal call.
 
 ### Fixed
+
+- Kept provenance from attaching facts to bare item, boundary, or relation
+  coordinates that later structural edits can move or remove. Provenance now
+  stamps only the moved, inserted, replaced, or otherwise directly acted-on
+  subject rather than every position shifted by an edit. Journal provenance
+  facts travel with their durable subjects and are retired as part of the same
+  undoable edit when that subject is removed or demoted, without weakening the
+  ordinary kernel rules for other facts in the provenance layer. The journal
+  record remains the provenance source when acted-on content has no durable
+  graph subject.
+- Preserved relation-subject layer facts while clock editing temporarily removes
+  and rebuilds binding relations, and made equal-valued item reports use the
+  edit's exact positional mapping.
+- Checked protected layers against the final candidate including provenance
+  writes, while allowing unchanged protected content and facts to follow valid
+  coordinate remaps.
+- Kept undo and redo records on their original stacks until restoration
+  succeeds. Dry-run rollback failures now restore both history stacks and chain
+  both the operation and rollback failures, including after a successful body.
+- Reconstruct JSON attribute and layer-fact edits atomically when dataclass
+  storage field names are not constructor parameters.
+- Reported only references whose subjects actually departed, without
+  misclassifying value replacement, explicit fact removal, or newly supplied
+  orphan facts as detachment.
 
 - Made layer reads resolve coordinate and durable references to the same live
   subject consistently in `layer_values()`, `consensus()` and `disagreements()`.
