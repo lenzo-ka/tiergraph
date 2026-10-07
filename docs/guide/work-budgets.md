@@ -112,13 +112,21 @@ points records their combined work.
 
 ## What is bounded without a budget
 
-Compiling a pattern is not metered. Its size is bounded instead: the pattern
-text parser and the pattern compiler refuse deep nesting, and a compiled
-pattern may hold at most `MAX_PATTERN_POSITIONS` item positions and
-`MAX_PATTERN_STATES` automaton states. Regular expressions inside predicates
-have the same state ceiling. These refusals are typed and do not depend on the
-caller's Python stack depth. Because one position can expand into many states,
-the state ceiling can refuse a pattern well below the position ceiling.
+Compiling a pattern is not metered. These fixed ceilings bound its input and
+compiled form:
+
+- Pattern text accepts at most 256 nested groups.
+- Predicate text accepts at most 256 nested groups.
+- A pattern AST may contain at most 10,000 nodes.
+- A pattern AST may nest at most 256 levels.
+- A regular expression may nest at most 256 levels.
+- A compiled pattern may contain at most 100,000 item positions.
+- A compiled pattern may contain at most 1,000,000 NFA states.
+
+The item-position and NFA-state ceilings also apply to regular expressions
+inside predicates. These refusals are typed and do not depend on the caller's
+Python stack depth. Because one position can expand into many states, the state
+ceiling can refuse a pattern well below the position ceiling.
 
 ```python
 from tiergraph.match import MAX_PATTERN_POSITIONS, MAX_PATTERN_STATES

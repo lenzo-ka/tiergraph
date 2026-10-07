@@ -127,12 +127,12 @@ The `tiergraph` command reads graph documents from files or stdin and runs the
 same machinery as the Python API. For example:
 
 ```console
-tiergraph validate graph.json
-tiergraph inspect graph.json
-tiergraph select graph.json --where 'score>=0.5' --prefix ex
-tiergraph match graph.json --pattern '{class=V} / {class=C} _' --prefix ex \
+$ tiergraph validate graph.json
+$ tiergraph inspect graph.json
+$ tiergraph select graph.json --where 'score>=0.5' --prefix ex
+$ tiergraph match graph.json --pattern '{class=V} / {class=C} _' --prefix ex \
   --ordering '{"order":"tier","tier":{"namespace":"urn:ex","local_name":"phones"}}' focus
-tiergraph span render graph.json --profile span-profile.json --format textgrid
+$ tiergraph span render graph.json --profile span-profile.json --format textgrid
 ```
 
 See the generated [CLI reference](https://github.com/lenzo-ka/tiergraph/blob/main/docs/reference/cli.md) for every command and

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added public `equivalent()` graph comparison.
 - Added public `fingerprint()` deterministic graph fingerprints.
 - Added public `first_difference()` stable graph difference diagnostics.
+- Added `SpanViewProfile.to_data()` so imported TextGrid profiles can be saved
+  for `tiergraph span render --profile`.
 
 ### Fixed
 

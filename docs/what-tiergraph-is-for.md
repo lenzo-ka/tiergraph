@@ -39,8 +39,8 @@ explicit format version and a published schema.
 
 ## Related tools
 
-Several established tools work with tiered or graph-shaped annotation. Each is
-described here on its own terms, with how tiergraph relates to it.
+Established tools cover neighboring tasks in annotation, language processing,
+and finite-state modeling.
 
 **Praat TextGrid and its Python readers.** The TextGrid is Praat's text format
 for interval and point tiers over a time axis, and it is the common exchange
@@ -73,9 +73,11 @@ types every relation by a declaration, and validates the whole graph when it is
 built.
 
 **NLTK.** The Natural Language Toolkit provides tree types, corpus readers, and
-a broad set of language-processing tools. A tiergraph `OrderedContainment`
-reads a tree as one relation inside a multi-tier graph, beside the other layers
-aligned to the same items.
+access to established corpora and lexical resources alongside tokenizers,
+taggers, parsers, and tree-processing tools. It is the more direct choice when
+a task starts with one of those corpora or needs its language-processing
+algorithms. A tiergraph `OrderedContainment` reads a tree as one relation inside
+a multi-tier graph, beside the other layers aligned to the same items.
 
 **OpenFst and Pynini.** OpenFst is a library for weighted finite-state
 transducers, with composition, determinization, minimization, and shortest-path
@@ -95,8 +97,9 @@ structure and adds a typed, immutable model with a versioned interchange format.
 
 ## What it does not try to do
 
-- **General graphs.** Structure without ordered tiers is better served by a
-  graph database or a general graph library.
+- **General graphs.** NetworkX is a general-purpose Python graph library with a
+  broad collection of graph algorithms, well suited to structures that do not
+  center ordered tiers.
 - **High-rate mutable stores.** A `Graph` is a value validated when it is
   built; collect many edits in a `GraphEditor` and freeze once.
 - **Annotation interfaces.** tiergraph has no labeling application.

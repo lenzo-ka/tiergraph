@@ -31,6 +31,7 @@ from tiergraph.machine_codec import _JSONL_LINE_BYTES  # noqa: E402
 from tiergraph.match import (  # noqa: E402
     _MAX_PATTERN_DEPTH,
     _MAX_PATTERN_NODES,
+    MAX_PATTERN_POSITIONS,
     MAX_PATTERN_STATES,
 )
 from tiergraph.match_text import _MAX_PATTERN_NESTING  # noqa: E402
@@ -41,6 +42,7 @@ MANIFEST_PATH = ROOT / "docs" / "manifest.json"
 API_PATH = ROOT / "docs" / "reference" / "api.md"
 CLI_PATH = ROOT / "docs" / "reference" / "cli.md"
 MIXING_PATH = ROOT / "docs" / "guide" / "recognize-and-act.md"
+WORK_BUDGETS_PATH = ROOT / "docs" / "guide" / "work-budgets.md"
 CONTRIBUTING_PATH = ROOT / "CONTRIBUTING.md"
 MAKEFILE_PATH = ROOT / "Makefile"
 DIRECTIVE = re.compile(
@@ -49,10 +51,7 @@ DIRECTIVE = re.compile(
 )
 GATE_TARGET = re.compile(r"^gate:(?P<steps>.*)$", re.MULTILINE)
 
-# Each entry pins one reader-visible phrase to the code value it describes. Add
-# guide entries here only after the docs-guides lane has settled the destination
-# page and wording; its patterns and work-budgets pages should cover the NFA-state,
-# AST-node, and four nesting ceilings represented in the generated reference.
+# Each entry pins one reader-visible phrase to the code value it describes.
 PROSE_CONSTANTS: tuple[tuple[Path, str, int], ...] = (
     (CLI_PATH, "Maximum CLI work budget: {value:,} steps.", _MAX_USER_STEPS),
     (CLI_PATH, "Maximum compiled pattern states: {value:,}.", MAX_PATTERN_STATES),
@@ -62,6 +61,41 @@ PROSE_CONSTANTS: tuple[tuple[Path, str, int], ...] = (
     (CLI_PATH, "Predicate text nesting limit: {value}.", _MAX_PREDICATE_NESTING),
     (CLI_PATH, "Regular-expression nesting limit: {value}.", _MAX_REGEX_NESTING),
     (CLI_PATH, "JSONL program line cap: {value:,} bytes.", _JSONL_LINE_BYTES),
+    (
+        WORK_BUDGETS_PATH,
+        "Pattern text accepts at most {value} nested groups.",
+        _MAX_PATTERN_NESTING,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "Predicate text accepts at most {value} nested groups.",
+        _MAX_PREDICATE_NESTING,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "A pattern AST may contain at most {value:,} nodes.",
+        _MAX_PATTERN_NODES,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "A pattern AST may nest at most {value} levels.",
+        _MAX_PATTERN_DEPTH,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "A regular expression may nest at most {value} levels.",
+        _MAX_REGEX_NESTING,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "A compiled pattern may contain at most {value:,} item positions.",
+        MAX_PATTERN_POSITIONS,
+    ),
+    (
+        WORK_BUDGETS_PATH,
+        "A compiled pattern may contain at most {value:,} NFA states.",
+        MAX_PATTERN_STATES,
+    ),
 )
 
 # What each gate step is for, keyed by the makefile target that runs it. The

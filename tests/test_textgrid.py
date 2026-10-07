@@ -428,6 +428,7 @@ def test_profile_new_keys_are_individually_optional_and_unknown_keys_refuse() ->
     """Old profile documents decode while each additive field can stand alone."""
     result = from_textgrid(_fixture("reference-long.TextGrid"))
     profile = result.profile
+    assert SpanViewProfile.from_data(profile.to_data()) == profile
     old = {
         "base_tier": profile.base_tier.to_data(),
         "span_tiers": [tier.to_data() for tier in profile.span_tiers],

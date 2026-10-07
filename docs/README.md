@@ -27,7 +27,7 @@ tools.
   [Grammars](guide/grammars.md).
 - **Limit the work an untrusted query may do?** See
   [Work budgets](guide/work-budgets.md).
-- **Attach physical times to boundaries?** Use [Timing](guide/timing.md).
+- **Attach physical times to boundaries?** See [Timing](guide/timing.md).
 - **Turn segmentation into text, HTML, JSON, or JSON Lines?** See
   [Span views](guide/span-views.md).
 - **Write JSON or render DOT?** Go to [Serialization](guide/serialization.md).

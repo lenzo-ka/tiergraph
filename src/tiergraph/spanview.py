@@ -15,6 +15,7 @@ from tiergraph.core import (
     Graph,
     Item,
     ItemRef,
+    JsonValue,
     QualifiedName,
     RelationEndpointKind,
     Tier,
@@ -84,6 +85,42 @@ class SpanViewProfile:
             raise ValueError(
                 f"value_attributes names tier {str(duplicate)!r} more than once"
             )
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the declarative span-view profile document used by the CLI."""
+        return {
+            "base_tier": self.base_tier.to_data(),
+            "span_tiers": [tier.to_data() for tier in self.span_tiers],
+            "coverage_relation": self.coverage_relation.to_data(),
+            "score_attribute": self.score_attribute.to_data(),
+            "value_attribute": self.value_attribute.to_data(),
+            "base_surface_attribute": (
+                None
+                if self.base_surface_attribute is None
+                else self.base_surface_attribute.to_data()
+            ),
+            "char_offset_attribute": (
+                None
+                if self.char_offset_attribute is None
+                else self.char_offset_attribute.to_data()
+            ),
+            "alternative_relation": (
+                None
+                if self.alternative_relation is None
+                else self.alternative_relation.to_data()
+            ),
+            "point_tiers": [tier.to_data() for tier in self.point_tiers],
+            "point_coverage_relation": (
+                None
+                if self.point_coverage_relation is None
+                else self.point_coverage_relation.to_data()
+            ),
+            "value_attributes": {
+                str(tier): attribute.to_data()
+                for tier, attribute in self.value_attributes
+            },
+            "clock_face": self.clock_face,
+        }
 
     @classmethod
     def from_data(cls, data: object) -> SpanViewProfile:
