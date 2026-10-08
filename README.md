@@ -86,7 +86,8 @@ model and a versioned interchange format.
 declared relations live in one immutable graph that refuses an invalid state
 when it is built. Build one with the `tiergraph.build` builder or the direct
 constructors, edit it with `GraphEditor`, or read one from a Praat TextGrid.
-See [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md) and
+See [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md),
+[editing](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/editing.md), and
 [annotation formats](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/annotation-formats.md).
 
 **Query it.** Selectors with set algebra, typed value predicates, quantifiers

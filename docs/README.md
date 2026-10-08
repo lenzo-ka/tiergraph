@@ -12,7 +12,7 @@ tools.
   [Interchange with annotation formats](guide/annotation-formats.md).
 - **Build a checked graph?** Start with [Construction](guide/construction.md).
 - **Edit a graph, one change or many?** See
-  [Construction](guide/construction.md#editing-an-existing-graph).
+  [Editing graphs](guide/editing.md).
 - **Find items or follow their links?** See
   [Selection and traversal](guide/selection-and-traversal.md).
 - **Select by a stored value, a related item, or an offset interval?** See
@@ -39,6 +39,7 @@ tools.
 ## Guides
 
 - [Construction](guide/construction.md)
+- [Editing graphs](guide/editing.md)
 - [Selection and traversal](guide/selection-and-traversal.md)
 - [Predicates and offset joins](guide/predicates-and-offset-joins.md)
 - [Sequence patterns](guide/patterns.md)

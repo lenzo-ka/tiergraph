@@ -34,6 +34,11 @@ immutable content is already available to the caller.
 
 ## Editing an existing graph
 
+This section introduces the carrier choice and a plain editing transaction.
+The [Editing graphs](editing.md) guide covers the complete primitive set,
+journals, clock-aware edits, patches, subtree replacement, bulk editing,
+distance, and cleanup.
+
 `Graph` and `GraphEditor` answer one operation set over two carriers. A frozen
 graph answers `declare()`, `set_attribute()`, `remove_attribute()`,
 `insert_item()`, `insert_items()`, `remove_item()`, `move_item()`, `swap_items()`,
