@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 298 top-level `tiergraph` exports exactly once.
+It covers 303 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -130,6 +130,103 @@ YieldNormalization.apply(self, deliveries: 'tuple[OrderedDelivery, ...]') -> 'tu
 ```
 
 Normalize a complete yield after first restoring structural order.
+
+## Blobs
+
+### `BLOB_NAMESPACE`
+
+Namespace for the fixed external-resource vocabulary. Current value: `urn:tiergraph:blob`.
+
+### `BlobRef`
+
+```text
+BlobRef(sha256: 'str', size: 'int') -> None
+```
+
+Identify payload bytes by their lowercase SHA-256 digest and exact size.
+
+### `BlobSpan`
+
+```text
+BlobSpan(offset: 'int | None', length: 'int') -> None
+```
+
+Describe a linear extent in the attached resource's declared unit.
+
+An absent ``offset`` makes the span duration-only. The resource's
+``blob:unit`` supplies the meaning of both integers, so the value does not
+assume time: a unit can name characters, samples, frames, or another
+resource-defined linear coordinate. Structured paths remain ordinary
+relation-instance attributes in the resource schema rather than being
+forced into this linear value.
+
+### `BlobProfile`
+
+```text
+BlobProfile(graph: 'Graph') -> None
+```
+
+Read and validate external-resource descriptors and attachments.
+
+A blob is any ordinary item carrying ``blob:sha256``. Every blob also has
+a durable item identifier, byte size, lowercase media type, and absolute
+schema URI. The payload bytes stay outside the graph. Media-specific
+metadata remains ordinary typed attributes in the media vocabulary, so
+audio, video, nested graph, transcript, key-value, and other resources all
+use the same profile without core interpreting their types.
+
+Attachments are ordinary item-to-item bipartite relation instances whose
+right endpoint is a blob item. They retain the graph's declared relation
+order and must have durable relation identifiers. This admits any number
+of roles and attachments, including several metadata resources on one
+binary resource and chains from a structural item through multiple blobs.
+
+Author-declared metadata lives on the base item. Inspected type-specific
+metadata can be recorded as ordinary layer facts in the media vocabulary,
+whose layer source identifies the inspector. This profile never imports or
+runs an inspector and never opens payload bytes.
+
+#### `BlobProfile.blobs`
+
+Method.
+
+```text
+BlobProfile.blobs(self) -> 'tuple[tuple[ItemRef, BlobRef], ...]'
+```
+
+Return blob items in tier and item order without sorting by digest.
+
+#### `BlobProfile.attachments`
+
+Method.
+
+```text
+BlobProfile.attachments(self, blob: 'ItemRef | DurableItemRef') -> 'tuple[tuple[RelationInstanceRef, ItemRef, BlobSpan | None], ...]'
+```
+
+Return one blob item's attachments in declared relation order.
+
+#### `BlobProfile.required`
+
+Method.
+
+```text
+BlobProfile.required(self) -> 'tuple[BlobRef, ...]'
+```
+
+Return distinct payload requirements in first blob-item order.
+
+### `declare_blob_vocabulary`
+
+```text
+declare_blob_vocabulary(editor: 'GraphEditor') -> 'GraphEditor'
+```
+
+Declare the fixed blob prefix and attributes on a mutable graph editor.
+
+The helper appends declarations and returns the same editor for chaining.
+Existing declarations are not silently adopted: the editor's ordinary
+duplicate-declaration refusals keep one explicit declaration event.
 
 ## Clock
 
@@ -7761,6 +7858,105 @@ Return strict-JSON traversal data in canonical node order.
 
 ## Supported secondary surface
 
+### `tiergraph.blob`
+
+This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+
+### `BLOB_NAMESPACE`
+
+Namespace for the fixed external-resource vocabulary. Current value: `urn:tiergraph:blob`.
+
+### `BlobProfile`
+
+```text
+BlobProfile(graph: 'Graph') -> None
+```
+
+Read and validate external-resource descriptors and attachments.
+
+A blob is any ordinary item carrying ``blob:sha256``. Every blob also has
+a durable item identifier, byte size, lowercase media type, and absolute
+schema URI. The payload bytes stay outside the graph. Media-specific
+metadata remains ordinary typed attributes in the media vocabulary, so
+audio, video, nested graph, transcript, key-value, and other resources all
+use the same profile without core interpreting their types.
+
+Attachments are ordinary item-to-item bipartite relation instances whose
+right endpoint is a blob item. They retain the graph's declared relation
+order and must have durable relation identifiers. This admits any number
+of roles and attachments, including several metadata resources on one
+binary resource and chains from a structural item through multiple blobs.
+
+Author-declared metadata lives on the base item. Inspected type-specific
+metadata can be recorded as ordinary layer facts in the media vocabulary,
+whose layer source identifies the inspector. This profile never imports or
+runs an inspector and never opens payload bytes.
+
+#### `BlobProfile.blobs`
+
+Method.
+
+```text
+BlobProfile.blobs(self) -> 'tuple[tuple[ItemRef, BlobRef], ...]'
+```
+
+Return blob items in tier and item order without sorting by digest.
+
+#### `BlobProfile.attachments`
+
+Method.
+
+```text
+BlobProfile.attachments(self, blob: 'ItemRef | DurableItemRef') -> 'tuple[tuple[RelationInstanceRef, ItemRef, BlobSpan | None], ...]'
+```
+
+Return one blob item's attachments in declared relation order.
+
+#### `BlobProfile.required`
+
+Method.
+
+```text
+BlobProfile.required(self) -> 'tuple[BlobRef, ...]'
+```
+
+Return distinct payload requirements in first blob-item order.
+
+### `BlobRef`
+
+```text
+BlobRef(sha256: 'str', size: 'int') -> None
+```
+
+Identify payload bytes by their lowercase SHA-256 digest and exact size.
+
+### `BlobSpan`
+
+```text
+BlobSpan(offset: 'int | None', length: 'int') -> None
+```
+
+Describe a linear extent in the attached resource's declared unit.
+
+An absent ``offset`` makes the span duration-only. The resource's
+``blob:unit`` supplies the meaning of both integers, so the value does not
+assume time: a unit can name characters, samples, frames, or another
+resource-defined linear coordinate. Structured paths remain ordinary
+relation-instance attributes in the resource schema rather than being
+forced into this linear value.
+
+### `declare_blob_vocabulary`
+
+```text
+declare_blob_vocabulary(editor: 'GraphEditor') -> 'GraphEditor'
+```
+
+Declare the fixed blob prefix and attributes on a mutable graph editor.
+
+The helper appends declarations and returns the same editor for chaining.
+Existing declarations are not silently adopted: the editor's ordinary
+duplicate-declaration refusals keep one explicit declaration event.
+
 ### `tiergraph.build`
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
@@ -7930,6 +8126,7 @@ item(durable_id: 'str | None' = None, /, *, attrs: 'Mapping[Name, object] | None
 ```
 
 Describe an item with values to lower through declared attribute types.
+
 ### `tiergraph.semiring`
 
 This module is a supported secondary API.
@@ -9216,6 +9413,7 @@ runs and can be quoted in a refusal. An empty result is a statement about the
 algebra's *declaration* only: it says the five laws are declared exact, not
 that they hold, which is why a caller that needs the stronger fact has to
 check the laws at values rather than read this tuple.
+
 ### `tiergraph.schema`
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
@@ -9331,6 +9529,7 @@ shape_hash() -> 'str'
 ```
 
 Hash the declaration independently of JSON Schema presentation.
+
 ### `tiergraph.match`
 
 This module is a supported secondary API.
@@ -9354,20 +9553,7 @@ Base 0 means to interpret the base from the string as an integer literal.
 
 ### `MAX_PATTERN_STATES`
 
-int([x]) -> integer
-int(x, base=10) -> integer
-
-Convert a number or string to an integer, or return 0 if no arguments
-are given.  If x is a number, return x.__int__().  For floating point
-numbers, this truncates towards zero.
-
-If x is not a number or if base is given, then x must be a string,
-bytes, or bytearray instance representing an integer literal in the
-given base.  The literal can be preceded by '+' or '-' and be surrounded
-by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
-Base 0 means to interpret the base from the string as an integer literal.
->>> int('0b100', base=0)
-4
+Largest Thompson NFA accepted by the regular-pattern compiler. Current value: `1000000`.
 
 ### `AdjacentRuns`
 
@@ -9769,6 +9955,7 @@ span_pairs(graph: 'Graph', left: 'Selector', right: 'Selector', relation: 'Inter
 ```
 
 Return related item pairs in left-major declared order.
+
 ### `tiergraph.predicate`
 
 This module is a supported secondary API.
@@ -10070,6 +10257,7 @@ predicate_to_data(predicate: 'Predicate') -> 'JsonValue'
 ```
 
 Return strict JSON data for one predicate AST.
+
 ### `tiergraph.cli`
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
@@ -10089,22 +10277,14 @@ main(argv: 'Sequence[str] | None' = None) -> 'int'
 ```
 
 Run the command line. Returns the process exit status.
+
 ### `tiergraph.spanview`
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
 
 ### `SPANVIEW_FORMAT_VERSION`
 
-str(object='') -> str
-str(bytes_or_buffer[, encoding[, errors]]) -> str
-
-Create a new string object from the given object. If encoding or
-errors is specified, then the object must expose a data buffer
-that will be decoded using the given encoding and error handler.
-Otherwise, returns the result of object.__str__() (if defined)
-or repr(object).
-encoding defaults to sys.getdefaultencoding().
-errors defaults to 'strict'.
+Version tag written by span-view JSON. Current value: `1`.
 
 ### `Span`
 
@@ -10217,6 +10397,7 @@ to_text(view: 'SpanView', *, alternatives: 'bool' = False) -> 'str'
 ```
 
 Return a deterministic ruler and aligned plain-text span table.
+
 ### `tiergraph.textgrid`
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
@@ -10254,6 +10435,7 @@ to_textgrid(graph: 'Graph', profile: 'SpanViewProfile', *, clock: 'ClockProfile 
 ```
 
 Render declared span and point tiers as a long-form TextGrid document.
+
 
 ## Companion package
 

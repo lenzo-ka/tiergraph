@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an opt-in blob vocabulary and profile for ordered, durably identified
+  typed external resources and their ordinary graph attachments.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
 - Added a tested `DotPresentation` guide example.
 - Added a hand-authored exact `dumps_spans()` DOT golden.

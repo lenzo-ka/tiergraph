@@ -12,6 +12,13 @@ from tiergraph.action import (
     Semimodule,
     YieldNormalization,
 )
+from tiergraph.blob import (
+    BLOB_NAMESPACE,
+    BlobProfile,
+    BlobRef,
+    BlobSpan,
+    declare_blob_vocabulary,
+)
 from tiergraph.budget import BudgetExhausted, Exhaustion, WorkBudget, WorkMeter
 from tiergraph.clock import (
     ClockBindingChange,
@@ -359,6 +366,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "ARCTIC",
+    "BLOB_NAMESPACE",
     "BOOLEAN",
     "CHART_NAMESPACE",
     "COMPLETE_BOUNDARY",
@@ -396,6 +404,9 @@ __all__ = [
     "AttributeValue",
     "BestDerivation",
     "BipartiteRelationDeclaration",
+    "BlobProfile",
+    "BlobRef",
+    "BlobSpan",
     "BoundariesSelector",
     "Boundary",
     "BoundaryBinding",
@@ -606,6 +617,7 @@ __all__ = [
     "contain_by_time",
     "contiguous_segmentation_distance",
     "count",
+    "declare_blob_vocabulary",
     "diff",
     "distance",
     "dump_bytes",

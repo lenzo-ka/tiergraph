@@ -356,6 +356,7 @@ def test_condition_declarations_must_be_distinct_and_named(
 def test_shipped_registry_holds_the_profiles_this_package_owns() -> None:
     """REGRESSION: importing the package registers its own profiles, once each."""
     assert PROFILES.names() == (
+        "tiergraph.blob",
         "tiergraph.json-value",
         "tiergraph.ordered-containment",
         "tiergraph.ordered-roots",

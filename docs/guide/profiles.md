@@ -211,6 +211,7 @@ for condition in roots_report.unconfirmed:
 ```
 
 ```text
+tiergraph.blob not_applicable
 tiergraph.json-value not_applicable
 tiergraph.ordered-containment satisfied
 tiergraph.ordered-roots satisfied_as_checked
