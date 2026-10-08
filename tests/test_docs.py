@@ -68,6 +68,14 @@ def test_entry_fallbacks_cover_undocumented_objects() -> None:
     assert generate_docs._signature(object()) == ""
 
 
+def test_constant_entries_sort_unordered_values() -> None:
+    """Generated descriptions do not depend on hash iteration order."""
+    module = SimpleNamespace(VALUE=frozenset({"b", "a"}))
+    assert generate_docs._entry(module, "VALUE", {"VALUE": "Names."}) == (
+        "### `VALUE`\n\nNames. Current value: `frozenset({'a', 'b'})`."
+    )
+
+
 def test_type_alias_entries_render_their_definitions() -> None:
     """TypeAliasType entries show the alias value, not the interpreter's docstring."""
     rendered = generate_docs._entry(tiergraph, "Selector", {})

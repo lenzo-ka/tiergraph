@@ -66,6 +66,26 @@
       "swap_subtrees",
       "undeclare_with_contents"
     ],
+    "distance": [
+      "CostTable",
+      "DistanceInterval",
+      "OrderedTree",
+      "SequenceProjection",
+      "ProjectionWitness",
+      "ProjectionViolation",
+      "ProjectionAdmissibility",
+      "AdmissibleProjection",
+      "weighted_sequence_distance",
+      "ordered_tree_distance",
+      "contiguous_segmentation_distance",
+      "text_projection",
+      "whitespace_insensitive_projection",
+      "format_control_insensitive_projection",
+      "check_projection_admissibility",
+      "price_patch",
+      "graph_distance",
+      "distance"
+    ],
     "equivalence": [
       "EquivalenceView",
       "abstract_form",
@@ -177,6 +197,7 @@
       "FORMAT_VERSION",
       "MACHINE_VERSION",
       "PATCH_VERSION",
+      "PRIMITIVE_KINDS",
       "MAX_DOCUMENT_BYTES",
       "MAX_JSON_DEPTH",
       "MAX_REPEAT_COUNT",
@@ -208,6 +229,7 @@
       "JsonValueProfile",
       "OrderedRootsProfile",
       "PROFILES",
+      "UNIT_COSTS",
       "PersistedChoiceProfile",
       "ProfileOutcome",
       "ProfileRegistrationRefusal",
@@ -503,6 +525,7 @@
     "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
     "MACHINE_VERSION": "Version tag for serialized construction programs.",
     "PATCH_VERSION": "Version tag for serialized graph patches.",
+    "PRIMITIVE_KINDS": "Graph operation names accepted by declared edit-cost tables.",
     "MAX_DOCUMENT_BYTES": "Largest UTF-8 JSON document accepted by the wire codec.",
     "MAX_JSON_DEPTH": "Deepest JSON container nesting accepted by the wire codec; construction bounds each attribute carrier by this limit less its document envelope.",
     "MAX_REPEAT_COUNT": "Largest repeat count accepted by the build machine.",
@@ -512,7 +535,8 @@
     "CHART_NAMESPACE": "Default namespace for grammar chart forests.",
     "COMPLETE_BOUNDARY": "Canonical complete-boundary grammar value.",
     "__version__": "Installed distribution version.",
-    "SPANVIEW_FORMAT_VERSION": "Version tag written by span-view JSON."
+    "SPANVIEW_FORMAT_VERSION": "Version tag written by span-view JSON.",
+    "UNIT_COSTS": "Default symmetric graph-edit costs with reorder shortcuts priced as two edits."
   },
   "reader_pages": [
     "README.md",
