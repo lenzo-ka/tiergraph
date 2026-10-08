@@ -322,7 +322,60 @@ class FoldCost:
         if self.witness_operations or self.ranked_multiplications:
             data["witness_operations"] = self.witness_operations
             data["ranked_multiplications"] = self.ranked_multiplications
+        type(self).from_data(data)
         return data
+
+    @classmethod
+    def from_data(cls, data: object) -> FoldCost:
+        """Decode and verify a strict serialized cost account."""
+        stored = (
+            "document_size",
+            "relation_incidence",
+            "index_product_size",
+            "carrier_additions",
+            "carrier_multiplications",
+            "carrier_operation_cost",
+            "witness_count",
+            "emitted_count",
+            "output_cap",
+        )
+        derived = ("carrier_work", "bound", "measured_work")
+        optional = {"witness_operations", "ranked_multiplications"}
+        required = set(stored + derived)
+        if (
+            not isinstance(data, dict)
+            or not required <= set(data) <= required | optional
+        ):
+            raise ValueError(
+                "fold cost fields must be exactly the required account fields "
+                "and optional ranked counters"
+            )
+        null_field = next(
+            (name for name in optional if name in data and data[name] is None), None
+        )
+        if null_field is not None:
+            raise ValueError(f"fold cost.{null_field} must not be null")
+        if any(type(value) is not int for value in data.values()):
+            raise ValueError("fold cost fields must be integers")
+        result = cls(
+            document_size=cast(int, data["document_size"]),
+            relation_incidence=cast(int, data["relation_incidence"]),
+            index_product_size=cast(int, data["index_product_size"]),
+            carrier_additions=cast(int, data["carrier_additions"]),
+            carrier_multiplications=cast(int, data["carrier_multiplications"]),
+            carrier_operation_cost=cast(int, data["carrier_operation_cost"]),
+            witness_count=cast(int, data["witness_count"]),
+            emitted_count=cast(int, data["emitted_count"]),
+            output_cap=cast(int, data["output_cap"]),
+            witness_operations=cast(int, data.get("witness_operations", 0)),
+            ranked_multiplications=cast(int, data.get("ranked_multiplications", 0)),
+        )
+        for name in derived:
+            if data[name] != getattr(result, name):
+                raise ValueError(
+                    f"fold cost.{name} does not match the measured account"
+                )
+        return result
 
 
 @dataclass(frozen=True, slots=True)

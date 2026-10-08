@@ -127,8 +127,8 @@ The difference `from_a - from_b` is the set algebra: everything `a` reaches that
 
 An unbounded walk is admitted only when the relation was declared acyclic, so it
 cannot loop forever. To walk a relation without that promise, pass a step `cap`.
-The result's `truncated` reports whether the walk stopped with new nodes still in
-hand.
+The result's `truncated` reports whether one more step would reach a fresh node
+that the cap omitted.
 
 ```python
 for cap in (1, 2, 3):
@@ -143,16 +143,14 @@ for cap in (1, 2, 3):
 
 ```text
 cap 1: ['b', 'd'] truncated: True
-cap 2: ['b', 'c', 'd'] truncated: True
+cap 2: ['b', 'c', 'd'] truncated: False
 cap 3: ['b', 'c', 'd'] truncated: False
 ```
 
-`truncated` is one-sided. `False` is a guarantee: the walk ran out of new nodes
-before it ran out of steps, so the set it returns is the whole reachable set.
-`True` says only that the cap ended a step that was still finding nodes, which is
-why `cap=2` reports it here even though that second step had already reached
-everything. Deciding between the two costs another step, so raise the cap and
-walk again where the answer matters.
+`truncated` is exact. At the cap, the walk takes one lookahead step and reports
+`True` only when that step finds a node outside the deduplicated result and
+source selection. Reaching the cap after finding the last reachable node is
+therefore complete and reports `False`.
 
 ## Ordered polyadic traversal
 

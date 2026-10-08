@@ -154,3 +154,29 @@ digraph tiergraph {
 Passing a `ClockProfile` as `clock` lays timed tiers out against the refined
 clock spine; see [Timing](timing.md). The renderer treats attribute names and
 values as data and assigns them no domain meaning.
+
+`DotPresentation` supplies display-only hooks without changing the graph. Each
+hook can return `None` to retain the default for that element:
+
+```python
+def tier_label(tier: Tier) -> str:
+    return f"Score: {tier.declaration.short_name}"
+
+
+def item_label(item: Item, tier: Tier) -> str:
+    return f"{tier.declaration.short_name}: {item.durable_id or 'anonymous'}"
+
+
+presentation = tiergraph_dot.DotPresentation(
+    tier_name=tier_label,
+    item_label=item_label,
+)
+custom = tiergraph_dot.dumps(graph, presentation=presentation)
+print('label="Score: events"' in custom)
+print('label="events: opening"' in custom)
+```
+
+```text
+True
+True
+```

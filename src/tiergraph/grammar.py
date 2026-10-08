@@ -736,45 +736,12 @@ class TargetLattice:
 
 
 def _decode_fold_cost(data: object) -> FoldCost:
-    """Decode and verify the strict public cost account in a generation result."""
-    path = "generation result.cost"
-    stored = (
-        "document_size",
-        "relation_incidence",
-        "index_product_size",
-        "carrier_additions",
-        "carrier_multiplications",
-        "carrier_operation_cost",
-        "witness_count",
-        "emitted_count",
-        "output_cap",
-    )
-    derived = ("carrier_work", "bound", "measured_work")
-    obj = _decode_optional_object(
-        data,
-        path,
-        set(stored + derived),
-        {"witness_operations", "ranked_multiplications"},
-    )
-    if any(type(value) is not int for value in obj.values()):
-        raise ValueError(f"{path} fields must be integers")
-    result = FoldCost(
-        document_size=cast(int, obj["document_size"]),
-        relation_incidence=cast(int, obj["relation_incidence"]),
-        index_product_size=cast(int, obj["index_product_size"]),
-        carrier_additions=cast(int, obj["carrier_additions"]),
-        carrier_multiplications=cast(int, obj["carrier_multiplications"]),
-        carrier_operation_cost=cast(int, obj["carrier_operation_cost"]),
-        witness_count=cast(int, obj["witness_count"]),
-        emitted_count=cast(int, obj["emitted_count"]),
-        output_cap=cast(int, obj["output_cap"]),
-        witness_operations=cast(int, obj.get("witness_operations", 0)),
-        ranked_multiplications=cast(int, obj.get("ranked_multiplications", 0)),
-    )
-    for name in derived:
-        if obj[name] != getattr(result, name):
-            raise ValueError(f"{path}.{name} does not match the measured account")
-    return result
+    """Decode the strict public cost account carried by grammar results."""
+    try:
+        return FoldCost.from_data(data)
+    except ValueError as error:
+        message = f"generation result.cost{str(error).removeprefix('fold cost')}"
+        raise ValueError(message) from None
 
 
 def _generation_declaration_data(

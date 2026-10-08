@@ -41,6 +41,7 @@ from tiergraph import (
     anchored_boundary,
 )
 from tiergraph.core import _scalar_attribute
+from tiergraph.spanview import SpanViewProfile
 
 NS = "urn:tiergraph:dot:test"
 DOT = shutil.which("dot")
@@ -200,6 +201,59 @@ def test_span_renderer_omits_external_character_ranges_without_offsets() -> None
     graph, profile = span_fixture(offsets=False)
     rendered = tiergraph_dot.dumps_spans(graph, profile)
     assert "chars=" not in rendered
+    assert_graphviz_accepts(rendered)
+
+
+def test_span_renderer_has_a_hand_authored_value_golden() -> None:
+    """A one-span graph pins the renderer's complete DOT value."""
+    base = name("golden-base")
+    spans = name("golden-spans")
+    base_type = name("golden-base-type")
+    span_type = name("golden-span-type")
+    coverage = name("golden-coverage")
+    score = name("golden-score")
+    value = name("golden-value")
+    graph = Graph(
+        (NamespaceDeclaration("d", NS),),
+        (
+            Tier(TierDeclaration(base, "Base"), (Item("base"),)),
+            Tier(TierDeclaration(spans, "Spans"), (Item("span"),)),
+        ),
+        (
+            SimpleRelationDeclaration(name("golden-base-members"), base, base_type),
+            SimpleRelationDeclaration(name("golden-span-members"), spans, span_type),
+            BipartiteRelationDeclaration(coverage, base_type, span_type),
+        ),
+        (RelationInstance(coverage, ItemRef(base, 0), ItemRef(spans, 0)),),
+        (
+            AttributeDeclaration(score, AttributeDomain.ITEM, XsdType.DECIMAL),
+            AttributeDeclaration(value, AttributeDomain.ITEM, XsdType.STRING),
+        ),
+    )
+    profile = SpanViewProfile(base, (spans,), coverage, score, value)
+    expected = """digraph tiergraph_spans {
+  graph [rankdir=TB, newrank=true, ranksep="0.62 equally", nodesep=0.28, splines=line];
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  subgraph tier_0 {
+    rank=same;
+    tier_label_0 [shape=plaintext, label="golden-base"];
+    item_0_0 [shape=box, label="0"];
+  }
+
+  subgraph tier_1 {
+    rank=same;
+    tier_label_1 [shape=plaintext, label="golden-spans"];
+    item_1_0 [shape=box, label="golden-span-type\\nindex=0..1"];
+  }
+
+  // Span extents over ordered base atoms.
+  item_1_0 -> item_0_0 [xlabel="extent", color="#777777", style=dashed, arrowhead=tee, arrowsize=0.6, fontsize=8, constraint=false];
+}
+"""
+    rendered = tiergraph_dot.dumps_spans(graph, profile)
+    assert rendered == expected
     assert_graphviz_accepts(rendered)
 
 

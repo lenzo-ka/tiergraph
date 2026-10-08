@@ -158,8 +158,8 @@ def test_polyadic_inverse_is_the_deduplicated_fiber() -> None:
     assert transitive.truncated is False
 
 
-def test_polyadic_cap_keeps_truncated_one_sided() -> None:
-    """The cap still reports only that a step which found nodes was the last one."""
+def test_polyadic_cap_reports_only_omitted_results() -> None:
+    """The cap reports truncation only when a fresh result was actually dropped."""
     graph = polyadic_graph()
     source = polyadic_selection(graph, 0)
     first = Walk(source, POLYADIC_CONTAINS, WalkDirection.FORWARD, 1).evaluate()
@@ -168,7 +168,7 @@ def test_polyadic_cap_keeps_truncated_one_sided() -> None:
     assert first.cap == 1
     second = Walk(source, POLYADIC_CONTAINS, WalkDirection.FORWARD, 2).evaluate()
     assert second.nodes == polyadic_selection(graph, 2, 3, 4)
-    assert second.truncated is True
+    assert second.truncated is False
     third = Walk(source, POLYADIC_CONTAINS, WalkDirection.FORWARD, 3).evaluate()
     assert third.nodes == second.nodes
     assert third.truncated is False

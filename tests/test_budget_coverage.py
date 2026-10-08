@@ -12,7 +12,7 @@ import tiergraph.budget as budget_module
 from tests.test_budget import compiled_atom, graph, lattice_match
 from tests.test_fold import declaration as fold_declaration
 from tests.test_fold import ranked_tie
-from tests.test_pathplan import COST, LATTICE_EDGES, LATTICE_WEIGHTS, path_lift
+from tests.test_pathplan import COST, LATTICE_EDGES, LATTICE_WEIGHTS, NEXT, path_lift
 from tests.test_pathplan import declare as plan_declaration
 from tests.test_pathplan import lattice as plan_lattice
 from tests.test_spans import offset_graph, offsets, q
@@ -66,7 +66,7 @@ from tiergraph.predicate import (
 )
 from tiergraph.selection import ItemsSelector, evaluate_selection
 from tiergraph.semiring import DECIMAL_TROPICAL, PATH, Semiring
-from tiergraph.traversal import WalkDirection, relation_image
+from tiergraph.traversal import Walk, WalkDirection, relation_image
 
 
 def test_meter_rejects_wrong_type() -> None:
@@ -294,6 +294,32 @@ def test_budgeted_relation_images_cover_both_shapes() -> None:
             WalkDirection.FORWARD,
         )
     assert result.nodes
+
+
+def test_budgeted_exact_cap_lookahead_covers_both_shapes() -> None:
+    """Charge exact capped-walk freshness probes for both relation shapes."""
+    bipartite = plan_lattice(LATTICE_WEIGHTS, LATTICE_EDGES)
+    source = NodeSet(
+        bipartite,
+        (
+            Node(
+                NodeKind.ITEM, ItemRef(next(iter(bipartite.tiers)).declaration.name, 4)
+            ),
+        ),
+    )
+    with budget_module._metered(WorkBudget(steps=10_000), "bipartite-walk"):
+        result = Walk(source, NEXT, WalkDirection.FORWARD, 2).evaluate()
+    assert result.truncated is False
+
+    polyadic = polyadic_graph()
+    with budget_module._metered(WorkBudget(steps=10_000), "polyadic-walk"):
+        result = Walk(
+            polyadic_selection(polyadic, 0),
+            polyadic.relation_declarations[0].name,
+            WalkDirection.FORWARD,
+            2,
+        ).evaluate()
+    assert result.truncated is False
 
 
 def test_budgeted_lattice_views_cover_reverse_subset_and_path_count() -> None:

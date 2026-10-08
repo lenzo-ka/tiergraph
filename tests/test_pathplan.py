@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from tiergraph import (
     AttributeDeclaration,
@@ -16,6 +20,7 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     ChildCombination,
+    FoldCost,
     FoldDeclaration,
     FoldResult,
     FoldTransition,
@@ -31,7 +36,7 @@ from tiergraph import (
     TierDeclaration,
     XsdType,
 )
-from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan
+from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPosteriors
 from tiergraph.semiring import (
     ARCTIC,
     COUNTING,
@@ -460,6 +465,143 @@ def test_marginals_agree_with_enumerated_derivations() -> None:
     assert by_label["m"] == pytest.approx(by_label["silent"])
     assert marginals.plan is plan
     assert isinstance(marginals, PathMarginals)
+
+
+@given(
+    st.lists(
+        st.one_of(
+            st.just(-math.inf),
+            st.floats(
+                min_value=-20.0,
+                max_value=20.0,
+                allow_nan=False,
+                allow_infinity=False,
+                width=64,
+            ),
+        ),
+        min_size=len(LATTICE_WEIGHTS),
+        max_size=len(LATTICE_WEIGHTS),
+    )
+)
+def test_path_marginals_strict_json_round_trip(values: list[float]) -> None:
+    """Generated carrier vectors survive the plan-owned lossless codec."""
+    plan = PathPlan.prepare(
+        declare(lattice(LATTICE_WEIGHTS, LATTICE_EDGES), LOG_PROBABILITY)
+    )
+    result = plan.marginals(values)
+    data = result.to_data()
+    assert list(data) == ["total", "inside", "outside", "marginals", "cost"]
+    encoded = json.dumps(data, allow_nan=False)
+    decoded = PathMarginals.from_data(plan, json.loads(encoded))
+    assert decoded == result
+    assert decoded.to_data() == data
+
+
+@given(
+    st.lists(
+        st.one_of(
+            st.just(-0.0),
+            st.floats(
+                min_value=0.0,
+                max_value=1.0,
+                allow_nan=False,
+                allow_infinity=False,
+                width=64,
+            ),
+        ),
+        max_size=20,
+    )
+)
+def test_path_posteriors_strict_json_round_trip(values: list[float]) -> None:
+    """Generated posterior doubles retain every bit through strict JSON."""
+    result = PathPosteriors("normalize", False, tuple(values))
+    data = result.to_data()
+    assert list(data) == ["readout", "zero_mass", "values"]
+    encoded = json.dumps(data, allow_nan=False)
+    decoded = PathPosteriors.from_data(json.loads(encoded))
+    assert decoded == result
+    assert decoded.to_data() == data
+
+
+def test_path_result_decoders_reject_shape_and_value_drift() -> None:
+    """The declared result codecs reject malformed objects and inconsistent fields."""
+    plan = PathPlan.prepare(
+        declare(lattice(LATTICE_WEIGHTS, LATTICE_EDGES), LOG_PROBABILITY)
+    )
+    marginals = plan.marginals()
+    marginal_data = marginals.to_data()
+    with pytest.raises(ValueError, match="fields"):
+        PathMarginals.from_data(plan, None)
+    with pytest.raises(ValueError, match="fields"):
+        PathMarginals.from_data(plan, {**marginal_data, "extra": None})
+    with pytest.raises(ValueError, match="inside must be an array"):
+        PathMarginals.from_data(plan, {**marginal_data, "inside": {}})
+    with pytest.raises(ValueError, match="inside has 0 values"):
+        PathMarginals.from_data(plan, {**marginal_data, "inside": []})
+    with pytest.raises(TypeError, match="encoded value must be a string"):
+        PathMarginals.from_data(plan, {**marginal_data, "total": 0})
+    with pytest.raises(ValueError, match="inside has 0 values"):
+        replace(marginals, inside=()).to_data()
+    with pytest.raises(ValueError, match="inside must be a tuple"):
+        replace(marginals, inside=cast(tuple[float, ...], [])).to_data()
+
+    other_plan = PathPlan.prepare(
+        declare(lattice(LATTICE_WEIGHTS, LATTICE_EDGES[:-1]), LOG_PROBABILITY)
+    )
+    with pytest.raises(ValueError, match="prepared plan account"):
+        PathMarginals.from_data(other_plan, marginal_data)
+    with pytest.raises(ValueError, match="prepared plan account"):
+        replace(
+            marginals,
+            cost=replace(
+                marginals.cost,
+                relation_incidence=marginals.cost.relation_incidence - 1,
+            ),
+        ).to_data()
+
+    cost_data = marginals.cost.to_data()
+    assert FoldCost.from_data(cost_data) == marginals.cost
+    with pytest.raises(ValueError, match="fields"):
+        FoldCost.from_data(None)
+    with pytest.raises(ValueError, match="integers"):
+        FoldCost.from_data({**cost_data, "document_size": "1"})
+    with pytest.raises(ValueError, match="measured account"):
+        FoldCost.from_data({**cost_data, "bound": -1})
+    with pytest.raises(ValueError, match="integers"):
+        replace(marginals.cost, document_size=cast(int, True)).to_data()
+
+    zero = PathPosteriors("normalize", True, None)
+    assert PathPosteriors.from_data(zero.to_data()) == zero
+    posterior_data = PathPosteriors("normalize", False, (0.5,)).to_data()
+    malformed = (
+        (None, "fields"),
+        ({**posterior_data, "extra": None}, "fields"),
+        ({**posterior_data, "readout": 1}, "readout"),
+        ({**posterior_data, "zero_mass": 0}, "zero_mass"),
+        ({**posterior_data, "values": {}}, "values"),
+        ({**posterior_data, "values": [1]}, "values"),
+        ({**posterior_data, "values": ["1p10000"]}, "values"),
+        ({**posterior_data, "values": ["inf"]}, "finite"),
+        ({**posterior_data, "zero_mass": True}, "disagree"),
+        ({**zero.to_data(), "zero_mass": False}, "disagree"),
+    )
+    for data, message in malformed:
+        with pytest.raises(ValueError, match=message):
+            PathPosteriors.from_data(data)
+    invalid_results = (
+        (PathPosteriors(cast(str, 1), False, (0.5,)), "readout"),
+        (PathPosteriors("normalize", cast(bool, 0), (0.5,)), "zero_mass"),
+        (
+            PathPosteriors("normalize", False, cast(tuple[float, ...], [0.5])),
+            "tuple",
+        ),
+        (PathPosteriors("normalize", True, ()), "disagree"),
+    )
+    for result, message in invalid_results:
+        with pytest.raises(ValueError, match=message):
+            result.to_data()
+    with pytest.raises(ValueError, match="finite"):
+        PathPosteriors("normalize", False, (math.nan,)).to_data()
 
 
 def test_fused_and_general_schedules_agree() -> None:
