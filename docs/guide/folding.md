@@ -447,6 +447,7 @@ accepts with its own value, so the final state carries `0.0` and a dead end
 would carry `-INF`.
 
 ```python
+import json
 import math
 
 from tiergraph import (
@@ -462,6 +463,8 @@ from tiergraph import (
     Item,
     ItemRef,
     NamespaceDeclaration,
+    PathMarginals,
+    PathPosteriors,
     QualifiedName,
     RelationInstance,
     SimpleRelationDeclaration,
@@ -541,6 +544,10 @@ probabilities = posteriors.values
 assert probabilities is not None  # zero mass is reported, never fabricated
 for label, probability in zip(plan.labels, probabilities):
     print(f"{label}: {probability:.4f}")
+marginal_data = json.loads(json.dumps(marginals.to_data()))
+posterior_data = json.loads(json.dumps(posteriors.to_data()))
+assert PathMarginals.from_data(plan, marginal_data) == marginals
+assert PathPosteriors.from_data(posterior_data) == posteriors
 ```
 
 ```text
@@ -563,6 +570,8 @@ no values rather than as a fabricated distribution. Aggregating
 posteriors by anything other than item — by the output an arc emits, say — is
 the caller's readout in turn; two arcs producing the same output each carry
 their own share here.
+
+`PathMarginals.to_data()` uses the plan's carrier codec, and `PathMarginals.from_data(plan, data)` binds the result back to that prepared plan while checking the vector lengths and measured cost account. `PathPosteriors` is independent of the plan and writes finite probabilities as lossless hexadecimal doubles. Both forms are strict JSON data; the example sends each through the standard JSON encoder and decoder before reconstructing it.
 
 New values reuse the compiled topology. `plan.values` holds what the
 declaration lifted, `plan.index` locates an item's position, and a vector of

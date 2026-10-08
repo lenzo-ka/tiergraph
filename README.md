@@ -82,13 +82,9 @@ model and a versioned interchange format.
 
 ## What you can do with it
 
-**Store aligned layers that stay valid.** Tiers, items, typed attributes, and
-declared relations live in one immutable graph that refuses an invalid state
-when it is built. Build one with the `tiergraph.build` builder or the direct
-constructors, edit it with `GraphEditor`, or read one from a Praat TextGrid.
-See [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md),
-[editing](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/editing.md), and
-[annotation formats](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/annotation-formats.md).
+**Store aligned layers that stay valid.** Tiers, items, typed attributes, and declared relations live in one immutable graph that refuses an invalid state when it is built. Build one with the `tiergraph.build` builder or the direct constructors, or read one from a Praat TextGrid. See [construction](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/construction.md) and [annotation formats](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/annotation-formats.md).
+
+**Edit and reconcile it.** Checked transactions report displacement; journals add preview, undo, redo, bounded history, and portable patches. Deterministic differences, subtree replacement and swaps, selected bulk edits, graph cleanup, path and timing reconciliation, and graph distance build on the same editing primitives. The command line exposes the primitive, replacement, bulk, cleanup, patch, diff, distance, and program operations. See [editing](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/editing.md).
 
 **Query it.** Selectors with set algebra, typed value predicates, quantifiers
 over related items, offset-interval joins, and walks over declared relations
