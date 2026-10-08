@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, and in-place replacement preserves the input file's permissions.
   Added patch application, inspection, inversion, and composition commands,
   deterministic graph diff output, and exact graph-to-program export.
+- Added declared graph-edit cost tables, exact weighted sequence and ordered-tree
+  engines, exact contiguous-segmentation distance, and graph distance results
+  that distinguish exact values from certified intervals. Projection lower
+  bounds require complete per-operation admissibility witnesses; general
+  overlapping relation structures use a realized diff or dependency-ordered
+  rebuild as their upper bound. Added caller-defined text joining and
+  presentation transforms, whitespace-insensitive and Unicode format-control
+  projections, and the `tiergraph distance` command. Value substitution and
+  boundary displacement accept caller callbacks, while numeric cost-table files
+  remain declarative.
 
 ### Changed
 

@@ -1020,6 +1020,35 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
     )
     _output_argument(difference)
 
+    distance = _subcommand(
+        subparsers,
+        "distance",
+        summary="measure exact or bounded graph-edit distance",
+        description="Measure graph-edit distance under a declared numeric cost table.",
+        examples=(
+            "tiergraph distance before.json after.json",
+            "tiergraph distance before.json after.json --costs costs.json",
+        ),
+        details=(
+            "Independent ordered tiers can produce an exact value. General and "
+            "overlapping relation structures produce certified lower and upper "
+            "bounds. Cost files use the CostTable.to_data() shape.\n\n"
+        ),
+    )
+    distance.set_defaults(handler=_handle_distance)
+    distance.add_argument("file", metavar="SOURCE", help="source graph")
+    distance.add_argument("target", metavar="TARGET", help="target graph")
+    distance.add_argument(
+        "--costs", metavar="FILE", help="numeric cost-table JSON (default: unit)"
+    )
+    distance.add_argument(
+        "--view",
+        choices=tuple(member.value for member in tiergraph.EquivalenceView),
+        default=tiergraph.EquivalenceView.FUNCTIONAL.value,
+        help="comparison view (default: functional)",
+    )
+    _output_argument(distance)
+
     program = _subcommand(
         subparsers,
         "program",
@@ -1781,6 +1810,27 @@ def _handle_diff(args: argparse.Namespace) -> None:
     _write_output(
         args.file, args.output, _strict_text_bytes(tiergraph.patch_dumps(patch))
     )
+
+
+def _handle_distance(args: argparse.Namespace) -> None:
+    """Write exact graph distance or a certified interval as JSON."""
+    _check_distinct(args.target, args.output)
+    if args.costs is not None:
+        _check_distinct(args.costs, args.output)
+    source = tiergraph.loads(_read_bytes(args.file))
+    target = tiergraph.loads(_read_bytes(args.target))
+    costs = (
+        tiergraph.UNIT_COSTS
+        if args.costs is None
+        else tiergraph.CostTable.from_data(_json_file(args.costs))
+    )
+    result = tiergraph.distance(
+        source,
+        target,
+        costs,
+        view=tiergraph.EquivalenceView(args.view),
+    )
+    _write_output(args.file, args.output, _json_bytes(result.to_data()))
 
 
 def _handle_program(args: argparse.Namespace) -> None:

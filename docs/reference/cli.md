@@ -325,13 +325,13 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,program}
+                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
                  ...
 
 Validate, query, transform, and render tiergraph documents.
 
 positional arguments:
-  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,program}
+  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
     validate            validate a graph document
     discharge           discharge a declaration against its inputs
     render              render a graph as DOT
@@ -352,6 +352,7 @@ positional arguments:
     edit                apply one checked graph edit
     patch               apply, inspect, invert, or compose patches
     diff                build an executable graph patch
+    distance            measure exact or bounded graph-edit distance
     program             build machine programs
 
 options:
@@ -2381,6 +2382,40 @@ options:
 
 Examples:
   $ tiergraph diff before.json after.json -o change.jsonl
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph distance`
+
+```text
+usage: tiergraph distance [-h] [--costs FILE]
+                          [--view {functional,identified,exact}] [-o FILE]
+                          SOURCE TARGET
+
+Measure graph-edit distance under a declared numeric cost table.
+
+positional arguments:
+  SOURCE                source graph
+  TARGET                target graph
+
+options:
+  -h, --help            show this help message and exit
+  --costs FILE          numeric cost-table JSON (default: unit)
+  --view {functional,identified,exact}
+                        comparison view (default: functional)
+  -o FILE, --output FILE
+                        output file (default: -)
+
+Independent ordered tiers can produce an exact value. General and overlapping relation structures produce certified lower and upper bounds. Cost files use the CostTable.to_data() shape.
+
+Examples:
+  $ tiergraph distance before.json after.json
+  $ tiergraph distance before.json after.json --costs costs.json
 
 Exit codes:
   0  success

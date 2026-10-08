@@ -192,11 +192,20 @@ def _signature(value: object) -> str:
     return str(signature.replace(parameters=public))
 
 
+def _constant_text(value: object) -> str:
+    """Render unordered constants deterministically for generated prose."""
+    if isinstance(value, frozenset):
+        members = ", ".join(sorted(repr(member) for member in value))
+        return f"frozenset({{{members}}})"
+    return str(value)
+
+
 def _entry(module: object, name: str, descriptions: Mapping[str, str]) -> str:
     value = getattr(module, name)
     heading = f"### `{name}`"
     if name in descriptions:
-        return f"{heading}\n\n{descriptions[name]} Current value: `{value}`."
+        rendered = _constant_text(value)
+        return f"{heading}\n\n{descriptions[name]} Current value: `{rendered}`."
     if isinstance(value, TypeAliasType):
         parameters = ""
         if value.__type_params__:

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 270 top-level `tiergraph` exports exactly once.
+It covers 290 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2474,6 +2474,340 @@ bypasses clock rebinding; use ``ClockProfile.edit().undeclare_with_contents``
 when timing must refuse or report through a named policy. Its inverse is
 available when the operation runs through an edit journal, not from this
 function itself.
+
+## Distance
+
+### `CostTable`
+
+```text
+CostTable(operations: 'Mapping[str, CostLike]' = <factory>, declarations: 'Mapping[QualifiedName, Mapping[str, CostLike]]' = <factory>, value_substitution: 'ValueSubstitution' = <factory>, boundary_displacement: 'BoundaryDisplacement' = <factory>) -> None
+```
+
+Declare graph-operation costs and domain-specific value costs.
+
+Operation costs are global unless ``declarations`` overrides one operation
+for a qualified declaration. Names must belong to :data:`PRIMITIVE_KINDS`,
+and inverse pairs must have equal costs. Zero is accepted for projections,
+but an exact result is a metric only when every operation visible in its
+equivalence view has positive cost.
+
+The two callbacks remain Python-only because a data file cannot safely name
+executable code. :meth:`from_data` therefore reads numeric operation and
+declaration costs while retaining the default callbacks.
+
+#### `CostTable.operation`
+
+Method.
+
+```text
+CostTable.operation(self, kind: 'str', declaration: 'QualifiedName | None' = None) -> 'Decimal'
+```
+
+Return the declared cost for one operation and optional declaration.
+
+#### `CostTable.minimum_operation`
+
+Method.
+
+```text
+CostTable.minimum_operation(self, kind: 'str') -> 'Decimal'
+```
+
+Return the least declared cost for an operation in any scope.
+
+#### `CostTable.substitute_value`
+
+Method.
+
+```text
+CostTable.substitute_value(self, before: 'Attribute', after: 'Attribute') -> 'Decimal'
+```
+
+Return the checked domain-specific cost of replacing one value.
+
+#### `CostTable.displace_boundary`
+
+Method.
+
+```text
+CostTable.displace_boundary(self, before: 'int', after: 'int') -> 'Decimal'
+```
+
+Return the checked domain-specific cost of moving one boundary.
+
+#### `CostTable.metric_violations`
+
+Method.
+
+```text
+CostTable.metric_violations(self) -> 'tuple[str, ...]'
+```
+
+Name declared graph operations whose zero cost prevents a metric.
+
+#### `CostTable.to_data`
+
+Method.
+
+```text
+CostTable.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the declarative numeric part as JSON-compatible data.
+
+#### `CostTable.from_data`
+
+Class method.
+
+```text
+CostTable.from_data(cls, value: 'object') -> 'CostTable'
+```
+
+Decode strict numeric cost-table data for command-line use.
+
+### `DistanceInterval`
+
+```text
+DistanceInterval(lower: 'Decimal', upper: 'Decimal', exact: 'bool', method: 'str') -> None
+```
+
+Hold exact distance or certified lower and realized upper bounds.
+
+#### `DistanceInterval.value`
+
+Property.
+
+```text
+DistanceInterval.value(self) -> 'Decimal | None'
+```
+
+Return the exact value, or ``None`` while the interval is open.
+
+#### `DistanceInterval.to_data`
+
+Method.
+
+```text
+DistanceInterval.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return a JSON-compatible exact value or interval report.
+
+### `OrderedTree`
+
+```text
+OrderedTree(value: 'object', children: 'tuple[OrderedTree, ...]' = ()) -> None
+```
+
+Hold one labeled node and its ordered children for tree distance.
+
+### `SequenceProjection`
+
+```text
+SequenceProjection(name: 'str', project: 'GraphProjection', insert: 'SequenceCost[object]' = 1, delete: 'SequenceCost[object]' = 1, substitute: 'SubstitutionCost[object]' = 1) -> None
+```
+
+Project a graph to a sequence with its own weighted edit model.
+
+#### `SequenceProjection.distance`
+
+Method.
+
+```text
+SequenceProjection.distance(self, source: 'Graph', target: 'Graph') -> 'Decimal'
+```
+
+Return this projection's exact sequence distance.
+
+### `ProjectionWitness`
+
+```text
+ProjectionWitness()
+```
+
+Show one replayed graph operation for projection admissibility.
+
+Use :meth:`from_patch`; arbitrary labeled graph pairs cannot serve as
+evidence because their claimed operation would not have been checked.
+
+#### `ProjectionWitness.from_patch`
+
+Class method.
+
+```text
+ProjectionWitness.from_patch(cls, before: 'Graph', patch: 'Patch') -> 'ProjectionWitness'
+```
+
+Build a witness by replaying one non-residual patch operation.
+
+### `ProjectionViolation`
+
+```text
+ProjectionViolation(operation: 'str', projected: 'Decimal', allowed: 'Decimal') -> None
+```
+
+Describe one graph operation that a projection overprices.
+
+### `ProjectionAdmissibility`
+
+```text
+ProjectionAdmissibility(projection: 'SequenceProjection', costs: 'CostTable', checked: 'frozenset[str]', required: 'frozenset[str]', violations: 'tuple[ProjectionViolation, ...]') -> None
+```
+
+Report coverage and failures from an admissibility check.
+
+#### `ProjectionAdmissibility.missing`
+
+Property.
+
+```text
+ProjectionAdmissibility.missing(self) -> 'frozenset[str]'
+```
+
+Return required primitive kinds with no supplied witness.
+
+#### `ProjectionAdmissibility.admissible`
+
+Property.
+
+```text
+ProjectionAdmissibility.admissible(self) -> 'bool'
+```
+
+Report whether coverage is complete and every inequality holds.
+
+#### `ProjectionAdmissibility.certify`
+
+Method.
+
+```text
+ProjectionAdmissibility.certify(self) -> 'AdmissibleProjection'
+```
+
+Return a lower-bound certificate or refuse an incomplete check.
+
+### `AdmissibleProjection`
+
+```text
+AdmissibleProjection(projection: 'SequenceProjection', operations: 'frozenset[str]', costs: 'CostTable') -> None
+```
+
+Certify that a projection is a lower bound for named graph operations.
+
+### `weighted_sequence_distance`
+
+```text
+weighted_sequence_distance(source: 'Sequence[T]', target: 'Sequence[T]', *, insert: 'SequenceCost[T]' = 1, delete: 'SequenceCost[T]' = 1, substitute: 'SubstitutionCost[T]' = 1) -> 'Decimal'
+```
+
+Return exact weighted insertion, deletion, and substitution distance.
+
+The dynamic program uses ``O(len(source) * len(target))`` time and two rows
+of storage. Costs may be constants or value-sensitive callables.
+
+### `ordered_tree_distance`
+
+```text
+ordered_tree_distance(source: 'OrderedTree', target: 'OrderedTree', *, insert: 'SequenceCost[object]' = 1, delete: 'SequenceCost[object]' = 1, substitute: 'SubstitutionCost[object]' = 1) -> 'Decimal'
+```
+
+Return exact ordered-tree edit distance with node promotion on deletion.
+
+This is the Zhang-Shasha operation model: deleting a node promotes its
+children into the ordered forest, and insertion is the inverse. The result
+is exact for that model and does not claim exactness for overlapping graph
+relations or cheaper graph-level move and reparent operations.
+
+### `contiguous_segmentation_distance`
+
+```text
+contiguous_segmentation_distance(source: 'Sequence[int]', target: 'Sequence[int]', *, split: 'CostLike' = 1, merge: 'CostLike' = 1, displace: 'SubstitutionCost[int]' = 1) -> 'Decimal'
+```
+
+Return exact edit distance between two contiguous segmentations.
+
+Each sequence gives positive segment widths over the same number of base
+units. Removing an internal boundary is one merge, adding one is a split,
+and matching unequal boundary positions uses the declared displacement
+cost. Pass :meth:`CostTable.displace_boundary` to use a table's callback.
+
+### `text_projection`
+
+```text
+text_projection(name: 'str', pieces: 'TextPieces', *, join: 'TextJoin', transform: 'TextTransform | None' = None) -> 'SequenceProjection'
+```
+
+Build a character projection with caller-declared joining policy.
+
+``pieces`` extracts ordered text fragments. ``join`` decides what, if
+anything, lies between them. ``transform`` can implement a presentation
+view; no language- or locale-specific joining rule is built in.
+
+### `whitespace_insensitive_projection`
+
+```text
+whitespace_insensitive_projection(pieces: 'TextPieces', *, join: 'TextJoin') -> 'SequenceProjection'
+```
+
+Build a character projection that removes ``str.isspace()`` characters.
+
+### `format_control_insensitive_projection`
+
+```text
+format_control_insensitive_projection(pieces: 'TextPieces', *, join: 'TextJoin') -> 'SequenceProjection'
+```
+
+Build a character projection that gives Unicode Cf controls zero cost.
+
+### `check_projection_admissibility`
+
+```text
+check_projection_admissibility(projection: 'SequenceProjection', costs: 'CostTable', witnesses: 'Iterable[ProjectionWitness]', *, required: 'Iterable[str] | None' = None) -> 'ProjectionAdmissibility'
+```
+
+Check projection cost against realized one-step graph operations.
+
+Callers supply small-graph witnesses for every required operation kind. A
+witness passes only when the projected change can be expressed at no more
+than the graph operation's declared cost. Missing operation kinds prevent a
+certificate; a projection never becomes a lower bound by assertion alone.
+
+### `price_patch`
+
+```text
+price_patch(patch: 'Patch', costs: 'CostTable', source: 'Graph | None' = None) -> 'Decimal'
+```
+
+Return the cost of a realized patch containing only declared operations.
+
+Residual document changes and multi-call native edits are not one declared
+primitive and are refused. Supplying ``source`` first replays the complete
+patch, establishing that the priced operations are a realized script, and
+resolves declaration-specific costs for structural and durable references.
+
+### `graph_distance`
+
+```text
+graph_distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>, projections: 'Iterable[AdmissibleProjection]' = ()) -> 'DistanceInterval'
+```
+
+Return exact distance where proved, otherwise certified graph-edit bounds.
+
+Independent ordered tiers use exact weighted sequence distance when move and
+swap shortcuts cannot undercut insertion plus deletion. General graphs use
+the maximum certified projection distance as a lower bound and the cost of
+an executable diff as an upper bound. If the diff contains a residual data
+delta, a conservative dependency-ordered rebuild supplies the upper bound.
+Overlapping and non-nesting relations therefore receive an interval rather
+than an unsupported exact graph-edit claim.
+
+### `distance`
+
+```text
+distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>, projections: 'Iterable[AdmissibleProjection]' = ()) -> 'DistanceInterval'
+```
+
+Return graph-edit distance as a synonym for :func:`graph_distance`.
 
 ## Equivalence
 
@@ -5196,6 +5530,10 @@ Version tag for serialized construction programs. Current value: `2`.
 
 Version tag for serialized graph patches. Current value: `1`.
 
+### `PRIMITIVE_KINDS`
+
+Graph operation names accepted by declared edit-cost tables. Current value: `frozenset({'add_layer', 'add_relation', 'declare', 'demote_boundary', 'demote_item', 'demote_relation', 'drop_seal', 'insert_item', 'move_item', 'promote_boundary', 'promote_item', 'promote_relation', 'put_fact', 'remove_attribute', 'remove_fact', 'remove_item', 'remove_layer', 'remove_relation', 'replace_item', 'seal', 'set_attribute', 'set_endpoints', 'swap_items', 'undeclare', 'unseal'})`.
+
 ### `MAX_DOCUMENT_BYTES`
 
 Largest UTF-8 JSON document accepted by the wire codec. Current value: `16777216`.
@@ -5604,6 +5942,10 @@ published. A caller registers what it means to offer.
 
 Enumeration is ordered by profile name, so the answer does not depend on
 registration order or on interpreter hash state.
+
+### `UNIT_COSTS`
+
+Default symmetric graph-edit costs with reorder shortcuts priced as two edits. Current value: `CostTable(operations=mappingproxy({'add_layer': Decimal('1'), 'add_relation': Decimal('1'), 'declare': Decimal('1'), 'demote_boundary': Decimal('1'), 'demote_item': Decimal('1'), 'demote_relation': Decimal('1'), 'drop_seal': Decimal('1'), 'insert_item': Decimal('1'), 'move_item': Decimal('2'), 'promote_boundary': Decimal('1'), 'promote_item': Decimal('1'), 'promote_relation': Decimal('1'), 'put_fact': Decimal('1'), 'remove_attribute': Decimal('1'), 'remove_fact': Decimal('1'), 'remove_item': Decimal('1'), 'remove_layer': Decimal('1'), 'remove_relation': Decimal('1'), 'replace_item': Decimal('1'), 'seal': Decimal('1'), 'set_attribute': Decimal('1'), 'set_endpoints': Decimal('1'), 'swap_items': Decimal('2'), 'undeclare': Decimal('1'), 'unseal': Decimal('1')}), declarations=mappingproxy({}))`.
 
 ### `PersistedChoiceProfile`
 

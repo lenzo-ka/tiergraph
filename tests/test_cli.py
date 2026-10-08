@@ -1807,8 +1807,8 @@ def test_version_default_help_and_every_command_help(
     assert main([]) == 0
     assert (
         "{validate,discharge,render,inspect,convert,schema,run,step,walk,path,"
-        "grammar,clock,span,select,match,fold,semirings,edit,patch,diff,program}"
-        in capsys.readouterr().out
+        "grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,"
+        "program}" in capsys.readouterr().out
     )
     for command in (
         "validate",
@@ -1831,6 +1831,7 @@ def test_version_default_help_and_every_command_help(
         "edit",
         "patch",
         "diff",
+        "distance",
         "program",
     ):
         with pytest.raises(SystemExit) as raised:
@@ -1863,6 +1864,7 @@ def test_version_default_help_and_every_command_help(
         "edit",
         "patch",
         "diff",
+        "distance",
         "program",
     ]
 
@@ -1951,6 +1953,9 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
     changed_graph = source_graph.move_item(ItemRef(tier_name, 0), 1)
     (directory / "before.json").write_bytes(tiergraph.dump_bytes(source_graph))
     (directory / "after.json").write_bytes(tiergraph.dump_bytes(changed_graph))
+    (directory / "costs.json").write_text(
+        json.dumps(tiergraph.UNIT_COSTS.to_data()), encoding="utf-8"
+    )
     first = tiergraph.diff(source_graph, changed_graph, tiergraph.EquivalenceView.EXACT)
     second = tiergraph.diff(
         changed_graph, changed_graph, tiergraph.EquivalenceView.EXACT
@@ -2006,7 +2011,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 62
+    assert len(examples) == 64
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
