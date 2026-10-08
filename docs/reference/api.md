@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 296 top-level `tiergraph` exports exactly once.
+It covers 298 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1311,6 +1311,26 @@ GraphEditor.remove_fact(self, layer: 'LayerName', subject: 'LayerSubject', name:
 
 Remove one fact by its exact subject spelling and attribute name.
 
+#### `GraphEditor.prune_orphans`
+
+Method.
+
+```text
+GraphEditor.prune_orphans(self) -> 'GraphEditor'
+```
+
+Remove every orphaned layer fact from this editor.
+
+#### `GraphEditor.compact`
+
+Method.
+
+```text
+GraphEditor.compact(self) -> 'GraphEditor'
+```
+
+Prune orphan facts and share equal retained immutable values.
+
 #### `GraphEditor.set_attribute`
 
 Method.
@@ -1487,12 +1507,15 @@ Replace one instance's endpoints while preserving its other content.
 ### `Journal`
 
 ```text
-Journal(annotations: 'EditAnnotations | None' = None, *, provenance: 'LayerName | None' = None, protected: 'Iterable[LayerName]' = (), author: 'str | None' = None, reason: 'str | None' = None, stage: 'str | None' = None, confidence: 'float | None' = None, iteration: 'int | None' = None, tool: 'str | None' = None, timestamp: 'str | None' = None, fields: 'Mapping[str, JsonValue] | None' = None) -> 'None'
+Journal(annotations: 'EditAnnotations | None' = None, *, provenance: 'LayerName | None' = None, protected: 'Iterable[LayerName]' = (), horizon: 'int | JournalHorizon | None' = None, author: 'str | None' = None, reason: 'str | None' = None, stage: 'str | None' = None, confidence: 'float | None' = None, iteration: 'int | None' = None, tool: 'str | None' = None, timestamp: 'str | None' = None, fields: 'Mapping[str, JsonValue] | None' = None) -> 'None'
 ```
 
 Own opt-in edit history and bind it to one editor session.
 
-Every successful record remains undoable for the lifetime of the journal.
+Records remain undoable until :meth:`checkpoint` or the optional history
+horizon discards them.  An integer ``horizon`` limits record count;
+:class:`JournalHorizon` can instead limit estimated retained bytes or apply
+both limits.
 ``provenance`` names a layer that receives typed JSON facts only on the
 durably addressable subjects an operation directly acts on.  Those facts
 travel with their subjects and are retired, undoably, when a later journal
@@ -1529,6 +1552,45 @@ Journal.redo_records(self) -> 'tuple[JournalRecord, ...]'
 ```
 
 Return undone records in the order :meth:`redo` will restore them.
+
+#### `Journal.horizon`
+
+Property.
+
+```text
+Journal.horizon(self) -> 'JournalHorizon | None'
+```
+
+Return this journal's immutable history-retention policy.
+
+#### `Journal.retained_bytes`
+
+Property.
+
+```text
+Journal.retained_bytes(self) -> 'int'
+```
+
+Return estimated Python storage reachable from retained history.
+
+A byte-bounded journal maintains a conservative per-record estimate so
+enforcing the bound does not repeatedly scan all retained records.
+Values shared between records or with the live graph may be counted
+more than once.
+
+#### `Journal.checkpoint`
+
+Method.
+
+```text
+Journal.checkpoint(self) -> 'Journal'
+```
+
+Make the current graph the undo base and release earlier records.
+
+Applied and redo history are both discarded.  Live graph content,
+including provenance facts, is unchanged.  A later undo cannot cross
+this boundary.
 
 #### `Journal.protect`
 
@@ -1807,6 +1869,26 @@ JournalEditor.remove_fact(self, layer: 'LayerName', subject: 'LayerSubject', nam
 
 Remove one layer fact and record it for restoration.
 
+#### `JournalEditor.prune_orphans`
+
+Method.
+
+```text
+JournalEditor.prune_orphans(self) -> 'JournalEditor'
+```
+
+Remove and report orphaned layer facts as one undoable edit.
+
+#### `JournalEditor.compact`
+
+Method.
+
+```text
+JournalEditor.compact(self) -> 'JournalEditor'
+```
+
+Prune orphans, compact live storage, and re-intern retained history.
+
 #### `JournalEditor.set_attribute`
 
 Method.
@@ -1946,6 +2028,14 @@ JournalEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEn
 ```
 
 Replace endpoints and retain their previous ordered values.
+
+### `JournalHorizon`
+
+```text
+JournalHorizon(count: 'int | None' = None, bytes: 'int | None' = None) -> None
+```
+
+Bound history by record count, conservative estimated bytes, or both.
 
 ### `ClockJournalEditor`
 
@@ -2164,7 +2254,7 @@ Describe the inverse without exposing retained Python values.
 ### `EditReport`
 
 ```text
-EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = ()) -> None
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = ()) -> None
 ```
 
 Describe the content one recorded operation touched.
@@ -2297,6 +2387,24 @@ RelationTouch.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return the carrier and structural index.
+
+### `PrunedFact`
+
+```text
+PrunedFact(layer: 'LayerName', fact: 'LayerFact') -> None
+```
+
+Name one orphaned layer fact removed by explicit cleanup.
+
+#### `PrunedFact.to_data`
+
+Method.
+
+```text
+PrunedFact.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the layer identity and canonical fact data.
 
 ### `ReplacementAction`
 
@@ -4543,6 +4651,35 @@ returned graph owns fresh derived indexes.  During the call, peak
 memory is therefore about the original graph plus the result.  The
 retained-memory saving applies after the caller drops the original
 graph.
+
+#### `Graph.prune_orphans`
+
+Method.
+
+```text
+Graph.prune_orphans(self) -> 'Graph'
+```
+
+Return a graph without orphaned layer facts.
+
+Orphans are ordinary graph content, so this operation is explicit and
+changes functional equivalence.  Use an edit journal when the removed
+facts must remain undoable or reportable.
+
+#### `Graph.compact`
+
+Method.
+
+```text
+Graph.compact(self) -> 'Graph'
+```
+
+Return a graph with orphan facts removed and retained values shared.
+
+Live durable identifiers and relation positions are already compact:
+removal deletes their records and rewrites structural indexes.  This
+operation performs the remaining content cleanup and applies the same
+opt-in value interning as :meth:`share_values`.
 
 #### `Graph.promotion`
 

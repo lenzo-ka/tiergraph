@@ -733,6 +733,8 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
         "replace-subtree": "tiergraph edit graph.json replace-subtree /items/durable/alpha --containment urn:path contains --new-graph new-graph.json --new-root /items/durable/alpha -o out.json",
         "swap-subtrees": "tiergraph edit graph.json swap-subtrees /items/durable/alpha /items/durable/beta --containment urn:path contains -o out.json",
         "bulk": "tiergraph edit graph.json bulk --selector selector.json --set-attribute attribute.json -o out.json",
+        "compact": "tiergraph edit graph.json compact -o compacted.json",
+        "prune-orphans": "tiergraph edit graph.json prune-orphans -o cleaned.json",
     }
 
     def operation(
@@ -953,6 +955,9 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
         metavar=("NS", "LOCAL"),
         help="attribute name to remove",
     )
+
+    operation("prune-orphans", "remove orphaned layer facts")
+    operation("compact", "prune orphans and compact retained graph values")
 
     patch = _subcommand(
         subparsers,
@@ -1943,6 +1948,10 @@ def _dispatch_edit(  # noqa: PLR0915 -- command vocabulary
             _replacement_policies(args.first_policies),
             _replacement_policies(args.second_policies),
         )
+    elif command == "prune-orphans":
+        editor.prune_orphans()
+    elif command == "compact":
+        editor.compact()
     else:  # pragma: no cover - argparse closes the command vocabulary
         raise ValueError(f"unsupported edit command {command!r}")
 

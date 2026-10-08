@@ -1939,6 +1939,25 @@ class Graph:
         )
         return shared_graph
 
+    def prune_orphans(self) -> Graph:
+        """Return a graph without orphaned layer facts.
+
+        Orphans are ordinary graph content, so this operation is explicit and
+        changes functional equivalence.  Use an edit journal when the removed
+        facts must remain undoable or reportable.
+        """
+        return self.edit().prune_orphans().freeze()
+
+    def compact(self) -> Graph:
+        """Return a graph with orphan facts removed and retained values shared.
+
+        Live durable identifiers and relation positions are already compact:
+        removal deletes their records and rewrites structural indexes.  This
+        operation performs the remaining content cleanup and applies the same
+        opt-in value interning as :meth:`share_values`.
+        """
+        return self.prune_orphans().share_values()
+
     def promotion(self, tier: QualifiedName) -> bool:
         """Report whether every item on a tier carries durable identity."""
         member = self._tiers_by_name.get(tier)
@@ -2979,6 +2998,33 @@ class GraphEditor:
                 f"{str(name)!r} at {str(subject)!r}"
             )
         self._layers[index] = Layer(layer, facts)
+        return self
+
+    def prune_orphans(self) -> GraphEditor:
+        """Remove every orphaned layer fact from this editor."""
+        self._layers = [
+            Layer(
+                layer.name,
+                tuple(
+                    fact
+                    for fact in layer.facts
+                    if not isinstance(fact.subject, OrphanedSubject)
+                ),
+            )
+            for layer in self._layers
+        ]
+        return self
+
+    def compact(self) -> GraphEditor:
+        """Prune orphan facts and share equal retained immutable values."""
+        self.prune_orphans()
+        shared = self.freeze().share_values()
+        self._tiers = [
+            _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
+            for tier in shared.tiers
+        ]
+        self._relations = list(shared.relations)
+        self._polyadic_relations = list(shared.polyadic_relations)
         return self
 
     def set_attribute(self, target: EditTarget, value: Attribute) -> GraphEditor:

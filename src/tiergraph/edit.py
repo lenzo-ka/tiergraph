@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Set
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -23,6 +24,7 @@ from tiergraph.core import (
     Attribute,
     AttributeDeclaration,
     AttributeDomain,
+    AttributeValue,
     BipartiteRelationDeclaration,
     BoundaryRef,
     BoundarySide,
@@ -511,6 +513,7 @@ class EditReport:
     annotations: EditAnnotations
     clock_reports: tuple[ClockEditReport, ...] = ()
     detached_dependencies: tuple[DetachedDependency, ...] = ()
+    pruned_orphans: tuple[PrunedFact, ...] = ()
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this report in deterministic JSON-compatible form."""
@@ -534,7 +537,22 @@ class EditReport:
             "detached_dependencies": [
                 dependency.to_data() for dependency in self.detached_dependencies
             ],
+            "pruned_orphans": [fact.to_data() for fact in self.pruned_orphans],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PrunedFact:
+    """Name one orphaned layer fact removed by explicit cleanup."""
+
+    layer: LayerName
+    fact: LayerFact
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the layer identity and canonical fact data."""
+        encoded = Layer(self.layer, (self.fact,)).to_data()
+        facts = cast(list[dict[str, JsonValue]], encoded["facts"])
+        return {"layer": self.layer.to_data(), "fact": facts[0]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,6 +635,7 @@ class _ReportRecipe:
     annotations: EditAnnotations
     clock_reports: tuple[ClockEditReport, ...]
     detached_dependencies: tuple[DetachedDependency, ...]
+    pruned_orphans: tuple[PrunedFact, ...]
 
     @classmethod
     def create(
@@ -627,6 +646,7 @@ class _ReportRecipe:
         annotations: EditAnnotations,
         clock_reports: tuple[ClockEditReport, ...],
         detached_dependencies: tuple[DetachedDependency, ...] = (),
+        pruned_orphans: tuple[PrunedFact, ...] = (),
     ) -> _ReportRecipe:
         """Capture eagerly derived touches without retaining expanded tuples."""
         return cls(
@@ -645,6 +665,7 @@ class _ReportRecipe:
             annotations,
             clock_reports,
             detached_dependencies,
+            pruned_orphans,
         )
 
     def build(self) -> EditReport:
@@ -659,6 +680,7 @@ class _ReportRecipe:
             self.annotations,
             self.clock_reports,
             self.detached_dependencies,
+            self.pruned_orphans,
         )
 
     @classmethod
@@ -674,6 +696,7 @@ class _ReportRecipe:
             report.annotations,
             report.clock_reports,
             report.detached_dependencies,
+            report.pruned_orphans,
         )
 
 
@@ -1062,6 +1085,16 @@ def _layer_by_name(graph: Graph, name: LayerName) -> Layer | None:
     return next((layer for layer in graph.layers if layer.name == name), None)
 
 
+def _orphan_facts(graph: Graph) -> tuple[PrunedFact, ...]:
+    """Return every orphan fact with its layer in deterministic graph order."""
+    return tuple(
+        PrunedFact(layer.name, fact)
+        for layer in graph.layers
+        for fact in layer.facts
+        if isinstance(fact.subject, OrphanedSubject)
+    )
+
+
 def _mapped_subject(subject: LayerSubject, step: Displacement) -> LayerSubject | None:
     """Map one structural subject through an edit, or report its departure."""
     if isinstance(subject, ItemRef):
@@ -1208,6 +1241,8 @@ def _inverse_name(operation: str) -> str:
         "remove_layer": "add_layer",
         "put_fact": "restore_fact",
         "remove_fact": "put_fact",
+        "prune_orphans": "restore_orphans",
+        "compact": "restore_orphans",
         "set_attribute": "restore_attribute",
         "remove_attribute": "set_attribute",
         "insert_item": "remove_item",
@@ -1576,10 +1611,158 @@ def _stamp_provenance(
     return editor.freeze()
 
 
+@dataclass(frozen=True, slots=True)
+class JournalHorizon:
+    """Bound history by record count, conservative estimated bytes, or both."""
+
+    count: int | None = None
+    bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        """Require at least one nonnegative integer bound."""
+        if self.count is None and self.bytes is None:
+            raise ValueError("a journal horizon needs a count or byte bound")
+        for name, value in (("count", self.count), ("bytes", self.bytes)):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError(f"journal horizon {name} must be nonnegative")
+
+
+def _retained_size(values: object) -> int:
+    """Estimate unique Python storage reachable from retained history values."""
+    seen: set[int] = set()
+
+    def visit(value: object) -> int:
+        """Count one object and its supported immutable children once."""
+        identity = id(value)
+        if identity in seen:
+            return 0
+        seen.add(identity)
+        size = sys.getsizeof(value)
+        if isinstance(value, Mapping):
+            return size + sum(visit(key) + visit(item) for key, item in value.items())
+        if isinstance(value, tuple | list | set | frozenset):
+            return size + sum(visit(item) for item in value)
+        if is_dataclass(value) and not isinstance(value, type):
+            return size + sum(
+                visit(getattr(value, member.name)) for member in fields(value)
+            )
+        return size
+
+    return visit(values)
+
+
+def _share_history_value(
+    value: object,
+    attributes: dict[Attribute, Attribute],
+    references: dict[ItemRef, ItemRef],
+    memo: dict[int, object],
+) -> object:
+    """Rebuild retained immutable values through shared representative tables."""
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if isinstance(value, AttributeValue | JsonAttributeValue):
+        shared: object = attributes.setdefault(value, value)
+    elif isinstance(value, ItemRef):
+        shared = references.setdefault(value, value)
+    elif isinstance(value, tuple):
+        items = tuple(
+            _share_history_value(item, attributes, references, memo) for item in value
+        )
+        shared = (
+            value if all(a is b for a, b in zip(value, items, strict=True)) else items
+        )
+    elif isinstance(value, frozenset):
+        frozen_items = frozenset(
+            _share_history_value(item, attributes, references, memo) for item in value
+        )
+        shared = frozen_items
+    elif is_dataclass(value) and not isinstance(value, type):
+        replacements = {
+            member.name: transformed
+            for member in fields(value)
+            if member.init
+            and (
+                transformed := _share_history_value(
+                    getattr(value, member.name), attributes, references, memo
+                )
+            )
+            is not getattr(value, member.name)
+        }
+        shared = (
+            value if not replacements else cast(Any, replace)(value, **replacements)
+        )
+    else:
+        shared = value
+    memo[identity] = shared
+    return shared
+
+
+def _share_journal_history(journal: Journal, graph: Graph) -> None:
+    """Intern retained record payloads with the compacted current graph."""
+    attributes: dict[Attribute, Attribute] = {
+        attribute: attribute
+        for tier in graph.tiers
+        for item in tier.items
+        for attribute in item.attributes
+    }
+    references: dict[ItemRef, ItemRef] = {
+        reference: reference for reference in graph._items_by_id.values()
+    }
+    for relation in graph.relations:
+        for endpoint in (relation.left, relation.right):
+            if isinstance(endpoint, ItemRef):
+                references.setdefault(endpoint, endpoint)
+    for polyadic in graph.polyadic_relations:
+        for endpoint in (*polyadic.sources, *polyadic.targets):
+            if isinstance(endpoint, ItemRef):
+                references.setdefault(endpoint, endpoint)
+    memo: dict[int, object] = {}
+
+    def shared_record(record: JournalRecord) -> JournalRecord:
+        """Rebuild one record with interned restoration and report values."""
+        delta = cast(
+            _Restoration,
+            _share_history_value(record.inverse._delta, attributes, references, memo),
+        )
+        inverse = EditInverse._create(
+            record.inverse.operation, record.inverse.carriers, delta
+        )
+        return JournalRecord._create(
+            record.operation,
+            inverse,
+            cast(
+                _ReportRecipe,
+                _share_history_value(
+                    record._report_recipe, attributes, references, memo
+                ),
+            ),
+            record.annotations,
+            record._before_clock_active,
+            record._after_clock_active,
+            record._provenance_ownership,
+            cast(
+                _OperationPair | None,
+                _share_history_value(
+                    record._patch_operations, attributes, references, memo
+                ),
+            ),
+        )
+
+    journal._done = [shared_record(record) for record in journal._done]
+    journal._undone = [shared_record(record) for record in journal._undone]
+    journal._refresh_retained_sizes()
+
+
 class Journal:
     """Own opt-in edit history and bind it to one editor session.
 
-    Every successful record remains undoable for the lifetime of the journal.
+    Records remain undoable until :meth:`checkpoint` or the optional history
+    horizon discards them.  An integer ``horizon`` limits record count;
+    :class:`JournalHorizon` can instead limit estimated retained bytes or apply
+    both limits.
     ``provenance`` names a layer that receives typed JSON facts only on the
     durably addressable subjects an operation directly acts on.  Those facts
     travel with their subjects and are retired, undoably, when a later journal
@@ -1594,6 +1777,7 @@ class Journal:
         *,
         provenance: LayerName | None = None,
         protected: Iterable[LayerName] = (),
+        horizon: int | JournalHorizon | None = None,
         author: str | None = None,
         reason: str | None = None,
         stage: str | None = None,
@@ -1619,10 +1803,25 @@ class Journal:
         self._annotation_stack: list[EditAnnotations] = []
         self._provenance = provenance
         self._protected = frozenset(protected)
+        if isinstance(horizon, bool) or not isinstance(
+            horizon, int | JournalHorizon | None
+        ):
+            raise TypeError(
+                "journal horizon must be an integer, JournalHorizon, or None"
+            )
+        self._horizon = (
+            JournalHorizon(count=horizon) if isinstance(horizon, int) else horizon
+        )
         self._owned_provenance: set[_ProvenanceKey] = set()
         self._done: list[JournalRecord] = []
         self._undone: list[JournalRecord] = []
+        self._done_sizes: list[int] = []
+        self._undone_sizes: list[int] = []
+        self._done_bytes = 0
+        self._undone_bytes = 0
         self._editor: JournalEditor | ClockJournalEditor | None = None
+        self._history_truncated = False
+        self._horizon_suspended = 0
 
     @property
     def records(self) -> tuple[JournalRecord, ...]:
@@ -1638,6 +1837,52 @@ class Journal:
     def redo_records(self) -> tuple[JournalRecord, ...]:
         """Return undone records in the order :meth:`redo` will restore them."""
         return tuple(reversed(self._undone))
+
+    @property
+    def horizon(self) -> JournalHorizon | None:
+        """Return this journal's immutable history-retention policy."""
+        return self._horizon
+
+    @property
+    def retained_bytes(self) -> int:
+        """Return estimated Python storage reachable from retained history.
+
+        A byte-bounded journal maintains a conservative per-record estimate so
+        enforcing the bound does not repeatedly scan all retained records.
+        Values shared between records or with the live graph may be counted
+        more than once.
+        """
+        if not self._done and not self._undone:
+            return 0
+        if self._tracks_retained_sizes():
+            return (
+                self._done_bytes
+                + self._undone_bytes
+                + sys.getsizeof(self._done)
+                + sys.getsizeof(self._undone)
+            )
+        return _retained_size((self._done, self._undone))
+
+    def checkpoint(self) -> Journal:
+        """Make the current graph the undo base and release earlier records.
+
+        Applied and redo history are both discarded.  Live graph content,
+        including provenance facts, is unchanged.  A later undo cannot cross
+        this boundary.
+        """
+        if self._editor is None:
+            raise GraphValidationError("journal is not attached to an editor")
+        if self._horizon_suspended:
+            raise GraphValidationError("journal cannot checkpoint during a dry run")
+        self._editor._source = self._editor._graph
+        self._done.clear()
+        self._undone.clear()
+        self._done_sizes.clear()
+        self._undone_sizes.clear()
+        self._done_bytes = 0
+        self._undone_bytes = 0
+        self._history_truncated = True
+        return self
 
     def protect(self, layer: LayerName) -> Journal:
         """Protect one existing layer's facts and described live content.
@@ -1695,15 +1940,24 @@ class Journal:
         if self._editor is None:
             raise GraphValidationError("journal is not attached to an editor")
         if not self._done:
-            raise GraphValidationError("journal has no operation to undo")
+            message = (
+                "journal cannot undo past its retained history boundary"
+                if self._history_truncated
+                else "journal has no operation to undo"
+            )
+            raise GraphValidationError(message)
         record = self._done[-1]
         self._editor._restore(record, forward=False)
         if record._provenance_ownership is not None:
             added, removed = record._provenance_ownership
             self._owned_provenance.difference_update(added)
             self._owned_provenance.update(removed)
+        size = self._done_sizes.pop()
         self._done.pop()
+        self._done_bytes -= size
         self._undone.append(record)
+        self._undone_sizes.append(size)
+        self._undone_bytes += size
         return record
 
     def redo(self) -> JournalRecord:
@@ -1718,8 +1972,12 @@ class Journal:
             added, removed = record._provenance_ownership
             self._owned_provenance.difference_update(removed)
             self._owned_provenance.update(added)
+        size = self._undone_sizes.pop()
         self._undone.pop()
+        self._undone_bytes -= size
         self._done.append(record)
+        self._done_sizes.append(size)
+        self._done_bytes += size
         return record
 
     def to_patch(self) -> Patch:
@@ -1797,7 +2055,45 @@ class Journal:
 
     def _record(self, record: JournalRecord) -> None:
         self._done.append(record)
+        size = _retained_size(record) if self._tracks_retained_sizes() else 0
+        self._done_sizes.append(size)
+        self._done_bytes += size
         self._undone.clear()
+        self._undone_sizes.clear()
+        self._undone_bytes = 0
+        self._enforce_horizon()
+
+    def _tracks_retained_sizes(self) -> bool:
+        """Report whether byte-bound enforcement needs incremental estimates."""
+        return self._horizon is not None and self._horizon.bytes is not None
+
+    def _refresh_retained_sizes(self) -> None:
+        """Recompute estimates after retained records have been rebuilt."""
+        if self._tracks_retained_sizes():
+            self._done_sizes = [_retained_size(record) for record in self._done]
+            self._undone_sizes = [_retained_size(record) for record in self._undone]
+        else:
+            self._done_sizes = [0] * len(self._done)
+            self._undone_sizes = [0] * len(self._undone)
+        self._done_bytes = sum(self._done_sizes)
+        self._undone_bytes = sum(self._undone_sizes)
+
+    def _enforce_horizon(self) -> None:
+        """Advance the journal base until every configured bound is met."""
+        if self._horizon is None or self._horizon_suspended:
+            return
+        while self._done and (
+            (self._horizon.count is not None and len(self._done) > self._horizon.count)
+            or (
+                self._horizon.bytes is not None
+                and self.retained_bytes > self._horizon.bytes
+            )
+        ):
+            assert self._editor is not None
+            dropped = self._done.pop(0)
+            self._done_bytes -= self._done_sizes.pop(0)
+            self._editor._source = dropped.inverse._delta.forward(self._editor._source)
+            self._history_truncated = True
 
     def _attach_graph(self, graph: Graph) -> JournalEditor:
         if self._editor is not None:
@@ -1847,9 +2143,21 @@ class _JournalEditorBase:
 
     def dry_run(self, operation: Callable[[Any], object]) -> tuple[EditReport, ...]:
         """Apply, validate, report, and roll back new operations by inverses."""
+        self._journal._horizon_suspended += 1
+        try:
+            return self._dry_run(operation)
+        finally:
+            self._journal._horizon_suspended -= 1
+
+    def _dry_run(self, operation: Callable[[Any], object]) -> tuple[EditReport, ...]:
+        """Run rollback mechanics while automatic history trimming is paused."""
         prior_done = list(self._journal._done)
+        prior_done_sizes = list(self._journal._done_sizes)
+        prior_done_bytes = self._journal._done_bytes
         done = len(prior_done)
         prior_undone = list(self._journal._undone)
+        prior_undone_sizes = list(self._journal._undone_sizes)
+        prior_undone_bytes = self._journal._undone_bytes
         prior_owned = set(self._journal._owned_provenance)
         try:
             operation(self)
@@ -1861,6 +2169,10 @@ class _JournalEditorBase:
             except BaseException as rollback:
                 self._journal._done = prior_done
                 self._journal._undone = prior_undone
+                self._journal._done_sizes = prior_done_sizes
+                self._journal._undone_sizes = prior_undone_sizes
+                self._journal._done_bytes = prior_done_bytes
+                self._journal._undone_bytes = prior_undone_bytes
                 self._journal._owned_provenance = prior_owned
                 original.add_note(
                     f"dry-run rollback also failed: {type(rollback).__name__}: "
@@ -1868,6 +2180,8 @@ class _JournalEditorBase:
                 )
                 raise original from rollback
             self._journal._undone = prior_undone
+            self._journal._undone_sizes = prior_undone_sizes
+            self._journal._undone_bytes = prior_undone_bytes
             self._journal._owned_provenance = prior_owned
             raise
         try:
@@ -1876,6 +2190,10 @@ class _JournalEditorBase:
         except BaseException as rollback:
             self._journal._done = prior_done
             self._journal._undone = prior_undone
+            self._journal._done_sizes = prior_done_sizes
+            self._journal._undone_sizes = prior_undone_sizes
+            self._journal._done_bytes = prior_done_bytes
+            self._journal._undone_bytes = prior_undone_bytes
             self._journal._owned_provenance = prior_owned
             failure = GraphValidationError(
                 "dry-run operation succeeded but rollback failed"
@@ -1883,6 +2201,8 @@ class _JournalEditorBase:
             failure.add_note(f"rollback error: {type(rollback).__name__}: {rollback}")
             raise failure from rollback
         self._journal._undone = prior_undone
+        self._journal._undone_sizes = prior_undone_sizes
+        self._journal._undone_bytes = prior_undone_bytes
         self._journal._owned_provenance = prior_owned
         return reports
 
@@ -1900,6 +2220,7 @@ class _JournalEditorBase:
         before_clock_active: bool = True,
         after_clock_active: bool = True,
         detached_dependencies: tuple[DetachedDependency, ...] = (),
+        pruned_orphans: tuple[PrunedFact, ...] = (),
     ) -> None:
         before = self._graph
         acted_subjects = tuple(provenance_subjects)
@@ -1949,6 +2270,7 @@ class _JournalEditorBase:
             annotations,
             clock_reports,
             detached_dependencies,
+            pruned_orphans,
         )
         inverse = EditInverse._create(
             _inverse_name(operation),
@@ -2477,6 +2799,45 @@ class JournalEditor(_JournalEditorBase):
             patch_operations=operations,
             provenance_subjects=(subject,),
         )
+
+    def prune_orphans(self) -> JournalEditor:
+        """Remove and report orphaned layer facts as one undoable edit."""
+        return self._cleanup_orphans("prune_orphans", compact=False)
+
+    def compact(self) -> JournalEditor:
+        """Prune orphans, compact live storage, and re-intern retained history."""
+        result = self._cleanup_orphans("compact", compact=True)
+        _share_journal_history(self._journal, self._graph)
+        return result
+
+    def _cleanup_orphans(self, operation: str, *, compact: bool) -> JournalEditor:
+        """Apply one explicit cleanup operation and retain every removed fact."""
+        removed = _orphan_facts(self._graph)
+        forward = _operation(operation)
+        inverse = _OperationSequence(
+            tuple(
+                _OperationCall("put_fact", (value.layer, value.fact))
+                for value in removed
+            )
+        )
+        operations = _OperationPair(forward, inverse)
+        editor = GraphEditor(self._graph)
+        if compact:
+            editor.compact()
+        else:
+            editor.prune_orphans()
+        candidate = editor.freeze()
+        if compact:
+            candidate = candidate.share_values()
+        self._finish(
+            operation,
+            candidate,
+            editor.displacement(),
+            operations=operations,
+            patch_operations=operations,
+            pruned_orphans=removed,
+        )
+        return self
 
     def set_attribute(self, target: EditTarget, value: Attribute) -> JournalEditor:
         """Set one attribute and record the prior value or absence."""

@@ -1388,14 +1388,14 @@ Exit codes:
 ```text
 usage: tiergraph edit [-h]
                       GRAPH
-                      {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk}
+                      {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
                       ...
 
 Apply one checked edit to a graph document.
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
-  {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk}
+  {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
     apply               apply a fingerprint-guarded patch
     insert              insert one item
     delete              remove one item or an item run
@@ -1415,6 +1415,8 @@ positional arguments:
     replace-subtree     replace one containment root's descendants
     swap-subtrees       swap two disjoint containment subtrees
     bulk                apply one edit to a selector or exhaustive match
+    prune-orphans       remove orphaned layer facts
+    compact             prune orphans and compact retained graph values
 
 options:
   -h, --help            show this help message and exit
@@ -2210,6 +2212,73 @@ options:
 
 Examples:
   $ tiergraph edit graph.json bulk --selector selector.json --set-attribute attribute.json -o out.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph edit prune-orphans`
+
+```text
+usage: tiergraph edit GRAPH prune-orphans [-h] [-o FILE | --in-place]
+                                          [--dry-run] [--report FILE]
+                                          [--record FILE] [--inverse-out FILE]
+                                          [--annotate KEY=JSON]
+                                          [--max-steps N]
+
+Remove orphaned layer facts.
+
+options:
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output graph (default: -)
+  --in-place            atomically replace GRAPH
+  --dry-run             validate and report without writing GRAPH
+  --report FILE         write the edit report as JSON
+  --record FILE         write the forward patch as JSONL
+  --inverse-out FILE    write the inverse patch as JSONL
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --max-steps N         refuse after N deterministic work steps (maximum:
+                        1000000000)
+
+Examples:
+  $ tiergraph edit graph.json prune-orphans -o cleaned.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph edit compact`
+
+```text
+usage: tiergraph edit GRAPH compact [-h] [-o FILE | --in-place] [--dry-run]
+                                    [--report FILE] [--record FILE]
+                                    [--inverse-out FILE] [--annotate KEY=JSON]
+                                    [--max-steps N]
+
+Prune orphans and compact retained graph values.
+
+options:
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output graph (default: -)
+  --in-place            atomically replace GRAPH
+  --dry-run             validate and report without writing GRAPH
+  --report FILE         write the edit report as JSON
+  --record FILE         write the forward patch as JSONL
+  --inverse-out FILE    write the inverse patch as JSONL
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --max-steps N         refuse after N deterministic work steps (maximum:
+                        1000000000)
+
+Examples:
+  $ tiergraph edit graph.json compact -o compacted.json
 
 Exit codes:
   0  success
