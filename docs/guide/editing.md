@@ -360,6 +360,7 @@ file. `--in-place` is never implicit: it writes and validates a temporary file,
 then atomically replaces the input while preserving its permissions.
 `--dry-run` validates and reports without publishing the graph. `--record`,
 `--inverse-out`, `--report`, caller annotations, and `--max-steps` are opt-in.
-On a direct edit, caller annotations are recorded only when `--record`,
-`--inverse-out`, or `--report` requests journal output. Commands that can affect
-a clock-bound tier accept a profile and require an explicit rebinding policy.
+On a direct edit or patch application, caller annotations require `--record`,
+`--inverse-out`, `--report`, or `--dry-run` to expose the metadata; otherwise the
+command refuses them. Commands that can affect a clock-bound tier accept a
+profile and require an explicit rebinding policy.

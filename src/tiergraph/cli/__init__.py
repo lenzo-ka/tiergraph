@@ -753,7 +753,9 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
             examples=(example or examples[name],),
         )
         parser.set_defaults(handler=_handle_edit)
-        _edit_output_arguments(parser, clock_profile=clock_profile)
+        _edit_output_arguments(
+            parser, clock_profile=clock_profile, annotations_require_output=True
+        )
         return parser
 
     apply = operation("apply", "apply a fingerprint-guarded patch")
@@ -977,7 +979,7 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
     patch_apply.set_defaults(handler=_handle_patch)
     patch_apply.add_argument("patch", metavar="PATCH", help="patch JSONL")
     patch_apply.add_argument("file", metavar="GRAPH", help="base graph")
-    _edit_output_arguments(patch_apply)
+    _edit_output_arguments(patch_apply, annotations_require_output=True)
     for name, summary in (
         ("show", "show a patch as JSON"),
         ("invert", "write the inverse patch"),
@@ -1075,7 +1077,10 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
 
 
 def _edit_output_arguments(
-    parser: argparse.ArgumentParser, *, clock_profile: bool = False
+    parser: argparse.ArgumentParser,
+    *,
+    clock_profile: bool = False,
+    annotations_require_output: bool = False,
 ) -> None:
     """Add the controls shared by every command that can produce a graph."""
     parser.set_defaults(clock_profile=None, rebinding=None)
@@ -1120,7 +1125,12 @@ def _edit_output_arguments(
         action="append",
         default=[],
         metavar="KEY=JSON",
-        help="attach caller-supplied patch metadata; repeatable",
+        help=(
+            "attach caller-supplied patch metadata; repeatable; requires --record, "
+            "--inverse-out, --report, or --dry-run"
+            if annotations_require_output
+            else "attach caller-supplied patch metadata; repeatable"
+        ),
     )
     _max_steps_argument(parser)
 
@@ -1658,6 +1668,7 @@ def _handle_step(args: argparse.Namespace) -> int:
 
 def _handle_edit(args: argparse.Namespace) -> None:
     """Apply one edit command and emit only fully validated artifacts."""
+    _require_annotation_output(args)
     graph = tiergraph.loads(_read_bytes(args.file))
     annotations = _edit_annotations(args.annotate)
     patch: tiergraph.Patch | None
@@ -1763,6 +1774,7 @@ def _handle_edit(args: argparse.Namespace) -> None:
 def _handle_patch(args: argparse.Namespace) -> None:
     """Apply or transform one patch without weakening its fingerprint guards."""
     if args.patch_command == "apply":
+        _require_annotation_output(args)
         graph = tiergraph.loads(_read_bytes(args.file))
         patch = tiergraph.patch_loads(_read_bytes(args.patch))
         patch = _annotated_patch(patch, _edit_annotations(args.annotate))
@@ -2039,6 +2051,14 @@ def _needs_patch(args: argparse.Namespace) -> bool:
 def _needs_report(args: argparse.Namespace) -> bool:
     """Return whether an edit must materialize its report data."""
     return args.dry_run or args.report is not None
+
+
+def _require_annotation_output(args: argparse.Namespace) -> None:
+    """Refuse caller metadata when no requested artifact can expose it."""
+    if args.annotate and not (_needs_patch(args) or _needs_report(args)):
+        raise ValueError(
+            "--annotate requires --record, --inverse-out, --report, or --dry-run"
+        )
 
 
 def _needs_journal(args: argparse.Namespace) -> bool:

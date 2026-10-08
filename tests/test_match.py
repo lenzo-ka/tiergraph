@@ -905,6 +905,14 @@ def test_open_right_reports_settled_results_and_watermarks() -> None:
     assert intermediate.pending_from == (2,)
 
 
+def test_open_left_start_anchor_has_no_pending_open_right_match() -> None:
+    """A hidden predecessor permanently rules out a start-anchored pattern."""
+    compiled = compile_pattern(SeqPattern((StartPattern(), atom("seg", "a"))))
+    scope = match_module._Scope((), open_left=True)
+
+    assert compiled._pending_start(scope, ({},)) is None
+
+
 def test_open_right_settled_span_prefix_is_extension_invariant() -> None:
     ordering = TierOrder(q("seg"))
     a, b = atom("seg", "a"), atom("seg", "b")

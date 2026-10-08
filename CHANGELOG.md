@@ -130,6 +130,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refused CLI annotations on direct edits and patch application when no patch,
+  report, or dry-run output can carry them.
+- Removed false open-stream pending watermarks for start-anchored patterns in
+  open-left scopes.
+- Kept the release runbook's source quotation aligned with the makefile.
 - Installed Graphviz in CI so DOT parser checks run end to end.
 - Made capped walks report truncation only when a fresh node is omitted.
 - Kept provenance from attaching facts to bare item, boundary, or relation

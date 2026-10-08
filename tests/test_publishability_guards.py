@@ -19,6 +19,9 @@ SALT = bytes.fromhex("00112233445566778899aabbccddeeff")
 # Joined at run time: this module is itself a shipped surface, so a literal
 # counter-example would be extracted from it and refused.
 LEAK_URL = "https:" + "//unknown.invalid/project"
+RELEASE_GUIDE_SOURCE_CITATIONS: tuple[tuple[str, Path], ...] = (
+    ("Capture is deliberately NOT part of the gate", Path("Makefile")),
+)
 
 
 def test_release_guide_requires_a_dependency_floor_without_an_upper_cap() -> None:
@@ -27,6 +30,15 @@ def test_release_guide_requires_a_dependency_floor_without_an_upper_cap() -> Non
     assert "tiergraph>=X.Y" in guide
     assert "never add an upper cap" in guide
     assert "tiergraph>=X.Y,<X.(Y+1)" not in guide
+
+
+def test_release_guide_source_citations_stay_verbatim() -> None:
+    """Quoted implementation prose remains present in the named repository file."""
+    guide = (check_tracked_clean.ROOT / "RELEASING.md").read_text(encoding="utf-8")
+    for quote, relative_path in RELEASE_GUIDE_SOURCE_CITATIONS:
+        assert quote in guide
+        source = (check_tracked_clean.ROOT / relative_path).read_text(encoding="utf-8")
+        assert quote in source
 
 
 def _synthetic_denylist() -> check_tracked_clean.Denylist:
