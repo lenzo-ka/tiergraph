@@ -257,8 +257,4 @@ declarations that interpretation needs and refuses a graph that cannot carry it.
 
 ## Lineage
 
-The model is informed by Sue Hertz's Delta representation and the Heterogeneous
-Relation Graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps their
-emphasis on explicit tiered structure and defines its own typed, immutable
-model with a versioned interchange format. Phonetics is one application; the
-graph and format assign no phonetic meaning to any tier or attribute.
+The model is informed by Sue Hertz's Delta representation and the Heterogeneous Relation Graphs (HRGs) of the Festival Speech Synthesis System. tiergraph's interchange format also owes something in spirit to Apple's QuickTime, a general time-based media format, where tracks of any media type share one timeline, each with its own timescale and related by references, and each track is typed by its media handler and sample description, so the container stays general while every resource brings its own schema. tiergraph keeps their emphasis on explicit tiered structure and defines its own typed, immutable model with a versioned interchange format. Phonetics is one application; the graph and format assign no phonetic meaning to any tier or attribute.
