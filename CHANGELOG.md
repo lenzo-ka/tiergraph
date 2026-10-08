@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an editing guide covering primitive transactions, refusal and
+  displacement, journals and provenance, clock-aware editing, patches and
+  differences, subtree and bulk operations, reconciliation, distance, explicit
+  cleanup, and the corresponding command-line workflow.
 - Added public `EquivalenceView` graph comparison views.
 - Added public `abstract_form()` canonical graph forms.
 - Added public `equivalent()` graph comparison.

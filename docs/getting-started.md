@@ -286,8 +286,10 @@ first line is `{"machine_version":"1"}`, followed by one public opcode
 - [What tiergraph is for](what-tiergraph-is-for.md) places it among related
   tools.
 - [Concepts](concepts.md) describes the data model.
-- [Construction](guide/construction.md) covers the builder, direct
-  constructors, editing, and construction programs.
+- [Construction](guide/construction.md) covers the builder, direct constructors,
+  and construction programs.
+- [Editing graphs](guide/editing.md) covers transactions, journals, patches,
+  clock-aware edits, bulk operations, distance, and cleanup.
 - [Selection and traversal](guide/selection-and-traversal.md) covers selectors,
   set algebra, walks, and ordered containment.
 - [Predicates and offset joins](guide/predicates-and-offset-joins.md) adds
