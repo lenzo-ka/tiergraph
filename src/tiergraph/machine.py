@@ -98,6 +98,7 @@ EDIT_OPCODE_NAMES = frozenset(
         "add_layer",
         "add_relation",
         "attach_value",
+        "compact",
         "declare",
         "declare_attribute",
         "declare_namespace",
@@ -114,6 +115,7 @@ EDIT_OPCODE_NAMES = frozenset(
         "promote_boundary",
         "promote_item",
         "promote_relation",
+        "prune_orphans",
         "put_fact",
         "relate",
         "remove_attribute",
@@ -127,6 +129,7 @@ EDIT_OPCODE_NAMES = frozenset(
         "restore_attribute",
         "restore_declaration_contents",
         "restore_fact",
+        "restore_orphans",
         "restore_seal",
         "seal",
         "set_attribute",
@@ -141,6 +144,7 @@ EDIT_CALL_NAMES = frozenset(
     {
         "add_layer",
         "add_relation",
+        "compact",
         "declare",
         "demote_boundary",
         "demote_item",
@@ -152,6 +156,7 @@ EDIT_CALL_NAMES = frozenset(
         "promote_boundary",
         "promote_item",
         "promote_relation",
+        "prune_orphans",
         "put_fact",
         "remove_attribute",
         "remove_fact",
@@ -971,6 +976,7 @@ class DeltaOpcode:
                 "remove_item": {"remove_item", "remove_items"},
                 "restore_attribute": {"remove_attribute", "set_attribute"},
                 "restore_fact": {"remove_fact", "put_fact"},
+                "restore_orphans": {"put_fact"},
                 "restore_seal": {"drop_seal", "unseal"},
             }
             admitted = aliases.get(self.operation, {self.operation})
@@ -1102,6 +1108,7 @@ _EXECUTABLE_OPCODE_TYPES = (*_PRIMITIVE_OPCODE_TYPES, DeltaOpcode)
 _REMOVAL_OPCODE_NAMES = frozenset(
     {
         "delta",
+        "compact",
         "demote_boundary",
         "demote_item",
         "demote_relation",
@@ -1112,6 +1119,7 @@ _REMOVAL_OPCODE_NAMES = frozenset(
         "remove_items",
         "remove_layer",
         "remove_relation",
+        "prune_orphans",
         "undeclare",
         "undeclare_with_contents",
         "unseal",

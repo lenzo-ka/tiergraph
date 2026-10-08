@@ -110,7 +110,9 @@ from tiergraph.edit import (
     EditReport,
     Journal,
     JournalEditor,
+    JournalHorizon,
     JournalRecord,
+    PrunedFact,
     RelationTouch,
 )
 from tiergraph.equivalence import (
@@ -470,6 +472,7 @@ __all__ = [
     "ItemsSelector",
     "Journal",
     "JournalEditor",
+    "JournalHorizon",
     "JournalRecord",
     "JsonAttributeValue",
     "JsonType",
@@ -526,6 +529,7 @@ __all__ = [
     "ProjectionWitness",
     "PromoteBoundary",
     "PromoteItem",
+    "PrunedFact",
     "QualifiedName",
     "ReactDeclaration",
     "ReactMode",

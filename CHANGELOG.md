@@ -102,6 +102,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expanded primitives, so patches retain no request-scoped lattice or alignment
   object. Timing comparisons use exact integral clock positions; tolerance
   remains a distance concern.
+- Added explicit journal checkpoints and optional count- or byte-bounded undo
+  horizons. Checkpoints and automatic horizon trimming advance the retained
+  patch base while releasing older inverses; undo refuses at that retained
+  history boundary.
+- Added undoable `prune_orphans()` and `compact()` graph edits. Both report every
+  orphaned layer fact they remove; compaction also shares equal immutable
+  values across the live graph and retained history. Durable identifiers remain
+  reusable caller vocabulary, while identified patch fingerprints prevent a
+  patch from silently retargeting a reused identifier.
 
 ### Changed
 
