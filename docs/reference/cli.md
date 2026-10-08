@@ -1453,7 +1453,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --patch FILE          patch JSONL
@@ -1492,7 +1494,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --tier NS LOCAL       destination tier
@@ -1537,7 +1541,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --count N             item count (default: 1)
@@ -1575,7 +1581,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --item FILE           item JSON
@@ -1617,7 +1625,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --to N                destination index
@@ -1660,7 +1670,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 
@@ -1693,7 +1705,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --instance FILE       relation JSON
@@ -1733,7 +1747,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 
@@ -1776,7 +1792,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --sources FILE        endpoint array JSON
@@ -1818,7 +1836,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --attribute FILE      attribute JSON for set
@@ -1854,7 +1874,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --declaration FILE    declaration JSON
@@ -1896,7 +1918,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --prefix P            namespace prefix
@@ -1938,7 +1962,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --id ID               new durable identifier
@@ -1978,7 +2004,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 
@@ -2016,7 +2044,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --sealed N            sealed prefix length
@@ -2057,7 +2087,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --vocabulary URI      layer vocabulary URI
@@ -2109,7 +2141,9 @@ options:
   --clock-profile FILE  validate and edit through this clock profile
   --rebinding {keep-earlier,drop-to-provisional}
                         named clock rebinding policy; requires --clock-profile
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --containment NS LOCAL
@@ -2155,7 +2189,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --containment NS LOCAL
@@ -2197,7 +2233,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
   --selector FILE       selector JSON
@@ -2240,7 +2278,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 
@@ -2273,7 +2313,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 
@@ -2338,7 +2380,9 @@ options:
   --report FILE         write the edit report as JSON
   --record FILE         write the forward patch as JSONL
   --inverse-out FILE    write the inverse patch as JSONL
-  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
   --max-steps N         refuse after N deterministic work steps (maximum:
                         1000000000)
 

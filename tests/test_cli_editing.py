@@ -172,6 +172,75 @@ def test_plain_edits_do_not_build_recording_state(
     assert tiergraph.loads(output.read_bytes()) != tiergraph.loads(source.read_bytes())
 
 
+def test_direct_edit_annotations_require_an_observable_journal_artifact(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Annotations never disappear into the allocation-free plain editor."""
+    source = _files(tmp_path)
+    output = tmp_path / "annotated.json"
+
+    status, _, error = _run(
+        [
+            "edit",
+            str(source),
+            "move",
+            "/items/durable/alpha",
+            "--to",
+            "1",
+            "--annotate",
+            "reason=correction",
+            "-o",
+            str(output),
+        ],
+        capsys,
+    )
+
+    assert status == 1
+    assert (
+        "--annotate requires --record, --inverse-out, --report, or --dry-run" in error
+    )
+    assert not output.exists()
+
+
+def test_patch_apply_annotations_require_an_observable_artifact(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Patch-application annotations cannot be accepted and then discarded."""
+    source = _files(tmp_path)
+    graph = tiergraph.loads(source.read_bytes())
+    changed = graph.move_item(ItemRef(QualifiedName("urn:path", "tokens"), 0), 1)
+    patch_path = tmp_path / "change.jsonl"
+    patch_path.write_text(
+        tiergraph.patch_dumps(
+            tiergraph.diff(graph, changed, tiergraph.EquivalenceView.EXACT)
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "annotated.json"
+
+    status, _, error = _run(
+        [
+            "patch",
+            "apply",
+            str(patch_path),
+            str(source),
+            "--annotate",
+            "reason=correction",
+            "-o",
+            str(output),
+        ],
+        capsys,
+    )
+
+    assert status == 1
+    assert (
+        "--annotate requires --record, --inverse-out, --report, or --dry-run" in error
+    )
+    assert not output.exists()
+
+
 def test_plain_bulk_edits_do_not_build_a_patch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -206,6 +275,7 @@ def test_patch_apply_bulk_forms_and_budget_refusal(
 ) -> None:
     source = _files(tmp_path)
     output = tmp_path / "applied.json"
+    recorded = tmp_path / "replay.jsonl"
     assert (
         cli.main(
             [
@@ -215,6 +285,8 @@ def test_patch_apply_bulk_forms_and_budget_refusal(
                 str(source),
                 "-o",
                 str(output),
+                "--record",
+                str(recorded),
                 "--annotate",
                 "reason=replay",
             ]
@@ -222,6 +294,7 @@ def test_patch_apply_bulk_forms_and_budget_refusal(
         == 0
     )
     assert tiergraph.loads(output.read_bytes()) != tiergraph.loads(source.read_bytes())
+    assert tiergraph.patch_loads(recorded.read_bytes()).annotations.reason == "replay"
     for dry_run_command in (
         [
             "patch",

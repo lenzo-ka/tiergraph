@@ -182,7 +182,8 @@ job references it; the OIDC identity is scoped to it).
    `python -c "import tiergraph; print(tiergraph.__version__)"`.
 
 Those six are the whole sequence. In particular there is no `make corpus-capture`
-step, although the makefile target's own comment says to run one at a release:
+step, and the makefile target's own comment says it is deliberately outside the
+gate:
 see [`make corpus-capture` is not a release step](#make-corpus-capture-is-not-a-release-step)
 below for why not, and for what would change the answer.
 
@@ -192,9 +193,10 @@ below for why not, and for what would change the answer.
 
 ### `make corpus-capture` is not a release step
 
-The makefile's `corpus-capture` comment says "Run this at a release", and
-nothing in this checklist runs it. That is deliberate, and the reasoning is
-here so a releaser who goes looking does not have to reconstruct it.
+The makefile's `corpus-capture` comment says
+"Capture is deliberately NOT part of the gate", and nothing in this checklist
+runs it. That is deliberate, and the reasoning is here so a releaser who goes
+looking does not have to reconstruct it.
 
 `corpus/accepted-documents.jsonl` records documents this project's decoder
 accepted, and `make gate`'s `format-semantics` step re-runs the current decoder

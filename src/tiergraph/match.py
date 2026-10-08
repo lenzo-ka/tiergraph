@@ -1510,7 +1510,12 @@ class CompiledPattern:
         )
 
     def _can_change_after_end(
-        self, states: set[int], length: int, *, meter: _ChargeMeter | None = None
+        self,
+        states: set[int],
+        length: int,
+        *,
+        open_left: bool = False,
+        meter: _ChargeMeter | None = None,
     ) -> bool:
         if meter is not None:
             meter.charge(len(self.epsilon))
@@ -1523,7 +1528,7 @@ class CompiledPattern:
             for edge in self.epsilon[state]:
                 next_phase = phase
                 guard = _epsilon_guard(edge)
-                if guard == _GUARD_START and (phase or length):
+                if guard == _GUARD_START and (phase or length or open_left):
                     continue
                 if guard == _GUARD_END:
                     next_phase = _FUTURE_END
@@ -1568,7 +1573,9 @@ class CompiledPattern:
                 )
                 if not active:
                     break
-            if active and self._can_change_after_end(active, length, meter=meter):
+            if active and self._can_change_after_end(
+                active, length, open_left=scope.open_left, meter=meter
+            ):
                 return start
         return None
 
