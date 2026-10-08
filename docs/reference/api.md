@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 290 top-level `tiergraph` exports exactly once.
+It covers 296 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -2210,6 +2210,12 @@ EditAnnotations.to_data(self) -> 'dict[str, JsonValue]'
 
 Return only supplied metadata as detached JSON data.
 
+### `ContainmentRule`
+
+```text
+type ContainmentRule = str | collections.abc.Callable[[tuple[int, int], tuple[tuple[tiergraph.core.ItemRef, tuple[int, int]], ...]], tiergraph.core.ItemRef | None]
+```
+
 ### `DetachedDependency`
 
 ```text
@@ -2355,6 +2361,18 @@ References on the right address :attr:`Subtree.graph`. Multiple old items
 may name one new item for a merge, and one old item may name several new
 items for a split. Missing old items have no counterpart.
 
+### `PathChoice`
+
+```text
+type PathChoice = collections.abc.Iterable[PathStep] | tuple[tuple[str, ...], ...]
+```
+
+### `PathStep`
+
+```text
+type PathStep = tiergraph.core.ItemRef | tiergraph.core.DurableItemRef | str
+```
+
 ### `apply_patch`
 
 ```text
@@ -2397,6 +2415,31 @@ the active meter. This graph-level entry point records no journal and
 applies no clock rebinding policy. Callers requiring either must perform the
 equivalent selected structural operations through the appropriate editor.
 
+### `commit_path`
+
+```text
+commit_path(lattice: 'PathPlan[Any]', path: 'PathChoice', *, containment: 'QualifiedName | Iterable[QualifiedName]' = (), journal: 'Journal | None' = None) -> 'Graph'
+```
+
+Keep one complete path and its declared containment substructure.
+
+``lattice`` supplies the finite acyclic topology and its source graph.
+``path`` is either its ordered item references, its ordered labels, or
+non-``None`` one-path provenance returned by :meth:`PathPlan.evaluate`.
+Every unchosen lattice item and descendant outside the retained
+substructure is removed. ``containment`` names ordered, item-only polyadic
+relations that declare source uniqueness and acyclicity; their descendants
+travel with each alternative, and descendants shared with the chosen path
+remain live.
+
+Item attributes and layer facts are ordinary graph content, so source spans
+and ranked-alternative provenance on chosen units remain unchanged. Facts
+scoped to withdrawn content and references with withdrawn endpoints are
+removed explicitly, never orphaned silently. When ``journal`` is supplied,
+the derived edit is recorded as its expanded fact, relation, value, and item
+primitives. A resulting patch therefore retains no reference to the
+request-scoped path plan.
+
 ### `compose_patches`
 
 ```text
@@ -2404,6 +2447,28 @@ compose_patches(first: 'Patch', second: 'Patch') -> 'Patch'
 ```
 
 Compose adjacent identified patches without weakening either guard.
+
+### `contain_by_time`
+
+```text
+contain_by_time(profile: 'ClockProfile', relation: 'QualifiedName', parent: 'QualifiedName', child: 'QualifiedName', *, rule: 'ContainmentRule' = 'midpoint', journal: 'Journal | None' = None) -> 'Graph'
+```
+
+Rebuild one parent-child relation from exact shared-clock spans.
+
+The default ``"midpoint"`` rule assigns each child to the unique parent
+whose half-open span contains the child's midpoint. Spans use coarse,
+integral clock-boundary indices; optional within-tick refinements do not
+affect assignment. A caller may instead provide a function receiving the
+child's integral clock span and every parent span; it returns the chosen
+parent or ``None``. Refusal is explicit when the default finds no unique
+parent or a callback names another item.
+
+Bipartite declarations retain one instance per child. Polyadic declarations
+retain one source per parent and ordered child targets. Existing instances
+are updated in place where possible, preserving ids, values, facts, and
+global order; already correct structure is an exact no-op. Journaled calls
+expand into endpoint, relation, and fact primitives.
 
 ### `diff`
 
@@ -2446,6 +2511,28 @@ Return ``graph`` with one root's containment descendants replaced.
 The root, its incoming containment link, its attributes, and its layer facts
 remain live. The default abandons dependencies on descendants and reports
 them when this operation is journaled. Correspondence is explicitly opt-in.
+
+### `retime`
+
+```text
+retime(profile: 'ClockProfile', tier: 'QualifiedName', alignment: 'Sequence[int]', *, offset: 'int' = 0, journal: 'Journal | None' = None) -> 'Graph'
+```
+
+Rebind every boundary of one timed tier to exact clock positions.
+
+``alignment`` contains one integral clock-boundary index per tier boundary,
+hence one more entry than the tier has items. ``offset`` is added to every
+supplied index. The resulting positions must be in range and monotone.
+Existing binding instances are updated in place, retaining their durable
+identities, attributes, layer facts, and global relation positions.
+
+The operation changes structural clock bindings only; stored item start and
+duration values are not rewritten. It uses the profile's declared clock and
+binding relation and validates a new profile before publishing the graph, so
+stored values must still satisfy that profile. It does not apply a tolerance:
+callers should store external times as integral samples or milliseconds and
+put tolerance in a distance calculation. A journal records the endpoint
+changes as ordinary expanded primitives.
 
 ### `swap_subtrees`
 
