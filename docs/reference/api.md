@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 303 top-level `tiergraph` exports exactly once.
+It covers 309 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -216,6 +216,221 @@ BlobProfile.required(self) -> 'tuple[BlobRef, ...]'
 
 Return distinct payload requirements in first blob-item order.
 
+### `BlobResolver`
+
+```text
+BlobResolver(*args, **kwargs)
+```
+
+Open payload bytes from one explicit storage source.
+
+Returned readers must follow ``BinaryIO`` semantics, including reading
+through end of stream when given a negative size.
+
+#### `BlobResolver.open`
+
+Method.
+
+```text
+BlobResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return a fresh binary reader, or ``None`` when this source has no match.
+
+### `MappingResolver`
+
+```text
+MappingResolver(payloads: 'Mapping[str, bytes]') -> 'None'
+```
+
+Resolve caller-supplied immutable bytes by digest alone.
+
+Declared size and href do not participate in lookup. Wrap returned readers
+in ``VerifiedReader`` when size and content must be checked.
+
+#### `MappingResolver.open`
+
+Method.
+
+```text
+MappingResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return a new in-memory reader for the digest, independent of its href.
+
+### `ChainResolver`
+
+```text
+ChainResolver(resolvers: 'Iterable[BlobResolver]') -> 'None'
+```
+
+Try an explicitly ordered collection of resolvers until one answers.
+
+#### `ChainResolver.open`
+
+Method.
+
+```text
+ChainResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return the first available reader without consulting later resolvers.
+
+### `BlobSink`
+
+```text
+BlobSink(*args, **kwargs)
+```
+
+Store one payload in caller-selected external storage.
+
+#### `BlobSink.put`
+
+Method.
+
+```text
+BlobSink.put(self, ref: 'BlobRef', source: 'BinaryIO') -> 'str | None'
+```
+
+Store the bytes and return an optional href for a bundle index.
+
+### `VerifiedReader`
+
+```text
+VerifiedReader(source: 'BinaryIO', ref: 'BlobRef') -> 'None'
+```
+
+Hash a binary stream as it is read and verify its declared identity at EOF.
+
+``verified`` becomes true only after an unseeked negative-size read or an
+empty bounded read establishes end of stream with both the expected byte
+count and SHA-256 digest. A bounded read that returns the final payload byte
+therefore needs one subsequent read to establish EOF. The wrapped source
+must follow ``BinaryIO`` semantics, including reading through EOF for a
+negative size. Seeking permanently makes the wrapper unverified, which
+permits random-access span reads without presenting a partial read as an
+integrity check. Closing the wrapper closes its source.
+
+#### `VerifiedReader.verified`
+
+Property.
+
+```text
+VerifiedReader.verified(self) -> 'bool'
+```
+
+Return whether one complete, unseeked read matched size and digest.
+
+#### `VerifiedReader.readable`
+
+Method.
+
+```text
+VerifiedReader.readable(self) -> 'bool'
+```
+
+Return whether the wrapped stream supports reads.
+
+#### `VerifiedReader.writable`
+
+Method.
+
+```text
+VerifiedReader.writable(self) -> 'bool'
+```
+
+Return false because integrity readers never expose writes.
+
+#### `VerifiedReader.seekable`
+
+Method.
+
+```text
+VerifiedReader.seekable(self) -> 'bool'
+```
+
+Return whether the wrapped stream supports random access.
+
+#### `VerifiedReader.tell`
+
+Method.
+
+```text
+VerifiedReader.tell(self) -> 'int'
+```
+
+Return the wrapped stream's current byte position.
+
+#### `VerifiedReader.seek`
+
+Method.
+
+```text
+VerifiedReader.seek(self, offset: 'int', whence: 'int' = 0) -> 'int'
+```
+
+Move the wrapped stream and permanently invalidate full-read verification.
+
+#### `VerifiedReader.read`
+
+Method.
+
+```text
+VerifiedReader.read(self, size: 'int | None' = -1) -> 'bytes'
+```
+
+Read bytes and verify after a negative-size or empty bounded read.
+
+#### `VerifiedReader.read1`
+
+Method.
+
+```text
+VerifiedReader.read1(self, size: 'int' = -1) -> 'bytes'
+```
+
+Read bytes through the same verification path as ``read``.
+
+#### `VerifiedReader.readinto`
+
+Method.
+
+```text
+VerifiedReader.readinto(self, buffer: 'Buffer', /) -> 'int'
+```
+
+Read verified bytes into a writable contiguous buffer.
+
+#### `VerifiedReader.readinto1`
+
+Method.
+
+```text
+VerifiedReader.readinto1(self, buffer: 'Buffer', /) -> 'int'
+```
+
+Read one verified chunk into a writable contiguous buffer.
+
+#### `VerifiedReader.readline`
+
+Method.
+
+```text
+VerifiedReader.readline(self, size: 'int | None' = -1) -> 'bytes'
+```
+
+Read one binary line and verify when its result establishes EOF.
+
+#### `VerifiedReader.close`
+
+Method.
+
+```text
+VerifiedReader.close(self) -> 'None'
+```
+
+Close both the wrapped source and this reader without forcing a read.
+
 ### `declare_blob_vocabulary`
 
 ```text
@@ -227,6 +442,14 @@ Declare the fixed blob prefix and attributes on a mutable graph editor.
 The helper appends declarations and returns the same editor for chaining.
 Existing declarations are not silently adopted: the editor's ordinary
 duplicate-declaration refusals keep one explicit declaration event.
+
+### `hash_blob`
+
+```text
+hash_blob(source: 'BinaryIO', *, chunk_size: 'int' = 1048576) -> 'BlobRef'
+```
+
+Hash bytes from the source's current position through end of stream.
 
 ## Clock
 
@@ -7930,6 +8153,45 @@ BlobRef(sha256: 'str', size: 'int') -> None
 
 Identify payload bytes by their lowercase SHA-256 digest and exact size.
 
+### `BlobResolver`
+
+```text
+BlobResolver(*args, **kwargs)
+```
+
+Open payload bytes from one explicit storage source.
+
+Returned readers must follow ``BinaryIO`` semantics, including reading
+through end of stream when given a negative size.
+
+#### `BlobResolver.open`
+
+Method.
+
+```text
+BlobResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return a fresh binary reader, or ``None`` when this source has no match.
+
+### `BlobSink`
+
+```text
+BlobSink(*args, **kwargs)
+```
+
+Store one payload in caller-selected external storage.
+
+#### `BlobSink.put`
+
+Method.
+
+```text
+BlobSink.put(self, ref: 'BlobRef', source: 'BinaryIO') -> 'str | None'
+```
+
+Store the bytes and return an optional href for a bundle index.
+
 ### `BlobSpan`
 
 ```text
@@ -7945,6 +8207,182 @@ resource-defined linear coordinate. Structured paths remain ordinary
 relation-instance attributes in the resource schema rather than being
 forced into this linear value.
 
+### `ChainResolver`
+
+```text
+ChainResolver(resolvers: 'Iterable[BlobResolver]') -> 'None'
+```
+
+Try an explicitly ordered collection of resolvers until one answers.
+
+#### `ChainResolver.open`
+
+Method.
+
+```text
+ChainResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return the first available reader without consulting later resolvers.
+
+### `MappingResolver`
+
+```text
+MappingResolver(payloads: 'Mapping[str, bytes]') -> 'None'
+```
+
+Resolve caller-supplied immutable bytes by digest alone.
+
+Declared size and href do not participate in lookup. Wrap returned readers
+in ``VerifiedReader`` when size and content must be checked.
+
+#### `MappingResolver.open`
+
+Method.
+
+```text
+MappingResolver.open(self, ref: 'BlobRef', href: 'str | None') -> 'BinaryIO | None'
+```
+
+Return a new in-memory reader for the digest, independent of its href.
+
+### `VerifiedReader`
+
+```text
+VerifiedReader(source: 'BinaryIO', ref: 'BlobRef') -> 'None'
+```
+
+Hash a binary stream as it is read and verify its declared identity at EOF.
+
+``verified`` becomes true only after an unseeked negative-size read or an
+empty bounded read establishes end of stream with both the expected byte
+count and SHA-256 digest. A bounded read that returns the final payload byte
+therefore needs one subsequent read to establish EOF. The wrapped source
+must follow ``BinaryIO`` semantics, including reading through EOF for a
+negative size. Seeking permanently makes the wrapper unverified, which
+permits random-access span reads without presenting a partial read as an
+integrity check. Closing the wrapper closes its source.
+
+#### `VerifiedReader.verified`
+
+Property.
+
+```text
+VerifiedReader.verified(self) -> 'bool'
+```
+
+Return whether one complete, unseeked read matched size and digest.
+
+#### `VerifiedReader.readable`
+
+Method.
+
+```text
+VerifiedReader.readable(self) -> 'bool'
+```
+
+Return whether the wrapped stream supports reads.
+
+#### `VerifiedReader.writable`
+
+Method.
+
+```text
+VerifiedReader.writable(self) -> 'bool'
+```
+
+Return false because integrity readers never expose writes.
+
+#### `VerifiedReader.seekable`
+
+Method.
+
+```text
+VerifiedReader.seekable(self) -> 'bool'
+```
+
+Return whether the wrapped stream supports random access.
+
+#### `VerifiedReader.tell`
+
+Method.
+
+```text
+VerifiedReader.tell(self) -> 'int'
+```
+
+Return the wrapped stream's current byte position.
+
+#### `VerifiedReader.seek`
+
+Method.
+
+```text
+VerifiedReader.seek(self, offset: 'int', whence: 'int' = 0) -> 'int'
+```
+
+Move the wrapped stream and permanently invalidate full-read verification.
+
+#### `VerifiedReader.read`
+
+Method.
+
+```text
+VerifiedReader.read(self, size: 'int | None' = -1) -> 'bytes'
+```
+
+Read bytes and verify after a negative-size or empty bounded read.
+
+#### `VerifiedReader.read1`
+
+Method.
+
+```text
+VerifiedReader.read1(self, size: 'int' = -1) -> 'bytes'
+```
+
+Read bytes through the same verification path as ``read``.
+
+#### `VerifiedReader.readinto`
+
+Method.
+
+```text
+VerifiedReader.readinto(self, buffer: 'Buffer', /) -> 'int'
+```
+
+Read verified bytes into a writable contiguous buffer.
+
+#### `VerifiedReader.readinto1`
+
+Method.
+
+```text
+VerifiedReader.readinto1(self, buffer: 'Buffer', /) -> 'int'
+```
+
+Read one verified chunk into a writable contiguous buffer.
+
+#### `VerifiedReader.readline`
+
+Method.
+
+```text
+VerifiedReader.readline(self, size: 'int | None' = -1) -> 'bytes'
+```
+
+Read one binary line and verify when its result establishes EOF.
+
+#### `VerifiedReader.close`
+
+Method.
+
+```text
+VerifiedReader.close(self) -> 'None'
+```
+
+Close both the wrapped source and this reader without forcing a read.
+
 ### `declare_blob_vocabulary`
 
 ```text
@@ -7956,6 +8394,14 @@ Declare the fixed blob prefix and attributes on a mutable graph editor.
 The helper appends declarations and returns the same editor for chaining.
 Existing declarations are not silently adopted: the editor's ordinary
 duplicate-declaration refusals keep one explicit declaration event.
+
+### `hash_blob`
+
+```text
+hash_blob(source: 'BinaryIO', *, chunk_size: 'int' = 1048576) -> 'BlobRef'
+```
+
+Hash bytes from the source's current position through end of stream.
 
 ### `tiergraph.build`
 

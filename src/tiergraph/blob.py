@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import re
+from collections.abc import Buffer, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import BinaryIO, Protocol
 
 from tiergraph.core import (
     Attribute,
@@ -103,6 +107,214 @@ class BlobSpan:
             raise ValueError(f"blob span offset {self.offset} is negative")
         if self.length < 0:
             raise ValueError(f"blob span length {self.length} is negative")
+
+
+def hash_blob(source: BinaryIO, *, chunk_size: int = 1 << 20) -> BlobRef:
+    """Hash bytes from the source's current position through end of stream."""
+    if isinstance(chunk_size, bool) or not isinstance(chunk_size, int):
+        raise ValueError(f"blob hash chunk size {chunk_size!r} is not integral")
+    if chunk_size <= 0:
+        raise ValueError(f"blob hash chunk size {chunk_size} is not positive")
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        chunk = source.read(chunk_size)
+        if not isinstance(chunk, bytes):
+            raise TypeError("binary blob source read() must return bytes")
+        if not chunk:
+            return BlobRef(digest.hexdigest(), size)
+        digest.update(chunk)
+        size += len(chunk)
+
+
+class BlobResolver(Protocol):
+    """Open payload bytes from one explicit storage source.
+
+    Returned readers must follow ``BinaryIO`` semantics, including reading
+    through end of stream when given a negative size.
+    """
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        """Return a fresh binary reader, or ``None`` when this source has no match."""
+        ...
+
+
+class MappingResolver:
+    """Resolve caller-supplied immutable bytes by digest alone.
+
+    Declared size and href do not participate in lookup. Wrap returned readers
+    in ``VerifiedReader`` when size and content must be checked.
+    """
+
+    def __init__(self, payloads: Mapping[str, bytes]) -> None:
+        """Copy a digest-to-bytes lookup without copying its payload bytes."""
+        copied: dict[str, bytes] = {}
+        for digest, payload in payloads.items():
+            if _DIGEST.fullmatch(digest) is None:
+                raise ValueError(
+                    "mapping resolver digest must be exactly 64 lowercase "
+                    "hexadecimal characters"
+                )
+            if not isinstance(payload, bytes):
+                raise TypeError("mapping resolver payloads must be bytes")
+            copied[digest] = payload
+        self._payloads = copied
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        """Return a new in-memory reader for the digest, independent of its href."""
+        del href
+        payload = self._payloads.get(ref.sha256)
+        return None if payload is None else io.BytesIO(payload)
+
+
+class ChainResolver:
+    """Try an explicitly ordered collection of resolvers until one answers."""
+
+    def __init__(self, resolvers: Iterable[BlobResolver]) -> None:
+        """Materialize resolver order once so every lookup follows the same order."""
+        self._resolvers = tuple(resolvers)
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        """Return the first available reader without consulting later resolvers."""
+        for resolver in self._resolvers:
+            source = resolver.open(ref, href)
+            if source is not None:
+                return source
+        return None
+
+
+class BlobSink(Protocol):
+    """Store one payload in caller-selected external storage."""
+
+    def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+        """Store the bytes and return an optional href for a bundle index."""
+        ...
+
+
+class VerifiedReader(io.BufferedIOBase):
+    """Hash a binary stream as it is read and verify its declared identity at EOF.
+
+    ``verified`` becomes true only after an unseeked negative-size read or an
+    empty bounded read establishes end of stream with both the expected byte
+    count and SHA-256 digest. A bounded read that returns the final payload byte
+    therefore needs one subsequent read to establish EOF. The wrapped source
+    must follow ``BinaryIO`` semantics, including reading through EOF for a
+    negative size. Seeking permanently makes the wrapper unverified, which
+    permits random-access span reads without presenting a partial read as an
+    integrity check. Closing the wrapper closes its source.
+    """
+
+    def __init__(self, source: BinaryIO, ref: BlobRef) -> None:
+        """Wrap a reader positioned at the start of the declared payload."""
+        super().__init__()
+        self._source = source
+        self._ref = ref
+        self._digest = hashlib.sha256()
+        self._size = 0
+        self._verification_possible = True
+        self._finished = False
+        self._verified = False
+
+    @property
+    def verified(self) -> bool:
+        """Return whether one complete, unseeked read matched size and digest."""
+        return self._verified
+
+    def readable(self) -> bool:
+        """Return whether the wrapped stream supports reads."""
+        return self._source.readable()
+
+    def writable(self) -> bool:
+        """Return false because integrity readers never expose writes."""
+        return False
+
+    def seekable(self) -> bool:
+        """Return whether the wrapped stream supports random access."""
+        return self._source.seekable()
+
+    def tell(self) -> int:
+        """Return the wrapped stream's current byte position."""
+        return self._source.tell()
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        """Move the wrapped stream and permanently invalidate full-read verification."""
+        position = self._source.seek(offset, whence)
+        self._verification_possible = False
+        self._verified = False
+        return position
+
+    def read(self, size: int | None = -1) -> bytes:
+        """Read bytes and verify after a negative-size or empty bounded read."""
+        requested = -1 if size is None else size
+        data = self._binary(self._source.read(requested))
+        self._accept(data, eof=requested < 0 or (requested != 0 and not data))
+        return data
+
+    def read1(self, size: int = -1) -> bytes:
+        """Read bytes through the same verification path as ``read``."""
+        return self.read(size)
+
+    def readinto(self, buffer: Buffer, /) -> int:
+        """Read verified bytes into a writable contiguous buffer."""
+        view = memoryview(buffer)
+        if view.readonly:
+            raise TypeError("readinto() argument must be a writable buffer")
+        byte_view = view.cast("B")
+        data = self.read(len(byte_view))
+        byte_view[: len(data)] = data
+        return len(data)
+
+    def readinto1(self, buffer: Buffer, /) -> int:
+        """Read one verified chunk into a writable contiguous buffer."""
+        return self.readinto(buffer)
+
+    def readline(self, size: int | None = -1) -> bytes:
+        """Read one binary line and verify when its result establishes EOF."""
+        requested = -1 if size is None else size
+        data = self._binary(self._source.readline(requested))
+        eof = (requested != 0 and not data) or (
+            requested < 0 and not data.endswith(b"\n")
+        )
+        self._accept(data, eof=eof)
+        return data
+
+    def close(self) -> None:
+        """Close both the wrapped source and this reader without forcing a read."""
+        if not self.closed:
+            try:
+                self._source.close()
+            finally:
+                super().close()
+
+    @staticmethod
+    def _binary(data: object) -> bytes:
+        """Require the binary-reader result promised by the public protocol."""
+        if not isinstance(data, bytes):
+            raise TypeError("binary blob source read must return bytes")
+        return data
+
+    def _accept(self, data: bytes, *, eof: bool) -> None:
+        """Accumulate sequential bytes and finish verification at known EOF."""
+        if not self._verification_possible or self._finished:
+            return
+        self._digest.update(data)
+        self._size += len(data)
+        if eof:
+            self._finish()
+
+    def _finish(self) -> None:
+        """Compare the accumulated stream identity exactly once."""
+        self._finished = True
+        if self._size != self._ref.size:
+            raise ValueError(
+                f"blob size mismatch: expected {self._ref.size}, read {self._size}"
+            )
+        actual = self._digest.hexdigest()
+        if actual != self._ref.sha256:
+            raise ValueError(
+                f"blob SHA-256 mismatch: expected {self._ref.sha256}, read {actual}"
+            )
+        self._verified = True
 
 
 def _values(attributes: tuple[Attribute, ...]) -> dict[QualifiedName, AttributeValue]:
@@ -398,6 +610,12 @@ __all__ = [
     "BLOB_NAMESPACE",
     "BlobProfile",
     "BlobRef",
+    "BlobResolver",
+    "BlobSink",
     "BlobSpan",
+    "ChainResolver",
+    "MappingResolver",
+    "VerifiedReader",
     "declare_blob_vocabulary",
+    "hash_blob",
 ]

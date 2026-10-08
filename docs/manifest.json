@@ -14,7 +14,13 @@
       "BlobRef",
       "BlobSpan",
       "BlobProfile",
-      "declare_blob_vocabulary"
+      "BlobResolver",
+      "MappingResolver",
+      "ChainResolver",
+      "BlobSink",
+      "VerifiedReader",
+      "declare_blob_vocabulary",
+      "hash_blob"
     ],
     "clock": [
       "ClockProfile",
@@ -593,8 +599,14 @@
       "BLOB_NAMESPACE",
       "BlobProfile",
       "BlobRef",
+      "BlobResolver",
+      "BlobSink",
       "BlobSpan",
-      "declare_blob_vocabulary"
+      "ChainResolver",
+      "MappingResolver",
+      "VerifiedReader",
+      "declare_blob_vocabulary",
+      "hash_blob"
     ],
     "tiergraph.build": [
       "Document",
