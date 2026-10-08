@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar, cast
 
+from tiergraph.blob import BLOB_NAMESPACE, BlobProfile, declare_blob_vocabulary
 from tiergraph.core import (
     AttributeDeclaration,
     AttributeDomain,
@@ -396,6 +397,77 @@ _ROOTS = _witness_name("roots")
 _DEPENDS = _witness_name("depends")
 _ALTERNATIVES = _witness_name("alternatives")
 _DEFAULT = _witness_name("default")
+
+
+def _blob_graph(digest: str) -> Graph:
+    """Build one fixed-vocabulary blob witness with a chosen digest."""
+    blob_tier = _witness_name("blobs")
+    blob_type = _witness_name("blob-type")
+    editor = Graph((), (), ()).edit()
+    declare_blob_vocabulary(editor)
+    editor.declare(NamespaceDeclaration("w", _WITNESS_NS))
+    editor.declare(TierDeclaration(blob_tier, "Witness blobs"))
+    editor.declare(
+        SimpleRelationDeclaration(_witness_name("blob-members"), blob_tier, blob_type)
+    )
+    editor.insert_item(
+        blob_tier,
+        0,
+        Item(
+            "witness-blob",
+            (
+                AttributeValue(
+                    QualifiedName(BLOB_NAMESPACE, "sha256"), XsdType.STRING, digest
+                ),
+                AttributeValue(
+                    QualifiedName(BLOB_NAMESPACE, "size"), XsdType.INTEGER, "1"
+                ),
+                AttributeValue(
+                    QualifiedName(BLOB_NAMESPACE, "media-type"),
+                    XsdType.STRING,
+                    "application/octet-stream",
+                ),
+                AttributeValue(
+                    QualifiedName(BLOB_NAMESPACE, "schema"),
+                    XsdType.STRING,
+                    "urn:tiergraph:profile-witness:blob",
+                ),
+            ),
+        ),
+    )
+    return editor.freeze()
+
+
+@PROFILES.register
+class _BlobVocabulary(GraphProfile):
+    """Validate the package-owned fixed blob vocabulary without opening bytes."""
+
+    name = "tiergraph.blob"
+    required_roles = ("vocabulary",)
+    decides = (
+        "the fixed blob namespace and declarations have their required shapes",
+        "every blob descriptor has canonical identity, type, schema, and durable id",
+        "attachments are ordered durable item-to-item relations with valid spans",
+    )
+
+    @classmethod
+    def check(cls, graph: Graph, roles: RoleBinding) -> None:
+        """Construct the vocabulary reader, which validates all blob content."""
+        if roles["vocabulary"] != BLOB_NAMESPACE:
+            raise ValueError(
+                f"role 'vocabulary' must bind the fixed namespace {BLOB_NAMESPACE!r}"
+            )
+        BlobProfile(graph)
+
+    @classmethod
+    def satisfaction_witness(cls) -> tuple[Graph, RoleBinding]:
+        """Return one complete descriptor using the fixed declarations."""
+        return _blob_graph("00" * 32), {"vocabulary": BLOB_NAMESPACE}
+
+    @classmethod
+    def refusal_witness(cls) -> tuple[Graph, RoleBinding]:
+        """Return the same descriptor with a noncanonical content digest."""
+        return _blob_graph("not-a-digest"), {"vocabulary": BLOB_NAMESPACE}
 
 
 def _node_side(

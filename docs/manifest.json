@@ -9,6 +9,13 @@
       "OrderedDelivery",
       "YieldNormalization"
     ],
+    "blobs": [
+      "BLOB_NAMESPACE",
+      "BlobRef",
+      "BlobSpan",
+      "BlobProfile",
+      "declare_blob_vocabulary"
+    ],
     "clock": [
       "ClockProfile",
       "ClockEditor",
@@ -539,6 +546,7 @@
     "docs/reference/cli.md"
   ],
   "constant_descriptions": {
+    "BLOB_NAMESPACE": "Namespace for the fixed external-resource vocabulary.",
     "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
     "MACHINE_VERSION": "Version tag for serialized construction programs.",
     "PATCH_VERSION": "Version tag for serialized graph patches.",
@@ -581,6 +589,13 @@
     "docs/reference/cli.md"
   ],
   "secondary": {
+    "tiergraph.blob": [
+      "BLOB_NAMESPACE",
+      "BlobProfile",
+      "BlobRef",
+      "BlobSpan",
+      "declare_blob_vocabulary"
+    ],
     "tiergraph.build": [
       "Document",
       "document",

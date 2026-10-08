@@ -312,7 +312,8 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
                     "",
                 )
             )
-        parts.append("\n\n".join(_entry(module, name, {}) for name in names))
+        parts.append("\n\n".join(_entry(module, name, descriptions) for name in names))
+        parts.append("")
     parts.extend(("", "## Companion package", ""))
     parts.append(
         "\n\n".join(
