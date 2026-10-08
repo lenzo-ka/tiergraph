@@ -75,10 +75,7 @@ The complete runnable example keeps the displayed phone labels separate from
 their durable ids and prints `['K', 'AE', 'T']`; see
 [`examples/caption_alignment.py`](examples/caption_alignment.py).
 
-The model is informed by Sue Hertz's Delta representation and the Heterogeneous
-Relation Graphs (HRGs) of the Festival Speech Synthesis System. tiergraph keeps
-their emphasis on explicit tiered structure while defining a typed, immutable
-model and a versioned interchange format.
+The model is informed by Sue Hertz's Delta representation and the Heterogeneous Relation Graphs (HRGs) of the Festival Speech Synthesis System. tiergraph's interchange format also owes something in spirit to Apple's QuickTime, a general time-based media format, where tracks of any media type share one timeline, each with its own timescale and related by references, and each track is typed by its media handler and sample description, so the container stays general while every resource brings its own schema. tiergraph keeps their emphasis on explicit tiered structure while defining a typed, immutable model and a versioned interchange format.
 
 ## What you can do with it
 
