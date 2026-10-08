@@ -3235,6 +3235,16 @@ FoldCost.to_data(self) -> 'dict[str, int]'
 
 Return a strict-JSON cost account.
 
+#### `FoldCost.from_data`
+
+Class method.
+
+```text
+FoldCost.from_data(cls, data: 'object') -> 'FoldCost'
+```
+
+Decode and verify a strict serialized cost account.
+
 ### `FoldDeclaration`
 
 ```text
@@ -3612,6 +3622,26 @@ through ``i``, which is the zero at a dead end and at an unreachable item.
 ``total`` is the fold value over the roots, and ``cost`` accounts for both
 passes.
 
+#### `PathMarginals.to_data`
+
+Method.
+
+```text
+PathMarginals.to_data(self) -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data using the plan's carrier codec.
+
+#### `PathMarginals.from_data`
+
+Class method.
+
+```text
+PathMarginals.from_data(cls, plan: 'PathPlan[Value]', data: 'object') -> 'PathMarginals[Value]'
+```
+
+Decode strict serialized marginals against their prepared path plan.
+
 #### `PathMarginals.posteriors`
 
 Method.
@@ -3723,6 +3753,26 @@ produced ``values``, so the result says which post-pass above the algebra
 it applied. ``zero_mass`` is
 true when the total was the algebra's zero; ``values`` is then ``None``,
 because there is no distribution to report and none is fabricated.
+
+#### `PathPosteriors.to_data`
+
+Method.
+
+```text
+PathPosteriors.to_data(self) -> 'dict[str, object]'
+```
+
+Return deterministic strict-JSON data with lossless double values.
+
+#### `PathPosteriors.from_data`
+
+Class method.
+
+```text
+PathPosteriors.from_data(cls, data: 'object') -> 'PathPosteriors'
+```
+
+Decode deterministic strict-JSON posterior data.
 
 ### `TiePolicy`
 
@@ -7691,16 +7741,13 @@ Choose the declared descending direction or its computed inverse view.
 WalkResult(nodes: 'NodeSet', truncated: 'bool', cap: 'int | None') -> None
 ```
 
-Return reached nodes and a one-sided report of the step cap.
+Return reached nodes and report whether the step cap dropped a result.
 
-``truncated`` is ``False`` when the last step found nothing the walk had
-not already reached, which is also what a step that exhausts the frontier
-and the cap at once reports: the cap being reached is not what this field
-says. A ``False`` report is a guarantee that ``nodes`` is the whole
-reachable set less the source selection, which :meth:`Walk.evaluate`
-excludes from what it returns. ``True`` says only that the cap ended a step
-that was still finding nodes, which a walk that had already reached
-everything also reports; separating the two costs another step.
+``truncated`` is true only when one lookahead step finds a node that is not
+already in the deduplicated result or source selection. Reaching the cap is
+not itself truncation. A false report therefore guarantees that ``nodes``
+is the whole reachable set less the source selection, which
+:meth:`Walk.evaluate` excludes from what it returns.
 
 #### `WalkResult.to_data`
 

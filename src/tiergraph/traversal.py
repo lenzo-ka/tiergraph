@@ -67,16 +67,13 @@ def relation_image(
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
-    """Return reached nodes and a one-sided report of the step cap.
+    """Return reached nodes and report whether the step cap dropped a result.
 
-    ``truncated`` is ``False`` when the last step found nothing the walk had
-    not already reached, which is also what a step that exhausts the frontier
-    and the cap at once reports: the cap being reached is not what this field
-    says. A ``False`` report is a guarantee that ``nodes`` is the whole
-    reachable set less the source selection, which :meth:`Walk.evaluate`
-    excludes from what it returns. ``True`` says only that the cap ended a step
-    that was still finding nodes, which a walk that had already reached
-    everything also reports; separating the two costs another step.
+    ``truncated`` is true only when one lookahead step finds a node that is not
+    already in the deduplicated result or source selection. Reaching the cap is
+    not itself truncation. A false report therefore guarantees that ``nodes``
+    is the whole reachable set less the source selection, which
+    :meth:`Walk.evaluate` excludes from what it returns.
     """
 
     nodes: NodeSet
@@ -698,11 +695,25 @@ class Walk:
             frontier = following - reached - self.source
             reached = reached | frontier
             steps += 1
-        return WalkResult(reached, bool(frontier.nodes), self.cap)
+        truncated = False
+        if frontier.nodes and self.cap is not None and steps == self.cap:
+            excluded = set(reached.nodes) | set(self.source.nodes)
+            truncated = self._step_has_fresh(frontier, excluded)
+        return WalkResult(reached, truncated, self.cap)
 
     def _step(self, source: NodeSet) -> NodeSet:
         """Follow one step of the declared shape, forward or as an inverse fiber."""
         return relation_image(source, self.relation, self.direction)
+
+    def _step_has_fresh(self, source: NodeSet, excluded: set[Node]) -> bool:
+        """Report whether one step finds a node outside an existing result."""
+        if isinstance(self._declaration, PolyadicRelationDeclaration):
+            return _polyadic_relation_has_fresh(
+                source, self.relation, self.direction, excluded
+            )
+        return _bipartite_relation_has_fresh(
+            source, self.relation, self.direction, excluded
+        )
 
 
 def _polyadic_relation_image(
@@ -728,6 +739,33 @@ def _polyadic_relation_image(
     return NodeSet(graph, tuple(targets))
 
 
+def _polyadic_relation_has_fresh(
+    source: NodeSet,
+    relation: QualifiedName,
+    direction: WalkDirection,
+    excluded: set[Node],
+) -> bool:
+    """Return early when a polyadic image contains a fresh node."""
+    graph = source.graph
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(graph.polyadic_relations))
+    admitted = set(source.nodes)
+    for instance in graph.polyadic_relations:
+        if instance.declaration != relation:
+            continue
+        near, far = (
+            (instance.sources, instance.targets)
+            if direction is WalkDirection.FORWARD
+            else (instance.targets, instance.sources)
+        )
+        if any(_endpoint_node(graph, endpoint) in admitted for endpoint in near):
+            for endpoint in far:
+                if _endpoint_node(graph, endpoint) not in excluded:
+                    return True
+    return False
+
+
 def _bipartite_relation_image(
     source: NodeSet, relation: QualifiedName, direction: WalkDirection
 ) -> NodeSet:
@@ -749,6 +787,31 @@ def _bipartite_relation_image(
         if origin in admitted:
             targets.append(target)
     return NodeSet(graph, tuple(targets))
+
+
+def _bipartite_relation_has_fresh(
+    source: NodeSet,
+    relation: QualifiedName,
+    direction: WalkDirection,
+    excluded: set[Node],
+) -> bool:
+    """Return early when a bipartite image contains a fresh node."""
+    graph = source.graph
+    meter = _active_meter()
+    if meter is not None:
+        meter.charge(len(graph.relations))
+    admitted = set(source.nodes)
+    for instance in graph.relations:
+        if instance.declaration != relation:
+            continue
+        left = _endpoint_node(graph, instance.left)
+        right = _endpoint_node(graph, instance.right)
+        origin, target = (
+            (left, right) if direction is WalkDirection.FORWARD else (right, left)
+        )
+        if origin in admitted and target not in excluded:
+            return True
+    return False
 
 
 def _endpoint_node(graph: Graph, reference: RelationEndpointRef) -> Node:

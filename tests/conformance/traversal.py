@@ -157,11 +157,14 @@ class TraversalLawSuite:
         assert upward.truncated is True
 
     def check_cyclic_cap_is_visible(self) -> None:
-        """A cyclic walk stopping on its cap discloses both facts in public data."""
+        """A capped walk reports only fresh reachable nodes it had to omit."""
         graph = self.graph(acyclic=False)
+        truncated = self.walk(self.selection(graph, 0), WalkDirection.FORWARD, 1)
+        assert truncated.nodes.nodes == self.selection(graph, 1, 2).nodes
+        assert truncated.truncated is True
         result = self.walk(self.selection(graph, 0), WalkDirection.FORWARD, 2)
         assert result.nodes.nodes == self.selection(graph, 1, 2, 3).nodes
-        assert result.truncated is True
+        assert result.truncated is False
         assert result.cap == 2
         encoded = json.dumps(
             result.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False

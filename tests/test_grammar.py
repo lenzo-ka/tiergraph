@@ -1523,11 +1523,16 @@ def test_experimental_generation_result_decoder_refusals() -> None:
 
     bad_cost = result.to_data()
     cast(dict[str, object], bad_cost["cost"])["document_size"] = "1"
-    with pytest.raises(ValueError, match="integers"):
+    with pytest.raises(
+        ValueError, match="generation result.cost fields must be integers"
+    ):
         GenerationResult.from_data(bad_cost)
     bad_account = result.to_data()
     cast(dict[str, object], bad_account["cost"])["carrier_work"] = -1
-    with pytest.raises(ValueError, match="measured account"):
+    with pytest.raises(
+        ValueError,
+        match="generation result.cost.carrier_work does not match the measured account",
+    ):
         GenerationResult.from_data(bad_account)
 
 

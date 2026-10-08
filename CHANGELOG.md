@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
+- Added a tested `DotPresentation` guide example.
+- Added a hand-authored exact `dumps_spans()` DOT golden.
 - Added an editing guide covering primitive transactions, refusal and
   displacement, journals and provenance, clock-aware editing, patches and
   differences, subtree and bulk operations, reconciliation, distance, explicit
@@ -127,6 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Installed Graphviz in CI so DOT parser checks run end to end.
+- Made capped walks report truncation only when a fresh node is omitted.
 - Kept provenance from attaching facts to bare item, boundary, or relation
   coordinates that later structural edits can move or remove. Provenance now
   stamps only the moved, inserted, replaced, or otherwise directly acted-on

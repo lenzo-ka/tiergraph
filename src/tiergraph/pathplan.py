@@ -58,6 +58,13 @@ _NEGATIVE = -math.inf
 _POSITIVE = math.inf
 
 
+def _serialized_object(data: object, path: str, fields: set[str]) -> dict[str, object]:
+    """Decode one exact serialized object."""
+    if not isinstance(data, dict) or set(data) != fields:
+        raise ValueError(f"{path} fields must be exactly {sorted(fields)!r}")
+    return cast(dict[str, object], data)
+
+
 @dataclass(frozen=True, slots=True)
 class AlgebraOrder[Value]:
     """Compare carrier values by the algebra's own selective addition.
@@ -102,6 +109,64 @@ class PathPosteriors:
     zero_mass: bool
     values: tuple[float, ...] | None
 
+    def to_data(self) -> dict[str, object]:
+        """Return deterministic strict-JSON data with lossless double values."""
+        if not isinstance(self.readout, str):
+            raise ValueError("path posteriors.readout must be a string")
+        if type(self.zero_mass) is not bool:
+            raise ValueError("path posteriors.zero_mass must be a boolean")
+        if self.values is not None:
+            if not isinstance(self.values, tuple) or any(
+                type(value) is not float for value in self.values
+            ):
+                raise ValueError(
+                    "path posteriors.values must be a tuple of IEEE doubles or null"
+                )
+            if any(not math.isfinite(value) for value in self.values):
+                raise ValueError("path posterior values must be finite IEEE doubles")
+        if self.zero_mass != (self.values is None):
+            raise ValueError("path posteriors zero_mass and values disagree")
+        return {
+            "readout": self.readout,
+            "zero_mass": self.zero_mass,
+            "values": (
+                None if self.values is None else [value.hex() for value in self.values]
+            ),
+        }
+
+    @classmethod
+    def from_data(cls, data: object) -> PathPosteriors:
+        """Decode deterministic strict-JSON posterior data."""
+        obj = _serialized_object(
+            data, "path posteriors", {"readout", "zero_mass", "values"}
+        )
+        readout = obj["readout"]
+        zero_mass = obj["zero_mass"]
+        encoded = obj["values"]
+        if not isinstance(readout, str):
+            raise ValueError("path posteriors.readout must be a string")
+        if type(zero_mass) is not bool:
+            raise ValueError("path posteriors.zero_mass must be a boolean")
+        values: tuple[float, ...] | None
+        if encoded is None:
+            values = None
+        elif isinstance(encoded, list):
+            try:
+                values = tuple(float.fromhex(cast(str, value)) for value in encoded)
+            except (OverflowError, TypeError, ValueError):
+                raise ValueError(
+                    "path posteriors.values must be an array of hexadecimal doubles or null"
+                ) from None
+            if any(not math.isfinite(value) for value in values):
+                raise ValueError("path posterior values must be finite IEEE doubles")
+        else:
+            raise ValueError(
+                "path posteriors.values must be an array of hexadecimal doubles or null"
+            )
+        if zero_mass != (values is None):
+            raise ValueError("path posteriors zero_mass and values disagree")
+        return cls(readout, zero_mass, values)
+
 
 @dataclass(frozen=True, slots=True)
 class PathMarginals[Value]:
@@ -122,6 +187,68 @@ class PathMarginals[Value]:
     outside: tuple[Value, ...]
     marginals: tuple[Value, ...]
     cost: FoldCost
+
+    def to_data(self) -> dict[str, object]:
+        """Return deterministic strict-JSON data using the plan's carrier codec."""
+        self._verify_plan_binding()
+        semiring = self.plan.declaration.semiring
+        return {
+            "total": semiring.encode(self.total),
+            "inside": [semiring.encode(value) for value in self.inside],
+            "outside": [semiring.encode(value) for value in self.outside],
+            "marginals": [semiring.encode(value) for value in self.marginals],
+            "cost": self.cost.to_data(),
+        }
+
+    @classmethod
+    def from_data(cls, plan: PathPlan[Value], data: object) -> PathMarginals[Value]:
+        """Decode strict serialized marginals against their prepared path plan."""
+        obj = _serialized_object(
+            data,
+            "path marginals",
+            {"total", "inside", "outside", "marginals", "cost"},
+        )
+        semiring = plan.declaration.semiring
+
+        def _values(name: str) -> tuple[Value, ...]:
+            encoded = obj[name]
+            if not isinstance(encoded, list):
+                raise ValueError(f"path marginals.{name} must be an array")
+            if len(encoded) != len(plan.items):
+                raise ValueError(
+                    f"path marginals.{name} has {len(encoded)} values for "
+                    f"{len(plan.items)} plan items"
+                )
+            return tuple(semiring.decode(value) for value in encoded)
+
+        result = cls(
+            plan,
+            semiring.decode(obj["total"]),
+            _values("inside"),
+            _values("outside"),
+            _values("marginals"),
+            FoldCost.from_data(obj["cost"]),
+        )
+        result._verify_plan_binding()
+        return result
+
+    def _verify_plan_binding(self) -> None:
+        """Refuse vectors or a cost account that do not belong to this plan."""
+        expected_size = len(self.plan.items)
+        for name in ("inside", "outside", "marginals"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple):
+                raise ValueError(f"path marginals.{name} must be a tuple")
+            if len(values) != expected_size:
+                raise ValueError(
+                    f"path marginals.{name} has {len(values)} values for "
+                    f"{expected_size} plan items"
+                )
+        expected_cost = self.plan._marginal_cost()
+        if self.cost != expected_cost:
+            raise ValueError(
+                "path marginals.cost does not match the prepared plan account"
+            )
 
     def posteriors(self, *, readout: str) -> PathPosteriors:
         """Read every marginal as a probability of the total through a declared readout.
@@ -406,17 +533,22 @@ class PathPlan[Value]:
             tuple(inside),
             tuple(outside),
             tuple(through),
-            self._cost(
-                compiled.inside_additions + compiled.outside_additions,
-                compiled.inside_multiplications + compiled.outside_multiplications,
-                0,
-                0,
-            ),
+            self._marginal_cost(),
         )
         self._charge_value_sizes(
             (result.total, *result.inside, *result.outside, *result.marginals)
         )
         return result
+
+    def _marginal_cost(self) -> FoldCost:
+        """Return the topology-derived account for an inside-outside pass."""
+        compiled = self._compiled
+        return self._cost(
+            compiled.inside_additions + compiled.outside_additions,
+            compiled.inside_multiplications + compiled.outside_multiplications,
+            0,
+            0,
+        )
 
     def _vector(self, values: Sequence[Value] | None) -> tuple[Value, ...]:
         """Bind a value vector to the plan order, or take the declaration's."""
