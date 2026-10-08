@@ -94,6 +94,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projections, and the `tiergraph distance` command. Value substitution and
   boundary displacement accept caller callbacks, while numeric cost-table files
   remain declarative.
+- Added `commit_path()` for collapsing a prepared finite path lattice while
+  retaining the chosen alternatives' containment substructure, source values,
+  and provenance facts. Added exact `retime()` clock-boundary rebinding and
+  `contain_by_time()` reconstruction for binary and ordered polyadic
+  parent-child relations. Optional journals record all three derived edits as
+  expanded primitives, so patches retain no request-scoped lattice or alignment
+  object. Timing comparisons use exact integral clock positions; tolerance
+  remains a distance concern.
 
 ### Changed
 
