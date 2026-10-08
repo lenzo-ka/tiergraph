@@ -121,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bring documentation current with the editing API and path-result serialization.
 - Item and relation removal now refuses locally, before changing an editor, when
   a relation endpoint, durable boundary anchor, stored boundary value, seal, or
   live layer fact still depends on the removed content. Some item removals that
