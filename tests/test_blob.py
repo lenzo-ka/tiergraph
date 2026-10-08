@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 from dataclasses import replace
+from typing import BinaryIO, cast
 
 import pytest
 
@@ -15,8 +18,11 @@ from tiergraph import (
     BipartiteRelationDeclaration,
     BlobProfile,
     BlobRef,
+    BlobResolver,
+    BlobSink,
     BlobSpan,
     BoundarySide,
+    ChainResolver,
     DurableBoundaryRef,
     DurableItemRef,
     EquivalenceView,
@@ -28,6 +34,7 @@ from tiergraph import (
     JsonAttributeValue,
     LayerFact,
     LayerName,
+    MappingResolver,
     NamespaceDeclaration,
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
@@ -38,6 +45,7 @@ from tiergraph import (
     RelationSideDeclaration,
     SimpleRelationDeclaration,
     TierDeclaration,
+    VerifiedReader,
     XsdType,
     apply_patch,
     declare_blob_vocabulary,
@@ -45,6 +53,7 @@ from tiergraph import (
     dumps,
     fingerprint,
     graph_to_program,
+    hash_blob,
     loads,
 )
 from tiergraph.machine import DeltaOpcode
@@ -701,3 +710,202 @@ def test_blobless_graph_unchanged_bytes_and_fingerprints() -> None:
             QualifiedName(NS, "bytes"),
             b"not graph data",  # type: ignore[arg-type]
         )
+
+
+class _ObjectReader(io.BytesIO):
+    def read(self, size: int | None = -1) -> bytes:
+        del size
+        return cast(bytes, "not bytes")
+
+
+class _RecordingResolver:
+    def __init__(
+        self,
+        label: str,
+        calls: list[tuple[str, str | None]],
+        payload: bytes | None,
+    ) -> None:
+        self.label = label
+        self.calls = calls
+        self.payload = payload
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        del ref
+        self.calls.append((self.label, href))
+        return None if self.payload is None else io.BytesIO(self.payload)
+
+
+class _MemorySink:
+    def __init__(self) -> None:
+        self.payloads: dict[str, bytes] = {}
+
+    def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+        payload = source.read()
+        self.payloads[ref.sha256] = payload
+        return f"objects/{ref.sha256}"
+
+
+def test_hash_blob_streams_from_current_position_with_bounded_reads() -> None:
+    """Hashing uses canonical SHA-256 identity without rewinding or whole reads."""
+    source = io.BytesIO(b"prefixpayload")
+    source.seek(6)
+    reference = hash_blob(source, chunk_size=3)
+    assert reference == BlobRef(hashlib.sha256(b"payload").hexdigest(), 7)
+    assert source.tell() == len(b"prefixpayload")
+
+    for chunk_size in (0, -1):
+        with pytest.raises(ValueError, match="not positive"):
+            hash_blob(io.BytesIO(), chunk_size=chunk_size)
+    with pytest.raises(ValueError, match="not integral"):
+        hash_blob(io.BytesIO(), chunk_size=True)
+    with pytest.raises(TypeError, match="must return bytes"):
+        hash_blob(_ObjectReader())
+
+
+def test_mapping_resolver_uses_digest_and_returns_fresh_readers() -> None:
+    """Caller-held payloads resolve by content digest rather than href or size."""
+    payload = b"caller-held payload"
+    reference = hash_blob(io.BytesIO(payload))
+    resolver: BlobResolver = MappingResolver({reference.sha256: payload})
+    first = resolver.open(reference, "ignored/location")
+    second = resolver.open(BlobRef(reference.sha256, reference.size + 1), None)
+    assert first is not None
+    assert second is not None
+    assert first is not second
+    assert first.read() == payload
+    assert second.read() == payload
+    assert resolver.open(BlobRef("00" * 32, 0), None) is None
+
+    with pytest.raises(ValueError, match="64 lowercase"):
+        MappingResolver({"BAD": b"payload"})
+    with pytest.raises(TypeError, match="must be bytes"):
+        MappingResolver(cast(dict[str, bytes], {reference.sha256: bytearray()}))
+
+
+def test_chain_resolver_preserves_order_and_stops_at_first_answer() -> None:
+    """Resolution order is declared order and integrity failure has no fallback."""
+    payload = b"right payload"
+    reference = hash_blob(io.BytesIO(payload))
+    calls: list[tuple[str, str | None]] = []
+    chain = ChainResolver(
+        iter(
+            (
+                _RecordingResolver("missing", calls, None),
+                _RecordingResolver("first-answer", calls, b"wrong payload"),
+                _RecordingResolver("not-consulted", calls, payload),
+            )
+        )
+    )
+    source = chain.open(reference, "relative/object")
+    assert source is not None
+    reader = VerifiedReader(source, reference)
+    with pytest.raises(ValueError, match="mismatch"):
+        reader.read()
+    assert calls == [
+        ("missing", "relative/object"),
+        ("first-answer", "relative/object"),
+    ]
+    assert ChainResolver(()).open(reference, None) is None
+
+
+def test_blob_sink_protocol_accepts_a_third_party_store() -> None:
+    """Storage remains structural and caller-defined rather than directory-bound."""
+    payload = b"stored payload"
+    reference = hash_blob(io.BytesIO(payload))
+    memory_sink = _MemorySink()
+    sink: BlobSink = memory_sink
+    href = sink.put(reference, io.BytesIO(payload))
+    assert href == f"objects/{reference.sha256}"
+    assert memory_sink.payloads == {reference.sha256: payload}
+
+
+def test_verified_reader_marks_only_a_complete_matching_read() -> None:
+    """Sequential EOF verifies once, while bounded partial reads remain untrusted."""
+    payload = b"abcdef"
+    reference = hash_blob(io.BytesIO(payload))
+    source = io.BytesIO(payload)
+    reader = VerifiedReader(source, reference)
+    assert reader.readable()
+    assert reader.seekable()
+    assert not reader.writable()
+    assert reader.tell() == 0
+    assert reader.read(0) == b""
+    assert not reader.verified
+    assert reader.read(3) == b"abc"
+    assert reader.tell() == 3
+    assert not reader.verified
+    assert reader.read() == b"def"
+    assert reader.verified
+    assert reader.read() == b""
+    assert reader.verified
+    reader.close()
+    assert reader.closed
+    assert source.closed
+    reader.close()
+
+    exact_reader = VerifiedReader(io.BytesIO(payload), reference)
+    assert exact_reader.read(len(payload)) == payload
+    assert not exact_reader.verified
+    assert exact_reader.read(1) == b""
+    assert exact_reader.verified
+
+
+def test_verified_reader_supports_binary_reader_methods() -> None:
+    """Chunk, buffer, line, and iterator reads all pass through verification."""
+    payload = b"a\nb"
+    reference = hash_blob(io.BytesIO(payload))
+    line_reader = VerifiedReader(io.BytesIO(payload), reference)
+    assert line_reader.readline(0) == b""
+    assert not line_reader.verified
+    assert line_reader.readline() == b"a\n"
+    assert not line_reader.verified
+    assert line_reader.readline() == b"b"
+    assert line_reader.verified
+
+    chunk_reader = VerifiedReader(io.BytesIO(payload), reference)
+    assert chunk_reader.read1(1) == b"a"
+    buffer = bytearray(2)
+    assert chunk_reader.readinto(buffer) == 2
+    assert bytes(buffer) == b"\nb"
+    assert not chunk_reader.verified
+    assert chunk_reader.readinto1(bytearray(1)) == 0
+    assert chunk_reader.verified
+    with pytest.raises(TypeError, match="writable buffer"):
+        VerifiedReader(io.BytesIO(payload), reference).readinto(b"abc")
+
+    iter_reader = VerifiedReader(io.BytesIO(payload), reference)
+    assert list(iter_reader) == [b"a\n", b"b"]
+    assert iter_reader.verified
+
+
+def test_verified_reader_refuses_wrong_size_digest_and_binary_shape() -> None:
+    """Truncation, extra bytes, content changes, and text reads fail closed."""
+    payload = b"payload"
+    reference = hash_blob(io.BytesIO(payload))
+    with pytest.raises(ValueError, match="expected 8, read 7"):
+        VerifiedReader(
+            io.BytesIO(payload), BlobRef(reference.sha256, reference.size + 1)
+        ).read()
+    with pytest.raises(ValueError, match="expected 6, read 7"):
+        VerifiedReader(
+            io.BytesIO(payload), BlobRef(reference.sha256, reference.size - 1)
+        ).read()
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        VerifiedReader(io.BytesIO(b"payloae"), reference).read()
+    with pytest.raises(TypeError, match="must return bytes"):
+        VerifiedReader(_ObjectReader(), reference).read()
+
+
+def test_partial_or_seeked_verified_reader_stays_unverified() -> None:
+    """Closing or seeking a partial stream never turns a span read into trust."""
+    payload = b"payload"
+    reference = hash_blob(io.BytesIO(payload))
+    partial = VerifiedReader(io.BytesIO(payload), reference)
+    assert partial.read(2) == b"pa"
+    partial.close()
+    assert not partial.verified
+
+    seeked = VerifiedReader(io.BytesIO(payload), reference)
+    assert seeked.seek(2) == 2
+    assert seeked.read() == b"yload"
+    assert not seeked.verified
