@@ -26,6 +26,9 @@
       "declare_blob_vocabulary",
       "hash_blob",
       "open_bundle",
+      "write_bundle",
+      "relink",
+      "embed_links",
       "bundle_json_schema"
     ],
     "clock": [
@@ -618,8 +621,11 @@
       "VerifiedReader",
       "bundle_json_schema",
       "declare_blob_vocabulary",
+      "embed_links",
       "hash_blob",
-      "open_bundle"
+      "open_bundle",
+      "relink",
+      "write_bundle"
     ],
     "tiergraph.build": [
       "Document",

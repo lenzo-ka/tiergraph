@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
-from collections.abc import Buffer, Iterable, Mapping
+from collections.abc import Buffer, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, BinaryIO, Literal, Protocol, cast
@@ -27,7 +27,7 @@ from tiergraph.core import (
     RelationInstanceRef,
     XsdType,
 )
-from tiergraph.wire import MAX_DOCUMENT_BYTES, loads
+from tiergraph.wire import MAX_DOCUMENT_BYTES, dump_bytes, loads
 
 BLOB_NAMESPACE = "urn:tiergraph:blob"
 """Namespace for the fixed external-resource vocabulary."""
@@ -54,6 +54,9 @@ _UNIX_SYSTEM = 3
 _ZIP_VERSION = 20
 _ZIP64_VERSION = 45
 _EXTRA_HEADER_SIZE = 4
+_LOCAL_HEADER_SIZE = 30
+_CENTRAL_HEADER_SIZE = 46
+_ZIP64_VALUE_SIZE = 8
 _UINT16_MAX = (1 << 16) - 1
 _UINT32_MAX = (1 << 32) - 1
 _ZIP64_EXTRA = 0x0001
@@ -214,7 +217,13 @@ class ChainResolver:
 
 
 class BlobSink(Protocol):
-    """Store one payload in caller-selected external storage."""
+    """Store one payload in caller-selected external storage.
+
+    A sink may close ``source`` after consuming and verifying it completely.
+    External writes remain the sink's responsibility if a later sink call or
+    bundle publication fails, so implementations should be transactional or
+    idempotent when partial publication is not acceptable.
+    """
 
     def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
         """Store the bytes and return an optional href for a bundle index."""
@@ -671,6 +680,15 @@ class _CentralDirectory:
     zip64: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _WrittenEntry:
+    name: str
+    size: int
+    crc: int
+    offset: int
+    version: int
+
+
 class Bundle:
     """Expose one validated bundle graph and its lazily opened payloads.
 
@@ -799,6 +817,577 @@ def open_bundle(
     except Exception:
         archive.close()
         raise
+
+
+def write_bundle(
+    graph: Graph,
+    destination: BinaryIO,
+    resolver: BlobResolver,
+    *,
+    embed: Callable[[BlobRef], bool] | bool = True,
+    hrefs: Mapping[BlobRef, str] | None = None,
+    limits: BundleLimits = BundleLimits(),  # noqa: B008 -- frozen public default
+) -> None:
+    """Write a deterministic bundle with a per-payload storage choice.
+
+    ``embed`` is either one choice for every payload or a predicate evaluated
+    once for each distinct payload in first blob-item order. Linked rows take
+    their optional locator from ``hrefs``. The resolver is consulted only for
+    embedded payloads and receives the matching locator when one was supplied.
+
+    The destination must be an empty, seekable binary stream. Any refusal while
+    resolving, reading, or verifying a payload rolls it back to empty, so a
+    failed write never leaves a usable-looking bundle.
+    """
+    choices = _selection(embed)
+    source_hrefs = {} if hrefs is None else hrefs
+    assets: list[BundleAsset] = []
+    for position, (durable_id, ref) in enumerate(_graph_assets(graph)):
+        embedded = choices(ref)
+        href = source_hrefs.get(ref)
+        if href is not None and not isinstance(href, str):
+            raise TypeError(f"bundle href for blob {ref.sha256} must be a string")
+        assets.append(
+            BundleAsset(
+                durable_id,
+                position,
+                ref,
+                "embedded" if embedded else "linked",
+                None if embedded else href,
+            )
+        )
+
+    def _open_payload(ref: BlobRef) -> BinaryIO | None:
+        return resolver.open(ref, source_hrefs.get(ref))
+
+    _write_bundle_archive(
+        graph, destination, tuple(assets), _open_payload, limits=limits
+    )
+
+
+def relink(
+    bundle: Bundle,
+    destination: BinaryIO,
+    sink: BlobSink,
+    *,
+    which: Callable[[BlobRef], bool] | bool = True,
+) -> None:
+    """Move selected embedded payloads to a sink and write linked rows.
+
+    Selection is evaluated once per distinct payload in declared asset order.
+    Existing linked rows and unselected embedded rows retain their modes and
+    locators. A sink must consume the complete verified stream before its href
+    is accepted. The destination and every selection are validated before the
+    first sink call. External writes remain the sink's responsibility if a
+    later sink call or bundle publication fails.
+    """
+    selected = _selection(which)
+    selected_assets = tuple(
+        asset
+        for asset in _distinct_assets(bundle.assets())
+        if asset.mode == "embedded" and selected(asset.ref)
+    )
+    _prepare_destination(destination)
+    hrefs: dict[BlobRef, str | None] = {}
+    for asset in selected_assets:
+        with bundle.open_blob(asset.ref) as reader:
+            href = sink.put(asset.ref, cast(BinaryIO, reader))
+            if href is not None and not isinstance(href, str):
+                raise TypeError(
+                    f"blob sink href for {asset.ref.sha256} must be a string"
+                )
+            if not reader.verified and not reader.closed:
+                reader.read(1)
+            if not reader.verified:
+                raise ValueError(
+                    f"blob sink did not consume payload {asset.ref.sha256} completely"
+                )
+        hrefs[asset.ref] = href
+    assets = tuple(
+        BundleAsset(
+            asset.id,
+            asset.position,
+            asset.ref,
+            "linked" if asset.ref in hrefs else asset.mode,
+            hrefs[asset.ref] if asset.ref in hrefs else asset.href,
+        )
+        for asset in bundle.assets()
+    )
+    _write_bundle_archive(
+        bundle.graph,
+        destination,
+        assets,
+        lambda ref: cast(BinaryIO, bundle.open_blob(ref)),
+        limits=BundleLimits(),
+    )
+
+
+def embed_links(
+    bundle: Bundle,
+    destination: BinaryIO,
+    resolver: BlobResolver,
+    *,
+    which: Callable[[BlobRef], bool] | bool = True,
+) -> None:
+    """Embed selected linked payloads and preserve every other asset row.
+
+    The resolver is consulted only for selected linked payloads, with each
+    row's href. Existing embedded payloads are streamed from the source bundle.
+    Selection is evaluated once per distinct payload in declared asset order.
+    """
+    selected = _selection(which)
+    changed: set[BlobRef] = set()
+    original = {asset.ref: asset for asset in _distinct_assets(bundle.assets())}
+    for asset in original.values():
+        if asset.mode == "linked" and selected(asset.ref):
+            changed.add(asset.ref)
+    assets = tuple(
+        BundleAsset(
+            asset.id,
+            asset.position,
+            asset.ref,
+            "embedded" if asset.ref in changed else asset.mode,
+            None if asset.ref in changed else asset.href,
+        )
+        for asset in bundle.assets()
+    )
+
+    def _open_payload(ref: BlobRef) -> BinaryIO | None:
+        asset = original[ref]
+        if asset.mode == "embedded":
+            return cast(BinaryIO, bundle.open_blob(ref))
+        return resolver.open(ref, asset.href)
+
+    _write_bundle_archive(
+        bundle.graph,
+        destination,
+        assets,
+        _open_payload,
+        limits=BundleLimits(),
+    )
+
+
+def _graph_assets(graph: Graph) -> tuple[tuple[str, BlobRef], ...]:
+    """Return durable ids and payload identities in declared blob-item order."""
+    if not any(namespace.namespace == BLOB_NAMESPACE for namespace in graph.namespaces):
+        return ()
+    profile = BlobProfile(graph)
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    result: list[tuple[str, BlobRef]] = []
+    for reference, blob_ref in profile.blobs():
+        durable_id = tiers[reference.tier].items[reference.index].durable_id
+        result.append((cast(str, durable_id), blob_ref))
+    return tuple(result)
+
+
+def _selection(
+    choice: Callable[[BlobRef], bool] | bool,
+) -> Callable[[BlobRef], bool]:
+    """Return a memoized, strictly boolean per-payload choice."""
+    if isinstance(choice, bool):
+
+        def _fixed(ref: BlobRef) -> bool:
+            del ref
+            return choice
+
+        return _fixed
+    if not callable(choice):
+        raise TypeError("bundle payload selection must be a boolean or callable")
+    decisions: dict[BlobRef, bool] = {}
+
+    def _selected(ref: BlobRef) -> bool:
+        if ref not in decisions:
+            result = choice(ref)
+            if not isinstance(result, bool):
+                raise TypeError("bundle payload selection must return a boolean")
+            decisions[ref] = result
+        return decisions[ref]
+
+    return _selected
+
+
+def _distinct_assets(assets: tuple[BundleAsset, ...]) -> tuple[BundleAsset, ...]:
+    """Return the first row for each payload without changing declared order."""
+    seen: set[BlobRef] = set()
+    result: list[BundleAsset] = []
+    for asset in assets:
+        if asset.ref not in seen:
+            seen.add(asset.ref)
+            result.append(asset)
+    return tuple(result)
+
+
+def _write_bundle_archive(
+    graph: Graph,
+    destination: BinaryIO,
+    assets: tuple[BundleAsset, ...],
+    open_payload: Callable[[BlobRef], BinaryIO | None],
+    *,
+    limits: BundleLimits,
+) -> None:
+    """Write the strict archive and roll back the destination on every failure."""
+    import json  # noqa: PLC0415 -- loaded only for opted-in bundle writes
+
+    graph_bytes = dump_bytes(graph)
+    index = {
+        "bundle_version": BUNDLE_VERSION,
+        "graph": {
+            "path": _BUNDLE_GRAPH,
+            "sha256": hashlib.sha256(graph_bytes).hexdigest(),
+            "size": len(graph_bytes),
+        },
+        "assets": [_asset_data(asset) for asset in assets],
+    }
+    index_bytes = json.dumps(
+        index,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    embedded = tuple(
+        asset for asset in _distinct_assets(assets) if asset.mode == "embedded"
+    )
+    _check_write_limits(index_bytes, graph_bytes, embedded, limits)
+    _prepare_destination(destination)
+    try:
+        entries = [
+            _write_entry(
+                destination, _BUNDLE_INDEX, len(index_bytes), io.BytesIO(index_bytes)
+            ),
+            _write_entry(
+                destination, _BUNDLE_GRAPH, len(graph_bytes), io.BytesIO(graph_bytes)
+            ),
+        ]
+        for asset in embedded:
+            source = open_payload(asset.ref)
+            if source is None:
+                raise ValueError(
+                    f"embedded blob {asset.ref.sha256} was not found by the resolver"
+                )
+            reader = VerifiedReader(source, asset.ref)
+            try:
+                entries.append(
+                    _write_entry(
+                        destination,
+                        _BLOB_PATH + asset.ref.sha256,
+                        asset.ref.size,
+                        cast(BinaryIO, reader),
+                    )
+                )
+            finally:
+                reader.close()
+        _write_directory(destination, tuple(entries), limits)
+    except BaseException:
+        _rollback_destination(destination)
+        raise
+
+
+def _asset_data(asset: BundleAsset) -> dict[str, object]:
+    """Return one closed index row with fields in canonical presentation order."""
+    row: dict[str, object] = {
+        "id": asset.id,
+        "position": asset.position,
+        "sha256": asset.ref.sha256,
+        "size": asset.ref.size,
+        "mode": asset.mode,
+    }
+    if asset.mode == "linked" and asset.href is not None:
+        row["href"] = asset.href
+    return row
+
+
+def _check_write_limits(
+    index: bytes,
+    graph: bytes,
+    embedded: tuple[BundleAsset, ...],
+    limits: BundleLimits,
+) -> None:
+    """Check all declared entry limits before the destination is touched."""
+    specifications = (
+        (_BUNDLE_INDEX, len(index)),
+        (_BUNDLE_GRAPH, len(graph)),
+        *((_BLOB_PATH + asset.ref.sha256, asset.ref.size) for asset in embedded),
+    )
+    sizes = [size for _, size in specifications]
+    _check_limit(len(sizes), limits.max_entries, "entry count")
+    _check_limit(len(index), limits.max_index_bytes, "bundle index size")
+    _check_limit(len(graph), limits.max_graph_bytes, "bundle graph size")
+    total = 0
+    for size in sizes:
+        _check_limit(size, limits.max_entry_bytes, "entry size")
+        total += size
+        _check_limit(total, limits.max_total_bytes, "total entry size")
+    directory_size = _central_directory_size(_plan_entries(specifications))
+    _check_limit(
+        directory_size,
+        limits.max_central_directory_bytes,
+        "central directory size",
+    )
+
+
+def _plan_entries(
+    specifications: tuple[tuple[str, int], ...],
+) -> tuple[_WrittenEntry, ...]:
+    """Plan exact stored-entry offsets without opening payload streams."""
+    entries: list[_WrittenEntry] = []
+    offset = 0
+    for name, size in specifications:
+        version = (
+            _ZIP64_VERSION
+            if size >= _UINT32_MAX or offset >= _UINT32_MAX
+            else _ZIP_VERSION
+        )
+        entries.append(_WrittenEntry(name, size, 0, offset, version))
+        local_extra_size = (
+            _EXTRA_HEADER_SIZE + (2 * _ZIP64_VALUE_SIZE) if size >= _UINT32_MAX else 0
+        )
+        offset += _LOCAL_HEADER_SIZE + len(name.encode("ascii")) + local_extra_size
+        offset += size
+    return tuple(entries)
+
+
+def _central_directory_size(entries: tuple[_WrittenEntry, ...]) -> int:
+    """Return the exact byte size of canonical central-directory records."""
+    total = 0
+    for entry in entries:
+        value_count = 2 if entry.size >= _UINT32_MAX else 0
+        if entry.offset >= _UINT32_MAX:
+            value_count += 1
+        extra_size = (
+            _EXTRA_HEADER_SIZE + (value_count * _ZIP64_VALUE_SIZE) if value_count else 0
+        )
+        total += _CENTRAL_HEADER_SIZE + len(entry.name.encode("ascii")) + extra_size
+    return total
+
+
+def _prepare_destination(destination: BinaryIO) -> None:
+    """Require an empty seekable output that can be rolled back exactly."""
+    try:
+        if not destination.writable() or not destination.seekable():
+            raise ValueError("bundle destination must be seekable and writable")
+        position = destination.tell()
+        end = destination.seek(0, io.SEEK_END)
+        destination.seek(position)
+    except (AttributeError, OSError, ValueError) as error:
+        raise ValueError(
+            "bundle destination must be a seekable binary stream"
+        ) from error
+    if position != 0 or end != 0:
+        raise ValueError("bundle destination must be empty and positioned at byte 0")
+
+
+def _rollback_destination(destination: BinaryIO) -> None:
+    """Erase every byte written during a refused bundle operation."""
+    try:
+        destination.seek(0)
+        destination.truncate(0)
+        destination.seek(0)
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            "failed bundle destination could not be rolled back"
+        ) from error
+
+
+def _write_entry(
+    destination: BinaryIO, name: str, expected_size: int, source: BinaryIO
+) -> _WrittenEntry:
+    """Stream one stored entry and patch its CRC into the local header."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle writes
+    import zlib  # noqa: PLC0415 -- loaded only for opted-in bundle writes
+
+    encoded_name = name.encode("ascii")
+    offset = _stream_position(destination, "bundle entry offset")
+    version = (
+        _ZIP64_VERSION
+        if expected_size >= _UINT32_MAX or offset >= _UINT32_MAX
+        else _ZIP_VERSION
+    )
+    extra = (
+        _zip64_extra((expected_size, expected_size))
+        if expected_size >= _UINT32_MAX
+        else b""
+    )
+    stored_size = _UINT32_MAX if extra else expected_size
+
+    def _header(crc: int) -> bytes:
+        return (
+            struct.pack(
+                "<4s5H3L2H",
+                _LOCAL_SIGNATURE,
+                version,
+                0,
+                0,
+                _CANONICAL_DOS_TIME,
+                _CANONICAL_DOS_DATE,
+                crc,
+                stored_size,
+                stored_size,
+                len(encoded_name),
+                len(extra),
+            )
+            + encoded_name
+            + extra
+        )
+
+    _write_all(destination, _header(0), f"entry {name!r} header")
+    crc = 0
+    size = 0
+    while True:
+        chunk = source.read(1 << 20)
+        if not isinstance(chunk, bytes):
+            raise TypeError(f"bundle entry {name!r} source did not return bytes")
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > expected_size:
+            raise ValueError(
+                f"bundle entry {name!r} exceeds its declared size {expected_size}"
+            )
+        crc = zlib.crc32(chunk, crc)
+        _write_all(destination, chunk, f"entry {name!r} payload")
+    if size != expected_size:
+        raise ValueError(
+            f"bundle entry {name!r} size mismatch: expected {expected_size}, read {size}"
+        )
+    end = _stream_position(destination, f"entry {name!r} end")
+    destination.seek(offset)
+    _write_all(destination, _header(crc), f"entry {name!r} header")
+    destination.seek(end)
+    return _WrittenEntry(name, size, crc, offset, version)
+
+
+def _write_directory(
+    destination: BinaryIO,
+    entries: tuple[_WrittenEntry, ...],
+    limits: BundleLimits,
+) -> None:
+    """Write canonical central and end records for completed stored entries."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle writes
+
+    directory_offset = _stream_position(destination, "central directory offset")
+    planned_size = _central_directory_size(entries)
+    _check_limit(
+        planned_size,
+        limits.max_central_directory_bytes,
+        "central directory size",
+    )
+    directory_size = 0
+    for entry in entries:
+        encoded_name = entry.name.encode("ascii")
+        values: list[int] = []
+        if entry.size >= _UINT32_MAX:
+            values.extend((entry.size, entry.size))
+        if entry.offset >= _UINT32_MAX:
+            values.append(entry.offset)
+        extra = _zip64_extra(tuple(values)) if values else b""
+        size = _UINT32_MAX if entry.size >= _UINT32_MAX else entry.size
+        offset = _UINT32_MAX if entry.offset >= _UINT32_MAX else entry.offset
+        record = (
+            struct.pack(
+                "<4s6H3L5H2L",
+                b"PK\x01\x02",
+                (_UNIX_SYSTEM << 8) | entry.version,
+                entry.version,
+                0,
+                0,
+                _CANONICAL_DOS_TIME,
+                _CANONICAL_DOS_DATE,
+                entry.crc,
+                size,
+                size,
+                len(encoded_name),
+                len(extra),
+                0,
+                0,
+                0,
+                _CANONICAL_EXTERNAL_ATTR,
+                offset,
+            )
+            + encoded_name
+            + extra
+        )
+        directory_size += len(record)
+        _write_all(destination, record, "central directory")
+    if directory_size != planned_size:
+        raise AssertionError("planned central directory size disagrees with encoding")
+    count = len(entries)
+    needs_zip64 = (
+        count >= _UINT16_MAX
+        or directory_size >= _UINT32_MAX
+        or directory_offset >= _UINT32_MAX
+    )
+    if needs_zip64:
+        record_offset = _stream_position(destination, "ZIP64 end record offset")
+        _write_all(
+            destination,
+            struct.pack(
+                "<4sQ2H2L4Q",
+                _ZIP64_EOCD_SIGNATURE,
+                _ZIP64_EOCD_MINIMUM_BODY_SIZE,
+                _ZIP64_VERSION,
+                _ZIP64_VERSION,
+                0,
+                0,
+                count,
+                count,
+                directory_size,
+                directory_offset,
+            ),
+            "ZIP64 end record",
+        )
+        _write_all(
+            destination,
+            struct.pack("<4sLQL", _ZIP64_LOCATOR_SIGNATURE, 0, record_offset, 1),
+            "ZIP64 locator",
+        )
+    classic_count = _UINT16_MAX if count >= _UINT16_MAX else count
+    classic_size = _UINT32_MAX if directory_size >= _UINT32_MAX else directory_size
+    classic_offset = (
+        _UINT32_MAX if directory_offset >= _UINT32_MAX else directory_offset
+    )
+    _write_all(
+        destination,
+        struct.pack(
+            "<4s4H2LH",
+            _EOCD_SIGNATURE,
+            0,
+            0,
+            classic_count,
+            classic_count,
+            classic_size,
+            classic_offset,
+            0,
+        ),
+        "bundle ZIP end record",
+    )
+
+
+def _zip64_extra(values: tuple[int, ...]) -> bytes:
+    """Encode one minimal ZIP64 extra record for its required values."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle writes
+
+    body = struct.pack(f"<{len(values)}Q", *values)
+    return struct.pack("<HH", _ZIP64_EXTRA, len(body)) + body
+
+
+def _stream_position(stream: BinaryIO, subject: str) -> int:
+    """Return a nonnegative integral stream position."""
+    position = stream.tell()
+    if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+        raise ValueError(f"{subject} is not a nonnegative integer")
+    return position
+
+
+def _write_all(destination: BinaryIO, data: bytes, subject: str) -> None:
+    """Write every byte while refusing nonblocking and invalid writer results."""
+    offset = 0
+    while offset < len(data):
+        written = destination.write(data[offset:])
+        if isinstance(written, bool) or not isinstance(written, int) or written <= 0:
+            raise ValueError(f"{subject} writer made no progress")
+        if written > len(data) - offset:
+            raise ValueError(f"{subject} writer reported too many bytes")
+        offset += written
 
 
 def bundle_json_schema() -> dict[str, object]:
@@ -1411,6 +2000,9 @@ __all__ = [
     "VerifiedReader",
     "bundle_json_schema",
     "declare_blob_vocabulary",
+    "embed_links",
     "hash_blob",
     "open_bundle",
+    "relink",
+    "write_bundle",
 ]

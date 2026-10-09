@@ -9,7 +9,7 @@ import struct
 import subprocess
 import sys
 import zipfile
-from collections.abc import Callable
+from collections.abc import Buffer, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import BinaryIO, cast
@@ -30,7 +30,11 @@ from tiergraph import (
     MappingResolver,
     bundle_json_schema,
     dump_bytes,
+    embed_links,
+    loads,
     open_bundle,
+    relink,
+    write_bundle,
 )
 
 PAYLOAD_A = b"ordered embedded payload"
@@ -162,6 +166,35 @@ class TrackingSource(io.BytesIO):
         data = super().read(size)
         self.intervals.append((start, start + len(data)))
         return data
+
+
+class RecordingResolver:
+    """Resolve test payloads while recording ordered href-aware requests."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        """Retain payloads and initialize an empty request log."""
+        self.payloads = payloads
+        self.calls: list[tuple[BlobRef, str | None]] = []
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        """Return one fresh reader when the requested digest is available."""
+        self.calls.append((ref, href))
+        payload = self.payloads.get(ref.sha256)
+        return None if payload is None else io.BytesIO(payload)
+
+
+class RecordingSink:
+    """Store complete test payloads and return stable content-addressed hrefs."""
+
+    def __init__(self, hrefs: dict[BlobRef, str]) -> None:
+        """Retain returned hrefs and initialize an ordered payload log."""
+        self.hrefs = hrefs
+        self.payloads: list[tuple[BlobRef, bytes]] = []
+
+    def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+        """Consume and retain one complete payload before returning its href."""
+        self.payloads.append((ref, source.read()))
+        return self.hrefs[ref]
 
 
 def mutate_eocd(data: bytes, field: int, value: int) -> bytes:
@@ -319,6 +352,471 @@ def test_same_payload_rows_preserve_distinct_ids_and_positions() -> None:
             BundleAsset("one", 0, REF_A, "embedded", None),
             BundleAsset("two", 1, REF_A, "embedded", None),
         )
+
+
+def test_write_bundle_is_deterministic_and_selects_each_payload_once() -> None:
+    """Writing preserves graph bytes, row order, choices, hrefs, and entry order."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    calls: list[BlobRef] = []
+
+    def choose(ref: BlobRef) -> bool:
+        calls.append(ref)
+        return ref == REF_A
+
+    hrefs = {REF_A: "objects/embedded-source", REF_B: "objects/linked"}
+    resolver = RecordingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B})
+    first = io.BytesIO()
+    write_bundle(graph, first, resolver, embed=choose, hrefs=hrefs)
+    assert calls == [REF_A, REF_B]
+    assert resolver.calls == [(REF_A, "objects/embedded-source")]
+
+    second = io.BytesIO()
+    write_bundle(
+        graph,
+        second,
+        MappingResolver({REF_A.sha256: PAYLOAD_A}),
+        embed=lambda ref: ref == REF_A,
+        hrefs=hrefs,
+    )
+    assert first.getvalue() == second.getvalue()
+    with zipfile.ZipFile(io.BytesIO(first.getvalue())) as archive:
+        assert archive.namelist() == [
+            "bundle.json",
+            "graph.json",
+            "blobs/sha256/" + REF_A.sha256,
+        ]
+        assert archive.read("graph.json") == graph_bytes
+    with open_bundle(io.BytesIO(first.getvalue())) as bundle:
+        assert bundle.assets() == (
+            BundleAsset("embedded-asset", 0, REF_A, "embedded", None),
+            BundleAsset("linked-asset", 1, REF_B, "linked", "objects/linked"),
+        )
+        with bundle.open_blob(REF_A) as reader:
+            assert reader.read() == PAYLOAD_A
+            assert reader.verified
+
+
+def test_write_bundle_supports_all_linked_and_blobless_graphs() -> None:
+    """Reference bundles need no payload reads, including an empty inventory."""
+    graph_bytes, _ = graph_and_rows()
+    resolver = RecordingResolver({})
+    linked = io.BytesIO()
+    write_bundle(
+        loads(graph_bytes),
+        linked,
+        resolver,
+        embed=False,
+        hrefs={REF_A: "a", REF_B: "b"},
+    )
+    assert resolver.calls == []
+    with open_bundle(io.BytesIO(linked.getvalue())) as bundle:
+        assert [asset.mode for asset in bundle.assets()] == ["linked", "linked"]
+        assert [asset.href for asset in bundle.assets()] == ["a", "b"]
+
+    empty = io.BytesIO()
+    write_bundle(Graph((), (), ()), empty, resolver)
+    with open_bundle(io.BytesIO(empty.getvalue())) as bundle:
+        assert bundle.assets() == ()
+
+
+def test_embed_links_and_relink_are_byte_exact_inverse_moves() -> None:
+    """Moving every payload out and back preserves the deterministic container."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    payloads = {REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}
+    hrefs = {REF_A: "objects/a", REF_B: "objects/b"}
+    linked = io.BytesIO()
+    write_bundle(graph, linked, MappingResolver(payloads), embed=False, hrefs=hrefs)
+
+    with open_bundle(io.BytesIO(linked.getvalue())) as source:
+        flattened = io.BytesIO()
+        resolver = RecordingResolver(payloads)
+        embed_links(source, flattened, resolver)
+        assert resolver.calls == [(REF_A, "objects/a"), (REF_B, "objects/b")]
+    with open_bundle(io.BytesIO(flattened.getvalue())) as source:
+        assert [asset.mode for asset in source.assets()] == ["embedded", "embedded"]
+        sink = RecordingSink(hrefs)
+        restored = io.BytesIO()
+        relink(source, restored, sink)
+        assert sink.payloads == [(REF_A, PAYLOAD_A), (REF_B, PAYLOAD_B)]
+    assert restored.getvalue() == linked.getvalue()
+
+
+def test_partial_moves_preserve_unselected_rows_and_embedded_bytes() -> None:
+    """Predicates change only selected modes and keep all rows in declared order."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    payloads = {REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}
+    mixed = io.BytesIO()
+    write_bundle(
+        graph,
+        mixed,
+        MappingResolver(payloads),
+        embed=lambda ref: ref == REF_A,
+        hrefs={REF_B: "objects/b"},
+    )
+    with open_bundle(io.BytesIO(mixed.getvalue())) as source:
+        unchanged = io.BytesIO()
+        embed_links(source, unchanged, MappingResolver(payloads), which=False)
+        assert unchanged.getvalue() == mixed.getvalue()
+    with open_bundle(io.BytesIO(mixed.getvalue())) as source:
+        flattened = io.BytesIO()
+        embed_links(
+            source,
+            flattened,
+            MappingResolver(payloads),
+            which=lambda ref: ref == REF_B,
+        )
+    with open_bundle(io.BytesIO(flattened.getvalue())) as source:
+        partly_linked = io.BytesIO()
+        sink = RecordingSink({REF_A: "objects/a", REF_B: "objects/b"})
+        relink(source, partly_linked, sink, which=lambda ref: ref == REF_A)
+        assert sink.payloads == [(REF_A, PAYLOAD_A)]
+    with open_bundle(io.BytesIO(partly_linked.getvalue())) as result:
+        assert result.assets() == (
+            BundleAsset("embedded-asset", 0, REF_A, "linked", "objects/a"),
+            BundleAsset("linked-asset", 1, REF_B, "embedded", None),
+        )
+
+
+def test_write_failures_roll_back_the_destination() -> None:
+    """Missing, truncated, changed, and extra payload bytes publish no archive."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    failures = [
+        ({}, "was not found"),
+        ({REF_A.sha256: PAYLOAD_A[:-1]}, "size mismatch"),
+        ({REF_A.sha256: b"x" * len(PAYLOAD_A)}, "SHA-256 mismatch"),
+        ({REF_A.sha256: PAYLOAD_A + b"x"}, "exceeds its declared size"),
+    ]
+    for payloads, message in failures:
+        destination = io.BytesIO()
+        with pytest.raises(ValueError, match=message):
+            write_bundle(
+                graph,
+                destination,
+                MappingResolver(payloads),
+                embed=lambda ref: ref == REF_A,
+            )
+        assert destination.getvalue() == b""
+        assert destination.tell() == 0
+
+
+def test_move_failures_refuse_incomplete_sinks_and_missing_links() -> None:
+    """Moves verify both sink consumption and resolved bytes before publishing."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    flat = io.BytesIO()
+    write_bundle(
+        graph,
+        flat,
+        MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}),
+    )
+
+    class PartialSink:
+        def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+            del ref
+            source.read(1)
+            return None
+
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        destination = io.BytesIO()
+        with pytest.raises(ValueError, match="did not consume"):
+            relink(source, destination, PartialSink())
+        assert destination.getvalue() == b""
+
+    linked = io.BytesIO()
+    write_bundle(graph, linked, MappingResolver({}), embed=False)
+    with open_bundle(io.BytesIO(linked.getvalue())) as source:
+        destination = io.BytesIO()
+        with pytest.raises(ValueError, match="was not found"):
+            embed_links(source, destination, MappingResolver({}))
+        assert destination.getvalue() == b""
+
+
+def test_relink_preflights_destination_and_selection_before_sink_writes() -> None:
+    """Locally detectable move refusals occur before external sink writes."""
+    graph_bytes, _ = graph_and_rows()
+    flat = io.BytesIO()
+    write_bundle(
+        loads(graph_bytes),
+        flat,
+        MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}),
+    )
+    sink = RecordingSink({REF_A: "objects/a", REF_B: "objects/b"})
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        with pytest.raises(ValueError, match="empty and positioned"):
+            relink(source, io.BytesIO(b"occupied"), sink)
+    assert sink.payloads == []
+
+    def refuse_second(ref: BlobRef) -> bool:
+        if ref == REF_B:
+            raise ValueError("selection refusal")
+        return True
+
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        with pytest.raises(ValueError, match="selection refusal"):
+            relink(source, io.BytesIO(), sink, which=refuse_second)
+    assert sink.payloads == []
+
+
+def test_relink_accepts_a_sink_that_closes_a_verified_stream() -> None:
+    """A sink may close a source after one complete verified read."""
+    graph_bytes, _ = graph_and_rows()
+    flat = io.BytesIO()
+    write_bundle(
+        loads(graph_bytes),
+        flat,
+        MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}),
+    )
+
+    class ClosingSink:
+        def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+            payload = source.read()
+            source.close()
+            assert payload in {PAYLOAD_A, PAYLOAD_B}
+            return "objects/" + ref.sha256
+
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        linked = io.BytesIO()
+        relink(source, linked, ClosingSink())
+    with open_bundle(io.BytesIO(linked.getvalue())) as result:
+        assert [asset.mode for asset in result.assets()] == ["linked", "linked"]
+
+
+def test_bundle_write_public_argument_refusals() -> None:
+    """Writers reject ill-typed choices, hrefs, sinks, and destinations."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    resolver = MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B})
+    with pytest.raises(TypeError, match="boolean or callable"):
+        write_bundle(graph, io.BytesIO(), resolver, embed=cast(bool, 1))
+    with pytest.raises(TypeError, match="return a boolean"):
+        write_bundle(graph, io.BytesIO(), resolver, embed=lambda ref: cast(bool, 1))
+    with pytest.raises(TypeError, match="href.*string"):
+        write_bundle(
+            graph,
+            io.BytesIO(),
+            resolver,
+            embed=False,
+            hrefs=cast(dict[BlobRef, str], {REF_A: 1}),
+        )
+    for destination in (io.BytesIO(b"occupied"), io.BytesIO(b"x")):
+        if destination.getvalue() == b"x":
+            destination.seek(1)
+        with pytest.raises(ValueError, match="empty and positioned"):
+            write_bundle(graph, destination, resolver, embed=False)
+
+    class NotSeekable(io.BytesIO):
+        def seekable(self) -> bool:
+            return False
+
+    with pytest.raises(ValueError, match="seekable binary stream"):
+        write_bundle(graph, cast(BinaryIO, NotSeekable()), resolver, embed=False)
+
+    class InvalidSink:
+        def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+            del ref
+            source.read()
+            return cast(str, 1)
+
+    flat = io.BytesIO()
+    write_bundle(graph, flat, resolver)
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        with pytest.raises(TypeError, match="sink href.*string"):
+            relink(source, io.BytesIO(), InvalidSink())
+
+
+def test_write_selection_is_memoized_for_shared_payloads() -> None:
+    """Equal payload rows share one decision, source read, and ZIP entry."""
+    editor = base_editor()
+    for position, durable_id in enumerate(("one", "two")):
+        editor.insert_item(
+            BLOBS,
+            position,
+            blob_item(
+                durable_id,
+                REF_A.sha256,
+                REF_A.size,
+                "application/octet-stream",
+                "urn:example:binary",
+            ),
+        )
+    calls: list[BlobRef] = []
+    resolver = RecordingResolver({REF_A.sha256: PAYLOAD_A})
+    destination = io.BytesIO()
+
+    def choose(ref: BlobRef) -> bool:
+        calls.append(ref)
+        return True
+
+    write_bundle(
+        editor.freeze(),
+        destination,
+        resolver,
+        embed=choose,
+    )
+    assert calls == [REF_A]
+    assert resolver.calls == [(REF_A, None)]
+    with open_bundle(io.BytesIO(destination.getvalue())) as bundle:
+        assert [asset.id for asset in bundle.assets()] == ["one", "two"]
+
+
+def test_sink_must_leave_a_verifiable_stream_at_eof() -> None:
+    """A sink that seeks cannot make its complete read count as verification."""
+    graph_bytes, _ = graph_and_rows()
+    flat = io.BytesIO()
+    write_bundle(
+        loads(graph_bytes),
+        flat,
+        MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}),
+    )
+
+    class SeekingSink:
+        def put(self, ref: BlobRef, source: BinaryIO) -> str | None:
+            del ref
+            source.seek(0)
+            source.read()
+            return None
+
+    with open_bundle(io.BytesIO(flat.getvalue())) as source:
+        with pytest.raises(ValueError, match="did not consume"):
+            relink(source, io.BytesIO(), SeekingSink())
+
+
+def test_write_limits_refuse_before_publishing() -> None:
+    """Count, metadata, entry, and total limits are enforced before output."""
+    graph_bytes, _ = graph_and_rows()
+    graph = loads(graph_bytes)
+    resolver = MappingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B})
+    limits = [
+        BundleLimits(max_entries=2),
+        BundleLimits(max_index_bytes=1),
+        BundleLimits(max_graph_bytes=1),
+        BundleLimits(max_entry_bytes=1),
+        BundleLimits(max_total_bytes=1),
+        BundleLimits(max_central_directory_bytes=1),
+    ]
+    for limit in limits:
+        destination = io.BytesIO()
+        with pytest.raises(ValueError, match="bundle limit"):
+            write_bundle(graph, destination, resolver, limits=limit)
+        assert destination.getvalue() == b""
+
+
+def test_central_directory_limit_precedes_payload_reads_and_writes() -> None:
+    """Predictable directory limits refuse before payload and output I/O."""
+    graph_bytes, _ = graph_and_rows()
+    resolver = RecordingResolver({REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B})
+
+    class RecordingDestination(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.write_calls: list[int] = []
+
+        def write(self, data: Buffer, /) -> int:
+            self.write_calls.append(len(memoryview(data)))
+            return super().write(data)
+
+    destination = RecordingDestination()
+    with pytest.raises(ValueError, match="central directory size"):
+        write_bundle(
+            loads(graph_bytes),
+            destination,
+            resolver,
+            limits=BundleLimits(max_central_directory_bytes=1),
+        )
+    assert resolver.calls == []
+    assert destination.write_calls == []
+    assert destination.getvalue() == b""
+
+
+def test_low_level_bundle_writer_defenses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Binary writer helpers reject malformed streams and cover ZIP64 records."""
+
+    class TextSource(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            del size
+            return cast(bytes, "text")
+
+    with pytest.raises(TypeError, match="did not return bytes"):
+        blob_module._write_entry(io.BytesIO(), "entry", 0, TextSource())
+    with pytest.raises(ValueError, match="size mismatch"):
+        blob_module._write_entry(io.BytesIO(), "entry", 1, io.BytesIO())
+
+    monkeypatch.setattr(blob_module, "_UINT32_MAX", 2)
+    encoded = io.BytesIO()
+    large = blob_module._write_entry(encoded, "large", 3, io.BytesIO(b"abc"))
+    assert large.version == 45
+    monkeypatch.setattr(blob_module, "_UINT16_MAX", 2)
+    directory = io.BytesIO()
+    blob_module._write_directory(
+        directory,
+        (
+            large,
+            blob_module._WrittenEntry("offset", 1, 0, 3, 45),
+        ),
+        BundleLimits(),
+    )
+    assert b"PK\x06\x06" in directory.getvalue()
+
+    central_directory_size = blob_module._central_directory_size
+    monkeypatch.setattr(
+        blob_module,
+        "_central_directory_size",
+        lambda entries: central_directory_size(entries) + 1,
+    )
+    with pytest.raises(AssertionError, match="planned central directory"):
+        blob_module._write_directory(
+            io.BytesIO(),
+            (blob_module._WrittenEntry("tiny", 1, 0, 0, 20),),
+            BundleLimits(),
+        )
+
+    class BadTell(io.BytesIO):
+        def tell(self) -> int:
+            return cast(int, True)
+
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        blob_module._stream_position(BadTell(), "position")
+
+    class PartialWriter(io.BytesIO):
+        def write(self, data: Buffer, /) -> int:
+            return super().write(memoryview(data)[:1])
+
+    partial = PartialWriter()
+    blob_module._write_all(partial, b"abc", "partial")
+    assert partial.getvalue() == b"abc"
+
+    class StalledWriter(io.BytesIO):
+        def write(self, data: Buffer, /) -> int:
+            del data
+            return 0
+
+    with pytest.raises(ValueError, match="made no progress"):
+        blob_module._write_all(StalledWriter(), b"x", "stalled")
+
+    class LyingWriter(io.BytesIO):
+        def write(self, data: Buffer, /) -> int:
+            return len(memoryview(data)) + 1
+
+    with pytest.raises(ValueError, match="too many bytes"):
+        blob_module._write_all(LyingWriter(), b"x", "lying")
+
+
+def test_destination_seek_and_rollback_failures_are_named() -> None:
+    """Unmeasurable outputs and failed rollback expose stable diagnostics."""
+
+    class BadSeek(io.BytesIO):
+        def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+            del offset, whence
+            raise OSError("no seek")
+
+    with pytest.raises(ValueError, match="seekable binary stream"):
+        blob_module._prepare_destination(BadSeek())
+    with pytest.raises(ValueError, match="could not be rolled back"):
+        blob_module._rollback_destination(BadSeek())
 
 
 def test_plain_package_import_does_not_load_zipfile() -> None:

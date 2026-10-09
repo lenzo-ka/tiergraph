@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 315 top-level `tiergraph` exports exactly once.
+It covers 318 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -288,6 +288,11 @@ BlobSink(*args, **kwargs)
 
 Store one payload in caller-selected external storage.
 
+A sink may close ``source`` after consuming and verifying it completely.
+External writes remain the sink's responsibility if a later sink call or
+bundle publication fails, so implementations should be transactional or
+idempotent when partial publication is not acceptable.
+
 #### `BlobSink.put`
 
 Method.
@@ -521,6 +526,50 @@ open_bundle(source: 'BinaryIO', *, limits: 'BundleLimits' = BundleLimits(max_ent
 ```
 
 Validate and open a strict store-only bundle without reading payloads.
+
+### `write_bundle`
+
+```text
+write_bundle(graph: 'Graph', destination: 'BinaryIO', resolver: 'BlobResolver', *, embed: 'Callable[[BlobRef], bool] | bool' = True, hrefs: 'Mapping[BlobRef, str] | None' = None, limits: 'BundleLimits' = BundleLimits(max_entries=100000, max_entry_bytes=1099511627776, max_total_bytes=17592186044416, max_central_directory_bytes=67108864, max_index_bytes=16777216, max_graph_bytes=16777216)) -> 'None'
+```
+
+Write a deterministic bundle with a per-payload storage choice.
+
+``embed`` is either one choice for every payload or a predicate evaluated
+once for each distinct payload in first blob-item order. Linked rows take
+their optional locator from ``hrefs``. The resolver is consulted only for
+embedded payloads and receives the matching locator when one was supplied.
+
+The destination must be an empty, seekable binary stream. Any refusal while
+resolving, reading, or verifying a payload rolls it back to empty, so a
+failed write never leaves a usable-looking bundle.
+
+### `relink`
+
+```text
+relink(bundle: 'Bundle', destination: 'BinaryIO', sink: 'BlobSink', *, which: 'Callable[[BlobRef], bool] | bool' = True) -> 'None'
+```
+
+Move selected embedded payloads to a sink and write linked rows.
+
+Selection is evaluated once per distinct payload in declared asset order.
+Existing linked rows and unselected embedded rows retain their modes and
+locators. A sink must consume the complete verified stream before its href
+is accepted. The destination and every selection are validated before the
+first sink call. External writes remain the sink's responsibility if a
+later sink call or bundle publication fails.
+
+### `embed_links`
+
+```text
+embed_links(bundle: 'Bundle', destination: 'BinaryIO', resolver: 'BlobResolver', *, which: 'Callable[[BlobRef], bool] | bool' = True) -> 'None'
+```
+
+Embed selected linked payloads and preserve every other asset row.
+
+The resolver is consulted only for selected linked payloads, with each
+row's href. Existing embedded payloads are streamed from the source bundle.
+Selection is evaluated once per distinct payload in declared asset order.
 
 ### `bundle_json_schema`
 
@@ -8265,6 +8314,11 @@ BlobSink(*args, **kwargs)
 
 Store one payload in caller-selected external storage.
 
+A sink may close ``source`` after consuming and verifying it completely.
+External writes remain the sink's responsibility if a later sink call or
+bundle publication fails, so implementations should be transactional or
+idempotent when partial publication is not acceptable.
+
 #### `BlobSink.put`
 
 Method.
@@ -8545,6 +8599,18 @@ The helper appends declarations and returns the same editor for chaining.
 Existing declarations are not silently adopted: the editor's ordinary
 duplicate-declaration refusals keep one explicit declaration event.
 
+### `embed_links`
+
+```text
+embed_links(bundle: 'Bundle', destination: 'BinaryIO', resolver: 'BlobResolver', *, which: 'Callable[[BlobRef], bool] | bool' = True) -> 'None'
+```
+
+Embed selected linked payloads and preserve every other asset row.
+
+The resolver is consulted only for selected linked payloads, with each
+row's href. Existing embedded payloads are streamed from the source bundle.
+Selection is evaluated once per distinct payload in declared asset order.
+
 ### `hash_blob`
 
 ```text
@@ -8560,6 +8626,38 @@ open_bundle(source: 'BinaryIO', *, limits: 'BundleLimits' = BundleLimits(max_ent
 ```
 
 Validate and open a strict store-only bundle without reading payloads.
+
+### `relink`
+
+```text
+relink(bundle: 'Bundle', destination: 'BinaryIO', sink: 'BlobSink', *, which: 'Callable[[BlobRef], bool] | bool' = True) -> 'None'
+```
+
+Move selected embedded payloads to a sink and write linked rows.
+
+Selection is evaluated once per distinct payload in declared asset order.
+Existing linked rows and unselected embedded rows retain their modes and
+locators. A sink must consume the complete verified stream before its href
+is accepted. The destination and every selection are validated before the
+first sink call. External writes remain the sink's responsibility if a
+later sink call or bundle publication fails.
+
+### `write_bundle`
+
+```text
+write_bundle(graph: 'Graph', destination: 'BinaryIO', resolver: 'BlobResolver', *, embed: 'Callable[[BlobRef], bool] | bool' = True, hrefs: 'Mapping[BlobRef, str] | None' = None, limits: 'BundleLimits' = BundleLimits(max_entries=100000, max_entry_bytes=1099511627776, max_total_bytes=17592186044416, max_central_directory_bytes=67108864, max_index_bytes=16777216, max_graph_bytes=16777216)) -> 'None'
+```
+
+Write a deterministic bundle with a per-payload storage choice.
+
+``embed`` is either one choice for every payload or a predicate evaluated
+once for each distinct payload in first blob-item order. Linked rows take
+their optional locator from ``hrefs``. The resolver is consulted only for
+embedded payloads and receives the matching locator when one was supplied.
+
+The destination must be an empty, seekable binary stream. Any refusal while
+resolving, reading, or verifying a payload rolls it back to empty, so a
+failed write never leaves a usable-looking bundle.
 
 ### `tiergraph.build`
 

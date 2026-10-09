@@ -160,6 +160,7 @@ _STDLIB_IMPORTS = {
     "urllib",
     "venv",
     "zipfile",
+    "zlib",
 }
 # This distribution's packages and its in-repository runnable/test modules.
 _PROJECT_IMPORTS = {
