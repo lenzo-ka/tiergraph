@@ -28,8 +28,11 @@ from tiergraph.blob import (
     VerifiedReader,
     bundle_json_schema,
     declare_blob_vocabulary,
+    embed_links,
     hash_blob,
     open_bundle,
+    relink,
+    write_bundle,
 )
 from tiergraph.budget import BudgetExhausted, Exhaustion, WorkBudget, WorkMeter
 from tiergraph.clock import (
@@ -646,6 +649,7 @@ __all__ = [
     "dump_compact",
     "dumps",
     "embed_json_value",
+    "embed_links",
     "equivalent",
     "evaluate_selection",
     "execute",
@@ -674,6 +678,7 @@ __all__ = [
     "program_dumps",
     "program_loads",
     "recognize",
+    "relink",
     "replace_subtree",
     "resolve_path",
     "retime",
@@ -692,4 +697,5 @@ __all__ = [
     "undeclare_with_contents",
     "weighted_sequence_distance",
     "whitespace_insensitive_projection",
+    "write_bundle",
 ]

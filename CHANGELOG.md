@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolution, ordered resolver chains, and resolver and sink protocols.
 - Added strict, bounded, lazy reading for versioned store-only ZIP bundles,
   including a published bundle-index schema and verified payload streams.
+- Added deterministic per-asset bundle writing and streaming moves between
+  embedded payloads and explicit links.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
 - Added a tested `DotPresentation` guide example.
 - Added a hand-authored exact `dumps_spans()` DOT golden.
