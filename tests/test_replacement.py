@@ -289,7 +289,6 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
         )
         in output_layer.facts
     )
-
     journal = Journal(reason="replace")
     editor = case.graph.edit(journal=journal)
     editor.replace_subtree(
@@ -553,6 +552,73 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
             case.containment,
             Subtree(case.alternative, ItemRef(case.root, 0)),
             ReplacementPolicies(ReplacementAction.TRIM),
+        )
+
+
+def test_identity_correspondence_is_linear_through_apply_and_journal() -> None:
+    """A split may identify one target while its other target remains fresh."""
+    case = fixture("speech")
+    source = ItemRef(case.leaf, 0)
+    first = ItemRef(case.leaf, 0)
+    second = ItemRef(case.leaf, 1)
+    correspondence = SubtreeCorrespondence(
+        {source: (first, second)},
+        {source: (first,)},
+    )
+    policies = drop_crossings(case, ReplacementPolicies(correspondence=correspondence))
+    subtree = Subtree(case.alternative, ItemRef(case.root, 0))
+
+    direct = replace_subtree(
+        case.graph,
+        DurableItemRef("root"),
+        case.containment,
+        subtree,
+        policies,
+    )
+    journal = Journal()
+    editor = case.graph.edit(journal=journal)
+    editor.replace_subtree(DurableItemRef("root"), case.containment, subtree, policies)
+
+    assert editor.freeze() == direct.graph
+    effective = journal.records[0].report.correspondence
+    assert effective is not None
+    assert len(effective.items[source]) == 2
+    assert effective.identity_correspondence[source] == (effective.items[source][0],)
+    assert effective.items[source][1] not in {
+        target
+        for targets in effective.identity_correspondence.values()
+        for target in targets
+    }
+    report_data = journal.records[0].to_data()["report"]
+    assert isinstance(report_data, dict)
+    assert report_data["correspondence"] == effective.to_data()
+
+
+def test_identity_correspondence_refuses_splits_and_merges() -> None:
+    """An identity claim is one-to-one even when alignment is functional."""
+    case = fixture("speech")
+    first_source = ItemRef(case.leaf, 0)
+    second_source = ItemRef(case.leaf, 1)
+    first_target = ItemRef(case.leaf, 0)
+    second_target = ItemRef(case.leaf, 1)
+
+    with pytest.raises(ValueError, match=r"source .*exactly one target.*ItemRef"):
+        SubtreeCorrespondence(
+            {first_source: (first_target, second_target)},
+            {first_source: (first_target, second_target)},
+        )
+    with pytest.raises(
+        ValueError, match=r"source .*targets .*already claimed by source"
+    ):
+        SubtreeCorrespondence(
+            {
+                first_source: (first_target,),
+                second_source: (first_target,),
+            },
+            {
+                first_source: (first_target,),
+                second_source: (first_target,),
+            },
         )
 
 
@@ -2315,7 +2381,7 @@ def test_replacement_value_and_helper_refusals_are_typed() -> None:
             aligned,
             {ItemRef(case.middle, 0): (object(),)},  # type: ignore[dict-item]
         )
-    with pytest.raises(ValueError, match="match its alignment hole"):
+    with pytest.raises(ValueError, match="belong to its alignment hole"):
         SubtreeCorrespondence(
             aligned,
             {ItemRef(case.middle, 0): (ItemRef(case.middle, 1),)},

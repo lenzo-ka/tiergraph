@@ -3237,7 +3237,8 @@ may name one new item for a merge, and one old item may name several new
 items for a split. Missing old items have no counterpart. Each source
 reference names one alignment hole. ``identity_correspondence`` optionally
 marks holes whose aligned items retain identity; an absent entry claims
-functional correspondence only.
+functional correspondence only. Identity correspondence is linear: each
+source names exactly one target, and no target is claimed by two sources.
 
 #### `SubtreeCorrespondence.to_data`
 

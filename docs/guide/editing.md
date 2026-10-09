@@ -380,10 +380,11 @@ donor coordinates that explain why the content was omitted.
 Correspondence is opt-in through `ReplacementPolicies`. An explicit
 `SubtreeCorrespondence` records named old-to-new alignment holes. Each hole can
 optionally carry `identity_correspondence`: its absence claims functional
-correspondence only, while its presence declares that the aligned items retain
-identity. Carrying a crossing relation does not promote a functional alignment
-to identity. Journal reports retain the effective correspondence so this
-distinction is explicit. Stable local per-tier matching can fill equal
+correspondence only, while its presence declares that exactly one target in the
+hole retains identity. For a split, the claim names that target and the other
+targets are fresh. Carrying a crossing relation does not promote a functional
+alignment to identity. Journal reports retain the effective correspondence so
+this distinction is explicit. Stable local per-tier matching can fill equal
 unmatched items, but remains functional unless the caller explicitly declares
 identity. `follow` requires exactly one counterpart for facts and boundary
 values, while `split` duplicates them across all declared counterparts.
@@ -427,7 +428,7 @@ boundaries, and only then calls the generic primitive:
 ```python
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from tiergraph import (
     AttributeDeclaration,
@@ -440,6 +441,10 @@ from tiergraph import (
     DurableBoundaryRef,
     DurableItemRef,
     Graph,
+    Journal,
+    Layer,
+    LayerFact,
+    LayerName,
     QualifiedName,
     RelationEndpointKind,
     RelationInstance,
@@ -460,6 +465,19 @@ class AlignedUnit(NamedTuple):
     end: int
 
 
+class RetimeOperation(Protocol):
+    """Describe the primitive invoked only after row validation succeeds."""
+
+    def __call__(
+        self,
+        profile: ClockProfile,
+        tier: QualifiedName,
+        alignment: Sequence[int],
+        *,
+        journal: Journal | None = None,
+    ) -> Graph: ...
+
+
 def import_unit_timings(
     profile: ClockProfile,
     tier: QualifiedName,
@@ -467,6 +485,7 @@ def import_unit_timings(
     alignment: Sequence[AlignedUnit],
     *,
     journal: Journal | None = None,
+    retime_operation: RetimeOperation = retime,
 ) -> Graph:
     """Validate keyed framework rows and rebind the tier in graph order."""
     member = next(
@@ -503,7 +522,7 @@ def import_unit_timings(
         raise ValueError("adjacent aligned units must share a boundary")
 
     boundaries = (ordered[0].start, *(row.end for row in ordered))
-    return retime(profile, tier, boundaries, journal=journal)
+    return retime_operation(profile, tier, boundaries, journal=journal)
 
 
 timeline_namespace = tokens.name.namespace
@@ -553,35 +572,51 @@ timed = replace(
             bindings,
             DurableBoundaryRef(tokens.name, BoundarySide.BEFORE),
             DurableBoundaryRef(samples, BoundarySide.BEFORE),
+            "binding-start",
         ),
         RelationInstance(
             bindings,
             DurableBoundaryRef(DurableItemRef("beta"), BoundarySide.BEFORE),
             DurableBoundaryRef(DurableItemRef("sample-2"), BoundarySide.BEFORE),
+            "binding-beta",
         ),
         RelationInstance(
             bindings,
             DurableBoundaryRef(DurableItemRef("gamma"), BoundarySide.BEFORE),
             DurableBoundaryRef(DurableItemRef("sample-4"), BoundarySide.BEFORE),
+            "binding-gamma",
         ),
         RelationInstance(
             bindings,
             DurableBoundaryRef(tokens.name, BoundarySide.AFTER),
             DurableBoundaryRef(samples, BoundarySide.AFTER),
+            "binding-end",
+        ),
+    ),
+    layers=(
+        Layer(
+            LayerName(timeline_namespace, "alignment"),
+            (
+                LayerFact(
+                    DurableItemRef("beta"),
+                    AttributeValue(source_span, XsdType.STRING, "5:9"),
+                ),
+            ),
         ),
     ),
 )
 profile = ClockProfile(timed, samples, bindings, None, unit)
 timing_journal = Journal(stage="alignment")
+shuffled_alignment = (
+    AlignedUnit("gamma", "9:14", 4, 6),
+    AlignedUnit("alpha", "0:5", 0, 1),
+    AlignedUnit("beta", "5:9", 1, 4),
+)
 retimed = import_unit_timings(
     profile,
     tokens.name,
     source_span,
-    (
-        AlignedUnit("gamma", "9:14", 4, 6),
-        AlignedUnit("alpha", "0:5", 0, 1),
-        AlignedUnit("beta", "5:9", 1, 4),
-    ),
+    shuffled_alignment,
     journal=timing_journal,
 )
 checked_profile = ClockProfile(retimed, samples, bindings, None, unit)
@@ -589,6 +624,111 @@ assert tuple(
     checked_profile.clock_index(BoundaryRef(tokens.name, index)) for index in range(4)
 ) == (0, 1, 4, 6)
 assert [record.operation for record in timing_journal.records] == ["set_endpoints"]
+assert tuple(item.attributes for item in retimed.tiers[0].items) == tuple(
+    item.attributes for item in timed.tiers[0].items
+)
+assert tuple(
+    (relation.declaration, relation.durable_id, relation.attributes)
+    for relation in retimed.relations
+) == tuple(
+    (relation.declaration, relation.durable_id, relation.attributes)
+    for relation in timed.relations
+)
+assert retimed.layers == timed.layers
+assert timing_journal.to_patch().invert().apply(retimed) == timed
+
+
+def assert_timing_refusal(
+    tier: QualifiedName,
+    rows: Sequence[AlignedUnit],
+    message: str,
+) -> None:
+    """Require a row refusal before the adapter invokes ``retime()``."""
+
+    def unexpected_retime(
+        profile: ClockProfile,
+        tier: QualifiedName,
+        alignment: Sequence[int],
+        *,
+        journal: Journal | None = None,
+    ) -> Graph:
+        raise AssertionError("retime was called before row validation finished")
+
+    refused_journal = Journal()
+    try:
+        import_unit_timings(
+            profile,
+            tier,
+            source_span,
+            rows,
+            journal=refused_journal,
+            retime_operation=unexpected_retime,
+        )
+    except ValueError as error:
+        assert message in str(error)
+    else:
+        raise AssertionError("invalid alignment rows were accepted")
+    assert not refused_journal.records
+
+
+assert_timing_refusal(
+    QualifiedName(timeline_namespace, "unknown-tier"),
+    shuffled_alignment,
+    "unknown timed tier",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("alpha", "0:5", 0, 1),
+        AlignedUnit("alpha", "0:5", 1, 4),
+        AlignedUnit("gamma", "9:14", 4, 6),
+    ),
+    "cover each unit ID and source span once",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("gamma", "9:14", 4, 6),
+        AlignedUnit("alpha", "0:5", 0, 1),
+        AlignedUnit("beta", "4:9", 1, 4),
+    ),
+    "cover each unit ID and source span once",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("alpha", "0:5", 0, 1),
+        AlignedUnit("beta", "5:9", 1, 4),
+    ),
+    "cover each unit ID and source span once",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("alpha", "0:5", 0, 1),
+        AlignedUnit("beta", "5:9", 2, 4),
+        AlignedUnit("gamma", "9:14", 4, 6),
+    ),
+    "share a boundary",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("unknown", "0:5", 0, 1),
+        AlignedUnit("beta", "5:9", 1, 4),
+        AlignedUnit("gamma", "9:14", 4, 6),
+    ),
+    "cover each unit ID and source span once",
+)
+assert_timing_refusal(
+    tokens.name,
+    (
+        AlignedUnit("alpha", "stale", 0, 1),
+        AlignedUnit("beta", "5:9", 1, 4),
+        AlignedUnit("gamma", "9:14", 4, 6),
+    ),
+    "cover each unit ID and source span once",
+)
 ```
 
 The row order is deliberately unrelated to tier order. Unknown, duplicate,
@@ -683,11 +823,20 @@ class TextViewCosts(NamedTuple):
 
     projection: SequenceProjection
     costs: CostTable
+    normalize: Callable[[Graph], Graph]
+
+
+surface = QualifiedName(tokens.name.namespace, "surface")
 
 
 def item_text(graph: Graph) -> tuple[str, ...]:
     """Read this application's ordered text pieces."""
-    return tuple(item.durable_id or "" for item in graph.tiers[0].items)
+    return tuple(
+        value.lexical
+        for item in graph.tiers[0].items
+        for value in item.attributes
+        if isinstance(value, AttributeValue) and value.name == surface
+    )
 
 
 def identity(text: str) -> str:
@@ -712,6 +861,32 @@ def without_format_controls(text: str) -> str:
     )
 
 
+def normalize_graph(graph: Graph, normalize: Callable[[str], str]) -> Graph:
+    """Normalize surface values without changing tiers, IDs, or references."""
+    return replace(
+        graph,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(
+                    replace(
+                        item,
+                        attributes=tuple(
+                            replace(value, lexical=normalize(value.lexical))
+                            if isinstance(value, AttributeValue)
+                            and value.name == surface
+                            else value
+                            for value in item.attributes
+                        ),
+                    )
+                    for item in tier.items
+                ),
+            )
+            for tier in graph.tiers
+        ),
+    )
+
+
 def value_cost(
     normalize: Callable[[str], str],
 ) -> Callable[[Attribute, Attribute], int]:
@@ -719,7 +894,11 @@ def value_cost(
 
     def substitute(before: Attribute, after: Attribute) -> int:
         """Return zero exactly when this view identifies the values."""
-        if isinstance(before, AttributeValue) and isinstance(after, AttributeValue):
+        if (
+            isinstance(before, AttributeValue)
+            and isinstance(after, AttributeValue)
+            and before.name == after.name == surface
+        ):
             return int(normalize(before.lexical) != normalize(after.lexical))
         return int(before != after)
 
@@ -752,49 +931,87 @@ def costs_for(
 
 views = {
     "strict": TextViewCosts(
-        text_projection("strict", item_text, join=join_pieces), costs_for(identity)
+        text_projection("strict", item_text, join=join_pieces),
+        costs_for(identity),
+        lambda graph: normalize_graph(graph, identity),
     ),
     "presentation": TextViewCosts(
         text_projection(
             "presentation", item_text, join=join_pieces, transform=presentation
         ),
         costs_for(presentation),
+        lambda graph: normalize_graph(graph, presentation),
     ),
     "whitespace-insensitive": TextViewCosts(
         whitespace_insensitive_projection(item_text, join=join_pieces),
         costs_for(without_whitespace),
+        lambda graph: normalize_graph(graph, without_whitespace),
     ),
     "format-control-insensitive": TextViewCosts(
         format_control_insensitive_projection(item_text, join=join_pieces),
         costs_for(without_format_controls, controls_are_free=True),
+        lambda graph: normalize_graph(graph, without_format_controls),
     ),
 }
 
-upper = replace(
-    base,
-    tiers=(replace(base.tiers[0], items=(Item("ALPHA"), *base.tiers[0].items[1:])),),
-)
-spaced = replace(
-    base,
-    tiers=(replace(base.tiers[0], items=(Item("al pha"), *base.tiers[0].items[1:])),),
-)
-controlled = replace(
+text_base = replace(
     base,
     tiers=(
-        replace(base.tiers[0], items=(Item("al\u200cpha"), *base.tiers[0].items[1:])),
+        replace(
+            base.tiers[0],
+            items=tuple(
+                replace(
+                    item,
+                    attributes=(
+                        AttributeValue(surface, XsdType.STRING, item.durable_id or ""),
+                    ),
+                )
+                for item in base.tiers[0].items
+            ),
+        ),
+    ),
+    attribute_declarations=(
+        AttributeDeclaration(surface, AttributeDomain.ITEM, XsdType.STRING),
     ),
 )
-assert views["strict"].projection.distance(base, upper) == 5
-assert views["presentation"].projection.distance(base, upper) == 0
-assert views["whitespace-insensitive"].projection.distance(base, spaced) == 0
-assert views["format-control-insensitive"].projection.distance(base, controlled) == 0
+
+
+def replace_first_text(graph: Graph, text: str) -> Graph:
+    """Replace the first surface reading without changing its identity."""
+    first = graph.tiers[0].items[0]
+    return replace(
+        graph,
+        tiers=(
+            replace(
+                graph.tiers[0],
+                items=(
+                    replace(
+                        first,
+                        attributes=(AttributeValue(surface, XsdType.STRING, text),),
+                    ),
+                    *graph.tiers[0].items[1:],
+                ),
+            ),
+            *graph.tiers[1:],
+        ),
+    )
+
+
+upper = replace_first_text(text_base, "ALPHA")
+spaced = replace_first_text(text_base, "al pha")
+controlled = replace_first_text(text_base, "al\u200cpha")
+assert views["strict"].projection.distance(text_base, upper) == 5
+assert views["presentation"].projection.distance(text_base, upper) == 0
+assert views["whitespace-insensitive"].projection.distance(text_base, spaced) == 0
+assert (
+    views["format-control-insensitive"].projection.distance(text_base, controlled) == 0
+)
 assert views["strict"].costs.operation("insert_item", tokens.name) == 2
 assert (
     views["format-control-insensitive"].costs.operation("insert_item", format_controls)
     == 0
 )
 
-surface = QualifiedName(tokens.name.namespace, "surface")
 plain_value = AttributeValue(surface, XsdType.STRING, "alpha")
 controlled_value = AttributeValue(surface, XsdType.STRING, "al\u200cpha")
 assert views["strict"].costs.substitute_value(plain_value, controlled_value) == 1
@@ -806,15 +1023,95 @@ assert (
 )
 ```
 
+The graph comparison uses those same readers and costs. Normalization changes
+only the declared surface value, so the durable item IDs and the cross-tier
+relation remain intact:
+
+```python
+from tiergraph import graph_distance
+
+control_type = QualifiedName(tokens.name.namespace, "format-control")
+control_membership = QualifiedName(tokens.name.namespace, "format-control-membership")
+control_link = QualifiedName(tokens.name.namespace, "token-format-control")
+control_item = Item("control-1", (AttributeValue(surface, XsdType.STRING, "\u200c"),))
+control_tier = Tier(
+    TierDeclaration(format_controls, "Format controls"), (control_item,)
+)
+two_tier = Graph(
+    text_base.namespaces,
+    (*text_base.tiers, control_tier),
+    (
+        *text_base.relation_declarations,
+        SimpleRelationDeclaration(control_membership, format_controls, control_type),
+        BipartiteRelationDeclaration(control_link, tokens.item_type, control_type),
+    ),
+    relations=(
+        RelationInstance(
+            control_link,
+            DurableItemRef("alpha"),
+            DurableItemRef("control-1"),
+        ),
+    ),
+    attribute_declarations=text_base.attribute_declarations,
+)
+upper_two_tier = replace_first_text(two_tier, "ALPHA")
+
+strict_source = views["strict"].normalize(two_tier)
+strict_target = views["strict"].normalize(upper_two_tier)
+presentation_source = views["presentation"].normalize(two_tier)
+presentation_target = views["presentation"].normalize(upper_two_tier)
+assert presentation_source.relations == two_tier.relations
+assert tuple(
+    item.durable_id for tier in presentation_source.tiers for item in tier.items
+) == (
+    "alpha",
+    "beta",
+    "gamma",
+    "control-1",
+)
+strict_distance = graph_distance(strict_source, strict_target, views["strict"].costs)
+presentation_distance = graph_distance(
+    presentation_source,
+    presentation_target,
+    views["presentation"].costs,
+)
+assert strict_distance.upper > 0
+assert presentation_distance.value == 0
+
+control_present = Graph(
+    text_base.namespaces,
+    (control_tier,),
+    (SimpleRelationDeclaration(control_membership, format_controls, control_type),),
+    attribute_declarations=text_base.attribute_declarations,
+)
+control_absent = replace(
+    control_present,
+    tiers=(replace(control_tier, items=()),),
+)
+strict_control_distance = graph_distance(
+    views["strict"].normalize(control_present),
+    views["strict"].normalize(control_absent),
+    views["strict"].costs,
+)
+free_control_distance = graph_distance(
+    views["format-control-insensitive"].normalize(control_present),
+    views["format-control-insensitive"].normalize(control_absent),
+    views["format-control-insensitive"].costs,
+)
+assert strict_control_distance.value is not None
+assert strict_control_distance.value > 0
+assert free_control_distance.value == 0
+```
+
 The dedicated zero-cost declaration makes that table a pseudometric at the
 raw-graph level, which `metric_violations()` reports. It is appropriate only
 when the application intentionally quotients away that class. If format
 controls share ordinary items with visible text, their whole-item insertion and
 removal remain ordinary costs; the projection and `value_substitution` callback
-still make control-only replacements free. For a multi-tier graph result,
-normalize a copy under the selected view and call `graph_distance()` with the
-matching table. The sequence projection itself is not a lower-bound certificate
-for a general graph.
+still make control-only replacements free. The multi-tier comparison above
+normalizes copies under the selected view and retains cross-tier references
+before calling `graph_distance()` with the matching table. The sequence
+projection itself is not a lower-bound certificate for a general graph.
 
 ## Bound history and clean up explicitly
 

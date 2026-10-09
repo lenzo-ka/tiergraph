@@ -651,6 +651,47 @@ def test_full_replacement_policy_codec_and_refusals(tmp_path: Path) -> None:
     assert decoded.insertion_points == {QualifiedName("urn:path", "tokens"): 1}
     assert cli._replacement_policies(None) == tiergraph.ReplacementPolicies()
 
+    for index, identity in enumerate((True, [item, second_item])):
+        split = tmp_path / f"split-identity-{index}.json"
+        split.write_text(
+            json.dumps(
+                {
+                    "correspondence": [
+                        {
+                            "old": item,
+                            "new": [item, second_item],
+                            "identity_correspondence": identity,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="exactly one target"):
+            cli._replacement_policies(str(split))
+
+    split = tmp_path / "linear-split-identity.json"
+    split.write_text(
+        json.dumps(
+            {
+                "correspondence": [
+                    {
+                        "old": item,
+                        "new": [item, second_item],
+                        "identity_correspondence": [second_item],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    split_decoded = cli._replacement_policies(str(split))
+    assert split_decoded.correspondence.identity_correspondence == {
+        ItemRef(QualifiedName("urn:path", "tokens"), 0): (
+            ItemRef(QualifiedName("urn:path", "tokens"), 1),
+        )
+    }
+
     invalid: list[object] = [
         [],
         {"unknown": 1},
