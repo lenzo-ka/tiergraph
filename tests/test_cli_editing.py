@@ -611,10 +611,20 @@ def test_layer_subjects_and_actions(tmp_path: Path) -> None:
 def test_full_replacement_policy_codec_and_refusals(tmp_path: Path) -> None:
     qname = {"namespace": "urn:path", "local_name": "tokens"}
     item = {"tier": qname, "index": 0}
+    second_item = {"tier": qname, "index": 1}
+    third_item = {"tier": qname, "index": 2}
     policy = {
         "default": "follow",
         "correspond": True,
-        "correspondence": [{"old": item, "new": [item]}],
+        "correspondence": [
+            {"old": item, "new": [item], "identity_correspondence": True},
+            {
+                "old": second_item,
+                "new": [second_item],
+                "identity_correspondence": [second_item],
+            },
+            {"old": third_item, "new": [third_item], "identity_correspondence": False},
+        ],
         "relations": [
             {
                 "name": {"namespace": "urn:path", "local_name": "contains"},
@@ -630,6 +640,14 @@ def test_full_replacement_policy_codec_and_refusals(tmp_path: Path) -> None:
     path.write_text(json.dumps(policy), encoding="utf-8")
     decoded = cli._replacement_policies(str(path))
     assert decoded.correspond and decoded.default is tiergraph.ReplacementAction.FOLLOW
+    assert decoded.correspondence.identity_correspondence == {
+        ItemRef(QualifiedName("urn:path", "tokens"), 0): (
+            ItemRef(QualifiedName("urn:path", "tokens"), 0),
+        ),
+        ItemRef(QualifiedName("urn:path", "tokens"), 1): (
+            ItemRef(QualifiedName("urn:path", "tokens"), 1),
+        ),
+    }
     assert decoded.insertion_points == {QualifiedName("urn:path", "tokens"): 1}
     assert cli._replacement_policies(None) == tiergraph.ReplacementPolicies()
 
@@ -639,6 +657,11 @@ def test_full_replacement_policy_codec_and_refusals(tmp_path: Path) -> None:
         {"correspondence": {}},
         {"correspondence": [{}]},
         {"correspondence": [{"old": item, "new": {}}]},
+        {
+            "correspondence": [
+                {"old": item, "new": [item], "identity_correspondence": {}}
+            ]
+        },
         {"relations": {}},
         {"relations": [{}]},
         {"relations": [{"name": qname, "action": 1}]},

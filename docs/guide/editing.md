@@ -251,29 +251,47 @@ defines the policies and report fields in detail.
 
 `replace_subtree()` keeps the named root and its incoming containment link, then
 replaces the descendants reached through the declared containment relations.
-Abandonment is the default: non-containment dependencies on departing
-descendants are detached and listed in the returned `EditResult.report` even
-without a journal. The report snapshots withdrawn items, relation instances,
+Facts and boundary values still use their declared replacement policy. A binary
+or polyadic relation crossing the replaced edge instead carries automatically:
+each inside endpoint follows the old-to-new correspondence, while outside
+endpoints remain attached to their displaced items. Polyadic one-to-many holes
+expand in place, so declared endpoint order is preserved. If an inside endpoint
+has no counterpart, or a binary endpoint has several, the edit refuses and
+names the relation and endpoint. `drop` explicitly removes the whole relation;
+`trim` is polyadic-only and removes only the unaligned endpoints. Reports contain
+only the relation or endpoints actually removed. A carried polyadic relation
+also refuses by relation and endpoint if flattening or trimming would violate
+its local declaration invariants; `drop` is the fallback for that case. A fact
+whose subject is a carried relation follows it; facts on a dropped relation are
+reported.
+
+The returned `EditResult.report` snapshots withdrawn items, relation instances,
 facts, and individual boundary values in graph order with their original
 references and complete typed values, including durable identifiers where
 present. Its `graph` field is the edited graph. `Graph.replace_subtree()` remains
 a graph-returning convenience; call the module function when the report is
 needed. A journal record exposes the same detached content, and its inverse
-restores it.
-Binary relations in the supplied graph are copied only when both endpoints
-belong to the supplied subtree. A binary relation that crosses that subtree edge
-is not copied; the report identifies it with a `donor_relations` dependency
-whose index addresses the supplied graph. Carrying such a relation requires an
-external endpoint mapping and is not inferred.
+restores it. Binary and polyadic relations in the supplied donor graph are
+copied only when all endpoints belong to the supplied subtree. A crossing donor
+relation and any facts on it are not copied, but their complete content is
+included in the report's separate `donor_relations` and `donor_facts` fields.
+The corresponding `donor_relations` and `donor_layer` dependencies retain the
+donor coordinates that explain why the content was omitted.
 
 Correspondence is opt-in through `ReplacementPolicies`. An explicit
-`SubtreeCorrespondence` maps an old descendant to zero, one, or several new
-descendants; stable local per-tier matching can fill equal unmatched items.
-`follow` requires exactly one counterpart, while `split` duplicates a
-dependency across all declared counterparts. Boundary-subject facts use the
-same boundary correspondence as boundary values. Policies can differ by
-relation or layer. `swap_subtrees()` also returns an `EditResult`, composes two
-replacements, and refuses equal or nested roots. `Graph.swap_subtrees()` keeps
+`SubtreeCorrespondence` records named old-to-new alignment holes. Each hole can
+optionally carry `identity_correspondence`: its absence claims functional
+correspondence only, while its presence declares that the aligned items retain
+identity. Carrying a crossing relation does not promote a functional alignment
+to identity. Journal reports retain the effective correspondence so this
+distinction is explicit. Stable local per-tier matching can fill equal
+unmatched items, but remains functional unless the caller explicitly declares
+identity. `follow` requires exactly one counterpart for facts and boundary
+values, while `split` duplicates them across all declared counterparts.
+Boundary-subject facts use the same boundary correspondence as boundary values.
+Policies can differ by relation or layer. `swap_subtrees()` also returns an
+`EditResult`, composes two replacements, reports boundary values absent from the
+final graph, and refuses equal or nested roots. `Graph.swap_subtrees()` keeps
 returning only the graph. Clock-aware replacement is available, but the
 graph-level subtree swap has no clock policy; do not use that convenience
 operation on clock-bound tiers.

@@ -1334,7 +1334,7 @@ class ClockEditor:
             timed,
             old_by_tier,
             new_by_tier,
-            outcome.correspondence,
+            outcome.correspondence.items,
             records,
             detached,
             outcome.detached,

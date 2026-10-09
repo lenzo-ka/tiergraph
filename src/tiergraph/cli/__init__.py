@@ -3135,16 +3135,22 @@ def _replacement_policies(filename: str | None) -> tiergraph.ReplacementPolicies
             f"replacement policies have unknown fields {sorted(unknown)!r}",
         )
     correspondence: dict[tiergraph.ItemRef, tuple[tiergraph.ItemRef, ...]] = {}
+    identity_correspondence: dict[tiergraph.ItemRef, tuple[tiergraph.ItemRef, ...]] = {}
     raw_correspondence = value.get("correspondence", [])
     if not isinstance(raw_correspondence, list):
         raise Refusal(
             RefusalStage.CONSTRUCTION, "replacement correspondence must be an array"
         )
     for index, entry in enumerate(raw_correspondence):
-        if not isinstance(entry, dict) or set(entry) != {"old", "new"}:
+        if (
+            not isinstance(entry, dict)
+            or not {"old", "new"} <= set(entry)
+            or set(entry) - {"old", "new", "identity_correspondence"}
+        ):
             raise Refusal(
                 RefusalStage.SHAPE,
-                f"replacement correspondence[{index}] needs old and new",
+                f"replacement correspondence[{index}] needs old and new and may "
+                "name identity_correspondence",
             )
         new = entry["new"]
         if not isinstance(new, list):
@@ -3152,9 +3158,23 @@ def _replacement_policies(filename: str | None) -> tiergraph.ReplacementPolicies
                 RefusalStage.CONSTRUCTION,
                 f"replacement correspondence[{index}].new must be an array",
             )
-        correspondence[_machine._decode_item_ref(entry["old"], "old")] = tuple(
-            _machine._decode_item_ref(item, "new") for item in new
-        )
+        old = _machine._decode_item_ref(entry["old"], "old")
+        targets = tuple(_machine._decode_item_ref(item, "new") for item in new)
+        correspondence[old] = targets
+        identity = entry.get("identity_correspondence")
+        if identity is True:
+            identity_correspondence[old] = targets
+        elif isinstance(identity, list):
+            identity_correspondence[old] = tuple(
+                _machine._decode_item_ref(item, "identity_correspondence")
+                for item in identity
+            )
+        elif identity is not None and identity is not False:
+            raise Refusal(
+                RefusalStage.CONSTRUCTION,
+                f"replacement correspondence[{index}].identity_correspondence "
+                "must be a boolean or array",
+            )
     relations: dict[tiergraph.QualifiedName, tiergraph.ReplacementAction] = {}
     for index, entry in enumerate(
         _policy_entries(value.get("relations", []), "relations")
@@ -3205,7 +3225,7 @@ def _replacement_policies(filename: str | None) -> tiergraph.ReplacementPolicies
     return tiergraph.ReplacementPolicies(
         tiergraph.ReplacementAction(default),
         correspond,
-        tiergraph.SubtreeCorrespondence(correspondence),
+        tiergraph.SubtreeCorrespondence(correspondence, identity_correspondence),
         relations,
         layers,
         insertion_points,

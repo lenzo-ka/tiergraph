@@ -35,6 +35,7 @@ from tiergraph.core import (
     RelationEndpointRef,
     RelationInstance,
     RelationInstanceRef,
+    RelationSideDeclaration,
     SealDeclaration,
 )
 
@@ -45,6 +46,8 @@ class ReplacementAction(StrEnum):
     ABANDON = "abandon"
     FOLLOW = "follow"
     SPLIT = "split"
+    DROP = "drop"
+    TRIM = "trim"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,14 +67,20 @@ class Subtree:
 
 @dataclass(frozen=True, slots=True)
 class SubtreeCorrespondence:
-    """Map old descendants to zero, one, or several new descendants.
+    """Align old descendant holes with zero, one, or several new positions.
 
     References on the right address :attr:`Subtree.graph`. Multiple old items
     may name one new item for a merge, and one old item may name several new
-    items for a split. Missing old items have no counterpart.
+    items for a split. Missing old items have no counterpart. Each source
+    reference names one alignment hole. ``identity_correspondence`` optionally
+    marks holes whose aligned items retain identity; an absent entry claims
+    functional correspondence only.
     """
 
     items: Mapping[ItemRef, tuple[ItemRef, ...]] = field(default_factory=dict)
+    identity_correspondence: Mapping[ItemRef, tuple[ItemRef, ...]] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Detach the mapping and require ordered target tuples."""
@@ -83,17 +92,57 @@ class SubtreeCorrespondence:
             if any(not isinstance(target, ItemRef) for target in values):
                 raise TypeError("correspondence targets must be item references")
             detached[source] = values
+        identities: dict[ItemRef, tuple[ItemRef, ...]] = {}
+        for source, targets in self.identity_correspondence.items():
+            if not isinstance(source, ItemRef):
+                raise TypeError(
+                    "identity correspondence sources must be item references"
+                )
+            values = tuple(targets)
+            if any(not isinstance(target, ItemRef) for target in values):
+                raise TypeError(
+                    "identity correspondence targets must be item references"
+                )
+            if detached.get(source) != values:
+                raise ValueError(
+                    "identity correspondence must match its alignment hole"
+                )
+            identities[source] = values
         object.__setattr__(self, "items", MappingProxyType(detached))
+        object.__setattr__(
+            self, "identity_correspondence", MappingProxyType(identities)
+        )
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return named alignment holes with optional identity claims."""
+        holes: list[JsonValue] = []
+        for source, targets in sorted(
+            self.items.items(), key=lambda pair: (str(pair[0].tier), pair[0].index)
+        ):
+            hole: dict[str, JsonValue] = {
+                "name": str(source),
+                "old": source.to_data(),
+                "new": [target.to_data() for target in targets],
+            }
+            identities = self.identity_correspondence.get(source)
+            if identities is not None:
+                hole["identity_correspondence"] = [
+                    target.to_data() for target in identities
+                ]
+            holes.append(hole)
+        return {"holes": holes}
 
 
 @dataclass(frozen=True, slots=True)
 class ReplacementPolicies:
     """Declare replacement defaults and per-carrier dependency actions.
 
-    Abandonment is the default. ``correspond`` enables a stable local
-    per-tier alignment for unmatched items with equal content; an explicit
-    correspondence is applied first. Per-relation and per-layer actions
-    override ``default``.
+    Abandonment is the default for facts and boundary values. Crossing
+    relations instead carry through correspondence; ``drop`` and polyadic
+    ``trim`` are explicit fallbacks for a missing correspondence. ``correspond``
+    enables a stable local per-tier alignment for unmatched items with equal
+    content; an explicit correspondence is applied first. Per-relation and
+    per-layer actions override ``default``.
     ``follow`` requires exactly one counterpart for every referenced item.
     ``split`` duplicates a dependency over all declared counterparts.
     """
@@ -159,6 +208,11 @@ class ReplacementPolicies:
         )
 
 
+def _abandons(action: ReplacementAction) -> bool:
+    """Return whether a general dependency policy withdraws its content."""
+    return action in {ReplacementAction.ABANDON, ReplacementAction.DROP}
+
+
 @dataclass(frozen=True, slots=True)
 class DetachedDependency:
     """Name one dependency omitted or removed by replacement.
@@ -166,8 +220,9 @@ class DetachedDependency:
     Ordinary carrier coordinates address the graph passed to the replacement
     function before editing. A
     ``donor_relations`` coordinate addresses :attr:`Subtree.graph` and names a
-    binary relation that crossed the supplied subtree edge, so it could not be
-    copied.
+    binary or polyadic relation that crossed the supplied subtree edge, so it
+    could not be copied. ``polyadic_endpoints`` names one endpoint removed by
+    an explicit trim.
     """
 
     carrier: str
@@ -176,6 +231,9 @@ class DetachedDependency:
     layer: LayerName | None = None
     subject: LayerSubject | None = None
     tier: QualifiedName | None = None
+    endpoint: RelationEndpointRef | None = None
+    endpoint_side: str | None = None
+    endpoint_index: int | None = None
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return a stable, JSON-compatible description."""
@@ -191,6 +249,12 @@ class DetachedDependency:
             data["subject"] = _subject_data(self.subject)
         if self.tier is not None:
             data["tier"] = self.tier.to_data()
+        if self.endpoint is not None:
+            data["endpoint"] = _subject_data(self.endpoint)
+        if self.endpoint_side is not None:
+            data["endpoint_side"] = self.endpoint_side
+        if self.endpoint_index is not None:
+            data["endpoint_index"] = self.endpoint_index
         return data
 
 
@@ -198,11 +262,13 @@ class DetachedDependency:
 class DetachmentReport:
     """Snapshot graph content withdrawn by one derived edit.
 
-    Items follow tier and item order, relation instances follow their carrier
-    order, facts follow canonical layer and fact order, and boundary values
-    follow boundary and attribute order. Entries retain their original
-    references and complete typed values, including durable identifiers where
-    present.
+    Source items follow tier and item order, source relation instances follow
+    their carrier order, source facts follow canonical layer and fact order,
+    and boundary values follow boundary and attribute order. Donor relations
+    and facts have separate fields because their coordinates address the
+    supplied subtree graph rather than the edited graph. Entries retain their
+    original references and complete typed values, including durable
+    identifiers where present.
     """
 
     items: tuple[tuple[ItemRef, Item], ...] = ()
@@ -216,12 +282,29 @@ class DetachmentReport:
     facts: tuple[tuple[LayerName, LayerFact], ...] = ()
     dependencies: tuple[DetachedDependency, ...] = ()
     boundary_values: tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...] = ()
+    donor_relations: tuple[
+        tuple[
+            RelationInstanceRef | PolyadicInstanceRef,
+            RelationInstance | PolyadicRelationInstance,
+        ],
+        ...,
+    ] = ()
+    donor_facts: tuple[tuple[LayerName, LayerFact], ...] = ()
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the ordered detached content as JSON-compatible data."""
-        relation_data: list[JsonValue] = []
-        for reference, relation in self.relations:
-            relation_data.append(
+
+        def relation_data(
+            values: tuple[
+                tuple[
+                    RelationInstanceRef | PolyadicInstanceRef,
+                    RelationInstance | PolyadicRelationInstance,
+                ],
+                ...,
+            ],
+        ) -> list[JsonValue]:
+            """Encode one graph's binary and polyadic relation snapshots."""
+            return [
                 {
                     "carrier": (
                         "polyadic_relations"
@@ -231,24 +314,34 @@ class DetachmentReport:
                     "index": reference.index,
                     "instance": relation.to_data(),
                 }
-            )
-        fact_data: list[JsonValue] = []
-        for layer_name, fact in self.facts:
-            encoded = Layer(layer_name, (fact,)).to_data()
-            facts = cast(list[dict[str, JsonValue]], encoded["facts"])
-            fact_data.append({"layer": layer_name.to_data(), "fact": facts[0]})
+                for reference, relation in values
+            ]
+
+        def fact_data(
+            values: tuple[tuple[LayerName, LayerFact], ...],
+        ) -> list[JsonValue]:
+            """Encode one graph's ordered layer-fact snapshots."""
+            result: list[JsonValue] = []
+            for layer_name, fact in values:
+                encoded = Layer(layer_name, (fact,)).to_data()
+                facts = cast(list[dict[str, JsonValue]], encoded["facts"])
+                result.append({"layer": layer_name.to_data(), "fact": facts[0]})
+            return result
+
         return {
             "items": [
                 {"reference": reference.to_data(), "item": item.to_data()}
                 for reference, item in self.items
             ],
-            "relations": relation_data,
-            "facts": fact_data,
+            "relations": relation_data(self.relations),
+            "facts": fact_data(self.facts),
             "dependencies": [item.to_data() for item in self.dependencies],
             "boundary_values": [
                 {"reference": reference.to_data(), "value": value.to_data()}
                 for reference, value in self.boundary_values
             ],
+            "donor_relations": relation_data(self.donor_relations),
+            "donor_facts": fact_data(self.donor_facts),
         }
 
 
@@ -266,7 +359,7 @@ class _ReplacementOutcome:
     displacement: Displacement
     detached: tuple[DetachedDependency, ...]
     report: DetachmentReport | None
-    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]]
+    correspondence: SubtreeCorrespondence
     new_items: Mapping[ItemRef, ItemRef]
 
 
@@ -290,10 +383,13 @@ def replace_subtree(
     The root, its incoming containment link, its attributes, and its layer facts
     remain live. The default abandons dependencies on descendants. The result
     reports the abandoned items, relation instances, facts, and boundary values
-    whether or not a journal is used. A binary donor relation that crosses the
-    supplied subtree edge is also reported, but not copied. Correspondence is
-    explicitly opt-in, and boundary-subject facts use the same correspondence
-    as boundary values.
+    whether or not a journal is used. Binary and polyadic relations crossing
+    the replaced edge carry through the old-to-new correspondence in declared
+    endpoint order. A missing or ambiguous endpoint refuses unless ``drop`` or,
+    for a polyadic relation, ``trim`` is named. Donor relations crossing the
+    supplied subtree edge and their facts are reported as complete content but
+    not copied. Correspondence is explicitly opt-in, and boundary-subject facts
+    use the same correspondence as boundary values.
     """
     outcome = _replace_subtree(
         graph, root, containment, new, policies, capture_report=True
@@ -309,7 +405,7 @@ def swap_subtrees(
     first_policies: ReplacementPolicies | None = None,
     second_policies: ReplacementPolicies | None = None,
 ) -> EditResult:
-    """Exchange descendant sets and report dependencies left detached."""
+    """Exchange descendant sets and report every dependency or value lost."""
     outcome = _swap_subtrees(
         graph,
         first,
@@ -354,12 +450,15 @@ def _swap_subtrees(
     else:
         current_second = first_outcome.displacement.items[right.root]
     current_right = _shape(first_outcome.graph, current_second, selected)
+    translated_second_policies = _translated_swap_policies(
+        second_policies, first_outcome.displacement
+    )
     second_outcome = _replace_subtree(
         first_outcome.graph,
         current_second,
         names,
         Subtree(graph, first),
-        second_policies,
+        translated_second_policies,
         report_donor_edges=False,
     )
     current_temporary = {
@@ -398,15 +497,58 @@ def _swap_subtrees(
             ),
         )
     )
+    displacement = first_outcome.displacement.then(second_outcome.displacement).then(
+        final_outcome.displacement
+    )
+    swap_correspondence = {
+        **{
+            source: (final_outcome.displacement.items[current],)
+            for source, current in second_outcome.new_items.items()
+            if source in left.descendants
+        },
+        **{
+            source: (target,)
+            for source, target in final_outcome.new_items.items()
+            if source in right.descendants
+        },
+    }
     return _ReplacementOutcome(
         final_outcome.graph,
-        first_outcome.displacement.then(second_outcome.displacement).then(
-            final_outcome.displacement
-        ),
+        displacement,
         detached,
-        (_detachment_report(graph, dependencies=detached) if capture_report else None),
-        final_outcome.correspondence,
+        (
+            _detachment_report(
+                graph,
+                dependencies=detached,
+                boundary_values=_removed_boundary_values(
+                    graph, final_outcome.graph, displacement
+                ),
+            )
+            if capture_report
+            else None
+        ),
+        SubtreeCorrespondence(swap_correspondence, swap_correspondence),
         final_outcome.new_items,
+    )
+
+
+def _translated_swap_policies(
+    policies: ReplacementPolicies | None, displacement: Displacement
+) -> ReplacementPolicies | None:
+    """Move second-side correspondence sources into the intermediate graph."""
+    if policies is None:
+        return None
+    items = {
+        displacement.items.get(source, source): targets
+        for source, targets in policies.correspondence.items.items()
+    }
+    identities = {
+        displacement.items.get(source, source): targets
+        for source, targets in policies.correspondence.identity_correspondence.items()
+    }
+    return replace(
+        policies,
+        correspondence=SubtreeCorrespondence(items, identities),
     )
 
 
@@ -819,6 +961,10 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         source: tuple(source_to_target[target] for target in targets)
         for source, targets in raw_correspondence.items()
     }
+    identity_correspondence = {
+        source: tuple(source_to_target[target] for target in targets)
+        for source, targets in chosen.correspondence.identity_correspondence.items()
+    }
 
     editor = GraphEditor(graph)
     detached: list[DetachedDependency] = []
@@ -853,7 +999,14 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             action = chosen.layers.get(layer.name, chosen.default)
             editor.remove_fact(layer.name, fact.subject, fact.value.name)
             held_facts.append((layer.name, fact_index, fact, action))
-            if action is ReplacementAction.ABANDON:
+            is_relation_subject = isinstance(
+                fact.subject,
+                RelationInstanceRef
+                | PolyadicInstanceRef
+                | DurableRelationRef
+                | DurablePolyadicRef,
+            )
+            if _abandons(action) and not is_relation_subject:
                 detached.append(
                     DetachedDependency(
                         "layer", fact_index, layer=layer.name, subject=fact.subject
@@ -871,7 +1024,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             )
             for value in stored_boundary.attributes:
                 editor.remove_attribute(stored_boundary.reference, value.name)
-            if chosen.default is ReplacementAction.ABANDON:
+            if _abandons(chosen.default):
                 detached.append(
                     DetachedDependency(
                         "boundary_values", coordinate.index, tier=coordinate.tier
@@ -889,31 +1042,47 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         items = tuple(new.graph._tiers_by_name[tier].items[index] for index in indexes)
         editor.insert_items(tier, insertions[tier], items)
     item_images = editor.displacement().items
+    inserted_graph = editor.freeze()
 
     additions_binary: list[tuple[int, RelationInstance, int]] = []
     additions_polyadic: list[tuple[int, PolyadicRelationInstance, int]] = []
     for index, binary_relation in old_binary:
         if index in old_shape.binary:
             continue
-        action = chosen.relations.get(binary_relation.declaration, chosen.default)
-        binary_replacements = _binary_replacements(
-            graph, binary_relation, correspondence, item_images, action
+        crossing_policy = _crossing_policy(chosen, binary_relation.declaration)
+        binary_carried = _carry_binary_relation(
+            graph,
+            inserted_graph,
+            index,
+            binary_relation,
+            old_shape.descendants,
+            correspondence,
+            item_images,
+            crossing_policy,
         )
-        if not binary_replacements:
+        if binary_carried is None:
             detached.append(
                 DetachedDependency(
                     "relations", index, declaration=binary_relation.declaration
                 )
             )
-        additions_binary.extend((index, value, index) for value in binary_replacements)
+        else:
+            additions_binary.append((index, binary_carried, index))
     for index, polyadic_relation in old_polyadic:
         if index in old_shape.polyadic:
             continue
-        action = chosen.relations.get(polyadic_relation.declaration, chosen.default)
-        polyadic_replacements = _polyadic_replacements(
-            graph, polyadic_relation, correspondence, item_images, action
+        crossing_policy = _crossing_policy(chosen, polyadic_relation.declaration)
+        polyadic_carried, removed_endpoints = _carry_polyadic_relation(
+            graph,
+            inserted_graph,
+            index,
+            polyadic_relation,
+            old_shape.descendants,
+            correspondence,
+            item_images,
+            crossing_policy,
         )
-        if not polyadic_replacements:
+        if polyadic_carried is None:
             detached.append(
                 DetachedDependency(
                     "polyadic_relations",
@@ -921,34 +1090,53 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
                     declaration=polyadic_relation.declaration,
                 )
             )
-        additions_polyadic.extend(
-            (index, value, index) for value in polyadic_replacements
-        )
+        else:
+            additions_polyadic.append((index, polyadic_carried, index))
+            detached.extend(removed_endpoints)
 
-    inserted_graph = editor.freeze()
     source_members = frozenset({new_shape.root, *new_shape.descendants})
     source_binary: list[int] = []
-    for index, relation in enumerate(new.graph.relations):
+    donor_binary: list[int] = []
+    for index, source_binary_relation in enumerate(new.graph.relations):
         inside = tuple(
             _source_endpoint_inside(new.graph, endpoint, source_members)
-            for endpoint in (relation.left, relation.right)
+            for endpoint in (
+                source_binary_relation.left,
+                source_binary_relation.right,
+            )
         )
         if all(inside):
             source_binary.append(index)
         elif report_donor_edges and any(inside):
+            donor_binary.append(index)
             detached.append(
                 DetachedDependency(
-                    "donor_relations", index, declaration=relation.declaration
+                    "donor_relations",
+                    index,
+                    declaration=source_binary_relation.declaration,
                 )
             )
-    source_polyadic = tuple(
-        index
-        for index, relation in enumerate(new.graph.polyadic_relations)
-        if all(
+    source_polyadic: list[int] = []
+    donor_polyadic: list[int] = []
+    for index, source_polyadic_relation in enumerate(new.graph.polyadic_relations):
+        inside = tuple(
             _source_endpoint_inside(new.graph, endpoint, source_members)
-            for endpoint in (*relation.sources, *relation.targets)
+            for endpoint in (
+                *source_polyadic_relation.sources,
+                *source_polyadic_relation.targets,
+            )
         )
-    )
+        if all(inside):
+            source_polyadic.append(index)
+        elif report_donor_edges and any(inside):
+            donor_polyadic.append(index)
+            detached.append(
+                DetachedDependency(
+                    "donor_relations",
+                    index,
+                    declaration=source_polyadic_relation.declaration,
+                )
+            )
     binary_anchor = min(old_shape.binary, default=len(graph.relations))
     for index in source_binary:
         binary_relation = new.graph.relations[index]
@@ -1005,17 +1193,17 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         targets = _boundary_correspondence(
             boundary_coordinate, correspondence, old_runs, insertions, new_runs
         )
-        carried = False
+        boundary_carried = False
         if chosen.default is ReplacementAction.FOLLOW and len(targets) == 1:
             for value in attributes:
                 editor.set_attribute(targets[0], value)
-            carried = True
+            boundary_carried = True
         elif chosen.default is ReplacementAction.SPLIT and targets:
             for target in targets:
                 for value in attributes:
                     editor.set_attribute(target, value)
-            carried = True
-        if not carried and chosen.default is not ReplacementAction.ABANDON:
+            boundary_carried = True
+        if not boundary_carried and not _abandons(chosen.default):
             detached.append(
                 DetachedDependency(
                     "boundary_values",
@@ -1036,7 +1224,14 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             insertions,
             new_runs,
         )
-        if not subjects and action is not ReplacementAction.ABANDON:
+        is_relation_subject = isinstance(
+            fact.subject,
+            RelationInstanceRef
+            | PolyadicInstanceRef
+            | DurableRelationRef
+            | DurablePolyadicRef,
+        )
+        if not subjects and (not _abandons(action) or is_relation_subject):
             detached.append(
                 DetachedDependency(
                     "layer",
@@ -1064,9 +1259,10 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             editor.set_attribute(target, value)
 
     target_layer_names = {layer.name for layer in graph.layers}
+    donor_facts: list[tuple[LayerName, LayerFact]] = []
     for layer in new.graph.layers:
         copied: list[LayerFact] = []
-        for fact in layer.facts:
+        for fact_index, fact in enumerate(layer.facts):
             copied_subject = _copy_source_fact_subject(
                 new.graph,
                 inserted_graph,
@@ -1079,6 +1275,18 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             )
             if copied_subject is not None:
                 copied.append(LayerFact(copied_subject, fact.value))
+            elif _donor_relation_fact(
+                new.graph, fact.subject, set(donor_binary), set(donor_polyadic)
+            ):
+                donor_facts.append((layer.name, fact))
+                detached.append(
+                    DetachedDependency(
+                        "donor_layer",
+                        fact_index,
+                        layer=layer.name,
+                        subject=fact.subject,
+                    )
+                )
         if copied and layer.name not in target_layer_names:
             editor.add_layer(layer.name)
             target_layer_names.add(layer.name)
@@ -1122,7 +1330,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         )
         if chosen.default is ReplacementAction.FOLLOW:
             targets = targets if len(targets) == 1 else ()
-        elif chosen.default is ReplacementAction.ABANDON:
+        elif _abandons(chosen.default):
             targets = ()
         if not targets:
             continue
@@ -1159,6 +1367,17 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             facts=detached_facts,
             dependencies=ordered_detached,
             boundary_values=overwritten_boundary_values,
+            donor_relations=(
+                *(
+                    (RelationInstanceRef(index), new.graph.relations[index])
+                    for index in donor_binary
+                ),
+                *(
+                    (PolyadicInstanceRef(index), new.graph.polyadic_relations[index])
+                    for index in donor_polyadic
+                ),
+            ),
+            donor_facts=donor_facts,
         )
         if capture_report
         else None
@@ -1168,7 +1387,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         editor.displacement(),
         ordered_detached,
         report,
-        MappingProxyType(correspondence),
+        SubtreeCorrespondence(correspondence, identity_correspondence),
         MappingProxyType(source_to_target),
     )
 
@@ -1293,89 +1512,246 @@ def _subject_touches(
     return False
 
 
-def _endpoint_targets(
+def _donor_relation_fact(
     graph: Graph,
+    subject: LayerSubject,
+    binary: set[int],
+    polyadic: set[int],
+) -> bool:
+    """Recognize a fact whose donor relation was rejected at the subtree edge."""
+    if isinstance(subject, RelationInstanceRef):
+        return subject.index in binary
+    if isinstance(subject, PolyadicInstanceRef):
+        return subject.index in polyadic
+    if isinstance(subject, DurableRelationRef):
+        return any(
+            index in binary and relation.durable_id == subject.durable_id
+            for index, relation in enumerate(graph.relations)
+        )
+    if isinstance(subject, DurablePolyadicRef):
+        return any(
+            index in polyadic and relation.durable_id == subject.durable_id
+            for index, relation in enumerate(graph.polyadic_relations)
+        )
+    return False
+
+
+def _crossing_policy(
+    policies: ReplacementPolicies, declaration: QualifiedName
+) -> ReplacementAction | None:
+    """Return the explicitly named fallback for an uncarryable crossing."""
+    action = policies.relations.get(declaration, policies.default)
+    return (
+        action if action in {ReplacementAction.DROP, ReplacementAction.TRIM} else None
+    )
+
+
+def _crossing_targets(
+    source: Graph,
+    target: Graph,
     endpoint: RelationEndpointRef,
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
-    action: ReplacementAction,
 ) -> tuple[RelationEndpointRef, ...]:
-    item = _endpoint_item(graph, endpoint)
-    if item is None or item not in correspondence:
-        return ()
-    targets = correspondence[item]
-    if action is ReplacementAction.ABANDON:
-        return ()
-    if action is ReplacementAction.FOLLOW:
-        return targets if len(targets) == 1 else ()
-    return targets
-
-
-def _binary_replacements(
-    graph: Graph,
-    relation: RelationInstance,
-    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
-    item_images: Mapping[ItemRef, ItemRef],
-    action: ReplacementAction,
-) -> tuple[RelationInstance, ...]:
-    sides: list[tuple[RelationEndpointRef, ...]] = []
-    for endpoint in (relation.left, relation.right):
-        item = _endpoint_item(graph, endpoint)
-        if item is not None and item in correspondence:
-            targets = _endpoint_targets(graph, endpoint, correspondence, action)
-            if not targets:
-                return ()
-            sides.append(targets)
-        elif isinstance(endpoint, DurableBoundaryRef) and _endpoint_touches(
-            graph, endpoint, frozenset(correspondence)
-        ):
+    """Resolve one inside endpoint through an old-to-new hole alignment."""
+    if isinstance(endpoint, DurableBoundaryRef):
+        owner = _boundary_owner(source, endpoint)
+        if owner is None:
             return ()
-        else:
-            sides.append((_remap_unaffected_endpoint(endpoint, item_images),))
-    result: list[RelationInstance] = []
-    for left in sides[0]:
-        for right in sides[1]:
+        result: list[RelationEndpointRef] = []
+        for coordinate in correspondence.get(owner, ()):
+            item = target._tiers_by_name[coordinate.tier].items[coordinate.index]
+            if item.durable_id is None:
+                return ()
             result.append(
-                RelationInstance(
-                    relation.declaration,
-                    left,
-                    right,
-                    relation.durable_id if not result else None,
-                    relation.attributes,
-                )
+                DurableBoundaryRef(DurableItemRef(item.durable_id), endpoint.side)
             )
-    return tuple(result)
+        return tuple(result)
+    return correspondence.get(source.resolve_item(endpoint), ())
 
 
-def _polyadic_replacements(
-    graph: Graph,
-    relation: PolyadicRelationInstance,
+def _crossing_refusal(
+    carrier: str,
+    index: int,
+    declaration: QualifiedName,
+    endpoint: RelationEndpointRef,
+    reason: str,
+    *,
+    allow_trim: bool = True,
+) -> GraphValidationError:
+    """Build the K3 refusal naming both relation and crossing endpoint."""
+    return GraphValidationError(
+        f"crossing {carrier} relation {str(declaration)!r} at index {index} "
+        f"endpoint {endpoint!s} has {reason}; name a DROP policy"
+        + (" or TRIM" if carrier == "polyadic" and allow_trim else "")
+    )
+
+
+def _polyadic_crossing_issue(
+    target: Graph,
+    declaration: PolyadicRelationDeclaration,
+    sources: tuple[RelationEndpointRef, ...],
+    targets: tuple[RelationEndpointRef, ...],
+) -> str | None:
+    """Name a local declaration invariant broken by a carried crossing."""
+
+    def side_issue(
+        name: str,
+        values: tuple[RelationEndpointRef, ...],
+        declared: RelationSideDeclaration,
+    ) -> str | None:
+        """Name an empty or out-of-bounds carried side."""
+        if not values:
+            return None if declared.allow_empty else f"an empty {name} side"
+        if len(values) < declared.minimum or (
+            declared.maximum is not None and len(values) > declared.maximum
+        ):
+            return (
+                f"{name} arity {len(values)} outside declared bounds "
+                f"{declared.minimum}..{declared.maximum}"
+            )
+        return None
+
+    issue = side_issue("source", sources, declaration.sources)
+    if issue is None:
+        issue = side_issue("target", targets, declaration.targets)
+    if issue is not None:
+        return issue
+
+    def resolved(
+        endpoint: RelationEndpointRef,
+    ) -> ItemRef | BoundaryRef:
+        """Resolve an endpoint for duplicate-invariant checks."""
+        if isinstance(endpoint, DurableBoundaryRef):
+            return target.resolve_boundary(endpoint)
+        return target.resolve_item(endpoint)
+
+    resolved_sources = tuple(resolved(endpoint) for endpoint in sources)
+    if declaration.unique_sources and len(set(resolved_sources)) != len(
+        resolved_sources
+    ):
+        return "duplicate sources in a declared unique-source relation"
+    resolved_targets = tuple(resolved(endpoint) for endpoint in targets)
+    if declaration.distinct_targets and len(set(resolved_targets)) != len(
+        resolved_targets
+    ):
+        return "duplicate declared-distinct targets"
+    return None
+
+
+def _carry_binary_relation(
+    source: Graph,
+    target: Graph,
+    index: int,
+    relation: RelationInstance,
+    descendants: frozenset[ItemRef],
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
     item_images: Mapping[ItemRef, ItemRef],
-    action: ReplacementAction,
-) -> tuple[PolyadicRelationInstance, ...]:
-    def _side(
-        values: tuple[RelationEndpointRef, ...],
-    ) -> tuple[RelationEndpointRef, ...] | None:
-        result: list[RelationEndpointRef] = []
-        for endpoint in values:
-            item = _endpoint_item(graph, endpoint)
-            if item is not None and item in correspondence:
-                targets = _endpoint_targets(graph, endpoint, correspondence, action)
-                if not targets:
-                    return None
-                result.extend(targets)
-            elif isinstance(endpoint, DurableBoundaryRef) and _endpoint_touches(
-                graph, endpoint, frozenset(correspondence)
-            ):
+    failure_policy: ReplacementAction | None,
+) -> RelationInstance | None:
+    """Carry one binary crossing or apply its explicit DROP fallback."""
+    sides: list[RelationEndpointRef] = []
+    for endpoint in (relation.left, relation.right):
+        if not _endpoint_touches(source, endpoint, descendants):
+            sides.append(_remap_unaffected_endpoint(endpoint, item_images))
+            continue
+        targets = _crossing_targets(source, target, endpoint, correspondence)
+        if len(targets) != 1:
+            if failure_policy is ReplacementAction.DROP:
                 return None
-            else:
+            reason = "no correspondence" if not targets else "ambiguous correspondence"
+            raise _crossing_refusal(
+                "binary", index, relation.declaration, endpoint, reason
+            )
+        sides.append(targets[0])
+    return RelationInstance(
+        relation.declaration,
+        sides[0],
+        sides[1],
+        relation.durable_id,
+        relation.attributes,
+    )
+
+
+def _carry_polyadic_relation(
+    source: Graph,
+    target: Graph,
+    index: int,
+    relation: PolyadicRelationInstance,
+    descendants: frozenset[ItemRef],
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    item_images: Mapping[ItemRef, ItemRef],
+    failure_policy: ReplacementAction | None,
+) -> tuple[
+    PolyadicRelationInstance | None,
+    tuple[DetachedDependency, ...],
+]:
+    """Carry a polyadic crossing, flattening each aligned hole in place."""
+    removed: list[DetachedDependency] = []
+
+    def side(
+        name: str, values: tuple[RelationEndpointRef, ...]
+    ) -> tuple[RelationEndpointRef, ...] | None:
+        """Carry one declared endpoint sequence or apply its fallback."""
+        result: list[RelationEndpointRef] = []
+        for endpoint_index, endpoint in enumerate(values):
+            if not _endpoint_touches(source, endpoint, descendants):
                 result.append(_remap_unaffected_endpoint(endpoint, item_images))
+                continue
+            targets = _crossing_targets(source, target, endpoint, correspondence)
+            if not targets:
+                if failure_policy is ReplacementAction.DROP:
+                    return None
+                if failure_policy is ReplacementAction.TRIM:
+                    removed.append(
+                        DetachedDependency(
+                            "polyadic_endpoints",
+                            index,
+                            declaration=relation.declaration,
+                            endpoint=endpoint,
+                            endpoint_side=name,
+                            endpoint_index=endpoint_index,
+                        )
+                    )
+                    continue
+                raise _crossing_refusal(
+                    "polyadic",
+                    index,
+                    relation.declaration,
+                    endpoint,
+                    "no correspondence",
+                )
+            result.extend(targets)
         return tuple(result)
 
-    sources = _side(relation.sources)
-    targets = _side(relation.targets)
-    if sources is None or targets is None:
-        return ()
+    sources = side("sources", relation.sources)
+    if sources is None:
+        return None, ()
+    targets = side("targets", relation.targets)
+    if targets is None:
+        return None, ()
+    declaration = next(
+        item
+        for item in target.relation_declarations
+        if item.name == relation.declaration
+        and isinstance(item, PolyadicRelationDeclaration)
+    )
+    issue = _polyadic_crossing_issue(target, declaration, sources, targets)
+    if issue is not None:
+        if failure_policy is ReplacementAction.DROP:
+            return None, ()
+        endpoint = next(
+            endpoint
+            for endpoint in (*relation.sources, *relation.targets)
+            if _endpoint_touches(source, endpoint, descendants)
+        )
+        raise _crossing_refusal(
+            "polyadic",
+            index,
+            relation.declaration,
+            endpoint,
+            issue,
+            allow_trim=False,
+        )
     return (
         PolyadicRelationInstance(
             relation.declaration,
@@ -1384,6 +1760,7 @@ def _polyadic_replacements(
             relation.durable_id,
             relation.attributes,
         ),
+        tuple(removed),
     )
 
 
@@ -1520,7 +1897,14 @@ def _fact_subjects(
     insertions: Mapping[QualifiedName, int],
     new_runs: Mapping[QualifiedName, tuple[int, ...]],
 ) -> tuple[LayerSubject, ...]:
-    if action is ReplacementAction.ABANDON:
+    relation_subject = isinstance(
+        subject,
+        RelationInstanceRef
+        | PolyadicInstanceRef
+        | DurableRelationRef
+        | DurablePolyadicRef,
+    )
+    if _abandons(action) and not relation_subject:
         return ()
     targets: tuple[LayerSubject, ...]
     if isinstance(subject, ItemRef | DurableItemRef):
@@ -1547,16 +1931,28 @@ def _fact_subjects(
             for index, relation in enumerate(graph.relations)
             if relation.durable_id == subject.durable_id
         )
-        targets = tuple(RelationInstanceRef(index) for index in binary.get(old, ()))
+        images = binary.get(old, ())
+        targets = (
+            (subject,)
+            if len(images) == 1
+            else tuple(RelationInstanceRef(index) for index in images)
+        )
     elif isinstance(subject, DurablePolyadicRef):
         old = next(
             index
             for index, relation in enumerate(graph.polyadic_relations)
             if relation.durable_id == subject.durable_id
         )
-        targets = tuple(PolyadicInstanceRef(index) for index in polyadic.get(old, ()))
+        images = polyadic.get(old, ())
+        targets = (
+            (subject,)
+            if len(images) == 1
+            else tuple(PolyadicInstanceRef(index) for index in images)
+        )
     else:
         targets = ()
+    if relation_subject:
+        return targets
     if action is ReplacementAction.FOLLOW:
         return targets if len(targets) == 1 else ()
     return targets
@@ -1649,6 +2045,9 @@ def _ordered_detached(
                 repr(dependency.layer),
                 repr(dependency.subject),
                 repr(dependency.tier),
+                dependency.endpoint_side,
+                dependency.endpoint_index,
+                repr(dependency.endpoint),
             ),
         )
     )
@@ -1663,6 +2062,13 @@ def _detachment_report(
     facts: Iterable[tuple[LayerName, int]] = (),
     dependencies: Iterable[DetachedDependency] = (),
     boundary_values: Iterable[tuple[BoundaryRef | DurableBoundaryRef, Attribute]] = (),
+    donor_relations: Iterable[
+        tuple[
+            RelationInstanceRef | PolyadicInstanceRef,
+            RelationInstance | PolyadicRelationInstance,
+        ]
+    ] = (),
+    donor_facts: Iterable[tuple[LayerName, LayerFact]] = (),
 ) -> DetachmentReport:
     """Snapshot selected source content in the graph's declared order."""
     ordered_dependencies = tuple(dependencies)
@@ -1731,6 +2137,8 @@ def _detachment_report(
         detached_facts,
         ordered_dependencies,
         detached_boundary_values,
+        tuple(donor_relations),
+        tuple(donor_facts),
     )
 
 

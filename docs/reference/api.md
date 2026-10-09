@@ -2782,7 +2782,7 @@ Describe the inverse without exposing retained Python values.
 ### `EditReport`
 
 ```text
-EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = (), detached_content: 'DetachmentReport | None' = None) -> None
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = (), detached_content: 'DetachmentReport | None' = None, correspondence: 'SubtreeCorrespondence | None' = None) -> None
 ```
 
 Describe the content one recorded operation touched.
@@ -2837,7 +2837,7 @@ type ContainmentRule = str | collections.abc.Callable[[tuple[int, int], tuple[tu
 ### `DetachedDependency`
 
 ```text
-DetachedDependency(carrier: 'str', index: 'int', declaration: 'QualifiedName | None' = None, layer: 'LayerName | None' = None, subject: 'LayerSubject | None' = None, tier: 'QualifiedName | None' = None) -> None
+DetachedDependency(carrier: 'str', index: 'int', declaration: 'QualifiedName | None' = None, layer: 'LayerName | None' = None, subject: 'LayerSubject | None' = None, tier: 'QualifiedName | None' = None, endpoint: 'RelationEndpointRef | None' = None, endpoint_side: 'str | None' = None, endpoint_index: 'int | None' = None) -> None
 ```
 
 Name one dependency omitted or removed by replacement.
@@ -2845,8 +2845,9 @@ Name one dependency omitted or removed by replacement.
 Ordinary carrier coordinates address the graph passed to the replacement
 function before editing. A
 ``donor_relations`` coordinate addresses :attr:`Subtree.graph` and names a
-binary relation that crossed the supplied subtree edge, so it could not be
-copied.
+binary or polyadic relation that crossed the supplied subtree edge, so it
+could not be copied. ``polyadic_endpoints`` names one endpoint removed by
+an explicit trim.
 
 #### `DetachedDependency.to_data`
 
@@ -2861,16 +2862,18 @@ Return a stable, JSON-compatible description.
 ### `DetachmentReport`
 
 ```text
-DetachmentReport(items: 'tuple[tuple[ItemRef, Item], ...]' = (), relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), facts: 'tuple[tuple[LayerName, LayerFact], ...]' = (), dependencies: 'tuple[DetachedDependency, ...]' = (), boundary_values: 'tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...]' = ()) -> None
+DetachmentReport(items: 'tuple[tuple[ItemRef, Item], ...]' = (), relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), facts: 'tuple[tuple[LayerName, LayerFact], ...]' = (), dependencies: 'tuple[DetachedDependency, ...]' = (), boundary_values: 'tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...]' = (), donor_relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), donor_facts: 'tuple[tuple[LayerName, LayerFact], ...]' = ()) -> None
 ```
 
 Snapshot graph content withdrawn by one derived edit.
 
-Items follow tier and item order, relation instances follow their carrier
-order, facts follow canonical layer and fact order, and boundary values
-follow boundary and attribute order. Entries retain their original
-references and complete typed values, including durable identifiers where
-present.
+Source items follow tier and item order, source relation instances follow
+their carrier order, source facts follow canonical layer and fact order,
+and boundary values follow boundary and attribute order. Donor relations
+and facts have separate fields because their coordinates address the
+supplied subtree graph rather than the edited graph. Entries retain their
+original references and complete typed values, including durable
+identifiers where present.
 
 #### `DetachmentReport.to_data`
 
@@ -2985,6 +2988,8 @@ Choose how a dependency on replaced content is handled.
 - `ABANDON` = `abandon`
 - `FOLLOW` = `follow`
 - `SPLIT` = `split`
+- `DROP` = `drop`
+- `TRIM` = `trim`
 
 ### `ReplacementPolicies`
 
@@ -2994,10 +2999,12 @@ ReplacementPolicies(default: 'ReplacementAction' = <ReplacementAction.ABANDON: '
 
 Declare replacement defaults and per-carrier dependency actions.
 
-Abandonment is the default. ``correspond`` enables a stable local
-per-tier alignment for unmatched items with equal content; an explicit
-correspondence is applied first. Per-relation and per-layer actions
-override ``default``.
+Abandonment is the default for facts and boundary values. Crossing
+relations instead carry through correspondence; ``drop`` and polyadic
+``trim`` are explicit fallbacks for a missing correspondence. ``correspond``
+enables a stable local per-tier alignment for unmatched items with equal
+content; an explicit correspondence is applied first. Per-relation and
+per-layer actions override ``default``.
 ``follow`` requires exactly one counterpart for every referenced item.
 ``split`` duplicates a dependency over all declared counterparts.
 
@@ -3026,14 +3033,27 @@ Name a rooted containment subtree in a validated graph.
 ### `SubtreeCorrespondence`
 
 ```text
-SubtreeCorrespondence(items: 'Mapping[ItemRef, tuple[ItemRef, ...]]' = <factory>) -> None
+SubtreeCorrespondence(items: 'Mapping[ItemRef, tuple[ItemRef, ...]]' = <factory>, identity_correspondence: 'Mapping[ItemRef, tuple[ItemRef, ...]]' = <factory>) -> None
 ```
 
-Map old descendants to zero, one, or several new descendants.
+Align old descendant holes with zero, one, or several new positions.
 
 References on the right address :attr:`Subtree.graph`. Multiple old items
 may name one new item for a merge, and one old item may name several new
-items for a split. Missing old items have no counterpart.
+items for a split. Missing old items have no counterpart. Each source
+reference names one alignment hole. ``identity_correspondence`` optionally
+marks holes whose aligned items retain identity; an absent entry claims
+functional correspondence only.
+
+#### `SubtreeCorrespondence.to_data`
+
+Method.
+
+```text
+SubtreeCorrespondence.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return named alignment holes with optional identity claims.
 
 ### `PathChoice`
 
@@ -3186,10 +3206,13 @@ Replace one root's descendants and report withdrawn graph content.
 The root, its incoming containment link, its attributes, and its layer facts
 remain live. The default abandons dependencies on descendants. The result
 reports the abandoned items, relation instances, facts, and boundary values
-whether or not a journal is used. A binary donor relation that crosses the
-supplied subtree edge is also reported, but not copied. Correspondence is
-explicitly opt-in, and boundary-subject facts use the same correspondence
-as boundary values.
+whether or not a journal is used. Binary and polyadic relations crossing
+the replaced edge carry through the old-to-new correspondence in declared
+endpoint order. A missing or ambiguous endpoint refuses unless ``drop`` or,
+for a polyadic relation, ``trim`` is named. Donor relations crossing the
+supplied subtree edge and their facts are reported as complete content but
+not copied. Correspondence is explicitly opt-in, and boundary-subject facts
+use the same correspondence as boundary values.
 
 ### `retime`
 
@@ -3219,7 +3242,7 @@ changes as ordinary expanded primitives.
 swap_subtrees(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'EditResult'
 ```
 
-Exchange descendant sets and report dependencies left detached.
+Exchange descendant sets and report every dependency or value lost.
 
 ### `undeclare_with_contents`
 
