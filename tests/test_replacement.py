@@ -458,6 +458,27 @@ def test_donor_crossings_and_their_facts_are_snapshotted() -> None:
 def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> None:
     """Opt-in correspondence follows one-to-one and one-to-many mappings."""
     case = fixture("speech")
+    relation_note = QualifiedName(case.root.namespace, "relation-note")
+    carried_value = AttributeValue(relation_note, XsdType.STRING, "kept")
+    relations = list(case.graph.relations)
+    relations[-1] = replace(relations[-1], attributes=(carried_value,))
+    relation_fact = LayerFact(DurableRelationRef("link"), carried_value)
+    graph = replace(
+        case.graph,
+        relations=tuple(relations),
+        attribute_declarations=(
+            *case.graph.attribute_declarations,
+            AttributeDeclaration(
+                relation_note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        layers=(
+            replace(
+                case.graph.layers[0],
+                facts=(*case.graph.layers[0].facts, relation_fact),
+            ),
+        ),
+    )
     correspondence = SubtreeCorrespondence(
         {
             ItemRef(case.middle, 0): (ItemRef(case.middle, 0),),
@@ -476,7 +497,7 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
         relations={case.group: ReplacementAction.SPLIT},
         layers={case.layer: ReplacementAction.FOLLOW},
     )
-    result = case.graph.replace_subtree(
+    result = graph.replace_subtree(
         DurableItemRef("root"),
         case.containment,
         Subtree(case.alternative, ItemRef(case.root, 0)),
@@ -484,6 +505,9 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
     )
     link = next(item for item in result.relations if item.declaration == case.link)
     assert link.right == ItemRef(case.middle, 0)
+    assert link.durable_id == "link"
+    assert link.attributes == (carried_value,)
+    assert result.relations.index(link) == 3
     group = result.polyadic_relations[0]
     assert group.targets == (ItemRef(case.middle, 0), ItemRef(case.middle, 0))
     output_layer = next(layer for layer in result.layers if layer.name == case.layer)
@@ -494,12 +518,42 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
         )
         in output_layer.facts
     )
+    assert relation_fact in output_layer.facts
     assert result.boundaries(case.leaf)[1].attributes == (
         AttributeValue(case.edge, XsdType.STRING, "aligned"),
     )
     assert result.boundaries(case.leaf)[2].attributes == (
         AttributeValue(case.edge, XsdType.STRING, "aligned"),
     )
+
+    with pytest.raises(GraphValidationError, match="TRIM.*polyadic"):
+        case.graph.replace_subtree(
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(case.alternative, ItemRef(case.root, 0)),
+            ReplacementPolicies(
+                relations={
+                    case.link: ReplacementAction.TRIM,
+                    case.group: ReplacementAction.DROP,
+                }
+            ),
+        )
+    with pytest.raises(GraphValidationError, match="TRIM.*polyadic"):
+        case.graph.replace_subtree(
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(case.alternative, ItemRef(case.root, 0)),
+            ReplacementPolicies(
+                relations={case.containment[1]: ReplacementAction.TRIM}
+            ),
+        )
+    with pytest.raises(GraphValidationError, match="TRIM.*polyadic"):
+        case.graph.replace_subtree(
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(case.alternative, ItemRef(case.root, 0)),
+            ReplacementPolicies(ReplacementAction.TRIM),
+        )
 
 
 def test_nested_phrase_crossing_carries_refuses_drops_and_trims() -> None:
@@ -1453,6 +1507,7 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
     members = QualifiedName(namespace, "nodes")
     contains = QualifiedName(namespace, "contains")
     link = QualifiedName(namespace, "link")
+    span = QualifiedName(namespace, "span")
     item_note = QualifiedName(namespace, "item-note")
     relation_note = QualifiedName(namespace, "relation-note")
     layer = LayerName(namespace, "hand")
@@ -1478,6 +1533,21 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
                 contains, item_type, item_type, single_parent=True, acyclic=True
             ),
             BipartiteRelationDeclaration(link, item_type, item_type),
+            PolyadicRelationDeclaration(
+                span,
+                RelationSideDeclaration(
+                    (RelationEndpointKind.ITEM,), (tier,), maximum=None
+                ),
+                RelationSideDeclaration(
+                    (
+                        RelationEndpointKind.ITEM,
+                        RelationEndpointKind.BOUNDARY,
+                    ),
+                    (tier,),
+                    maximum=None,
+                    allow_empty=True,
+                ),
+            ),
         ),
         (
             RelationInstance(contains, ItemRef(tier, 0), ItemRef(tier, 1)),
@@ -1514,9 +1584,25 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
                 ),
             ),
         ),
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                span,
+                (ItemRef(tier, 6),),
+                (
+                    ItemRef(tier, 5),
+                    DurableBoundaryRef(DurableItemRef("d"), BoundarySide.BEFORE),
+                ),
+                "second-stage-span",
+            ),
+        ),
     )
 
-    policies = ReplacementPolicies(relations={link: ReplacementAction.DROP})
+    policies = ReplacementPolicies(
+        relations={
+            link: ReplacementAction.DROP,
+            span: ReplacementAction.TRIM,
+        }
+    )
     result = swap_subtrees(
         graph,
         DurableItemRef("left"),
@@ -1527,8 +1613,15 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
     )
 
     assert [relation.durable_id for _, relation in result.report.relations] == [
-        "second-stage-link"
+        "second-stage-link",
+        "second-stage-span",
     ]
+    reported_span = next(
+        relation
+        for reference, relation in result.report.relations
+        if isinstance(reference, PolyadicInstanceRef)
+    )
+    assert reported_span == graph.polyadic_relations[0]
     assert [fact.value for _, fact in result.report.facts] == [
         AttributeValue(relation_note, XsdType.STRING, "second-stage-fact")
     ]
@@ -1536,6 +1629,35 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
         (dependency.carrier, dependency.index)
         for dependency in result.report.dependencies
     } >= {("relations", 4), ("layer", 1)}
+    trimmed = next(
+        relation
+        for relation in result.graph.polyadic_relations
+        if relation.durable_id == "second-stage-span"
+    )
+    assert trimmed.sources == (ItemRef(tier, 6),)
+    assert trimmed.targets == ()
+    endpoints = tuple(
+        dependency
+        for dependency in result.report.dependencies
+        if dependency.carrier == "polyadic_endpoints"
+    )
+    assert {
+        (
+            endpoint.index,
+            endpoint.endpoint,
+            endpoint.endpoint_side,
+            endpoint.endpoint_index,
+        )
+        for endpoint in endpoints
+    } == {
+        (0, ItemRef(tier, 5), "targets", 0),
+        (
+            0,
+            DurableBoundaryRef(DurableItemRef("d"), BoundarySide.BEFORE),
+            "targets",
+            1,
+        ),
+    }
 
 
 def test_detached_dependency_order_handles_distinct_subject_types() -> None:

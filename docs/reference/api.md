@@ -1619,7 +1619,7 @@ Return the displacement of a graph onto itself.
 ### `GraphEditor`
 
 ```text
-GraphEditor(graph: 'Graph') -> 'None'
+GraphEditor(graph: 'Graph', *, check_links: 'bool' = False) -> 'GraphEditor'
 ```
 
 Carry graph content in mutable form and validate it once at freeze.
@@ -2296,7 +2296,7 @@ plus the exact reverse changes under the journal's inverse operation name.
 ### `JournalEditor`
 
 ```text
-JournalEditor(graph: 'Graph', journal: 'Journal') -> 'None'
+JournalEditor(graph: 'Graph', journal: 'Journal', *, check_links: 'bool' = False) -> 'None'
 ```
 
 Apply fully validated graph edits while recording an opt-in journal.
@@ -3483,9 +3483,10 @@ Declare graph-operation costs and domain-specific value costs.
 
 Operation costs are global unless ``declarations`` overrides one operation
 for a qualified declaration. Names must belong to :data:`PRIMITIVE_KINDS`,
-and inverse pairs must have equal costs. Zero is accepted for projections,
-but an exact result is a metric only when every operation visible in its
-equivalence view has positive cost.
+and inverse pairs must have equal costs. Zero is accepted for callers that
+intentionally treat some graph changes as free, but an exact result is a
+metric only when every operation visible in its equivalence view has
+positive cost.
 
 The two callbacks remain Python-only because a data file cannot safely name
 executable code. :meth:`from_data` therefore reads numeric operation and
@@ -5642,7 +5643,7 @@ Report whether this coordinate stands inside its carrier's seal.
 Method.
 
 ```text
-Graph.edit(self, journal: 'Journal | None' = None) -> 'GraphEditor | JournalEditor'
+Graph.edit(self, journal: 'Journal | None' = None, *, check_links: 'bool' = False) -> 'GraphEditor | JournalEditor'
 ```
 
 Return a mutable editor holding a copy of this graph's content.
@@ -5656,6 +5657,10 @@ This editor has no clock profile. Structural edits can therefore leave
 an existing :class:`tiergraph.clock.ClockProfile` invalid without a
 rebinding refusal or report. Use ``ClockProfile.edit()`` when clock
 validity and the explicit rebinding policy must be preserved.
+
+Set ``check_links=True`` to audit every successful or refused edit
+against the complete before-and-after link ledger. The default
+``False`` path allocates no ledger state and performs no ledger work.
 
 #### `Graph.declare`
 
