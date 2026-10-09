@@ -19,7 +19,9 @@ Choose the narrowest path that carries the guarantees the application needs:
 
 The plain editor deliberately stays small. Opening it does not allocate journal
 records, inverse data, callbacks, or annotations. Use a journal only when those
-features are part of the job.
+features are part of the job. After an abandonment-capable subtree operation,
+the editor exposes the report as `last_detachment` while preserving fluent
+method returns.
 
 ## One change or a transaction
 
@@ -250,26 +252,32 @@ defines the policies and report fields in detail.
 `replace_subtree()` keeps the named root and its incoming containment link, then
 replaces the descendants reached through the declared containment relations.
 Abandonment is the default: non-containment dependencies on departing
-descendants are detached and, in a journaled edit, listed in the report. The
-inverse restores the old descendants and detached content.
+descendants are detached and listed in the returned `EditResult.report` even
+without a journal. The report snapshots withdrawn items, relation instances,
+and facts in graph order, including their durable identifiers. Its `graph`
+field is the edited graph. `Graph.replace_subtree()` remains a graph-returning
+convenience; call the module function when the report is needed. A journal
+record exposes the same detached content, and its inverse restores it.
 
 Correspondence is opt-in through `ReplacementPolicies`. An explicit
 `SubtreeCorrespondence` maps an old descendant to zero, one, or several new
 descendants; stable local per-tier matching can fill equal unmatched items.
 `follow` requires exactly one counterpart, while `split` duplicates a
 dependency across all declared counterparts. Policies can differ by relation
-or layer. `swap_subtrees()` composes two replacements and refuses equal or
-nested roots. Clock-aware replacement is available, but the graph-level subtree
-swap has no clock policy; do not use that convenience operation on clock-bound
-tiers.
+or layer. `swap_subtrees()` also returns an `EditResult`, composes two
+replacements, and refuses equal or nested roots. `Graph.swap_subtrees()` keeps
+returning only the graph. Clock-aware replacement is available, but the
+graph-level subtree swap has no clock policy; do not use that convenience
+operation on clock-bound tiers.
 
 Three higher-level operations support reconciliation without placing
 application-specific structures in the kernel:
 
-- `commit_path()` keeps one complete path from a finite `PathPlan` and the
-  containment descendants requested by the caller. Chosen item values and
-  provenance facts remain ordinary graph content. A journal expands the
-  operation into primitives, so its patch retains no path-plan object.
+- `commit_path()` returns an `EditResult` after keeping one complete path from a
+  finite `PathPlan` and the containment descendants requested by the caller.
+  Its report lists the withdrawn alternatives, links, and facts. Chosen item
+  values and provenance facts remain ordinary graph content. A journal expands
+  the operation into primitives, so its patch retains no path-plan object.
 - `retime()` rebinds every boundary of one timed tier to exact integral clock
   positions while preserving binding instance identities and facts. It does
   not rewrite stored start or duration attributes.

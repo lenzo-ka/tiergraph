@@ -70,6 +70,7 @@ from tiergraph.core import (
 )
 from tiergraph.replacement import (
     DetachedDependency,
+    DetachmentReport,
     ReplacementPolicies,
     Subtree,
     _replace_subtree,
@@ -516,10 +517,11 @@ class EditReport:
     clock_reports: tuple[ClockEditReport, ...] = ()
     detached_dependencies: tuple[DetachedDependency, ...] = ()
     pruned_orphans: tuple[PrunedFact, ...] = ()
+    detached_content: DetachmentReport | None = None
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this report in deterministic JSON-compatible form."""
-        return {
+        data: dict[str, JsonValue] = {
             "operation": self.operation,
             "touched_items": [item.to_data() for item in self.touched_items],
             "touched_boundaries": [
@@ -541,6 +543,9 @@ class EditReport:
             ],
             "pruned_orphans": [fact.to_data() for fact in self.pruned_orphans],
         }
+        if self.detached_content is not None:
+            data["detached_content"] = self.detached_content.to_data()
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -637,6 +642,7 @@ class _ReportRecipe:
     annotations: EditAnnotations
     clock_reports: tuple[ClockEditReport, ...]
     detached_dependencies: tuple[DetachedDependency, ...]
+    detached_content: DetachmentReport | None
     pruned_orphans: tuple[PrunedFact, ...]
 
     @classmethod
@@ -648,6 +654,7 @@ class _ReportRecipe:
         annotations: EditAnnotations,
         clock_reports: tuple[ClockEditReport, ...],
         detached_dependencies: tuple[DetachedDependency, ...] = (),
+        detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
     ) -> _ReportRecipe:
         """Capture eagerly derived touches without retaining expanded tuples."""
@@ -667,6 +674,7 @@ class _ReportRecipe:
             annotations,
             clock_reports,
             detached_dependencies,
+            detached_content,
             pruned_orphans,
         )
 
@@ -682,7 +690,8 @@ class _ReportRecipe:
             self.annotations,
             self.clock_reports,
             self.detached_dependencies,
-            self.pruned_orphans,
+            pruned_orphans=self.pruned_orphans,
+            detached_content=self.detached_content,
         )
 
     @classmethod
@@ -698,6 +707,7 @@ class _ReportRecipe:
             report.annotations,
             report.clock_reports,
             report.detached_dependencies,
+            report.detached_content,
             report.pruned_orphans,
         )
 
@@ -2223,6 +2233,7 @@ class _JournalEditorBase:
         before_clock_active: bool = True,
         after_clock_active: bool = True,
         detached_dependencies: tuple[DetachedDependency, ...] = (),
+        detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
     ) -> None:
         before = self._graph
@@ -2273,6 +2284,7 @@ class _JournalEditorBase:
             annotations,
             clock_reports,
             detached_dependencies,
+            detached_content,
             pruned_orphans,
         )
         inverse = EditInverse._create(
@@ -2994,7 +3006,9 @@ class JournalEditor(_JournalEditorBase):
         policies: ReplacementPolicies | None = None,
     ) -> JournalEditor:
         """Replace descendants atomically and retain abandoned dependencies."""
-        outcome = _replace_subtree(self._graph, root, containment, new, policies)
+        outcome = _replace_subtree(
+            self._graph, root, containment, new, policies, capture_report=True
+        )
         coordinate = self._graph.resolve_item(root)
         self._finish(
             "replace_subtree",
@@ -3004,6 +3018,7 @@ class JournalEditor(_JournalEditorBase):
                 _stable_subject(self._graph, coordinate)
             ),
             detached_dependencies=outcome.detached,
+            detached_content=outcome.report,
         )
         return self
 
@@ -3023,6 +3038,7 @@ class JournalEditor(_JournalEditorBase):
             containment,
             first_policies,
             second_policies,
+            capture_report=True,
         )
         coordinates = (
             self._graph.resolve_item(first),
@@ -3038,6 +3054,7 @@ class JournalEditor(_JournalEditorBase):
                 if (stable := _stable_subject(self._graph, coordinate)) is not None
             ),
             detached_dependencies=outcome.detached,
+            detached_content=outcome.report,
         )
         return self
 

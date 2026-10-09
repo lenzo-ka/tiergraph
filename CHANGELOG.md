@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `EditResult` and ordered detachment reports for subtree replacement,
+  subtree swapping, and path commitment. Reports retain withdrawn items,
+  relation instances, and facts with their durable identifiers even when no
+  journal is used; graph convenience methods continue to return `Graph`.
 - Added an opt-in blob vocabulary and profile for ordered, durably identified
   typed external resources and their ordinary graph attachments.
 - Added streaming blob hashing, verified readers, digest-keyed in-memory

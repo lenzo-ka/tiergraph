@@ -1176,6 +1176,8 @@ def test_report_encodes_detached_subject_and_every_clock_endpoint_shape() -> Non
     )
     data = report.to_data()
     assert data["detached_references"]
+    assert report.detached_content is None
+    assert "detached_content" not in data
     clock_reports = cast(list[dict[str, JsonValue]], data["clock_reports"])
     changes = cast(list[dict[str, JsonValue]], clock_reports[0]["changes"])
     previous_source = cast(dict[str, JsonValue], changes[0]["previous_source"])

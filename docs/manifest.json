@@ -74,6 +74,8 @@
       "EditAnnotations",
       "ContainmentRule",
       "DetachedDependency",
+      "DetachmentReport",
+      "EditResult",
       "Patch",
       "PatchOperation",
       "RelationTouch",

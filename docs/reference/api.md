@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 318 top-level `tiergraph` exports exactly once.
+It covers 320 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -1598,7 +1598,9 @@ A frozen ``Graph`` answers this operation set by returning a new graph.
 This carrier answers the same operations by changing itself, so a caller
 chooses rewriting or mutation by choosing which carrier to hold.  Every
 operation returns this editor so operations chain, and nothing it returns
-is a graph until ``freeze()`` builds and validates one.
+is a graph until ``freeze()`` builds and validates one. Subtree replacement
+and swapping expose their most recent detachment report through
+:attr:`last_detachment`.
 
 Structural operations keep the graph's own references denoting what they
 denoted before the edit.  Item coordinates stored inside the graph are
@@ -1632,6 +1634,16 @@ GraphEditor.displacement(self) -> 'Displacement'
 ```
 
 Return where every position of this editor's input now stands.
+
+#### `GraphEditor.last_detachment`
+
+Property.
+
+```text
+GraphEditor.last_detachment(self) -> 'DetachmentReport | None'
+```
+
+Return the report from the most recent abandonment-capable edit.
 
 #### `GraphEditor.declare`
 
@@ -2770,7 +2782,7 @@ Describe the inverse without exposing retained Python values.
 ### `EditReport`
 
 ```text
-EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = ()) -> None
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = (), detached_content: 'DetachmentReport | None' = None) -> None
 ```
 
 Describe the content one recorded operation touched.
@@ -2839,6 +2851,36 @@ DetachedDependency.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return a stable, JSON-compatible description.
+
+### `DetachmentReport`
+
+```text
+DetachmentReport(items: 'tuple[tuple[ItemRef, Item], ...]' = (), relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), facts: 'tuple[tuple[LayerName, LayerFact], ...]' = (), dependencies: 'tuple[DetachedDependency, ...]' = ()) -> None
+```
+
+Snapshot graph content withdrawn by one derived edit.
+
+Items follow tier and item order, relation instances follow their carrier
+order, and facts follow canonical layer and fact order. The stored graph
+values retain their durable identifiers.
+
+#### `DetachmentReport.to_data`
+
+Method.
+
+```text
+DetachmentReport.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the ordered detached content as JSON-compatible data.
+
+### `EditResult`
+
+```text
+EditResult(graph: 'Graph', report: 'DetachmentReport') -> None
+```
+
+Return an edited graph together with content withdrawn by the edit.
 
 ### `Patch`
 
@@ -3042,7 +3084,7 @@ equivalent selected structural operations through the appropriate editor.
 ### `commit_path`
 
 ```text
-commit_path(lattice: 'PathPlan[Any]', path: 'PathChoice', *, containment: 'QualifiedName | Iterable[QualifiedName]' = (), journal: 'Journal | None' = None) -> 'Graph'
+commit_path(lattice: 'PathPlan[Any]', path: 'PathChoice', *, containment: 'QualifiedName | Iterable[QualifiedName]' = (), journal: 'Journal | None' = None) -> 'EditResult'
 ```
 
 Keep one complete path and its declared containment substructure.
@@ -3127,14 +3169,15 @@ Reverse operation order and exchange every recorded transition.
 ### `replace_subtree`
 
 ```text
-replace_subtree(graph: 'Graph', root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+replace_subtree(graph: 'Graph', root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'EditResult'
 ```
 
-Return ``graph`` with one root's containment descendants replaced.
+Replace one root's descendants and report withdrawn graph content.
 
 The root, its incoming containment link, its attributes, and its layer facts
-remain live. The default abandons dependencies on descendants and reports
-them when this operation is journaled. Correspondence is explicitly opt-in.
+remain live. The default abandons dependencies on descendants. The result
+reports the abandoned items, relation instances, and facts whether or not a
+journal is used. Correspondence is explicitly opt-in.
 
 ### `retime`
 
@@ -3161,10 +3204,10 @@ changes as ordinary expanded primitives.
 ### `swap_subtrees`
 
 ```text
-swap_subtrees(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'Graph'
+swap_subtrees(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', first_policies: 'ReplacementPolicies | None' = None, second_policies: 'ReplacementPolicies | None' = None) -> 'EditResult'
 ```
 
-Exchange two non-nested descendant sets as two atomic replacements.
+Exchange descendant sets and report dependencies left detached.
 
 ### `undeclare_with_contents`
 
@@ -5572,7 +5615,10 @@ Method.
 Graph.replace_subtree(self, root: 'ItemRef | DurableItemRef', containment: 'QualifiedName | Iterable[QualifiedName]', new: 'Subtree', policies: 'ReplacementPolicies | None' = None) -> 'Graph'
 ```
 
-Return a graph with one root's containment descendants replaced.
+Return a graph with one root's descendants replaced.
+
+Call :func:`tiergraph.replace_subtree` to also receive the detachment
+report.
 
 #### `Graph.swap_subtrees`
 
@@ -5583,6 +5629,9 @@ Graph.swap_subtrees(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | 
 ```
 
 Return a graph with two non-nested descendant sets exchanged.
+
+Call :func:`tiergraph.swap_subtrees` to also receive the detachment
+report.
 
 #### `Graph.move_item`
 

@@ -212,9 +212,22 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     """The cheap default keeps the root and abandons every descendant dependency."""
     case = fixture(domain)
     source = Subtree(case.alternative, ItemRef(case.root, 0))
-    expected = replace_subtree(
+    edit_result = replace_subtree(
         case.graph, DurableItemRef("root"), case.containment, source
     )
+    expected = edit_result.graph
+    assert tuple(item.durable_id for _, item in edit_result.report.items) == (
+        "middle-0",
+        "middle-1",
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+    )
+    assert {relation.durable_id for _, relation in edit_result.report.relations} >= {
+        "link",
+        "group",
+    }
+    assert edit_result.report.facts
     assert tuple(
         item.durable_id for item in expected._tiers_by_name[case.middle].items
     ) == (
@@ -244,6 +257,7 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     editor.replace_subtree(DurableItemRef("root"), case.containment, source)
     assert editor.freeze() == expected
     report = journal.records[0].report
+    assert report.detached_content == edit_result.report
     assert {item.carrier for item in report.detached_dependencies} == {
         "boundary_values",
         "layer",
@@ -251,6 +265,14 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
         "relations",
     }
     assert report.to_data()["detached_dependencies"]
+    plain_editor = case.graph.edit()
+    assert plain_editor.last_detachment is None
+    returned_editor = plain_editor.replace_subtree(
+        DurableItemRef("root"), case.containment, source
+    )
+    assert returned_editor is plain_editor
+    assert plain_editor.freeze() == expected
+    assert plain_editor.last_detachment == edit_result.report
     editor.undo()
     assert editor.freeze() == case.graph
     editor.redo()
@@ -359,7 +381,7 @@ def test_replacement_copies_new_subtree_relations_values_and_facts() -> None:
         DurableItemRef("root"),
         case.containment,
         Subtree(source, ItemRef(case.root, 0)),
-    )
+    ).graph
     copied_link = next(
         relation for relation in result.relations if relation.durable_id == "new-link"
     )
@@ -423,7 +445,7 @@ def test_replacement_remaps_a_shifted_same_tier_root() -> None:
         DurableItemRef("root"),
         contains,
         Subtree(source, ItemRef(tier, 0)),
-    )
+    ).graph
     root = result.resolve_item(DurableItemRef("root"))
     assert root == ItemRef(tier, 3)
     assert {
@@ -481,7 +503,7 @@ def test_replacement_inserts_descendants_on_a_newly_used_tier() -> None:
         case.containment,
         Subtree(source, ItemRef(case.root, 0)),
         ReplacementPolicies(insertion_points={extra: 0}),
-    )
+    ).graph
     assert result._tiers_by_name[extra].items == (Item("new-caption"),)
 
 
@@ -522,7 +544,7 @@ def test_swap_subtrees_is_exactly_undoable_and_refuses_nested_roots() -> None:
     )
     expected = swap_subtrees(
         graph, DurableItemRef("left"), DurableItemRef("right"), contains
-    )
+    ).graph
     assert (
         graph.swap_subtrees(DurableItemRef("left"), DurableItemRef("right"), contains)
         == expected
@@ -555,6 +577,13 @@ def test_swap_subtrees_is_exactly_undoable_and_refuses_nested_roots() -> None:
 def test_swap_reports_only_dependencies_absent_from_the_result() -> None:
     """Subtree-owned values and facts moved by a swap are not reported detached."""
     case = fixture("speech")
+    direct = swap_subtrees(
+        case.graph, DurableItemRef("root"), DurableItemRef("other"), case.containment
+    )
+    assert {relation.durable_id for _, relation in direct.report.relations} == {
+        "link",
+        "group",
+    }
     journal = Journal()
     editor = case.graph.edit(journal=journal)
     editor.swap_subtrees(
@@ -570,6 +599,126 @@ def test_swap_reports_only_dependencies_absent_from_the_result() -> None:
         dependency.carrier not in {"boundary_values", "layer"}
         for dependency in journal.records[0].report.detached_dependencies
     )
+    assert journal.records[0].report.detached_content == direct.report
+
+
+def test_graph_conveniences_skip_report_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graph-only calls avoid snapshots and public result calls build one."""
+    case = fixture("text")
+    source = Subtree(case.alternative, ItemRef(case.root, 0))
+    calls = 0
+    original = replacement._detachment_report
+
+    def counted(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(replacement, "_detachment_report", counted)
+    case.graph.replace_subtree(DurableItemRef("root"), case.containment, source)
+    assert calls == 0
+    replace_subtree(case.graph, DurableItemRef("root"), case.containment, source)
+    assert calls == 1
+    case.graph.swap_subtrees(
+        DurableItemRef("root"), DurableItemRef("other"), case.containment
+    )
+    assert calls == 1
+    swap_subtrees(
+        case.graph,
+        DurableItemRef("root"),
+        DurableItemRef("other"),
+        case.containment,
+    )
+    assert calls == 2
+
+
+def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
+    """A first-stage shift does not redirect second-stage report entries."""
+    namespace = "urn:tiergraph:replacement:swap-report"
+    tier = QualifiedName(namespace, "node")
+    item_type = QualifiedName(namespace, "Node")
+    members = QualifiedName(namespace, "nodes")
+    contains = QualifiedName(namespace, "contains")
+    link = QualifiedName(namespace, "link")
+    item_note = QualifiedName(namespace, "item-note")
+    relation_note = QualifiedName(namespace, "relation-note")
+    layer = LayerName(namespace, "hand")
+    graph = Graph(
+        (NamespaceDeclaration("s", namespace),),
+        (
+            Tier(
+                TierDeclaration(tier, "Nodes"),
+                (
+                    Item("left"),
+                    Item("a"),
+                    Item("b"),
+                    Item("c"),
+                    Item("right"),
+                    Item("d"),
+                    Item("outside"),
+                ),
+            ),
+        ),
+        (
+            SimpleRelationDeclaration(members, tier, item_type),
+            BipartiteRelationDeclaration(
+                contains, item_type, item_type, single_parent=True, acyclic=True
+            ),
+            BipartiteRelationDeclaration(link, item_type, item_type),
+        ),
+        (
+            RelationInstance(contains, ItemRef(tier, 0), ItemRef(tier, 1)),
+            RelationInstance(contains, ItemRef(tier, 0), ItemRef(tier, 2)),
+            RelationInstance(contains, ItemRef(tier, 0), ItemRef(tier, 3)),
+            RelationInstance(contains, ItemRef(tier, 4), ItemRef(tier, 5)),
+            RelationInstance(
+                link,
+                ItemRef(tier, 6),
+                ItemRef(tier, 5),
+                "second-stage-link",
+            ),
+        ),
+        (
+            AttributeDeclaration(item_note, AttributeDomain.ITEM, XsdType.STRING),
+            AttributeDeclaration(
+                relation_note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        layers=(
+            Layer(
+                layer,
+                (
+                    LayerFact(
+                        DurableItemRef("a"),
+                        AttributeValue(item_note, XsdType.STRING, "first-stage-fact"),
+                    ),
+                    LayerFact(
+                        RelationInstanceRef(4),
+                        AttributeValue(
+                            relation_note, XsdType.STRING, "second-stage-fact"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    result = swap_subtrees(
+        graph, DurableItemRef("left"), DurableItemRef("right"), contains
+    )
+
+    assert [relation.durable_id for _, relation in result.report.relations] == [
+        "second-stage-link"
+    ]
+    assert [fact.value for _, fact in result.report.facts] == [
+        AttributeValue(relation_note, XsdType.STRING, "second-stage-fact")
+    ]
+    assert {
+        (dependency.carrier, dependency.index)
+        for dependency in result.report.dependencies
+    } >= {("relations", 4), ("layer", 1)}
 
 
 def test_detached_dependency_order_handles_distinct_subject_types() -> None:
@@ -594,6 +743,66 @@ def test_detached_dependency_order_handles_distinct_subject_types() -> None:
         ),
     )
     assert replacement._external_detached(case.graph, shape, external) == external
+
+
+def test_source_dependency_translation_handles_every_coordinate_carrier() -> None:
+    """Intermediate dependency coordinates map through every displaced space."""
+    case = fixture("music")
+    relation_note = QualifiedName(case.note.namespace, "relation-note")
+    graph = replace(
+        case.graph,
+        attribute_declarations=(
+            *case.graph.attribute_declarations,
+            AttributeDeclaration(
+                relation_note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        layers=(
+            Layer(
+                case.layer,
+                (
+                    LayerFact(
+                        ItemRef(case.middle, 2),
+                        AttributeValue(case.note, XsdType.STRING, "item"),
+                    ),
+                    LayerFact(
+                        DurableItemRef("root"),
+                        AttributeValue(case.note, XsdType.STRING, "durable-item"),
+                    ),
+                    LayerFact(
+                        BoundaryRef(case.leaf, 4),
+                        AttributeValue(case.edge, XsdType.STRING, "boundary"),
+                    ),
+                    LayerFact(
+                        RelationInstanceRef(5),
+                        AttributeValue(relation_note, XsdType.STRING, "relation"),
+                    ),
+                    LayerFact(
+                        PolyadicInstanceRef(0),
+                        AttributeValue(relation_note, XsdType.STRING, "polyadic"),
+                    ),
+                ),
+            ),
+        ),
+    )
+    layer = graph.layers[0]
+    dependencies = (
+        DetachedDependency("relations", 5, declaration=case.link),
+        DetachedDependency("polyadic_relations", 0, declaration=case.group),
+        DetachedDependency("boundary_values", 1, tier=case.leaf),
+        *(
+            DetachedDependency("layer", index, layer=layer.name, subject=fact.subject)
+            for index, fact in enumerate(layer.facts)
+        ),
+        DetachedDependency("other", 0),
+    )
+
+    assert (
+        replacement._source_dependencies(
+            graph, graph, graph.edit().displacement(), dependencies
+        )
+        == dependencies
+    )
 
 
 def test_replacement_guards_policy_shapes_and_protected_layers() -> None:
@@ -1405,7 +1614,7 @@ def test_polyadic_containment_and_coordinate_swap() -> None:
             ),
         ),
     )
-    swapped = swap_subtrees(graph, ItemRef(tier, 0), ItemRef(tier, 2), contains)
+    swapped = swap_subtrees(graph, ItemRef(tier, 0), ItemRef(tier, 2), contains).graph
     assert tuple(item.durable_id for item in swapped.tiers[0].items) == (
         "left",
         "b",
@@ -1429,7 +1638,7 @@ def test_polyadic_containment_and_coordinate_swap() -> None:
         DurableItemRef("left"),
         contains,
         Subtree(replacement_graph, ItemRef(tier, 0)),
-    )
+    ).graph
     assert len(result.polyadic_relations) == 2
 
 
@@ -1452,7 +1661,7 @@ def test_correspondence_alignment_and_structural_guards() -> None:
         case.containment,
         Subtree(aligned_source, ItemRef(case.root, 0)),
         tts_replacement_profile(),
-    )
+    ).graph
     assert next(
         relation for relation in aligned.relations if relation.declaration == case.link
     ).right == ItemRef(case.middle, 0)
@@ -1464,7 +1673,7 @@ def test_correspondence_alignment_and_structural_guards() -> None:
         case.containment,
         Subtree(aligned_source, ItemRef(case.root, 0)),
         tts_replacement_profile(),
-    )
+    ).graph
     assert equivalent(second, aligned, EquivalenceView.IDENTIFIED)
 
     with pytest.raises(GraphValidationError, match="outside the new subtree"):

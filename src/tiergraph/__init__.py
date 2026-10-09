@@ -272,6 +272,8 @@ from tiergraph.reconcile import (
 )
 from tiergraph.replacement import (
     DetachedDependency,
+    DetachmentReport,
+    EditResult,
     ReplacementAction,
     ReplacementPolicies,
     Subtree,
@@ -456,6 +458,7 @@ __all__ = [
     "DeclareTier",
     "Delivery",
     "DetachedDependency",
+    "DetachmentReport",
     "Determinize",
     "DifferenceSelector",
     "Displacement",
@@ -469,6 +472,7 @@ __all__ = [
     "EditAnnotations",
     "EditInverse",
     "EditReport",
+    "EditResult",
     "EffectRefusal",
     "Emissions",
     "EquivalenceView",

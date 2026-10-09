@@ -16,6 +16,7 @@ from tiergraph.core import (
     Graph,
     GraphValidationError,
     ItemRef,
+    LayerName,
     OrphanedSubject,
     PolyadicInstanceRef,
     PolyadicRelationDeclaration,
@@ -30,6 +31,7 @@ from tiergraph.core import (
     _resolve_layer_subject,
 )
 from tiergraph.pathplan import PathPlan
+from tiergraph.replacement import EditResult, _detachment_report
 from tiergraph.traversal import OrderedContainment
 
 if TYPE_CHECKING:
@@ -97,7 +99,7 @@ def commit_path(
     *,
     containment: QualifiedName | Iterable[QualifiedName] = (),
     journal: Journal | None = None,
-) -> Graph:
+) -> EditResult:
     """Keep one complete path and its declared containment substructure.
 
     ``lattice`` supplies the finite acyclic topology and its source graph.
@@ -130,7 +132,15 @@ def commit_path(
         """Remove every alternative-exclusive item and its dependencies."""
         _remove_items(editor, departing)
 
-    return _apply_derived(graph, journal, apply)
+    result, displacement = _apply_derived(graph, journal, apply)
+    report = _detachment_report(
+        graph,
+        items=displacement.departed_items,
+        binary=displacement.departed_relations,
+        polyadic=displacement.departed_polyadic_relations,
+        facts=_detached_fact_sites(graph, displacement),
+    )
+    return EditResult(result, report)
 
 
 def retime(
@@ -219,7 +229,7 @@ def retime(
                 editor.set_endpoints(RelationInstanceRef(site), relation.left, target)
         _profile_with_graph(profile, editor.freeze())
 
-    return _apply_derived(graph, journal, apply)
+    return _apply_derived(graph, journal, apply)[0]
 
 
 def contain_by_time(
@@ -294,14 +304,14 @@ def contain_by_time(
             _apply_polyadic_containment(editor, relation, parents, assignments)
         _profile_with_graph(profile, editor.freeze())
 
-    return _apply_derived(graph, journal, apply)
+    return _apply_derived(graph, journal, apply)[0]
 
 
 def _apply_derived(
     graph: Graph,
     journal: Journal | None,
     operation: Callable[[_DerivedEditor], None],
-) -> Graph:
+) -> tuple[Graph, Displacement]:
     """Apply a derived edit atomically, preflighting journal protections."""
     if journal is None:
         editor = cast(_DerivedEditor, graph.edit())
@@ -309,7 +319,40 @@ def _apply_derived(
         editor = cast(_DerivedEditor, graph.edit(journal=journal))
         cast(Any, editor).dry_run(operation)
     operation(editor)
-    return editor.freeze()
+    return editor.freeze(), editor.displacement()
+
+
+def _detached_fact_sites(
+    graph: Graph, displacement: Displacement
+) -> tuple[tuple[LayerName, int], ...]:
+    """Locate facts whose subjects departed during a derived edit."""
+    sites: list[tuple[LayerName, int]] = []
+    for layer in graph.layers:
+        for index, fact in enumerate(layer.facts):
+            if isinstance(fact.subject, OrphanedSubject):
+                continue
+            subject = _resolve_layer_subject(graph, fact.subject)
+            detached = (
+                (
+                    isinstance(subject, ItemRef)
+                    and subject in displacement.departed_items
+                )
+                or (
+                    isinstance(subject, BoundaryRef)
+                    and subject in displacement.departed_boundaries
+                )
+                or (
+                    isinstance(subject, RelationInstanceRef)
+                    and subject.index in displacement.departed_relations
+                )
+                or (
+                    isinstance(subject, PolyadicInstanceRef)
+                    and subject.index in displacement.departed_polyadic_relations
+                )
+            )
+            if detached:
+                sites.append((layer.name, index))
+    return tuple(sites)
 
 
 def _chosen_path(lattice: PathPlan[Any], raw: PathChoice) -> tuple[ItemRef, ...]:
