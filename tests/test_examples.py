@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from examples.caption_alignment import main as caption_alignment_main
+from examples.closed_media_profile import main as closed_media_profile_main
 from examples.critical_path import main as critical_path_main
 from examples.json_document import main as json_document_main
 from examples.text_segmentation import main as text_segmentation_main
@@ -13,6 +14,14 @@ def test_caption_alignment(capsys: pytest.CaptureFixture[str]) -> None:
     """The selected word reaches its three aligned phones."""
     assert caption_alignment_main() == 0
     assert capsys.readouterr().out == "['K', 'AE', 'T']\n"
+
+
+def test_closed_media_profile(capsys: pytest.CaptureFixture[str]) -> None:
+    """The domain profile accepts its closed set and refuses another media type."""
+    assert closed_media_profile_main() == 0
+    assert capsys.readouterr().out == (
+        "allowed media type: satisfied\nunlisted media type: refused\n"
+    )
 
 
 def test_text_segmentation(capsys: pytest.CaptureFixture[str]) -> None:

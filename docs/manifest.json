@@ -528,6 +528,10 @@
       "text",
       "python"
     ],
+    "docs/guide/external-resources.md": [
+      "console",
+      "console"
+    ],
     "docs/guide/serialization.md": [
       "python",
       "text",
@@ -595,6 +599,7 @@
     "docs/guide/patterns.md",
     "docs/guide/recognize-and-act.md",
     "docs/guide/timing.md",
+    "docs/guide/external-resources.md",
     "docs/guide/serialization.md",
     "docs/guide/profiles.md",
     "docs/guide/annotation-formats.md",

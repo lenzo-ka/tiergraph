@@ -28,6 +28,8 @@ tools.
 - **Limit the work an untrusted query may do?** See
   [Work budgets](guide/work-budgets.md).
 - **Attach physical times to boundaries?** See [Timing](guide/timing.md).
+- **Attach typed external resources without putting bytes in the graph?** See
+  [External resources](guide/external-resources.md).
 - **Turn segmentation into text, HTML, JSON, or JSON Lines?** See
   [Span views](guide/span-views.md).
 - **Write JSON or render DOT?** Go to [Serialization](guide/serialization.md).
@@ -47,6 +49,7 @@ tools.
 - [Grammars](guide/grammars.md)
 - [Work budgets](guide/work-budgets.md)
 - [Timing](guide/timing.md)
+- [External resources](guide/external-resources.md)
 - [Interchange with annotation formats](guide/annotation-formats.md)
 - [Span views](guide/span-views.md)
 - [Profiles](guide/profiles.md)
@@ -65,6 +68,8 @@ Each example runs from the repository root with `python -m examples.NAME`.
   a build dependency graph with a fold.
 - [json_document](../examples/json_document.py) encodes and decodes a JSON
   document as a checked graph.
+- [closed_media_profile](../examples/closed_media_profile.py) restricts
+  external resources to a domain-owned set of media types.
 - [mix_paths](../examples/mix_paths.py) addresses a multi-ring mix graph through
   TG-PATH.
 - [mixing](../examples/mixing.py) recognizes a path and applies two actions; it
