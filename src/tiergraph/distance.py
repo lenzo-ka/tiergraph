@@ -1,8 +1,9 @@
-"""Declared graph-edit costs, exact structured engines, and certified bounds."""
+"""Declared graph-edit costs, exact structured engines, and honest bounds."""
 
 from __future__ import annotations
 
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
@@ -24,9 +25,12 @@ from tiergraph.core import (
     JsonValue,
     NamespaceDeclaration,
     PolyadicInstanceRef,
+    PolyadicRelationInstance,
     QualifiedName,
     RelationDeclaration,
+    RelationInstance,
     RelationInstanceRef,
+    Seal,
     undeclare_with_contents,
 )
 from tiergraph.diff import diff
@@ -44,6 +48,10 @@ type GraphProjection = Callable[[Graph], Sequence[object]]
 type TextPieces = Callable[[Graph], Iterable[str]]
 type TextJoin = Callable[[Iterable[str]], str]
 type TextTransform = Callable[[str], str]
+
+# The assignment matrix has one row and column per unmatched source or target
+# atom. Keep its cubic solver bounded; larger sets use the linear count bound.
+_EXACT_ATOM_ASSIGNMENT_LIMIT = 64
 
 _INVERSE_KINDS = {
     "add_layer": "remove_layer",
@@ -69,9 +77,9 @@ _COST_KIND_ALIASES = {
     "seal_prefix": "seal",
 }
 
-# These are the one-step graph changes against which a projection certificate is
-# complete. Native and derived operations are included because a cheap shortcut
-# can invalidate a lower bound even when every basis primitive is priced safely.
+# These are the one-step graph changes that every lower-bound relaxation must
+# dominate. Native shortcuts are included because one can otherwise undercut a
+# relaxation assembled only from the reversible basis.
 PRIMITIVE_KINDS = frozenset(
     {
         *_INVERSE_KINDS,
@@ -665,15 +673,6 @@ class SequenceProjection:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _ProjectionSeal:
-    """Bind an admissibility certificate to exactly the completed check."""
-
-    projection: SequenceProjection
-    operations: frozenset[str]
-    costs: CostTable
-
-
 def text_projection(
     name: str,
     pieces: TextPieces,
@@ -723,166 +722,15 @@ def format_control_insensitive_projection(
     )
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class ProjectionWitness:
-    """Show one replayed graph operation for projection admissibility.
-
-    Use :meth:`from_patch`; arbitrary labeled graph pairs cannot serve as
-    evidence because their claimed operation would not have been checked.
-    """
-
-    operation: str
-    before: Graph
-    after: Graph
-    declaration: QualifiedName | None = None
-
-    @classmethod
-    def from_patch(cls, before: Graph, patch: Patch) -> ProjectionWitness:
-        """Build a witness by replaying one non-residual patch operation."""
-        if not isinstance(before, Graph):
-            raise TypeError("projection witness base must be a Graph value")
-        if not isinstance(patch, Patch):
-            raise TypeError("projection witness patch must be a Patch value")
-        if len(patch.operations) != 1:
-            raise ValueError("projection witness patch must contain one operation")
-        opcode = patch.operations[0].opcode
-        if isinstance(opcode, DeltaOpcode):
-            if len(opcode.calls) != 1 or opcode.changes:
-                raise ValueError(
-                    "projection witness patch must contain one graph editing primitive"
-                )
-            operation = _delta_primitive_kind(opcode)
-            declaration = _operation_declaration(opcode, before)
-        else:
-            raw_name = opcode.to_data().get("opcode")
-            if not isinstance(raw_name, str):  # pragma: no cover - opcode invariant
-                raise TypeError("projection witness opcode has no string name")
-            operation = _COST_KIND_ALIASES.get(raw_name, raw_name)
-            declaration = None
-        after = patch.apply(before)
-        result = object.__new__(cls)
-        object.__setattr__(result, "operation", operation)
-        object.__setattr__(result, "before", before)
-        object.__setattr__(result, "after", after)
-        object.__setattr__(result, "declaration", declaration)
-        return result
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectionViolation:
-    """Describe one graph operation that a projection overprices."""
-
-    operation: str
-    projected: Decimal
-    allowed: Decimal
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectionAdmissibility:
-    """Report coverage and failures from an admissibility check."""
-
-    projection: SequenceProjection
-    costs: CostTable
-    checked: frozenset[str]
-    required: frozenset[str]
-    violations: tuple[ProjectionViolation, ...]
-
-    @property
-    def missing(self) -> frozenset[str]:
-        """Return required primitive kinds with no supplied witness."""
-        return self.required - self.checked
-
-    @property
-    def admissible(self) -> bool:
-        """Report whether coverage is complete and every inequality holds."""
-        return not self.missing and not self.violations
-
-    def certify(self) -> AdmissibleProjection:
-        """Return a lower-bound certificate or refuse an incomplete check."""
-        if self.missing:
-            raise ValueError(
-                f"projection {self.projection.name!r} is missing witnesses for "
-                f"{sorted(self.missing)!r}"
-            )
-        if self.violations:
-            first = self.violations[0]
-            raise ValueError(
-                f"projection {self.projection.name!r} overprices "
-                f"{first.operation!r}: {first.projected} > {first.allowed}"
-            )
-        return AdmissibleProjection(
-            self.projection,
-            self.required,
-            self.costs,
-            _token=_ProjectionSeal(self.projection, self.required, self.costs),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class AdmissibleProjection:
-    """Certify that a projection is a lower bound for named graph operations."""
-
-    projection: SequenceProjection
-    operations: frozenset[str]
-    costs: CostTable
-    _token: object = field(default=None, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        """Restrict certificates to completed admissibility checks."""
-        token = self._token
-        if (
-            not isinstance(token, _ProjectionSeal)
-            or token.projection is not self.projection
-            or token.operations != self.operations
-            or token.costs is not self.costs
-        ):
-            raise TypeError(
-                "admissible projections come from ProjectionAdmissibility.certify()"
-            )
-
-
-def check_projection_admissibility(
-    projection: SequenceProjection,
-    costs: CostTable,
-    witnesses: Iterable[ProjectionWitness],
-    *,
-    required: Iterable[str] | None = None,
-) -> ProjectionAdmissibility:
-    """Check projection cost against realized one-step graph operations.
-
-    Callers supply small-graph witnesses for every required operation kind. A
-    witness passes only when the projected change can be expressed at no more
-    than the graph operation's declared cost. Missing operation kinds prevent a
-    certificate; a projection never becomes a lower bound by assertion alone.
-    """
-    required_kinds = PRIMITIVE_KINDS if required is None else frozenset(required)
-    checked: set[str] = set()
-    violations: list[ProjectionViolation] = []
-    for witness in witnesses:
-        checked.add(witness.operation)
-        projected = projection.distance(witness.before, witness.after)
-        allowed = costs.minimum_operation(witness.operation)
-        if projected > allowed:
-            violations.append(
-                ProjectionViolation(witness.operation, projected, allowed)
-            )
-    return ProjectionAdmissibility(
-        projection,
-        costs,
-        frozenset(checked),
-        required_kinds,
-        tuple(violations),
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class DistanceInterval:
-    """Hold exact distance or certified lower and realized upper bounds."""
+    """Hold an exact distance or named lower and realized upper bounds."""
 
     lower: Decimal
     upper: Decimal
     exact: bool
     method: str
+    lower_bound_method: str | None = None
 
     def __post_init__(self) -> None:
         """Require finite ordered bounds and an honest exactness flag."""
@@ -890,10 +738,17 @@ class DistanceInterval:
         upper = _cost(self.upper, "distance upper bound")
         if lower > upper:
             raise ValueError("distance lower bound must not exceed upper bound")
-        if self.exact != (lower == upper):
-            raise ValueError("distance is exact exactly when its bounds meet")
+        if self.exact and lower != upper:
+            raise ValueError("an exact distance must have equal bounds")
         if not isinstance(self.method, str) or not self.method:
             raise ValueError("distance method must be a nonempty string")
+        if self.exact:
+            if self.lower_bound_method is not None:
+                raise ValueError("an exact distance has no lower-bound method")
+        elif (
+            not isinstance(self.lower_bound_method, str) or not self.lower_bound_method
+        ):
+            raise ValueError("an interval needs a nonempty lower-bound method")
         object.__setattr__(self, "lower", lower)
         object.__setattr__(self, "upper", upper)
 
@@ -915,7 +770,429 @@ class DistanceInterval:
             "lower": _json_cost(self.lower),
             "upper": _json_cost(self.upper),
             "method": self.method,
+            "lower_bound_method": self.lower_bound_method,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _Atom:
+    """Hold one location-free unit retained by the general-graph relaxation."""
+
+    kind: str
+    value: object
+
+
+type _RelationAtomValue = tuple[str, QualifiedName, str | None, tuple[Attribute, ...]]
+type _CarrierValueAtom = tuple[str, QualifiedName | None, Attribute]
+
+
+def _relation_atom(
+    relation: RelationInstance | PolyadicRelationInstance,
+    view: EquivalenceView,
+) -> _Atom:
+    """Erase endpoints and relation order while retaining the atomic payload."""
+    kind = "polyadic" if isinstance(relation, PolyadicRelationInstance) else "binary"
+    durable_id = None if view is EquivalenceView.FUNCTIONAL else relation.durable_id
+    return _Atom(
+        "relation",
+        (kind, relation.declaration, durable_id, relation.attributes),
+    )
+
+
+def _graph_atoms(graph: Graph, view: EquivalenceView) -> Counter[_Atom]:
+    """Project a graph to the proved location- and incidence-free atom multiset."""
+    atoms: list[_Atom] = []
+    atoms.extend(
+        _Atom(
+            "declaration",
+            declaration
+            if view is EquivalenceView.EXACT
+            else ("namespace", declaration.namespace),
+        )
+        for declaration in graph.namespaces
+    )
+    atoms.extend(_Atom("declaration", tier.declaration) for tier in graph.tiers)
+    atoms.extend(
+        _Atom("declaration", declaration) for declaration in graph.relation_declarations
+    )
+    atoms.extend(
+        _Atom("declaration", declaration)
+        for declaration in graph.attribute_declarations
+    )
+    for tier in graph.tiers:
+        atoms.extend(
+            _Atom(
+                "item",
+                (
+                    None if view is EquivalenceView.FUNCTIONAL else item.durable_id,
+                    item.attributes,
+                ),
+            )
+            for item in tier.items
+        )
+        atoms.extend(
+            _Atom("carrier-value", ("tier", tier.declaration.name, value))
+            for value in tier.attributes
+        )
+    atoms.extend(_relation_atom(relation, view) for relation in graph.relations)
+    atoms.extend(
+        _relation_atom(relation, view) for relation in graph.polyadic_relations
+    )
+    atoms.extend(
+        _Atom("boundary-value", value)
+        for boundary in graph.boundary_values
+        for value in boundary.attributes
+    )
+    atoms.extend(_Atom("seal", seal) for seal in graph.seals)
+    for layer in graph.layers:
+        atoms.append(_Atom("layer", layer.name))
+        atoms.extend(_Atom("fact", (layer.name, fact.value)) for fact in layer.facts)
+    atoms.extend(
+        _Atom("carrier-value", ("document", None, value)) for value in graph.attributes
+    )
+    return Counter(atoms)
+
+
+def _attribute_transition(
+    before: Attribute, after: Attribute, costs: CostTable
+) -> Decimal:
+    """Return the closed one-value transition cost for one declared name."""
+    if before == after:
+        return Decimal(0)
+    if before.name != after.name:
+        return costs.operation("remove_attribute", before.name) + costs.operation(
+            "set_attribute", after.name
+        )
+    if costs.value_substitution is not _unit_value_substitution:
+        # An opaque callback gives no finite alphabet on which to prove its
+        # triangle closure. General-graph value substitution therefore relaxes
+        # to zero; ordered-tier exact distance still evaluates the callback.
+        return Decimal(0)
+    return min(
+        costs.operation("set_attribute", after.name),
+        costs.substitute_value(before, after),
+    )
+
+
+def _attributes_transition(
+    before: tuple[Attribute, ...],
+    after: tuple[Attribute, ...],
+    costs: CostTable,
+) -> Decimal:
+    """Close independent one-value transitions over a carrier payload."""
+    left = {value.name: value for value in before}
+    right = {value.name: value for value in after}
+    total = sum(
+        (costs.operation("remove_attribute", name) for name in left.keys() - right),
+        start=Decimal(0),
+    )
+    total += sum(
+        (costs.operation("set_attribute", name) for name in right.keys() - left),
+        start=Decimal(0),
+    )
+    total += sum(
+        (
+            _attribute_transition(left[name], right[name], costs)
+            for name in left.keys() & right
+        ),
+        start=Decimal(0),
+    )
+    return total
+
+
+def _identity_transition(
+    before: str | None,
+    after: str | None,
+    promote: Decimal,
+    demote: Decimal,
+) -> Decimal:
+    """Return the shortest promotion/demotion path between durable identities."""
+    if before == after:
+        return Decimal(0)
+    if before is None:
+        return promote
+    if after is None:
+        return demote
+    return demote + promote
+
+
+def _declaration_scope_from_atom(value: object) -> QualifiedName | None:
+    """Return the cost scope retained by one declaration atom."""
+    if isinstance(value, tuple):
+        return None
+    return _declaration_scope(cast(EditDeclaration, value))
+
+
+def _atom_insertion(atom: _Atom, costs: CostTable) -> Decimal:
+    """Return the one-atom insertion edge induced by graph primitives."""
+    if atom.kind == "declaration":
+        return costs.operation("declare", _declaration_scope_from_atom(atom.value))
+    if atom.kind == "item":
+        return costs.minimum_operation("insert_item")
+    if atom.kind == "relation":
+        declaration = cast(tuple[object, QualifiedName, object, object], atom.value)[1]
+        return costs.operation("add_relation", declaration)
+    if atom.kind in {"boundary-value", "carrier-value"}:
+        value = (
+            atom.value
+            if atom.kind == "boundary-value"
+            else cast(_CarrierValueAtom, atom.value)[2]
+        )
+        return costs.operation("set_attribute", cast(Attribute, value).name)
+    if atom.kind == "fact":
+        value = cast(tuple[object, Attribute], atom.value)[1]
+        return costs.operation("put_fact", value.name)
+    if atom.kind == "layer":
+        return costs.operation("add_layer")
+    if atom.kind == "seal":
+        seal = cast(Seal, atom.value)
+        scope = seal.carrier if isinstance(seal.carrier, QualifiedName) else None
+        return costs.operation("seal", scope)
+    raise ValueError(f"unknown graph-distance atom kind {atom.kind!r}")
+
+
+def _atom_deletion(atom: _Atom, costs: CostTable) -> Decimal:
+    """Return the one-atom deletion edge induced by graph primitives."""
+    if atom.kind == "declaration":
+        return costs.operation("undeclare", _declaration_scope_from_atom(atom.value))
+    if atom.kind == "item":
+        return costs.minimum_operation("remove_item")
+    if atom.kind == "relation":
+        declaration = cast(tuple[object, QualifiedName, object, object], atom.value)[1]
+        return costs.operation("remove_relation", declaration)
+    if atom.kind in {"boundary-value", "carrier-value"}:
+        value = (
+            atom.value
+            if atom.kind == "boundary-value"
+            else cast(_CarrierValueAtom, atom.value)[2]
+        )
+        return costs.operation("remove_attribute", cast(Attribute, value).name)
+    if atom.kind == "fact":
+        value = cast(tuple[object, Attribute], atom.value)[1]
+        return costs.operation("remove_fact", value.name)
+    if atom.kind == "layer":
+        return costs.operation("remove_layer")
+    if atom.kind == "seal":
+        seal = cast(Seal, atom.value)
+        scope = seal.carrier if isinstance(seal.carrier, QualifiedName) else None
+        return costs.operation("drop_seal", scope)
+    raise ValueError(f"unknown graph-distance atom kind {atom.kind!r}")
+
+
+def _declaration_substitution(
+    before: object, after: object, costs: CostTable
+) -> Decimal | None:
+    """Return a mutable declaration's one-atom closure, when names agree."""
+    if not hasattr(before, "attributes") or not hasattr(after, "attributes"):
+        return None
+    left = cast(RelationDeclaration, before)
+    right = cast(RelationDeclaration, after)
+    if replace(left, attributes=()) != replace(right, attributes=()):
+        return None
+    return _attributes_transition(left.attributes, right.attributes, costs)
+
+
+def _atom_substitution(before: _Atom, after: _Atom, costs: CostTable) -> Decimal:
+    """Choose the cheapest direct transition or delete-then-insert path."""
+    if before.kind != after.kind:
+        raise ValueError("atom substitution requires atoms of the same kind")
+    delete_insert = _atom_deletion(before, costs) + _atom_insertion(after, costs)
+    if before.kind == "declaration":
+        direct = _declaration_substitution(before.value, after.value, costs)
+        return delete_insert if direct is None else min(delete_insert, direct)
+    if before.kind == "item":
+        left_id, left_values = cast(
+            tuple[str | None, tuple[Attribute, ...]], before.value
+        )
+        right_id, right_values = cast(
+            tuple[str | None, tuple[Attribute, ...]], after.value
+        )
+        promote = min(
+            costs.minimum_operation("promote_item"),
+            costs.minimum_operation("promote_boundary"),
+        )
+        identity = _identity_transition(
+            left_id,
+            right_id,
+            promote,
+            costs.minimum_operation("demote_item"),
+        )
+        values = min(
+            costs.minimum_operation("replace_item"),
+            _attributes_transition(left_values, right_values, costs),
+        )
+        return min(delete_insert, identity + values)
+    if before.kind == "relation":
+        left_kind, left_declaration, left_id, left_values = cast(
+            _RelationAtomValue, before.value
+        )
+        right_kind, right_declaration, right_id, right_values = cast(
+            _RelationAtomValue, after.value
+        )
+        if (left_kind, left_declaration) != (right_kind, right_declaration):
+            return delete_insert
+        identity = _identity_transition(
+            left_id,
+            right_id,
+            costs.operation("promote_relation", left_declaration),
+            costs.operation("demote_relation", left_declaration),
+        )
+        values = _attributes_transition(left_values, right_values, costs)
+        return min(delete_insert, identity + values)
+    if before.kind == "boundary-value":
+        return min(
+            delete_insert,
+            _attribute_transition(
+                cast(Attribute, before.value), cast(Attribute, after.value), costs
+            ),
+        )
+    if before.kind == "fact":
+        left_layer, left_value = cast(tuple[object, Attribute], before.value)
+        right_layer, right_value = cast(tuple[object, Attribute], after.value)
+        if left_layer != right_layer or left_value.name != right_value.name:
+            return delete_insert
+        value_cost = (
+            Decimal(0)
+            if costs.value_substitution is not _unit_value_substitution
+            else costs.substitute_value(left_value, right_value)
+        )
+        return min(
+            delete_insert,
+            costs.operation("put_fact", right_value.name),
+            value_cost,
+        )
+    if before.kind == "carrier-value":
+        left_kind, left_carrier, left_value = cast(_CarrierValueAtom, before.value)
+        right_kind, right_carrier, right_value = cast(_CarrierValueAtom, after.value)
+        if (left_kind, left_carrier) != (right_kind, right_carrier):
+            return delete_insert
+        return min(
+            delete_insert,
+            _attribute_transition(left_value, right_value, costs),
+        )
+    if before.kind == "seal":
+        left = cast(Seal, before.value)
+        right = cast(Seal, after.value)
+        if left.carrier != right.carrier:
+            return delete_insert
+        declaration = left.carrier if isinstance(left.carrier, QualifiedName) else None
+        operation = "seal" if left.sealed < right.sealed else "unseal"
+        return min(delete_insert, costs.operation(operation, declaration))
+    if before.kind == "layer":
+        return delete_insert
+    raise AssertionError("known atom kinds are handled above")  # pragma: no cover
+
+
+def _uncancelled_atoms(
+    source: Counter[_Atom], target: Counter[_Atom], kind: str
+) -> tuple[list[_Atom], list[_Atom]]:
+    """Expand only unequal occurrences of one atom kind after exact cancellation."""
+    left: list[_Atom] = []
+    right: list[_Atom] = []
+    for atom in source.keys() | target.keys():
+        if atom.kind != kind:
+            continue
+        difference = source[atom] - target[atom]
+        if difference > 0:
+            left.extend([atom] * difference)
+        elif difference < 0:
+            right.extend([atom] * -difference)
+    return left, right
+
+
+def _atom_kind_distance(
+    source: list[_Atom],
+    target: list[_Atom],
+    costs: CostTable,
+) -> Decimal:
+    """Price one canceled atom kind without unbounded cubic assignment work."""
+    if not source:
+        return sum((_atom_insertion(atom, costs) for atom in target), Decimal(0))
+    if not target:
+        return sum((_atom_deletion(atom, costs) for atom in source), Decimal(0))
+    if len(source) + len(target) > _EXACT_ATOM_ASSIGNMENT_LIMIT:
+        operation_costs = tuple(
+            cast(Decimal, value) for value in costs.operations.values()
+        )
+        scoped_costs = tuple(
+            cast(Decimal, value)
+            for values in costs.declarations.values()
+            for value in values.values()
+        )
+        value_floor = (
+            Decimal(1)
+            if costs.value_substitution is _unit_value_substitution
+            else Decimal(0)
+        )
+        floor = min(*operation_costs, *scoped_costs, value_floor)
+        return Decimal(max(len(source), len(target))) * floor
+    removed = len(source)
+    inserted = len(target)
+    matrix = [
+        [
+            *(_atom_substitution(before, after, costs) for after in target),
+            *(_atom_deletion(before, costs) for _ in range(removed)),
+        ]
+        for before in source
+    ]
+    matrix.extend(
+        [
+            *(_atom_insertion(after, costs) for after in target),
+            *(Decimal(0) for _ in range(removed)),
+        ]
+        for _ in range(inserted)
+    )
+    return _minimum_assignment_cost(matrix)
+
+
+def _atom_multiset_lower_bound(
+    source: Graph,
+    target: Graph,
+    costs: CostTable,
+    view: EquivalenceView,
+) -> Decimal:
+    """Return the incidence-free atom-multiset relaxation of graph distance.
+
+    The projection retains complete declaration and item payloads, relation
+    payloads without endpoints, boundary values without addresses, facts
+    without subjects, and layer, seal, and other carrier-value atoms. It omits
+    item order, relation incidence, and fact attachment. Every primitive changes
+    at most one retained atom. Small unmatched sets use the minimum of direct
+    one-atom transitions and delete-then-insert paths. Large sets use their
+    unavoidable atom count at the least declared transition cost.
+    """
+    if PRIMITIVE_KINDS - costs.operations.keys():
+        # A partial table can price a realized script without defining every
+        # transition used by the general relaxation. Zero remains sound and
+        # does not make unrelated operation costs mandatory.
+        return Decimal(0)
+    left = _graph_atoms(source, view)
+    right = _graph_atoms(target, view)
+    kinds = {atom.kind for atom in left} | {atom.kind for atom in right}
+    return sum(
+        (
+            _atom_kind_distance(
+                *_uncancelled_atoms(left, right, kind),
+                costs,
+            )
+            for kind in kinds
+        ),
+        start=Decimal(0),
+    )
+
+
+def _general_graph_lower_bound(
+    source: Graph,
+    target: Graph,
+    costs: CostTable,
+    view: EquivalenceView,
+) -> tuple[Decimal, str]:
+    """Return the strongest built-in general-graph relaxation proved here.
+
+    A later relaxation can join this seam by taking the maximum only after it
+    has its own primitive-wise domination proof.
+    """
+    return _atom_multiset_lower_bound(source, target, costs, view), "atom-multiset"
 
 
 def _relation_declaration(graph: Graph, target: object) -> QualifiedName | None:
@@ -1432,17 +1709,16 @@ def graph_distance(
     costs: CostTable | None = None,
     *,
     view: EquivalenceView | str = EquivalenceView.FUNCTIONAL,
-    projections: Iterable[AdmissibleProjection] = (),
 ) -> DistanceInterval:
-    """Return exact distance where proved, otherwise certified graph-edit bounds.
+    """Return exact distance where proved, otherwise named graph-edit bounds.
 
     Independent ordered tiers use exact weighted sequence distance when move and
     swap shortcuts cannot undercut insertion plus deletion. General graphs use
-    the maximum certified projection distance as a lower bound and the cost of
-    an executable diff as an upper bound. If the diff contains a residual data
-    delta, a conservative dependency-ordered rebuild supplies the upper bound.
-    Overlapping and non-nesting relations therefore receive an interval rather
-    than an unsupported exact graph-edit claim.
+    the incidence-free atom-multiset relaxation as a lower bound and the cost
+    of an executable diff as an upper bound. If the diff contains a residual
+    data delta, a conservative dependency-ordered rebuild supplies the upper
+    bound. Overlapping and non-nesting relations therefore receive an interval
+    rather than an unsupported exact graph-edit claim.
     """
     if not isinstance(source, Graph) or not isinstance(target, Graph):
         raise TypeError("graph distance endpoints must be Graph values")
@@ -1453,38 +1729,21 @@ def graph_distance(
     exact = _independent_sequence_distance(source, target, selected_view, active_costs)
     if exact is not None:
         return DistanceInterval(exact, exact, True, "ordered-tiers")
-    certificates = tuple(projections)
-    for certificate in certificates:
-        if certificate.costs is not active_costs:
-            raise ValueError(
-                f"projection {certificate.projection.name!r} was checked against "
-                "a different cost table"
-            )
-        missing = PRIMITIVE_KINDS - certificate.operations
-        if missing:
-            raise ValueError(
-                f"projection {certificate.projection.name!r} lacks primitive "
-                f"coverage for {sorted(missing)!r}"
-            )
-    lower = max(
-        (
-            certificate.projection.distance(source, target)
-            for certificate in certificates
-        ),
-        default=Decimal(0),
+    lower, lower_method = _general_graph_lower_bound(
+        source, target, active_costs, selected_view
     )
     patch = diff(source, target, selected_view)
     try:
         upper = price_patch(patch, active_costs, source)
-        method = "projected-diff"
+        method = "realized-diff"
     except ValueError:
         upper = _rebuild_upper_bound(source, target, active_costs)
-        method = "projected-rebuild"
-    if lower > upper:
+        method = "realized-rebuild"
+    if lower > upper:  # pragma: no cover - primitive-wise proof makes this defensive
         raise ValueError(
-            "an admitted projection exceeds the realized graph-edit upper bound"
+            "the atom-multiset lower bound exceeds the realized graph-edit upper bound"
         )
-    return DistanceInterval(lower, upper, lower == upper, method)
+    return DistanceInterval(lower, upper, False, method, lower_method)
 
 
 def distance(
@@ -1493,24 +1752,18 @@ def distance(
     costs: CostTable | None = None,
     *,
     view: EquivalenceView | str = EquivalenceView.FUNCTIONAL,
-    projections: Iterable[AdmissibleProjection] = (),
 ) -> DistanceInterval:
     """Return graph-edit distance as a synonym for :func:`graph_distance`."""
-    return graph_distance(source, target, costs, view=view, projections=projections)
+    return graph_distance(source, target, costs, view=view)
 
 
 __all__ = [
     "PRIMITIVE_KINDS",
     "UNIT_COSTS",
-    "AdmissibleProjection",
     "CostTable",
     "DistanceInterval",
     "OrderedTree",
-    "ProjectionAdmissibility",
-    "ProjectionViolation",
-    "ProjectionWitness",
     "SequenceProjection",
-    "check_projection_admissibility",
     "contiguous_segmentation_distance",
     "distance",
     "format_control_insensitive_projection",

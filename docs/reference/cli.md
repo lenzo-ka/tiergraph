@@ -2765,7 +2765,7 @@ options:
   -o FILE, --output FILE
                         output file (default: -)
 
-Independent ordered tiers can produce an exact value. General and overlapping relation structures produce certified lower and upper bounds. Cost files use the CostTable.to_data() shape.
+Independent ordered tiers can produce an exact value. General and overlapping relation structures produce a named atom-multiset lower bound and a realized upper bound. Cost files use the CostTable.to_data() shape.
 
 Examples:
   $ tiergraph distance before.json after.json

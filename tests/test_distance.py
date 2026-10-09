@@ -1,4 +1,4 @@
-"""Exact distance engines, declared costs, admissibility, and graph bounds."""
+"""Exact distance engines, declared costs, and graph bounds."""
 
 from __future__ import annotations
 
@@ -6,22 +6,26 @@ import heapq
 import json
 from collections import deque
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from hypothesis.strategies import DrawFn
 
 from tests.test_edit_primitives import fixture as primitive_fixture
 from tiergraph import (
     PRIMITIVE_KINDS,
     UNIT_COSTS,
     AddItem,
-    AdmissibleProjection,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
     BipartiteRelationDeclaration,
+    Boundary,
     BoundaryRef,
     BoundarySide,
     CostTable,
@@ -47,7 +51,6 @@ from tiergraph import (
     PatchOperation,
     PolyadicInstanceRef,
     PolyadicRelationDeclaration,
-    ProjectionWitness,
     QualifiedName,
     Refusal,
     RelationEndpointKind,
@@ -60,12 +63,10 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
-    check_projection_admissibility,
     contiguous_segmentation_distance,
     diff,
     distance,
     dump_bytes,
-    fingerprint,
     format_control_insensitive_projection,
     ordered_tree_distance,
     price_patch,
@@ -75,6 +76,13 @@ from tiergraph import (
 )
 from tiergraph.cli import main
 from tiergraph.distance import (
+    _INVERSE_KINDS,
+    _Atom,
+    _atom_deletion,
+    _atom_insertion,
+    _atom_kind_distance,
+    _atom_multiset_lower_bound,
+    _atom_substitution,
     _delta_primitive_kind,
     _item_substitution,
     _operation_declaration,
@@ -136,26 +144,38 @@ def cyclic_relation_graph() -> Graph:
     )
 
 
-def move_witness(source: Graph, target: Graph) -> ProjectionWitness:
-    """Build one checked move witness through the public patch route."""
-    return ProjectionWitness.from_patch(
-        source, diff(source, target, EquivalenceView.IDENTIFIED)
-    )
+@dataclass(frozen=True)
+class PrimitiveCase:
+    """Hold one realized primitive and the scope that prices it."""
+
+    kind: str
+    before: Graph
+    after: Graph
+    declaration: QualifiedName | None
 
 
-def edit_witness(
+def edit_case(
     source: Graph, operation: Callable[[JournalEditor], object]
-) -> ProjectionWitness:
-    """Record one real editor primitive as a projection witness."""
+) -> PrimitiveCase:
+    """Record one real editor primitive and its resulting graph."""
     journal = Journal()
     editor = source.edit(journal=journal)
     operation(editor)
-    editor.freeze()
-    return ProjectionWitness.from_patch(source, journal.to_patch())
+    after = editor.freeze()
+    patch = journal.to_patch()
+    assert len(patch.operations) == 1
+    opcode = patch.operations[0].opcode
+    assert isinstance(opcode, DeltaOpcode)
+    return PrimitiveCase(
+        _delta_primitive_kind(opcode),
+        source,
+        after,
+        _operation_declaration(opcode, source),
+    )
 
 
-def primitive_witnesses() -> tuple[ProjectionWitness, ...]:
-    """Exercise every costed primitive on small validated graphs."""
+def primitive_cases() -> tuple[PrimitiveCase, ...]:
+    """Exercise every costed primitive on validated graphs."""
     case = primitive_fixture("text")
     base = case.graph
     layer = LayerName(case.namespace, "distance")
@@ -188,64 +208,62 @@ def primitive_witnesses() -> tuple[ProjectionWitness, ...]:
         attributes=(AttributeValue(case.note, XsdType.STRING, "replacement"),)
     )
     return (
-        edit_witness(base, lambda editor: editor.add_layer(layer)),
-        edit_witness(layered, lambda editor: editor.remove_layer(layer)),
-        edit_witness(base, lambda editor: editor.add_relation(inserted_relation)),
-        edit_witness(
-            base, lambda editor: editor.remove_relation(RelationInstanceRef(0))
-        ),
-        edit_witness(base, lambda editor: editor.declare(extra_tier)),
-        edit_witness(declared, lambda editor: editor.undeclare(extra_tier)),
-        edit_witness(base, lambda editor: editor.insert_item(case.spare, 1, Item())),
-        edit_witness(base, lambda editor: editor.remove_item(ItemRef(case.spare, 0))),
-        edit_witness(
+        edit_case(base, lambda editor: editor.add_layer(layer)),
+        edit_case(layered, lambda editor: editor.remove_layer(layer)),
+        edit_case(base, lambda editor: editor.add_relation(inserted_relation)),
+        edit_case(base, lambda editor: editor.remove_relation(RelationInstanceRef(0))),
+        edit_case(base, lambda editor: editor.declare(extra_tier)),
+        edit_case(declared, lambda editor: editor.undeclare(extra_tier)),
+        edit_case(base, lambda editor: editor.insert_item(case.spare, 1, Item())),
+        edit_case(base, lambda editor: editor.remove_item(ItemRef(case.spare, 0))),
+        edit_case(
             base,
             lambda editor: editor.promote_boundary(BoundaryRef(case.unit, 1), "u1"),
         ),
-        edit_witness(
+        edit_case(
             promoted_boundary, lambda editor: editor.demote_boundary(boundary_id)
         ),
-        edit_witness(
+        edit_case(
             base,
             lambda editor: editor.promote_item(ItemRef(case.spare, 0), "distance-item"),
         ),
-        edit_witness(
+        edit_case(
             promoted_item,
             lambda editor: editor.demote_item(DurableItemRef("distance-item")),
         ),
-        edit_witness(
+        edit_case(
             base,
             lambda editor: editor.promote_relation(
                 RelationInstanceRef(0), "distance-relation"
             ),
         ),
-        edit_witness(
+        edit_case(
             promoted_relation, lambda editor: editor.demote_relation(relation_id)
         ),
-        edit_witness(layered, lambda editor: editor.put_fact(layer, fact)),
-        edit_witness(
+        edit_case(layered, lambda editor: editor.put_fact(layer, fact)),
+        edit_case(
             with_fact,
             lambda editor: editor.remove_fact(layer, fact.subject, fact.value.name),
         ),
-        edit_witness(base, lambda editor: editor.seal(case.spare, 1)),
-        edit_witness(sealed, lambda editor: editor.drop_seal(case.spare)),
-        edit_witness(
+        edit_case(base, lambda editor: editor.seal(case.spare, 1)),
+        edit_case(sealed, lambda editor: editor.drop_seal(case.spare)),
+        edit_case(
             base,
             lambda editor: editor.set_attribute(
                 ItemRef(case.unit, 0),
                 AttributeValue(case.note, XsdType.STRING, "distance"),
             ),
         ),
-        edit_witness(
+        edit_case(
             valued,
             lambda editor: editor.remove_attribute(ItemRef(case.unit, 0), case.note),
         ),
-        edit_witness(base, lambda editor: editor.move_item(ItemRef(case.spare, 0), 2)),
-        edit_witness(
+        edit_case(base, lambda editor: editor.move_item(ItemRef(case.spare, 0), 2)),
+        edit_case(
             base,
             lambda editor: editor.replace_item(ItemRef(case.spare, 0), replacement),
         ),
-        edit_witness(
+        edit_case(
             base,
             lambda editor: editor.set_endpoints(
                 RelationInstanceRef(0),
@@ -253,13 +271,169 @@ def primitive_witnesses() -> tuple[ProjectionWitness, ...]:
                 ItemRef(case.unit, 2),
             ),
         ),
-        edit_witness(
+        edit_case(
             base,
             lambda editor: editor.swap_items(
                 ItemRef(case.spare, 0), ItemRef(case.spare, 2)
             ),
         ),
-        edit_witness(sealed, lambda editor: editor.unseal(case.spare, 1)),
+        edit_case(sealed, lambda editor: editor.unseal(case.spare, 1)),
+    )
+
+
+PRIMITIVE_CASES = primitive_cases()
+
+
+@st.composite
+def cost_tables(draw: DrawFn) -> CostTable:
+    """Generate complete nonnegative tables while preserving inverse symmetry."""
+    operations: dict[str, int] = {}
+    for operation, inverse in _INVERSE_KINDS.items():
+        value = draw(st.integers(min_value=0, max_value=20))
+        operations[operation] = value
+        operations[inverse] = value
+    for operation in PRIMITIVE_KINDS - operations.keys():
+        operations[operation] = draw(st.integers(min_value=0, max_value=20))
+    return CostTable(operations)
+
+
+def test_atom_bound_has_a_realized_case_for_every_primitive() -> None:
+    """The local proof surface covers the complete public primitive vocabulary."""
+    assert {case.kind for case in PRIMITIVE_CASES} == PRIMITIVE_KINDS
+
+
+@pytest.mark.parametrize("case", PRIMITIVE_CASES, ids=lambda case: case.kind)
+@settings(max_examples=20)
+@given(costs=cost_tables())
+def test_atom_bound_is_dominated_by_every_primitive(
+    case: PrimitiveCase, costs: CostTable
+) -> None:
+    """Every realized primitive changes the atom relaxation by at most its cost."""
+    bound = _atom_multiset_lower_bound(
+        case.before, case.after, costs, EquivalenceView.EXACT
+    )
+    assert bound <= costs.operation(case.kind, case.declaration)
+
+
+def many_incidence_cases() -> tuple[PrimitiveCase, ...]:
+    """Build the four primitives whose one cost can cover a large payload."""
+    case = primitive_fixture("atom-many")
+    base = case.graph
+    item_names = tuple(
+        QualifiedName(case.namespace, f"item-value-{index}") for index in range(16)
+    )
+    boundary_names = tuple(
+        QualifiedName(case.namespace, f"boundary-value-{index}") for index in range(16)
+    )
+    declaration_names = tuple(
+        QualifiedName(case.namespace, f"declaration-value-{index}")
+        for index in range(16)
+    )
+    declarations = (
+        *base.attribute_declarations,
+        *(
+            AttributeDeclaration(name, AttributeDomain.ITEM, XsdType.STRING)
+            for name in item_names
+        ),
+        *(
+            AttributeDeclaration(name, AttributeDomain.BOUNDARY, XsdType.STRING)
+            for name in boundary_names
+        ),
+        *(
+            AttributeDeclaration(
+                name, AttributeDomain.RELATION_DECLARATION, XsdType.STRING
+            )
+            for name in declaration_names
+        ),
+    )
+    item_values = tuple(
+        AttributeValue(name, XsdType.STRING, "before") for name in item_names
+    )
+    boundary_values = tuple(
+        AttributeValue(name, XsdType.STRING, "edge") for name in boundary_names
+    )
+    rich = replace(
+        base,
+        tiers=(
+            base.tiers[0],
+            replace(
+                base.tiers[1],
+                items=(replace(base.tiers[1].items[0], attributes=item_values),),
+            ),
+        ),
+        attribute_declarations=declarations,
+        boundary_values=(Boundary(BoundaryRef(case.unit, 1), boundary_values),),
+    )
+    replacement = replace(
+        rich.tiers[1].items[0],
+        attributes=tuple(
+            AttributeValue(name, XsdType.STRING, "after") for name in item_names
+        ),
+    )
+    relation_template = cast(
+        BipartiteRelationDeclaration,
+        next(
+            declaration
+            for declaration in rich.relation_declarations
+            if declaration.name == case.link
+        ),
+    )
+    relation_declaration = BipartiteRelationDeclaration(
+        QualifiedName(case.namespace, "wide-relation"),
+        relation_template.left_type,
+        relation_template.right_type,
+        attributes=tuple(
+            AttributeValue(name, XsdType.STRING, "declared")
+            for name in declaration_names
+        ),
+    )
+    endpoints = tuple(ItemRef(case.unit, index % 3) for index in range(64))
+    return (
+        edit_case(
+            rich,
+            lambda editor: editor.set_endpoints(
+                PolyadicInstanceRef(0), endpoints, tuple(reversed(endpoints))
+            ),
+        ),
+        edit_case(
+            rich,
+            lambda editor: editor.replace_item(ItemRef(case.spare, 0), replacement),
+        ),
+        edit_case(
+            rich,
+            lambda editor: editor.promote_boundary(BoundaryRef(case.unit, 1), "u1"),
+        ),
+        edit_case(rich, lambda editor: editor.declare(relation_declaration)),
+    )
+
+
+@settings(max_examples=20)
+@given(costs=cost_tables())
+def test_atom_bound_dominates_many_incidence_primitives(costs: CostTable) -> None:
+    """One primitive cost dominates rewiring and arbitrarily wide payloads."""
+    for case in many_incidence_cases():
+        bound = _atom_multiset_lower_bound(
+            case.before, case.after, costs, EquivalenceView.EXACT
+        )
+        assert bound <= costs.operation(case.kind, case.declaration)
+
+
+@settings(max_examples=50)
+@given(
+    source=st.lists(st.sampled_from(tuple("abcdef")), max_size=6, unique=True),
+    target=st.lists(st.sampled_from(tuple("abcdef")), max_size=6, unique=True),
+)
+def test_atom_bound_never_exceeds_ordered_tier_exact_distance(
+    source: list[str], target: list[str]
+) -> None:
+    """The relaxed multiset cost stays below the exact ordered-tier result."""
+    left = graph(*source)
+    right = graph(*target)
+    exact = distance(left, right, view=EquivalenceView.IDENTIFIED)
+    assert exact.exact
+    assert (
+        _atom_multiset_lower_bound(left, right, UNIT_COSTS, EquivalenceView.IDENTIFIED)
+        <= exact.lower
     )
 
 
@@ -629,101 +803,116 @@ def test_cost_table_data_refuses_duplicate_declarations() -> None:
         CostTable.from_data({"declarations": [entry, entry]})
 
 
-def _labels(value: Graph) -> tuple[object, ...]:
-    """Project durable labels from the first tier."""
-    return tuple(item.durable_id for item in value.tiers[0].items)
-
-
-def test_projection_admissibility_catches_a_cheap_move() -> None:
-    """A Levenshtein projection cannot lower-bound a cheaper arbitrary move."""
-    source = graph("a", "b", "c")
-    target = source.move_item(ItemRef(TOKENS, 0), 2)
-    costs = CostTable({**UNIT_COSTS.operations, "move_item": 1})
-    projection = SequenceProjection("labels", _labels)
-    check = check_projection_admissibility(
-        projection,
-        costs,
-        (move_witness(source, target),),
-        required=("move_item", "replace_item"),
-    )
-    assert not check.admissible
-    assert check.missing == frozenset({"replace_item"})
-    assert check.violations[0].projected == 2
-    with pytest.raises(ValueError, match="missing witnesses"):
-        check.certify()
-
-    complete = check_projection_admissibility(
-        projection,
-        CostTable({**UNIT_COSTS.operations, "move_item": 2}),
-        (move_witness(source, target),),
-        required=("move_item",),
-    )
-    assert complete.admissible
-    assert complete.certify().operations == frozenset({"move_item"})
-
-    other = QualifiedName(NS, "other-tier")
-    scoped = CostTable(
-        {**UNIT_COSTS.operations, "move_item": 2},
-        {other: {"move_item": 1}},
-    )
-    scoped_check = check_projection_admissibility(
-        projection,
-        scoped,
-        (move_witness(source, target),),
-        required=("move_item",),
-    )
-    assert scoped_check.violations[0].allowed == 1
-
-
-def test_projection_violation_refuses_certification() -> None:
-    """Complete witness coverage still refuses when the cost inequality fails."""
-    source = graph("a", "b", "c")
-    target = source.move_item(ItemRef(TOKENS, 0), 2)
-    check = check_projection_admissibility(
-        SequenceProjection("labels", _labels),
-        CostTable({**UNIT_COSTS.operations, "move_item": 1}),
-        (move_witness(source, target),),
-        required=("move_item",),
-    )
-    with pytest.raises(ValueError, match="overprices"):
-        check.certify()
+def test_sequence_projection_requires_a_diagnostic_name() -> None:
+    """Standalone sequence projections retain a stable diagnostic name."""
     with pytest.raises(ValueError, match="nonempty"):
-        SequenceProjection("", _labels)
-    with pytest.raises(TypeError, match="base must be"):
-        ProjectionWitness.from_patch(object(), diff(source, target, "identified"))  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="must be a Patch"):
-        ProjectionWitness.from_patch(source, object())  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="one operation"):
-        ProjectionWitness.from_patch(source, diff(source, source, "identified"))
-    other_name = QualifiedName("urn:test:distance:other", "items")
-    incompatible = Graph(
-        (NamespaceDeclaration("o", other_name.namespace),),
-        (Tier(TierDeclaration(other_name, "Items"), (Item("x"),)),),
-        (),
+        SequenceProjection("", lambda value: ())
+    labels = SequenceProjection(
+        "labels", lambda value: tuple(item.durable_id for item in value.tiers[0].items)
     )
-    with pytest.raises(ValueError, match="editing primitive"):
-        ProjectionWitness.from_patch(source, diff(source, incompatible, "identified"))
+    assert labels.distance(graph("a"), graph("b")) == 1
 
-    appended = AddItem(TOKENS, Item("tail")).apply(source)
-    base_fingerprint = fingerprint(source, EquivalenceView.IDENTIFIED)
-    target_fingerprint = fingerprint(appended, EquivalenceView.IDENTIFIED)
-    patch = Patch(
-        base_fingerprint,
-        target_fingerprint,
-        (
-            PatchOperation(
-                AddItem(TOKENS, Item("tail")),
-                AddItem(TOKENS, Item("tail")),
-                base_fingerprint,
-                target_fingerprint,
-            ),
+
+def test_atom_transition_closure_covers_every_retained_atom_kind() -> None:
+    """Insertion, deletion, and substitution cover each atom payload shape."""
+    case = primitive_fixture("atom-transition")
+    first = AttributeValue(case.note, XsdType.STRING, "first")
+    second = AttributeValue(case.note, XsdType.STRING, "second")
+    other = AttributeValue(case.boundary_note, XsdType.STRING, "other")
+    boundary = _Atom("boundary-value", first)
+    carrier = _Atom("carrier-value", ("document", None, first))
+    for atom in (boundary, carrier):
+        assert _atom_insertion(atom, UNIT_COSTS) == 1
+        assert _atom_deletion(atom, UNIT_COSTS) == 1
+
+    relation_declaration = cast(
+        BipartiteRelationDeclaration,
+        next(
+            declaration
+            for declaration in case.graph.relation_declarations
+            if declaration.name == case.link
         ),
     )
-    assert ProjectionWitness.from_patch(source, patch).operation == "insert_item"
-    with pytest.raises(TypeError, match="come from"):
-        AdmissibleProjection(
-            SequenceProjection("labels", _labels), frozenset(), UNIT_COSTS
+    changed_declaration = replace(relation_declaration, attributes=(first,))
+    assert (
+        _atom_substitution(
+            _Atom("declaration", relation_declaration),
+            _Atom("declaration", changed_declaration),
+            UNIT_COSTS,
         )
+        == 1
+    )
+    assert (
+        _atom_substitution(
+            boundary,
+            _Atom("boundary-value", second),
+            UNIT_COSTS,
+        )
+        == 1
+    )
+    assert (
+        _atom_substitution(
+            boundary,
+            _Atom("boundary-value", other),
+            UNIT_COSTS,
+        )
+        == 2
+    )
+
+    relation = _Atom("relation", ("binary", case.link, None, ()))
+    other_relation_shape = _Atom("relation", ("polyadic", case.link, None, ()))
+    assert _atom_substitution(relation, other_relation_shape, UNIT_COSTS) == 2
+
+    layer = LayerName(case.namespace, "first")
+    other_layer = LayerName(case.namespace, "second")
+    fact = _Atom("fact", (layer, first))
+    assert _atom_substitution(fact, _Atom("fact", (layer, second)), UNIT_COSTS) == 1
+    opaque_costs = CostTable(
+        UNIT_COSTS.operations, value_substitution=lambda before, after: 1
+    )
+    assert _atom_substitution(fact, _Atom("fact", (layer, second)), opaque_costs) == 0
+    assert (
+        _atom_substitution(fact, _Atom("fact", (other_layer, second)), UNIT_COSTS) == 2
+    )
+
+    changed_carrier = _Atom("carrier-value", ("document", None, second))
+    other_carrier = _Atom("carrier-value", ("tier", case.unit, second))
+    assert _atom_substitution(carrier, changed_carrier, UNIT_COSTS) == 1
+    assert _atom_substitution(carrier, other_carrier, UNIT_COSTS) == 2
+
+    seal = _Atom("seal", Seal(case.unit, 1))
+    advanced = _Atom("seal", Seal(case.unit, 2))
+    other_seal = _Atom("seal", Seal(GraphCarrier.RELATIONS, 1))
+    assert _atom_substitution(seal, advanced, UNIT_COSTS) == 1
+    assert _atom_substitution(advanced, seal, UNIT_COSTS) == 1
+    assert _atom_substitution(seal, other_seal, UNIT_COSTS) == 2
+    assert (
+        _atom_substitution(
+            _Atom("layer", layer), _Atom("layer", other_layer), UNIT_COSTS
+        )
+        == 2
+    )
+
+
+def test_atom_transition_refuses_an_unknown_kind() -> None:
+    """New atom kinds cannot silently inherit seal transition costs."""
+    unknown = _Atom("unknown", object())
+    with pytest.raises(ValueError, match="unknown graph-distance atom kind"):
+        _atom_insertion(unknown, UNIT_COSTS)
+    with pytest.raises(ValueError, match="unknown graph-distance atom kind"):
+        _atom_deletion(unknown, UNIT_COSTS)
+    with pytest.raises(ValueError, match="same kind"):
+        _atom_substitution(unknown, _Atom("item", (None, ())), UNIT_COSTS)
+
+
+def test_large_atom_assignment_uses_a_linear_count_bound() -> None:
+    """Large unmatched multisets avoid materializing a cubic assignment."""
+    source = [_Atom("item", (f"source-{index}", ())) for index in range(1_000)]
+    target = [_Atom("item", (f"target-{index}", ())) for index in range(1_000)]
+    assert _atom_kind_distance(source, target, UNIT_COSTS) == 1_000
+
+    zero_costs = CostTable({**UNIT_COSTS.operations, "replace_item": 0})
+    assert _atom_kind_distance(source, target, zero_costs) == 0
 
 
 def _pieces(value: Graph) -> tuple[str, ...]:
@@ -776,8 +965,13 @@ def test_value_callback_participates_in_exact_graph_distance() -> None:
         UNIT_COSTS.operations,
         value_substitution=lambda before, after: Decimal("0.25"),
     )
-    assert distance(valued_graph("old"), valued_graph("new"), costs).value == Decimal(
-        "0.25"
+    source = valued_graph("old")
+    target = valued_graph("new")
+    exact = distance(source, target, costs)
+    assert exact.value == Decimal("0.25")
+    assert (
+        _atom_multiset_lower_bound(source, target, costs, EquivalenceView.FUNCTIONAL)
+        == 0
     )
 
 
@@ -1003,7 +1197,47 @@ def test_general_graph_distance_returns_realized_interval() -> None:
     assert result.lower == 0
     assert result.lower <= result.upper
     assert not result.exact
-    assert result.method in {"projected-diff", "projected-rebuild"}
+    assert result.method in {"realized-diff", "realized-rebuild"}
+
+
+def test_general_atom_interval_can_have_a_positive_bound() -> None:
+    """A retained payload change gives a positive general-graph lower bound."""
+    case = primitive_fixture("distance-positive")
+    source = case.graph
+    item = source.tiers[1].items[0]
+    target = source.replace_item(
+        ItemRef(case.spare, 0),
+        replace(
+            item,
+            attributes=(AttributeValue(case.note, XsdType.STRING, "changed"),),
+        ),
+    )
+    result = distance(source, target, view=EquivalenceView.IDENTIFIED)
+    assert result.lower == Decimal(1)
+    assert result.upper >= result.lower
+    assert not result.exact
+    assert result.value is None
+    assert result.lower_bound_method == "atom-multiset"
+
+
+def test_general_atom_bound_accepts_a_partial_cost_table() -> None:
+    """The relaxation does not require costs unrelated to a realized edit."""
+    source = replace(
+        graph("a"),
+        attribute_declarations=(
+            AttributeDeclaration(VALUE, AttributeDomain.DOCUMENT, XsdType.STRING),
+        ),
+        layers=(Layer(LayerName(NS, "diagnostic"), ()),),
+    )
+    target = source.set_attribute(
+        None, AttributeValue(VALUE, XsdType.STRING, "changed")
+    )
+    costs = CostTable({"set_attribute": 1, "remove_attribute": 1})
+    result = distance(source, target, costs, view=EquivalenceView.EXACT)
+    assert result.lower == 0
+    assert result.upper == 1
+    assert result.method == "realized-diff"
+    assert result.lower_bound_method == "atom-multiset"
 
 
 def test_incompatible_graph_distance_prices_a_rebuild() -> None:
@@ -1016,7 +1250,7 @@ def test_incompatible_graph_distance_prices_a_rebuild() -> None:
         (),
     )
     result = distance(source, target, view="identified")
-    assert result.method == "projected-rebuild"
+    assert result.method == "realized-rebuild"
     assert 0 <= result.lower <= result.upper
 
 
@@ -1025,7 +1259,7 @@ def test_rebuild_realizes_mutually_dependent_relation_declarations() -> None:
     cyclic = cyclic_relation_graph()
     forward = distance(graph("a"), cyclic, view="identified")
     backward = distance(cyclic, graph("a"), view="identified")
-    assert forward.method == backward.method == "projected-rebuild"
+    assert forward.method == backward.method == "realized-rebuild"
     assert forward.upper == backward.upper
     with pytest.raises(GraphValidationError, match="could not undeclare"):
         _undeclare_all(cyclic, cyclic.relation_declarations, UNIT_COSTS)
@@ -1095,93 +1329,38 @@ def test_nonsequence_shapes_and_cheap_swap_select_bounds() -> None:
             Tier(TierDeclaration(extra_name, "Extra"), (Item("x"),)),
         ),
     )
-    assert distance(source, extra, view="identified").method.startswith("projected-")
+    assert distance(source, extra, view="identified").method.startswith("realized-")
     costs = CostTable({**UNIT_COSTS.operations, "swap_items": 1})
     swapped = distance(source, graph("b", "a"), costs, view="identified")
     assert not swapped.exact
 
 
-def test_an_invalid_projection_bound_is_refused() -> None:
-    """The final interval guard catches inconsistent certified input."""
-    costs = CostTable({**UNIT_COSTS.operations, "move_item": 1})
-
-    def project(value: Graph) -> tuple[object, ...]:
-        if not value.relations or value.tiers[0].declaration.name.namespace != NS:
-            return ()
-        endpoint = value.relations[0].right
-        assert isinstance(endpoint, ItemRef)
-        return tuple(range(endpoint.index * 10))
-
-    certificate = check_projection_admissibility(
-        SequenceProjection("conditional", project),
-        costs,
-        primitive_witnesses(),
-    ).certify()
-    with pytest.raises(ValueError, match="exceeds"):
-        distance(
-            graph("a", "b", "c", relation=(0, 1)),
-            graph("a", "b", "c", relation=(0, 2)),
-            costs,
-            projections=(certificate,),
-        )
-
-
-def test_move_interval_accepts_an_admissible_projection() -> None:
-    """Certified projection bounds remain below a cheap realized move."""
+def test_general_interval_names_both_bound_constructions() -> None:
+    """A general result names the atom lower bound and realized upper bound."""
     source = graph("a", "b", "c")
     target = source.move_item(ItemRef(TOKENS, 0), 2)
     costs = CostTable({**UNIT_COSTS.operations, "move_item": 1})
-    projection = SequenceProjection("constant", lambda value: ())
-    certificate = check_projection_admissibility(
-        projection,
-        costs,
-        (move_witness(source, target),),
-        required=("move_item",),
-    ).certify()
-    with pytest.raises(ValueError, match="lacks primitive coverage"):
-        distance(
-            source,
-            target,
-            costs,
-            view="identified",
-            projections=(certificate,),
-        )
-    with pytest.raises(TypeError, match="come from"):
-        replace(certificate, operations=PRIMITIVE_KINDS)
-    certificate = check_projection_admissibility(
-        projection,
-        costs,
-        primitive_witnesses(),
-    ).certify()
-    result = distance(
-        source,
-        target,
-        costs,
-        view="identified",
-        projections=(certificate,),
-    )
+    result = distance(source, target, costs, view="identified")
     assert result.to_data() == {
         "exact": False,
         "lower": 0,
         "upper": 1,
-        "method": "projected-diff",
+        "method": "realized-diff",
+        "lower_bound_method": "atom-multiset",
     }
-    with pytest.raises(ValueError, match="different cost table"):
-        distance(
-            source,
-            target,
-            CostTable({**UNIT_COSTS.operations, "move_item": 1}),
-            view="identified",
-            projections=(certificate,),
-        )
 
 
 def test_distance_interval_checks_its_claim() -> None:
-    """Interval construction refuses reversed bounds and false exactness."""
+    """Interval construction checks bound order, labels, and exactness."""
     with pytest.raises(ValueError, match="must not exceed"):
-        DistanceInterval(Decimal(2), Decimal(1), False, "probe")
-    with pytest.raises(ValueError, match="exact exactly"):
-        DistanceInterval(Decimal(1), Decimal(1), False, "probe")
+        DistanceInterval(Decimal(2), Decimal(1), False, "probe", "atom")
+    assert not DistanceInterval(Decimal(1), Decimal(1), False, "probe", "atom").exact
+    with pytest.raises(ValueError, match="equal bounds"):
+        DistanceInterval(Decimal(1), Decimal(2), True, "probe")
+    with pytest.raises(ValueError, match="lower-bound method"):
+        DistanceInterval(Decimal(1), Decimal(2), False, "probe")
+    with pytest.raises(ValueError, match="no lower-bound method"):
+        DistanceInterval(Decimal(1), Decimal(1), True, "probe", "atom")
     with pytest.raises(ValueError, match="method"):
         DistanceInterval(Decimal(1), Decimal(1), True, "")
 

@@ -115,14 +115,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic graph diff output, and exact graph-to-program export.
 - Added declared graph-edit cost tables, exact weighted sequence and ordered-tree
   engines, exact contiguous-segmentation distance, and graph distance results
-  that distinguish exact values from certified intervals. Projection lower
-  bounds require complete per-operation admissibility witnesses; general
-  overlapping relation structures use a realized diff or dependency-ordered
-  rebuild as their upper bound. Added caller-defined text joining and
-  presentation transforms, whitespace-insensitive and Unicode format-control
-  projections, and the `tiergraph distance` command. Value substitution and
-  boundary displacement accept caller callbacks, while numeric cost-table files
-  remain declarative.
+  that distinguish exact values from named intervals. General graphs use an
+  incidence-free atom-multiset lower bound and a realized diff or
+  dependency-ordered rebuild as their upper bound. The atom relaxation retains
+  complete payloads while erasing order, relation endpoints, boundary
+  addresses, and fact subjects. Small unmatched atom sets use minimum-cost
+  assignment over direct one-atom transitions and delete-then-insert paths;
+  large sets use a linear count bound at the least declared transition cost.
+  Partial cost tables and opaque custom value-substitution callbacks relax the
+  affected general-graph bound to zero when the complete transition basis is
+  unavailable; exact ordered tiers continue to use relevant declared costs and
+  callbacks directly. The distance surface also includes caller-defined text
+  joining and presentation transforms,
+  whitespace-insensitive and Unicode format-control projections, and the
+  `tiergraph distance` command. Value substitution and boundary displacement
+  accept caller callbacks, while numeric cost-table files remain declarative.
 - Added `commit_path()` for collapsing a prepared finite path lattice while
   retaining the chosen alternatives' containment substructure, source values,
   and provenance facts. Added exact `retime()` clock-boundary rebinding and
@@ -144,6 +151,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bring documentation current with the editing API and path-result serialization.
+- Removed the finite projection-witness admission types, helper, and
+  `graph_distance(..., projections=...)` parameter. General graph distance now
+  uses only the built-in atom-multiset lower bound. `DistanceInterval` adds the
+  serialized `lower_bound_method` field for nonexact results and requires a
+  nonempty lower-bound method when constructed with `exact=False`.
 - Item and relation removal now refuses locally, before changing an editor, when
   a relation endpoint, durable boundary anchor, stored boundary value, seal, or
   live layer fact still depends on the removed content. Some item removals that

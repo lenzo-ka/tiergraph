@@ -326,16 +326,33 @@ equal lower and upper bounds and the exact distance available as `value`.
 Independent ordered tiers can receive an exact weighted sequence result.
 Ordered trees and contiguous segmentations also have exact engines for their
 declared operation models. For general graphs with crossing or non-nesting
-relations, the interval instead holds a certified projection lower bound and
-the cost of a realized executable script as the upper bound. The upper bound is
-valid, not promised to be close to optimal. A projection contributes only
-after its admissibility has been checked against every primitive cost.
+relations, the result remains an interval even if its endpoints happen to meet.
+Its `lower_bound_method` names the incidence-free `atom-multiset` relaxation;
+`method` names the realized diff or rebuild used for the upper bound. The upper
+bound is valid, not promised to be close to optimal.
+
+The atom relaxation keeps complete declaration and item payloads, relation
+payloads without endpoints, boundary values without addresses, facts without
+subjects, and layer, seal, and other carrier-value atoms. It ignores item order,
+endpoint incidence, and fact attachment. Small unmatched atom sets use
+minimum-cost assignment over direct one-atom transitions and
+delete-then-insert paths. Large unmatched sets avoid cubic assignment and use
+their unavoidable atom count at the least declared transition cost. This makes
+the result sound but deliberately weak for rewiring and reordering:
+`set_endpoints`, moves, and swaps can project to zero. A partial cost table also
+uses zero for the general lower bound rather than requiring costs unrelated to
+the realized upper-bound script.
+An opaque `value_substitution` callback does not expose the global triangle
+information needed for a sound comparison, so general-graph value substitutions
+relax to zero when a custom callback is active. Exact ordered-tier distance
+still uses the callback directly.
 
 Text projections can define strict, presentation, whitespace-insensitive, or
 format-control-insensitive readings while a caller supplies its own joining
-policy. Zero-cost projected characters are compatible with a pseudometric for
-that projection; they do not make the exact positive-cost graph distance a
-metric on a finer view.
+policy. They are standalone sequence distances and do not contribute a general
+graph lower bound. Zero-cost projected characters are compatible with a
+pseudometric for that projection; they do not make the exact positive-cost
+graph distance a metric on a finer view.
 
 ## Bound history and clean up explicitly
 
