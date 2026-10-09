@@ -11,10 +11,12 @@ from math import gcd
 from typing import TYPE_CHECKING, cast, overload
 
 if TYPE_CHECKING:
+    from tiergraph.blob import BlobProfile
     from tiergraph.edit import ClockJournalEditor, Journal
     from tiergraph.replacement import DetachedDependency, ReplacementPolicies, Subtree
 
 from tiergraph.core import (
+    Attribute,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -26,6 +28,7 @@ from tiergraph.core import (
     DurableItemRef,
     DurableRelationRef,
     EditDeclaration,
+    EditTarget,
     Graph,
     GraphEditor,
     GraphValidationError,
@@ -579,7 +582,12 @@ class ClockProfile:
         return timings
 
     @overload
-    def edit(self, rebinding: ClockRebindingPolicy | str | None = None) -> ClockEditor:
+    def edit(
+        self,
+        rebinding: ClockRebindingPolicy | str | None = None,
+        *,
+        blob: BlobProfile | None = None,
+    ) -> ClockEditor:
         """Return a plain clock editor when no journal is attached."""
         ...
 
@@ -588,6 +596,7 @@ class ClockProfile:
         self,
         rebinding: ClockRebindingPolicy | str | None = None,
         *,
+        blob: BlobProfile | None = None,
         journal: Journal,
     ) -> ClockJournalEditor:
         """Return an opt-in journaled clock editor."""
@@ -597,6 +606,7 @@ class ClockProfile:
         self,
         rebinding: ClockRebindingPolicy | str | None = None,
         *,
+        blob: BlobProfile | None = None,
         journal: Journal | None = None,
     ) -> ClockEditor | ClockJournalEditor:
         """Return an editor that keeps this clock profile valid after every edit.
@@ -611,10 +621,16 @@ class ClockProfile:
         session. A named declaration cascade may explicitly remove this clock
         definition and retire the session; its graph and withdrawal reports
         remain available, but later profile-aware edits refuse.
+
+        Passing ``blob`` adds an opt-in external-resource agreement guard. The
+        supplied blob profile must describe this graph and agree initially.
+        Later clock and span edits may be staged in either order, but
+        :meth:`ClockEditor.freeze` refuses while any linear attachment span
+        disagrees with the current subject timing.
         """
         if journal is None:
-            return ClockEditor(self, rebinding)
-        return journal._attach_clock(self, rebinding)
+            return ClockEditor(self, rebinding, blob=blob)
+        return journal._attach_clock(self, rebinding, blob)
 
     @property
     def is_structural(self) -> bool:
@@ -883,11 +899,23 @@ def _corresponding_boundary_origins(
     return result
 
 
+def _check_blob_profile(blob: BlobProfile, clock: ClockProfile) -> None:
+    """Retarget and check one opt-in blob profile against current clock state."""
+    try:
+        replace(blob, graph=clock.graph).check_clock(clock)
+    except ValueError as error:
+        raise GraphValidationError(
+            f"clock edit violates blob span agreement: {error}"
+        ) from error
+
+
 class ClockEditor:
     """Edit one graph while preserving a declared clock profile.
 
     The editor validates both the graph and the clock profile after every
-    operation. Structural edits on timed tiers are atomic: a refusal leaves the
+    operation. An optional blob profile is checked only at :meth:`freeze`, so a
+    timing change and its attachment-span correction can be staged in either
+    order. Structural edits on timed tiers are atomic: a refusal leaves the
     editor's graph, reports, and profile unchanged. Successful timed-tier edits
     append a :class:`ClockEditReport`; untimed edits need no clock report. A
     named declaration cascade may explicitly remove the clock definition and
@@ -902,8 +930,10 @@ class ClockEditor:
         self,
         profile: ClockProfile,
         rebinding: ClockRebindingPolicy | str | None = None,
+        *,
+        blob: BlobProfile | None = None,
     ) -> None:
-        """Start a profile-aware session with an optional named policy."""
+        """Start a profile-aware session with optional policy and blob guard."""
         if profile.is_structural:
             raise ValueError(
                 "a structural clock-spine profile has no tier bindings to edit"
@@ -918,7 +948,14 @@ class ClockEditor:
                 raise ValueError(
                     f"unknown clock rebinding policy {rebinding!r}; choose {names}"
                 ) from error
+        if blob is not None:
+            if blob.graph != profile.graph:
+                raise ValueError(
+                    "blob and clock profiles must describe the editor's same graph"
+                )
+            _check_blob_profile(blob, profile)
         self._profile = profile
+        self._blob_profile = blob
         self._profile_active = True
         self._graph = profile.graph
         self._policy = policy
@@ -937,8 +974,44 @@ class ClockEditor:
         return tuple(self._reports)
 
     def freeze(self) -> Graph:
-        """Return the current fully validated graph without consuming the editor."""
+        """Return the graph without consuming the editor after guarded checks."""
+        if self._blob_profile is not None and self._profile_active:
+            _check_blob_profile(self._blob_profile, self._profile)
         return self._graph
+
+    def set_attribute(self, target: EditTarget, value: Attribute) -> ClockEditor:
+        """Set an attribute while preserving the active clock definition."""
+        self._require_active_profile()
+        editor = self._graph.edit().set_attribute(target, value)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
+        candidate = editor.freeze()
+        try:
+            next_profile = self._profile_for(candidate)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"attribute edit would invalidate the active clock profile: {error}"
+            ) from error
+        self._graph = candidate
+        self._profile = next_profile
+        return self
+
+    def remove_attribute(self, target: EditTarget, name: QualifiedName) -> ClockEditor:
+        """Remove an attribute while preserving the active clock definition."""
+        self._require_active_profile()
+        editor = self._graph.edit().remove_attribute(target, name)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
+        candidate = editor.freeze()
+        try:
+            next_profile = self._profile_for(candidate)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"attribute edit would invalidate the active clock profile: {error}"
+            ) from error
+        self._graph = candidate
+        self._profile = next_profile
+        return self
 
     def insert_item(self, tier: QualifiedName, index: int, item: Item) -> ClockEditor:
         """Insert one item and atomically bind every resulting timed boundary."""

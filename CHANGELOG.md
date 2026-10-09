@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added deterministic per-asset bundle writing and streaming moves between
   embedded payloads and explicit links.
 - Added opt-in exact clock-agreement checks for linear blob attachment spans.
+- Added an opt-in blob-span guard to clock edit sessions, checked at freeze
+  after clock and attachment-span changes have been staged together.
 - Added blob and bundle commands for ordered inspection, verified directory
   storage, mixed-residency bundle moves, and opt-in blob-profile validation.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.

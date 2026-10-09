@@ -682,7 +682,7 @@ caller's spine byte-identical.
 Method.
 
 ```text
-ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None, *, journal: 'Journal | None' = None) -> 'ClockEditor | ClockJournalEditor'
+ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None, journal: 'Journal | None' = None) -> 'ClockEditor | ClockJournalEditor'
 ```
 
 Return an editor that keeps this clock profile valid after every edit.
@@ -697,6 +697,12 @@ policy. The clock tier itself cannot be structurally edited in a bound
 session. A named declaration cascade may explicitly remove this clock
 definition and retire the session; its graph and withdrawal reports
 remain available, but later profile-aware edits refuse.
+
+Passing ``blob`` adds an opt-in external-resource agreement guard. The
+supplied blob profile must describe this graph and agree initially.
+Later clock and span edits may be staged in either order, but
+:meth:`ClockEditor.freeze` refuses while any linear attachment span
+disagrees with the current subject timing.
 
 #### `ClockProfile.is_structural`
 
@@ -828,13 +834,15 @@ Return the legacy coarse-tick span and rate when a rate exists.
 ### `ClockEditor`
 
 ```text
-ClockEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None' = None) -> 'None'
+ClockEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None) -> 'None'
 ```
 
 Edit one graph while preserving a declared clock profile.
 
 The editor validates both the graph and the clock profile after every
-operation. Structural edits on timed tiers are atomic: a refusal leaves the
+operation. An optional blob profile is checked only at :meth:`freeze`, so a
+timing change and its attachment-span correction can be staged in either
+order. Structural edits on timed tiers are atomic: a refusal leaves the
 editor's graph, reports, and profile unchanged. Successful timed-tier edits
 append a :class:`ClockEditReport`; untimed edits need no clock report. A
 named declaration cascade may explicitly remove the clock definition and
@@ -869,7 +877,27 @@ Method.
 ClockEditor.freeze(self) -> 'Graph'
 ```
 
-Return the current fully validated graph without consuming the editor.
+Return the graph without consuming the editor after guarded checks.
+
+#### `ClockEditor.set_attribute`
+
+Method.
+
+```text
+ClockEditor.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'ClockEditor'
+```
+
+Set an attribute while preserving the active clock definition.
+
+#### `ClockEditor.remove_attribute`
+
+Method.
+
+```text
+ClockEditor.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'ClockEditor'
+```
+
+Remove an attribute while preserving the active clock definition.
 
 #### `ClockEditor.insert_item`
 
@@ -2508,10 +2536,10 @@ Bound history by record count, conservative estimated bytes, or both.
 ### `ClockJournalEditor`
 
 ```text
-ClockJournalEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None', journal: 'Journal') -> 'None'
+ClockJournalEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None', journal: 'Journal', *, blob: 'BlobProfile | None' = None) -> 'None'
 ```
 
-Record atomic edits that preserve an explicit clock profile.
+Record atomic edits that preserve a clock and optional blob-span guard.
 
 #### `ClockJournalEditor.profile`
 
@@ -2541,7 +2569,7 @@ Method.
 ClockJournalEditor.freeze(self) -> 'Graph'
 ```
 
-Return the current fully validated graph.
+Return the graph after checking any opted-in blob span agreement.
 
 #### `ClockJournalEditor.displacement`
 
@@ -2582,6 +2610,26 @@ ClockJournalEditor.dry_run(self, operation: 'Callable[[Any], object]') -> 'tuple
 ```
 
 Apply, validate, report, and roll back new operations by inverses.
+
+#### `ClockJournalEditor.set_attribute`
+
+Method.
+
+```text
+ClockJournalEditor.set_attribute(self, target: 'EditTarget', value: 'Attribute') -> 'ClockJournalEditor'
+```
+
+Set one attribute within the guarded clock session.
+
+#### `ClockJournalEditor.remove_attribute`
+
+Method.
+
+```text
+ClockJournalEditor.remove_attribute(self, target: 'EditTarget', name: 'QualifiedName') -> 'ClockJournalEditor'
+```
+
+Remove one attribute within the guarded clock session.
 
 #### `ClockJournalEditor.insert_item`
 
