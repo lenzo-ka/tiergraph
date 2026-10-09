@@ -2861,14 +2861,16 @@ Return a stable, JSON-compatible description.
 ### `DetachmentReport`
 
 ```text
-DetachmentReport(items: 'tuple[tuple[ItemRef, Item], ...]' = (), relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), facts: 'tuple[tuple[LayerName, LayerFact], ...]' = (), dependencies: 'tuple[DetachedDependency, ...]' = ()) -> None
+DetachmentReport(items: 'tuple[tuple[ItemRef, Item], ...]' = (), relations: 'tuple[tuple[RelationInstanceRef | PolyadicInstanceRef, RelationInstance | PolyadicRelationInstance], ...]' = (), facts: 'tuple[tuple[LayerName, LayerFact], ...]' = (), dependencies: 'tuple[DetachedDependency, ...]' = (), boundary_values: 'tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...]' = ()) -> None
 ```
 
 Snapshot graph content withdrawn by one derived edit.
 
 Items follow tier and item order, relation instances follow their carrier
-order, and facts follow canonical layer and fact order. The stored graph
-values retain their durable identifiers.
+order, facts follow canonical layer and fact order, and boundary values
+follow boundary and attribute order. Entries retain their original
+references and complete typed values, including durable identifiers where
+present.
 
 #### `DetachmentReport.to_data`
 
@@ -3107,7 +3109,8 @@ remain live.
 Item attributes and layer facts are ordinary graph content, so source spans
 and ranked-alternative provenance on chosen units remain unchanged. Facts
 scoped to withdrawn content and references with withdrawn endpoints are
-removed explicitly, never orphaned silently. When ``journal`` is supplied,
+removed explicitly, never orphaned silently. The detachment report includes
+every removed boundary value in source order. When ``journal`` is supplied,
 the derived edit is recorded as its expanded fact, relation, value, and item
 primitives. A resulting patch therefore retains no reference to the
 request-scoped path plan.
@@ -3182,9 +3185,11 @@ Replace one root's descendants and report withdrawn graph content.
 
 The root, its incoming containment link, its attributes, and its layer facts
 remain live. The default abandons dependencies on descendants. The result
-reports the abandoned items, relation instances, and facts whether or not a
-journal is used. A binary donor relation that crosses the supplied subtree
-edge is also reported, but not copied. Correspondence is explicitly opt-in.
+reports the abandoned items, relation instances, facts, and boundary values
+whether or not a journal is used. A binary donor relation that crosses the
+supplied subtree edge is also reported, but not copied. Correspondence is
+explicitly opt-in, and boundary-subject facts use the same correspondence
+as boundary values.
 
 ### `retime`
 

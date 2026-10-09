@@ -16,6 +16,7 @@ from tiergraph.core import (
     Graph,
     GraphValidationError,
     ItemRef,
+    LayerFact,
     LayerName,
     OrphanedSubject,
     PolyadicInstanceRef,
@@ -31,7 +32,11 @@ from tiergraph.core import (
     _resolve_layer_subject,
 )
 from tiergraph.pathplan import PathPlan
-from tiergraph.replacement import EditResult, _detachment_report
+from tiergraph.replacement import (
+    EditResult,
+    _detachment_report,
+    _removed_boundary_values,
+)
 from tiergraph.traversal import OrderedContainment
 
 if TYPE_CHECKING:
@@ -114,7 +119,8 @@ def commit_path(
     Item attributes and layer facts are ordinary graph content, so source spans
     and ranked-alternative provenance on chosen units remain unchanged. Facts
     scoped to withdrawn content and references with withdrawn endpoints are
-    removed explicitly, never orphaned silently. When ``journal`` is supplied,
+    removed explicitly, never orphaned silently. The detachment report includes
+    every removed boundary value in source order. When ``journal`` is supplied,
     the derived edit is recorded as its expanded fact, relation, value, and item
     primitives. A resulting patch therefore retains no reference to the
     request-scoped path plan.
@@ -138,7 +144,8 @@ def commit_path(
         items=displacement.departed_items,
         binary=displacement.departed_relations,
         polyadic=displacement.departed_polyadic_relations,
-        facts=_detached_fact_sites(graph, displacement),
+        facts=_detached_fact_sites(graph, result, displacement),
+        boundary_values=_removed_boundary_values(graph, result, displacement),
     )
     return EditResult(result, report)
 
@@ -323,34 +330,35 @@ def _apply_derived(
 
 
 def _detached_fact_sites(
-    graph: Graph, displacement: Displacement
+    graph: Graph, result: Graph, displacement: Displacement
 ) -> tuple[tuple[LayerName, int], ...]:
     """Locate facts whose subjects departed during a derived edit."""
     sites: list[tuple[LayerName, int]] = []
+    result_facts_by_layer = {
+        layer.name: frozenset(layer.facts) for layer in result.layers
+    }
     for layer in graph.layers:
+        result_facts = result_facts_by_layer[layer.name]
         for index, fact in enumerate(layer.facts):
             if isinstance(fact.subject, OrphanedSubject):
                 continue
+            if fact in result_facts:
+                continue
             subject = _resolve_layer_subject(graph, fact.subject)
-            detached = (
-                (
-                    isinstance(subject, ItemRef)
-                    and subject in displacement.departed_items
-                )
-                or (
-                    isinstance(subject, BoundaryRef)
-                    and subject in displacement.departed_boundaries
-                )
-                or (
-                    isinstance(subject, RelationInstanceRef)
-                    and subject.index in displacement.departed_relations
-                )
-                or (
-                    isinstance(subject, PolyadicInstanceRef)
-                    and subject.index in displacement.departed_polyadic_relations
-                )
-            )
-            if detached:
+            image: object | None
+            if isinstance(subject, ItemRef):
+                image = displacement.items.get(subject)
+            elif isinstance(subject, BoundaryRef):
+                image = displacement.boundaries.get(subject)
+            elif isinstance(subject, RelationInstanceRef):
+                relation = displacement.relations.get(subject.index)
+                image = None if relation is None else RelationInstanceRef(relation)
+            elif isinstance(subject, PolyadicInstanceRef):
+                relation = displacement.polyadic_relations.get(subject.index)
+                image = None if relation is None else PolyadicInstanceRef(relation)
+            else:  # pragma: no cover - live facts resolve to graph coordinates
+                image = None
+            if image is None or LayerFact(image, fact.value) not in result_facts:
                 sites.append((layer.name, index))
     return tuple(sites)
 

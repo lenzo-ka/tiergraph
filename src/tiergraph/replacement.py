@@ -199,8 +199,10 @@ class DetachmentReport:
     """Snapshot graph content withdrawn by one derived edit.
 
     Items follow tier and item order, relation instances follow their carrier
-    order, and facts follow canonical layer and fact order. The stored graph
-    values retain their durable identifiers.
+    order, facts follow canonical layer and fact order, and boundary values
+    follow boundary and attribute order. Entries retain their original
+    references and complete typed values, including durable identifiers where
+    present.
     """
 
     items: tuple[tuple[ItemRef, Item], ...] = ()
@@ -213,6 +215,7 @@ class DetachmentReport:
     ] = ()
     facts: tuple[tuple[LayerName, LayerFact], ...] = ()
     dependencies: tuple[DetachedDependency, ...] = ()
+    boundary_values: tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...] = ()
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the ordered detached content as JSON-compatible data."""
@@ -242,6 +245,10 @@ class DetachmentReport:
             "relations": relation_data,
             "facts": fact_data,
             "dependencies": [item.to_data() for item in self.dependencies],
+            "boundary_values": [
+                {"reference": reference.to_data(), "value": value.to_data()}
+                for reference, value in self.boundary_values
+            ],
         }
 
 
@@ -282,9 +289,11 @@ def replace_subtree(
 
     The root, its incoming containment link, its attributes, and its layer facts
     remain live. The default abandons dependencies on descendants. The result
-    reports the abandoned items, relation instances, and facts whether or not a
-    journal is used. A binary donor relation that crosses the supplied subtree
-    edge is also reported, but not copied. Correspondence is explicitly opt-in.
+    reports the abandoned items, relation instances, facts, and boundary values
+    whether or not a journal is used. A binary donor relation that crosses the
+    supplied subtree edge is also reported, but not copied. Correspondence is
+    explicitly opt-in, and boundary-subject facts use the same correspondence
+    as boundary values.
     """
     outcome = _replace_subtree(
         graph, root, containment, new, policies, capture_report=True
@@ -851,11 +860,15 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
                     )
                 )
 
-    held_boundaries: list[tuple[BoundaryRef, tuple[Attribute, ...]]] = []
+    held_boundaries: list[
+        tuple[BoundaryRef | DurableBoundaryRef, BoundaryRef, tuple[Attribute, ...]]
+    ] = []
     for stored_boundary in graph.boundary_values:
         coordinate = graph.resolve_boundary(stored_boundary.reference)
         if _boundary_touches(coordinate, old_runs):
-            held_boundaries.append((coordinate, stored_boundary.attributes))
+            held_boundaries.append(
+                (stored_boundary.reference, coordinate, stored_boundary.attributes)
+            )
             for value in stored_boundary.attributes:
                 editor.remove_attribute(stored_boundary.reference, value.name)
             if chosen.default is ReplacementAction.ABANDON:
@@ -988,9 +1001,9 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         -index - 1: images for index, images in all_polyadic_images.items() if index < 0
     }
 
-    for boundary_reference, attributes in held_boundaries:
+    for _, boundary_coordinate, attributes in held_boundaries:
         targets = _boundary_correspondence(
-            boundary_reference, correspondence, old_runs, insertions, new_runs
+            boundary_coordinate, correspondence, old_runs, insertions, new_runs
         )
         carried = False
         if chosen.default is ReplacementAction.FOLLOW and len(targets) == 1:
@@ -1006,8 +1019,8 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             detached.append(
                 DetachedDependency(
                     "boundary_values",
-                    boundary_reference.index,
-                    tier=boundary_reference.tier,
+                    boundary_coordinate.index,
+                    tier=boundary_coordinate.tier,
                 )
             )
 
@@ -1019,6 +1032,9 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             binary_images,
             polyadic_images,
             action,
+            old_runs,
+            insertions,
+            new_runs,
         )
         if not subjects and action is not ReplacementAction.ABANDON:
             detached.append(
@@ -1071,6 +1087,53 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
 
     candidate = editor.freeze()
     SealDeclaration("replace subtree", graph, candidate).check_seals()
+    candidate_facts = {layer.name: frozenset(layer.facts) for layer in candidate.layers}
+    for layer_name, fact_index, fact, action in held_facts:
+        subjects = _fact_subjects(
+            graph,
+            fact.subject,
+            correspondence,
+            binary_images,
+            polyadic_images,
+            action,
+            old_runs,
+            insertions,
+            new_runs,
+        )
+        if subjects and any(
+            LayerFact(subject, fact.value) not in candidate_facts[layer_name]
+            for subject in subjects
+        ):
+            detached.append(
+                DetachedDependency(
+                    "layer", fact_index, layer=layer_name, subject=fact.subject
+                )
+            )
+    candidate_boundary_values = {
+        candidate.resolve_boundary(boundary.reference): boundary.attributes
+        for boundary in candidate.boundary_values
+    }
+    overwritten_boundary_values: list[
+        tuple[BoundaryRef | DurableBoundaryRef, Attribute]
+    ] = []
+    for source_reference, boundary_coordinate, attributes in held_boundaries:
+        targets = _boundary_correspondence(
+            boundary_coordinate, correspondence, old_runs, insertions, new_runs
+        )
+        if chosen.default is ReplacementAction.FOLLOW:
+            targets = targets if len(targets) == 1 else ()
+        elif chosen.default is ReplacementAction.ABANDON:
+            targets = ()
+        if not targets:
+            continue
+        overwritten_boundary_values.extend(
+            (source_reference, value)
+            for value in attributes
+            if any(
+                value not in candidate_boundary_values.get(target, ())
+                for target in targets
+            )
+        )
     ordered_detached = _ordered_detached(detached)
     detached_binary = {
         dependency.index
@@ -1095,6 +1158,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             polyadic=old_shape.polyadic | detached_polyadic,
             facts=detached_facts,
             dependencies=ordered_detached,
+            boundary_values=overwritten_boundary_values,
         )
         if capture_report
         else None
@@ -1452,12 +1516,23 @@ def _fact_subjects(
     binary: Mapping[int, tuple[int, ...]],
     polyadic: Mapping[int, tuple[int, ...]],
     action: ReplacementAction,
+    old_runs: Mapping[QualifiedName, tuple[int, ...]],
+    insertions: Mapping[QualifiedName, int],
+    new_runs: Mapping[QualifiedName, tuple[int, ...]],
 ) -> tuple[LayerSubject, ...]:
     if action is ReplacementAction.ABANDON:
         return ()
     targets: tuple[LayerSubject, ...]
     if isinstance(subject, ItemRef | DurableItemRef):
         targets = correspondence.get(graph.resolve_item(subject), ())
+    elif isinstance(subject, BoundaryRef | DurableBoundaryRef):
+        targets = _boundary_correspondence(
+            graph.resolve_boundary(subject),
+            correspondence,
+            old_runs,
+            insertions,
+            new_runs,
+        )
     elif isinstance(subject, RelationInstanceRef):
         targets = tuple(
             RelationInstanceRef(index) for index in binary.get(subject.index, ())
@@ -1587,6 +1662,7 @@ def _detachment_report(
     polyadic: Iterable[int] = (),
     facts: Iterable[tuple[LayerName, int]] = (),
     dependencies: Iterable[DetachedDependency] = (),
+    boundary_values: Iterable[tuple[BoundaryRef | DurableBoundaryRef, Attribute]] = (),
 ) -> DetachmentReport:
     """Snapshot selected source content in the graph's declared order."""
     ordered_dependencies = tuple(dependencies)
@@ -1636,12 +1712,53 @@ def _detachment_report(
         for index, fact in enumerate(layer.facts)
         if (layer.name, index) in fact_sites
     )
+    boundary_sites = {
+        BoundaryRef(dependency.tier, dependency.index)
+        for dependency in ordered_dependencies
+        if dependency.carrier == "boundary_values" and dependency.tier is not None
+    }
+    explicit_boundary_values = set(boundary_values)
+    detached_boundary_values = tuple(
+        (boundary.reference, value)
+        for boundary in graph.boundary_values
+        for value in boundary.attributes
+        if graph.resolve_boundary(boundary.reference) in boundary_sites
+        or (boundary.reference, value) in explicit_boundary_values
+    )
     return DetachmentReport(
         detached_items,
         detached_relations,
         detached_facts,
         ordered_dependencies,
+        detached_boundary_values,
     )
+
+
+def _removed_boundary_values(
+    source: Graph, target: Graph, displacement: Displacement
+) -> tuple[tuple[BoundaryRef | DurableBoundaryRef, Attribute], ...]:
+    """Return source boundary values absent at their displaced coordinates."""
+    target_by_reference = {
+        boundary.reference: boundary.attributes for boundary in target.boundary_values
+    }
+    target_values = {
+        target.resolve_boundary(boundary.reference): boundary.attributes
+        for boundary in target.boundary_values
+    }
+    removed: list[tuple[BoundaryRef | DurableBoundaryRef, Attribute]] = []
+    for boundary in source.boundary_values:
+        coordinate = source.resolve_boundary(boundary.reference)
+        image = displacement.boundaries.get(coordinate)
+        if isinstance(boundary.reference, DurableBoundaryRef):
+            carried = target_by_reference.get(boundary.reference, ())
+        else:
+            carried = () if image is None else target_values.get(image, ())
+        removed.extend(
+            (boundary.reference, value)
+            for value in boundary.attributes
+            if value not in carried
+        )
+    return tuple(removed)
 
 
 def _subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
