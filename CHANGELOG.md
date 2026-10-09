@@ -186,6 +186,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Required identity correspondence to be linear: every identified source names
   exactly one target, and two sources cannot claim the same target. Splits and
   merges remain available as functional correspondence.
+- Preserved each surviving subtree-swap boundary value exactly once at its
+  displaced boundary and reported only values whose adjacency genuinely left.
+  A swap now refuses with both durable anchors when their boundary values would
+  converge on one coordinate.
 - Reported binary donor relations that cross a supplied replacement subtree
   edge as `donor_relations` dependencies instead of silently omitting them.
   Such relations remain uncopied when no external endpoint mapping exists.
