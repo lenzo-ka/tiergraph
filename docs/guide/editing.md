@@ -254,10 +254,12 @@ replaces the descendants reached through the declared containment relations.
 Abandonment is the default: non-containment dependencies on departing
 descendants are detached and listed in the returned `EditResult.report` even
 without a journal. The report snapshots withdrawn items, relation instances,
-and facts in graph order, including their durable identifiers. Its `graph`
-field is the edited graph. `Graph.replace_subtree()` remains a graph-returning
-convenience; call the module function when the report is needed. A journal
-record exposes the same detached content, and its inverse restores it.
+facts, and individual boundary values in graph order with their original
+references and complete typed values, including durable identifiers where
+present. Its `graph` field is the edited graph. `Graph.replace_subtree()` remains
+a graph-returning convenience; call the module function when the report is
+needed. A journal record exposes the same detached content, and its inverse
+restores it.
 Binary relations in the supplied graph are copied only when both endpoints
 belong to the supplied subtree. A binary relation that crosses that subtree edge
 is not copied; the report identifies it with a `donor_relations` dependency
@@ -268,8 +270,9 @@ Correspondence is opt-in through `ReplacementPolicies`. An explicit
 `SubtreeCorrespondence` maps an old descendant to zero, one, or several new
 descendants; stable local per-tier matching can fill equal unmatched items.
 `follow` requires exactly one counterpart, while `split` duplicates a
-dependency across all declared counterparts. Policies can differ by relation
-or layer. `swap_subtrees()` also returns an `EditResult`, composes two
+dependency across all declared counterparts. Boundary-subject facts use the
+same boundary correspondence as boundary values. Policies can differ by
+relation or layer. `swap_subtrees()` also returns an `EditResult`, composes two
 replacements, and refuses equal or nested roots. `Graph.swap_subtrees()` keeps
 returning only the graph. Clock-aware replacement is available, but the
 graph-level subtree swap has no clock policy; do not use that convenience
@@ -280,9 +283,10 @@ application-specific structures in the kernel:
 
 - `commit_path()` returns an `EditResult` after keeping one complete path from a
   finite `PathPlan` and the containment descendants requested by the caller.
-  Its report lists the withdrawn alternatives, links, and facts. Chosen item
-  values and provenance facts remain ordinary graph content. A journal expands
-  the operation into primitives, so its patch retains no path-plan object.
+  Its report lists the withdrawn alternatives, links, facts, and boundary
+  values. Chosen item values and provenance facts remain ordinary graph
+  content. A journal expands the operation into primitives, so its patch
+  retains no path-plan object.
 - `retime()` rebinds every boundary of one timed tier to exact integral clock
   positions while preserving binding instance identities and facts. It does
   not rewrite stored start or duration attributes.

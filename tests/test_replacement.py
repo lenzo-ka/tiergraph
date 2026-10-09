@@ -228,6 +228,18 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
         "group",
     }
     assert edit_result.report.facts
+    assert edit_result.report.boundary_values == (
+        (
+            BoundaryRef(case.leaf, 1),
+            AttributeValue(case.edge, XsdType.STRING, "aligned"),
+        ),
+    )
+    assert edit_result.report.to_data()["boundary_values"] == [
+        {
+            "reference": BoundaryRef(case.leaf, 1).to_data(),
+            "value": AttributeValue(case.edge, XsdType.STRING, "aligned").to_data(),
+        }
+    ]
     assert tuple(
         item.durable_id for item in expected._tiers_by_name[case.middle].items
     ) == (
@@ -388,6 +400,172 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
     assert result.boundaries(case.leaf)[2].attributes == (
         AttributeValue(case.edge, XsdType.STRING, "aligned"),
     )
+
+
+def test_follow_carries_a_boundary_fact_and_has_an_exact_inverse() -> None:
+    """One corresponding boundary carries its fact through a journaled edit."""
+    case = fixture("speech")
+    boundary = BoundaryRef(case.leaf, 1)
+    fact = LayerFact(
+        boundary,
+        AttributeValue(case.edge, XsdType.STRING, "source-offset:1"),
+    )
+    graph = replace(
+        case.graph,
+        layers=(
+            replace(case.graph.layers[0], facts=(*case.graph.layers[0].facts, fact)),
+        ),
+    )
+    correspondence = SubtreeCorrespondence(
+        {
+            ItemRef(case.leaf, 0): (ItemRef(case.leaf, 0),),
+            ItemRef(case.leaf, 1): (ItemRef(case.leaf, 1),),
+        }
+    )
+    policies = ReplacementPolicies(
+        ReplacementAction.FOLLOW,
+        correspondence=correspondence,
+        layers={case.layer: ReplacementAction.FOLLOW},
+    )
+    source = Subtree(case.alternative, ItemRef(case.root, 0))
+
+    direct = replace_subtree(
+        graph, DurableItemRef("root"), case.containment, source, policies
+    )
+
+    assert fact in direct.graph.layers[0].facts
+    assert all(detached_fact != fact for _, detached_fact in direct.report.facts)
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.replace_subtree(DurableItemRef("root"), case.containment, source, policies)
+    assert editor.freeze() == direct.graph
+    assert journal.records[0].report.detached_content == direct.report
+    assert journal.to_patch().invert().apply(direct.graph) == graph
+
+
+def test_follow_reports_carried_boundary_content_overwritten_by_source() -> None:
+    """Supplied content cannot silently replace content reported as carried."""
+    case = fixture("speech")
+    boundary = BoundaryRef(case.leaf, 1)
+    sibling_name = QualifiedName(case.edge.namespace, "boundary-sibling")
+    sibling_declaration = AttributeDeclaration(
+        sibling_name, AttributeDomain.BOUNDARY, XsdType.STRING
+    )
+    old_value = AttributeValue(case.edge, XsdType.STRING, "old-alignment")
+    kept_value = AttributeValue(sibling_name, XsdType.STRING, "kept")
+    new_value = AttributeValue(case.edge, XsdType.STRING, "new-alignment")
+    old_fact = LayerFact(
+        boundary,
+        AttributeValue(case.edge, XsdType.STRING, "old-offset"),
+    )
+    new_fact = LayerFact(
+        boundary,
+        AttributeValue(case.edge, XsdType.STRING, "new-offset"),
+    )
+    graph = replace(
+        case.graph,
+        attribute_declarations=(
+            *case.graph.attribute_declarations,
+            sibling_declaration,
+        ),
+        boundary_values=(Boundary(boundary, (old_value, kept_value)),),
+        layers=(
+            replace(
+                case.graph.layers[0],
+                facts=(*case.graph.layers[0].facts, old_fact),
+            ),
+        ),
+    )
+    source = replace(
+        case.alternative,
+        boundary_values=(Boundary(boundary, (new_value,)),),
+        layers=(Layer(case.layer, (new_fact,)),),
+    )
+    correspondence = SubtreeCorrespondence(
+        {
+            ItemRef(case.leaf, 0): (ItemRef(case.leaf, 0),),
+            ItemRef(case.leaf, 1): (ItemRef(case.leaf, 1),),
+        }
+    )
+    policies = ReplacementPolicies(
+        ReplacementAction.FOLLOW,
+        correspondence=correspondence,
+        layers={case.layer: ReplacementAction.FOLLOW},
+    )
+    subtree = Subtree(source, ItemRef(case.root, 0))
+
+    direct = replace_subtree(
+        graph, DurableItemRef("root"), case.containment, subtree, policies
+    )
+
+    assert set(direct.graph.boundaries(case.leaf)[1].attributes) == {
+        kept_value,
+        new_value,
+    }
+    assert new_fact in direct.graph.layers[0].facts
+    assert old_fact not in direct.graph.layers[0].facts
+    assert direct.report.boundary_values == ((boundary, old_value),)
+    assert (case.layer, old_fact) in direct.report.facts
+    assert all(value != kept_value for _, value in direct.report.boundary_values)
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.replace_subtree(DurableItemRef("root"), case.containment, subtree, policies)
+    assert editor.freeze() == direct.graph
+    assert journal.records[0].report.detached_content == direct.report
+    assert journal.to_patch().invert().apply(direct.graph) == graph
+
+
+def test_follow_reports_content_lost_when_outer_boundaries_collapse() -> None:
+    """Two source boundaries mapped to one target report the overwritten content."""
+    case = fixture("speech")
+    start = BoundaryRef(case.leaf, 0)
+    end = BoundaryRef(case.leaf, 3)
+    start_value = AttributeValue(case.edge, XsdType.STRING, "outer-start")
+    end_value = AttributeValue(case.edge, XsdType.STRING, "outer-end")
+    start_fact = LayerFact(
+        start,
+        AttributeValue(case.edge, XsdType.STRING, "start-offset"),
+    )
+    end_fact = LayerFact(
+        end,
+        AttributeValue(case.edge, XsdType.STRING, "end-offset"),
+    )
+    graph = replace(
+        case.graph,
+        boundary_values=(
+            Boundary(start, (start_value,)),
+            Boundary(end, (end_value,)),
+        ),
+        layers=(Layer(case.layer, (start_fact, end_fact)),),
+    )
+    empty_source = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(tier, items=())
+            if tier.declaration.name in {case.middle, case.leaf}
+            else tier
+            for tier in case.alternative.tiers
+        ),
+        relations=(),
+    )
+    policies = ReplacementPolicies(
+        ReplacementAction.FOLLOW,
+        layers={case.layer: ReplacementAction.FOLLOW},
+    )
+
+    result = replace_subtree(
+        graph,
+        DurableItemRef("root"),
+        case.containment,
+        Subtree(empty_source, ItemRef(case.root, 0)),
+        policies,
+    )
+
+    assert result.graph.boundaries(case.leaf)[0].attributes == (end_value,)
+    assert LayerFact(start, end_fact.value) in result.graph.layers[0].facts
+    assert start_fact not in result.graph.layers[0].facts
+    assert result.report.boundary_values == ((start, start_value),)
+    assert result.report.facts == ((case.layer, start_fact),)
 
 
 def test_replacement_copies_new_subtree_relations_values_and_facts() -> None:
@@ -1495,6 +1673,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
             binary,
             polyadic,
             ReplacementAction.ABANDON,
+            old_runs,
+            insertions,
+            new_runs,
         )
         == ()
     )
@@ -1505,6 +1686,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
         binary,
         polyadic,
         ReplacementAction.SPLIT,
+        old_runs,
+        insertions,
+        new_runs,
     ) == (RelationInstanceRef(2), RelationInstanceRef(3))
     assert replacement._fact_subjects(
         case.graph,
@@ -1513,6 +1697,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
         binary,
         polyadic,
         ReplacementAction.FOLLOW,
+        old_runs,
+        insertions,
+        new_runs,
     ) == (PolyadicInstanceRef(1),)
     assert replacement._fact_subjects(
         case.graph,
@@ -1521,6 +1708,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
         binary,
         polyadic,
         ReplacementAction.SPLIT,
+        old_runs,
+        insertions,
+        new_runs,
     ) == (RelationInstanceRef(2), RelationInstanceRef(3))
     assert replacement._fact_subjects(
         case.graph,
@@ -1529,6 +1719,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
         binary,
         polyadic,
         ReplacementAction.FOLLOW,
+        old_runs,
+        insertions,
+        new_runs,
     ) == (PolyadicInstanceRef(1),)
     assert (
         replacement._fact_subjects(
@@ -1538,6 +1731,9 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
             binary,
             polyadic,
             ReplacementAction.SPLIT,
+            old_runs,
+            insertions,
+            new_runs,
         )
         == ()
     )
@@ -1836,8 +2032,8 @@ def test_schema_mismatch_and_unknown_containment_refuse() -> None:
         )
 
 
-def test_boundary_fallback_is_reported_and_outer_value_follows() -> None:
-    """Unmatched boundary facts detach visibly while unique outer values follow."""
+def test_boundary_fact_and_outer_value_follow_correspondence() -> None:
+    """Exact boundary facts and unique outer values follow correspondence."""
     case = fixture("music")
     layer = next(item for item in case.graph.layers if item.name == case.layer)
     graph = replace(
@@ -1885,8 +2081,15 @@ def test_boundary_fallback_is_reported_and_outer_value_follows() -> None:
     assert result.boundaries(case.leaf)[3].attributes == (
         AttributeValue(case.edge, XsdType.STRING, "unaffected"),
     )
-    assert any(
-        dependency.subject == BoundaryRef(case.leaf, 1)
+    assert (
+        LayerFact(
+            BoundaryRef(case.leaf, 1),
+            AttributeValue(case.edge, XsdType.STRING, "reviewed"),
+        )
+        in result.layers[0].facts
+    )
+    assert all(
+        dependency.subject != BoundaryRef(case.leaf, 1)
         for dependency in journal.records[0].report.detached_dependencies
     )
 

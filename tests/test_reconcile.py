@@ -270,6 +270,9 @@ def test_commit_path_keeps_chosen_substructure_offsets_and_provenance() -> None:
         journal=journal,
     )
     result = edit_result.graph
+    assert edit_result.report.boundary_values == (
+        (graph.boundary_values[0].reference, graph.boundary_values[0].attributes[0]),
+    )
     assert [
         relation.durable_id
         for _, relation in edit_result.report.relations
@@ -350,12 +353,17 @@ def test_commit_path_keeps_boundaries_anchored_to_surviving_items() -> None:
                         surviving,
                         AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "live:f"),
                     ),
+                    LayerFact(
+                        ItemRef(NODES, 3),
+                        AttributeValue(ITEM_NOTE, XsdType.STRING, "live-position:f"),
+                    ),
                 ),
             ),
         ),
     )
 
-    result = commit_path(path_plan(graph), ("s", "a", "f")).graph
+    edit_result = commit_path(path_plan(graph), ("s", "a", "f"))
+    result = edit_result.graph
 
     assert result.resolve_boundary(surviving) == BoundaryRef(NODES, 2)
     assert any(boundary.reference == surviving for boundary in result.boundary_values)
@@ -369,6 +377,28 @@ def test_commit_path_keeps_boundaries_anchored_to_surviving_items() -> None:
     assert any(
         relation.durable_id == "surviving-boundary-link"
         for relation in result.relations
+    )
+    assert (
+        LayerFact(
+            ItemRef(NODES, 2),
+            AttributeValue(ITEM_NOTE, XsdType.STRING, "live-position:f"),
+        )
+        in result.layers[0].facts
+    )
+    assert edit_result.report.boundary_values == (
+        (graph.boundary_values[0].reference, graph.boundary_values[0].attributes[0]),
+    )
+    assert all(
+        fact
+        != LayerFact(
+            surviving,
+            AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "live:f"),
+        )
+        for _, fact in edit_result.report.facts
+    )
+    assert all(
+        fact.value != AttributeValue(ITEM_NOTE, XsdType.STRING, "live-position:f")
+        for _, fact in edit_result.report.facts
     )
 
 
@@ -402,10 +432,24 @@ def test_commit_path_removes_departing_positional_boundary_content() -> None:
         ),
     )
 
-    result = commit_path(path_plan(graph), ("s", "a", "f")).graph
+    edit_result = commit_path(path_plan(graph), ("s", "a", "f"))
+    result = edit_result.graph
 
     assert all(boundary.reference != departing for boundary in result.boundary_values)
     assert all(fact.subject != departing for fact in result.layers[0].facts)
+    assert edit_result.report.boundary_values == (
+        (
+            departing,
+            AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "before-b"),
+        ),
+    )
+    assert (
+        PROVENANCE,
+        LayerFact(
+            departing,
+            AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "measured:b"),
+        ),
+    ) in edit_result.report.facts
 
 
 @pytest.mark.parametrize(

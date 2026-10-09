@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `EditResult` and ordered detachment reports for subtree replacement,
   subtree swapping, and path commitment. Reports retain withdrawn items,
-  relation instances, and facts with their durable identifiers even when no
-  journal is used; graph convenience methods continue to return `Graph`.
+  relation instances, facts, and individual boundary values with their original
+  references and complete typed values, including durable identifiers where
+  present. Graph convenience methods continue to return `Graph`.
 - Added an opt-in blob vocabulary and profile for ordered, durably identified
   typed external resources and their ordinary graph attachments.
 - Added streaming blob hashing, verified readers, digest-keyed in-memory
@@ -92,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either carry or report every dependency on departing descendants. Journal
   edits undo and redo replacements exactly and expose detached dependencies in
   their reports. Subtree swaps compose replacements and refuse nested roots.
+  Boundary-subject facts follow the same exact one-to-one correspondence as
+  boundary values and retain the existing refusal reports for ambiguous maps.
   Clock-aware replacement requires a named rebinding policy, creates
   provisional bindings for unmatched boundaries, and carries unambiguous
   corresponding timings under `keep-earlier`.
