@@ -960,7 +960,9 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
     swap.add_argument("second", metavar="TGPATH", help="second item TG-PATH")
 
     shift = operation(
-        "shift", "shift edge children to an adjacent sister", clock_profile=True
+        "shift",
+        "shift edge children across an adjacent container seam",
+        clock_profile=True,
     )
     shift.add_argument("target", metavar="TGPATH", help="container item TG-PATH")
     shift.add_argument(
@@ -983,6 +985,11 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
         "--policy",
         choices=("keep-earlier", "drop-to-provisional"),
         help="stored or shared boundary policy",
+    )
+    shift.add_argument(
+        "--across-parent",
+        action="store_true",
+        help="require different adjacent parents and report changed ancestor yields",
     )
 
     relate = operation("relate", "insert one relation instance")
@@ -2541,6 +2548,7 @@ def _dispatch_edit(  # noqa: PLR0915 -- command vocabulary
             args.direction,
             _qname(args.containment),
             args.policy,
+            args.across_parent,
         )
     elif command == "relate":
         editor.add_relation(_relation_json(args.instance), args.at)

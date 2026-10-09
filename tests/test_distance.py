@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import json
 from collections import deque
@@ -566,7 +567,12 @@ def test_generated_graphs_prove_primitive_and_path_atom_bounds(
     journal = Journal()
     editor = case.graph.edit(journal=journal)
     for index in selected:
-        operations[index](editor)
+        if index == 1:
+            # Earlier edits can remove a later shift's required child seam.
+            with contextlib.suppress(GraphValidationError):
+                operations[index](editor)
+        else:
+            operations[index](editor)
     target = editor.freeze()
     patch = journal.to_patch()
     assert _atom_multiset_lower_bound(

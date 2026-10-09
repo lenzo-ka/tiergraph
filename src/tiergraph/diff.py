@@ -321,7 +321,14 @@ def _append_residue(patch: Patch, source: Graph, target: Graph) -> Patch:
 
 def _shift_patch(source: Graph, target: Graph) -> Patch | None:
     """Recognize one identity-preserving adjacent containment-boundary shift."""
-    if replace(source, polyadic_relations=target.polyadic_relations) != target:
+    if (
+        replace(
+            source,
+            polyadic_relations=target.polyadic_relations,
+            boundary_values=target.boundary_values,
+        )
+        != target
+    ):
         return None
     if len(source.polyadic_relations) != len(target.polyadic_relations):
         return None
@@ -346,14 +353,23 @@ def _shift_patch(source: Graph, target: Graph) -> Patch | None:
             continue
         container = source.resolve_item(endpoint)
         for direction in ("left", "right"):
-            journal = Journal()
-            editor = source.edit(journal=journal)
-            try:
-                editor.shift(container, count, direction, instance.declaration)
-            except GraphValidationError:
-                continue
-            if editor.freeze() == target:
-                return journal.to_patch()
+            for policy in (None, "keep-earlier", "drop-to-provisional"):
+                for across_parent in (False, True):
+                    journal = Journal()
+                    editor = source.edit(journal=journal)
+                    try:
+                        editor.shift(
+                            container,
+                            count,
+                            direction,
+                            instance.declaration,
+                            policy,
+                            across_parent,
+                        )
+                    except GraphValidationError:
+                        continue
+                    if editor.freeze() == target:
+                        return journal.to_patch()
     return None
 
 

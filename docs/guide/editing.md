@@ -129,8 +129,9 @@ an unresolved cut realizes the ordinary delete and therefore has the same live
 dependency refusals as `remove_items()`. `move_run()` records the cut and insert
 as one journal event with one inverse. `swap_runs()` exchanges unequal adjacent
 runs as blocks; for separated runs, the middle remains in place. Either side
-may be a zero-width run. Moving or swapping a timed item tier still requires a
-clock rebinding policy.
+may be a zero-width run. A run or item swap is one atomic restructure: if its
+complete result is invalid, the editor remains unchanged. Moving or swapping a
+timed item tier still requires a clock rebinding policy.
 
 A phrase-break correction uses the same operation as a syllable-boundary
 correction. In this tested shape, the first phrase contains words `w0 w1 w2`
@@ -147,10 +148,22 @@ shifted = utterance.shift(
 
 The result is `P0[w0 w1] P1[w2 w3 w4]`. A left shift takes the first children
 of the right container and appends them to the left container. The containers
-must be adjacent items on one tier, and the named ordered polyadic containment
-must give both containers their child sequences. A shift accepts only a
-nonempty edge run smaller than the source membership. It never wraps at a tier
-seam.
+must be adjacent items on one tier and meet at one contiguous child-tier seam.
+They must either share a parent under ordered containment or both be root
+containers. The named ordered polyadic containment must give both containers
+their child sequences. A shift accepts only a nonempty edge run smaller than
+the source membership. It never wraps at a tier seam.
+
+Cross-parent resyllabification is explicit:
+`utterance.shift(ItemRef(syllable_tier, 0), 1, "right",
+syllable_segments, across_parent=True)`.
+
+This form requires each container to have exactly one parent and those parents
+to be adjacent in the shift direction. The same requirement continues up the
+ancestor chain until the two sides share a parent or both reach roots.
+`GraphEditor.last_yield_changes` and the journal report name every ancestor-tier
+boundary whose descendant yield changed, with its previous and new child seam.
+The default form refuses the same edit and names each container's parent.
 
 Operationally, the child run and the shared zero-width sister boundary trade
 places. Declaratively, the right shift is the synchronous rewrite
@@ -166,12 +179,16 @@ only the two containment instances. A clock-bound container boundary therefore
 needs no rebinding policy when it stores no independent boundary value. A
 stored container-boundary value, or a durable boundary shared with another
 tier, requires `keep-earlier` or `drop-to-provisional` on the plain editor; the
-other tier is never dragged. A clock-aware editor defaults an otherwise
-policy-free shift to `keep-earlier` because the active profile supplies that
-clock context. `drop-to-provisional` removes the independently stored boundary
-value, leaving it for later realignment. Container-emptying merge is
-intentionally not part of this operation because it needs a separate merge
-policy and inverse.
+other tier is never dragged. A clock-aware editor verifies that every affected
+container or ancestor boundary meets the old child seam on the common clock,
+then places those boundaries on the new seam's existing child time and
+revalidates the complete profile. It creates no new clock times. If any
+affected container or ancestor tier is timed but the child tier is untimed, the
+clock-aware editor refuses because the new child seam has no clock position.
+`drop-to-provisional` removes the independently stored boundary value, reports
+the removed value in the detachment report, and leaves it for later
+realignment. Container-emptying merge is intentionally not part of this
+operation because it needs a separate merge policy and inverse.
 
 Deleting two containers and inserting new containers with the shifted
 memberships is the alternative construction. It is functionally equal to the
@@ -180,7 +197,8 @@ are new. Shift and run swap use the existing `swap_items` cost unit; `move_run`
 uses `move_item`. Consequently a shift is no more expensive than delete plus
 insert under the default table, and is strictly cheaper whenever those two
 costs sum to more than the swap cost. `diff()` recognizes a single retained-ID
-containment shift and emits the shift operation.
+containment shift, including explicit cross-parent and boundary-policy forms,
+and emits the shift operation.
 
 ## References, displacement, and local refusal
 
@@ -257,6 +275,11 @@ removed or demoted. An operation without a stable graph subject remains
 attributable through its journal record. `journal.protect(layer_name)` refuses
 an operation whose final candidate would change that layer or the live content
 its facts describe.
+
+For exact before-and-after audits, that one journal-owned provenance fact on a
+moved durable child is metadata introduced by recording the edit. Exclude only
+that fact when asserting that all content outside the changed containment tier
+is exactly equal; plain edits add no such exception.
 
 Facts within each layer are canonicalized at construction, so their supplied
 order is not observed by any equivalence view and does not express rank. Store

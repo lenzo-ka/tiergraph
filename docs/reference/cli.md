@@ -1644,7 +1644,7 @@ positional arguments:
     replace             replace one item's stored value
     move                move one item within its tier
     swap                swap two items
-    shift               shift edge children to an adjacent sister
+    shift               shift edge children across an adjacent container seam
     relate              insert one relation instance
     unrelate            remove one relation instance
     endpoints           replace one relation instance's endpoints
@@ -1940,9 +1940,10 @@ usage: tiergraph edit GRAPH shift [-h] [-o FILE | --in-place] [--dry-run]
                                   --count N --direction {left,right}
                                   --containment NS LOCAL
                                   [--policy {keep-earlier,drop-to-provisional}]
+                                  [--across-parent]
                                   TGPATH
 
-Shift edge children to an adjacent sister.
+Shift edge children across an adjacent container seam.
 
 positional arguments:
   TGPATH                container item TG-PATH
@@ -1971,6 +1972,8 @@ options:
                         ordered containment relation
   --policy {keep-earlier,drop-to-provisional}
                         stored or shared boundary policy
+  --across-parent       require different adjacent parents and report changed
+                        ancestor yields
 
 Examples:
   $ tiergraph edit shift-graph.json shift /items/durable/alpha --count 1 --direction right --containment urn:path shift-contains -o out.json

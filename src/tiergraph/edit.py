@@ -30,6 +30,7 @@ from tiergraph.core import (
     BipartiteRelationDeclaration,
     BoundaryRef,
     BoundarySide,
+    ContainmentYieldChange,
     Displacement,
     DocumentRef,
     DurableBoundaryRef,
@@ -523,6 +524,7 @@ class EditReport:
     pruned_orphans: tuple[PrunedFact, ...] = ()
     detached_content: DetachmentReport | None = None
     correspondence: SubtreeCorrespondence | None = None
+    yield_changes: tuple[ContainmentYieldChange, ...] = ()
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this report in deterministic JSON-compatible form."""
@@ -552,6 +554,8 @@ class EditReport:
             data["detached_content"] = self.detached_content.to_data()
         if self.correspondence is not None:
             data["correspondence"] = self.correspondence.to_data()
+        if self.yield_changes:
+            data["yield_changes"] = [change.to_data() for change in self.yield_changes]
         return data
 
 
@@ -652,6 +656,7 @@ class _ReportRecipe:
     detached_content: DetachmentReport | None
     pruned_orphans: tuple[PrunedFact, ...]
     correspondence: SubtreeCorrespondence | None
+    yield_changes: tuple[ContainmentYieldChange, ...]
 
     @classmethod
     def create(
@@ -665,6 +670,7 @@ class _ReportRecipe:
         detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
         correspondence: SubtreeCorrespondence | None = None,
+        yield_changes: tuple[ContainmentYieldChange, ...] = (),
     ) -> _ReportRecipe:
         """Capture eagerly derived touches without retaining expanded tuples."""
         return cls(
@@ -686,6 +692,7 @@ class _ReportRecipe:
             detached_content,
             pruned_orphans,
             correspondence,
+            yield_changes,
         )
 
     def build(self) -> EditReport:
@@ -703,6 +710,7 @@ class _ReportRecipe:
             pruned_orphans=self.pruned_orphans,
             detached_content=self.detached_content,
             correspondence=self.correspondence,
+            yield_changes=self.yield_changes,
         )
 
     @classmethod
@@ -721,6 +729,7 @@ class _ReportRecipe:
             report.detached_content,
             report.pruned_orphans,
             report.correspondence,
+            report.yield_changes,
         )
 
 
@@ -2259,6 +2268,7 @@ class _JournalEditorBase:
         detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
         correspondence: SubtreeCorrespondence | None = None,
+        yield_changes: tuple[ContainmentYieldChange, ...] = (),
     ) -> None:
         before = self._graph
         acted_subjects = tuple(provenance_subjects)
@@ -2311,6 +2321,7 @@ class _JournalEditorBase:
             detached_content,
             pruned_orphans,
             correspondence,
+            yield_changes,
         )
         inverse = EditInverse._create(
             _inverse_name(operation),
@@ -2544,7 +2555,9 @@ class JournalEditor(_JournalEditorBase):
             patch_operations=patch_operations,
             operation_before=operation_before,
             provenance_subjects=acted,
+            detached_content=editor.last_detachment,
             correspondence=correspondence,
+            yield_changes=editor.last_yield_changes,
         )
         return self
 
@@ -3245,8 +3258,9 @@ class JournalEditor(_JournalEditorBase):
         direction: ShiftDirection | str,
         containment: QualifiedName,
         policy: str | None = None,
+        across_parent: bool = False,
     ) -> JournalEditor:
-        """Shift edge children and record the opposite sister shift as inverse."""
+        """Shift children and record the opposite sister shift as inverse."""
         probe = GraphEditor(self._graph)
         coordinate = self._graph.resolve_item(container)
         try:
@@ -3289,9 +3303,23 @@ class JournalEditor(_JournalEditorBase):
                 )
                 operations = _operation_pair(
                     "shift",
-                    (coordinate, k, selected.value, containment, policy),
+                    (
+                        coordinate,
+                        k,
+                        selected.value,
+                        containment,
+                        policy,
+                        across_parent,
+                    ),
                     "shift",
-                    (sister, k, inverse_direction.value, containment, policy),
+                    (
+                        sister,
+                        k,
+                        inverse_direction.value,
+                        containment,
+                        policy,
+                        across_parent,
+                    ),
                 )
                 subjects = tuple(
                     stable
@@ -3301,7 +3329,14 @@ class JournalEditor(_JournalEditorBase):
         exact_delta = policy == "drop-to-provisional"
         return self._apply(
             "shift",
-            lambda editor: editor.shift(container, k, direction, containment, policy),
+            lambda editor: editor.shift(
+                container,
+                k,
+                direction,
+                containment,
+                policy,
+                across_parent,
+            ),
             None if exact_delta else operations,
             patch_operations=operations if exact_delta else None,
             provenance_subjects=subjects,
@@ -4009,7 +4044,9 @@ class ClockJournalEditor(_JournalEditorBase):
             before_clock_active=self._profile_active,
             after_clock_active=active,
             detached_dependencies=native._detached_dependencies,
+            detached_content=native._detached_content,
             correspondence=correspondence,
+            yield_changes=native._yield_changes,
         )
         self._profile_active = active
         if active:
@@ -4194,8 +4231,9 @@ class ClockJournalEditor(_JournalEditorBase):
         direction: ShiftDirection | str,
         containment: QualifiedName,
         policy: ClockRebindingPolicy | str | None = None,
+        across_parent: bool = False,
     ) -> ClockJournalEditor:
-        """Shift containment without moving either timed tier."""
+        """Shift containment and rebind moved yields to existing child times."""
         coordinate = self._graph.resolve_item(container)
         try:
             selected = ShiftDirection(direction)
@@ -4220,7 +4258,14 @@ class ClockJournalEditor(_JournalEditorBase):
         alignment = {reference: (reference,) for reference in moved}
         return self._apply_clock(
             "shift",
-            lambda editor: editor.shift(container, k, direction, containment, policy),
+            lambda editor: editor.shift(
+                container,
+                k,
+                direction,
+                containment,
+                policy,
+                across_parent,
+            ),
             provenance_subjects=tuple(
                 stable
                 for reference in moved
