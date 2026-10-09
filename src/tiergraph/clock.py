@@ -34,6 +34,7 @@ from tiergraph.core import (
     GraphValidationError,
     Item,
     ItemRef,
+    ItemRun,
     Layer,
     LayerFact,
     LayerName,
@@ -46,6 +47,7 @@ from tiergraph.core import (
     RelationInstance,
     RelationInstanceRef,
     RelationTarget,
+    ShiftDirection,
     TierRef,
     XsdType,
     _canonical_lexical,
@@ -1155,6 +1157,46 @@ class ClockEditor:
             tuple(drop_targets),
         )
 
+    def move_run(self, run: ItemRun, at: int | BoundaryRef) -> ClockEditor:
+        """Move a run through fixed boundary times under the named policy."""
+        self._require_active_profile()
+        operation = ClockEditOperation.ITEM_MOVE
+        destination = at.index if isinstance(at, BoundaryRef) else at
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.move_run(run, at)
+
+        if self._route_plain_tier_edit(operation, run.tier, _edit):
+            return self
+        count = self._item_count(run.tier, operation)
+        if (
+            run.count < 1
+            or run.start < 0
+            or run.stop > count
+            or isinstance(destination, bool)
+            or not isinstance(destination, int)
+            or destination < 0
+            or destination > count - run.count
+        ):
+            # Delegate exact public refusal precedence and wording.
+            _edit(self._graph.edit())
+            raise AssertionError(  # pragma: no cover - delegated edit always refuses
+                "invalid run move unexpectedly succeeded"
+            )
+        lower = min(run.start, destination)
+        upper = max(run.stop, destination + run.count)
+        templates = tuple(range(count + 1))
+        drop_targets = list(templates)
+        drop_targets[lower : upper + 1] = [lower] * (upper - lower + 1)
+        return self._tier_edit(
+            operation,
+            run.tier,
+            _edit,
+            templates,
+            templates,
+            tuple(drop_targets),
+        )
+
     def swap_items(
         self,
         first: ItemRef | DurableItemRef,
@@ -1192,6 +1234,79 @@ class ClockEditor:
             templates,
             tuple(drop_targets),
         )
+
+    def swap_runs(self, first: ItemRun, second: ItemRun) -> ClockEditor:
+        """Exchange two runs through fixed boundary times under the policy."""
+        self._require_active_profile()
+        operation = ClockEditOperation.ITEM_SWAP
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.swap_runs(first, second)
+
+        if first.tier != second.tier:
+            _edit(self._graph.edit())
+            raise AssertionError(  # pragma: no cover - delegated edit always refuses
+                "cross-tier run swap unexpectedly succeeded"
+            )
+        if self._route_plain_tier_edit(operation, first.tier, _edit):
+            return self
+        count = self._item_count(first.tier, operation)
+        lower = min(first.start, second.start)
+        upper = max(first.stop, second.stop)
+        templates = tuple(range(count + 1))
+        drop_targets = list(templates)
+        drop_targets[lower : upper + 1] = [lower] * (upper - lower + 1)
+        return self._tier_edit(
+            operation,
+            first.tier,
+            _edit,
+            templates,
+            templates,
+            tuple(drop_targets),
+        )
+
+    def shift(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: ClockRebindingPolicy | str | None = None,
+    ) -> ClockEditor:
+        """Shift a containment boundary without moving either timed item tier."""
+        self._require_active_profile()
+        try:
+            selected = ShiftDirection(direction)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"shift direction must be 'left' or 'right', got {direction!r}"
+            ) from error
+        coordinate = self._graph.resolve_item(container)
+        if coordinate.tier == self._profile.clock_tier:
+            raise GraphValidationError(
+                "shift cannot restructure the clock tier in a bound session"
+            )
+        sister_index = coordinate.index + (
+            1 if selected is ShiftDirection.RIGHT else -1
+        )
+        shared = BoundaryRef(coordinate.tier, max(coordinate.index, sister_index))
+        stored = shared in self._graph._boundaries_by_ref
+        named = self._policy if policy is None else ClockRebindingPolicy(policy)
+        if stored and named is None:
+            # The plain editor provides the stable stored-boundary refusal.
+            self._graph.edit().shift(container, k, selected, containment, None)
+        editor = self._graph.edit()
+        editor.shift(
+            container,
+            k,
+            selected,
+            containment,
+            "keep-earlier" if named is None else named.value,
+        )
+        candidate = editor.freeze()
+        self._graph = candidate
+        self._profile = self._profile_with_graph(candidate)
+        return self
 
     def reparent(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 
 from tiergraph.core import (
     Attribute,
@@ -318,6 +319,44 @@ def _append_residue(patch: Patch, source: Graph, target: Graph) -> Patch:
     )
 
 
+def _shift_patch(source: Graph, target: Graph) -> Patch | None:
+    """Recognize one identity-preserving adjacent containment-boundary shift."""
+    if replace(source, polyadic_relations=target.polyadic_relations) != target:
+        return None
+    if len(source.polyadic_relations) != len(target.polyadic_relations):
+        return None
+    changed = tuple(
+        index
+        for index, (before, after) in enumerate(
+            zip(source.polyadic_relations, target.polyadic_relations, strict=True)
+        )
+        if before != after
+    )
+    shifted_instance_count = 2
+    if len(changed) != shifted_instance_count:
+        return None
+    for source_index in changed:
+        instance = source.polyadic_relations[source_index]
+        candidate = target.polyadic_relations[source_index]
+        count = len(instance.targets) - len(candidate.targets)
+        if count < 1 or len(instance.sources) != 1:
+            continue
+        endpoint = instance.sources[0]
+        if not isinstance(endpoint, ItemRef | DurableItemRef):
+            continue
+        container = source.resolve_item(endpoint)
+        for direction in ("left", "right"):
+            journal = Journal()
+            editor = source.edit(journal=journal)
+            try:
+                editor.shift(container, count, direction, instance.declaration)
+            except GraphValidationError:
+                continue
+            if editor.freeze() == target:
+                return journal.to_patch()
+    return None
+
+
 def diff(
     source: Graph,
     target: Graph,
@@ -343,6 +382,9 @@ def diff(
     base_fingerprint = fingerprint(source, EquivalenceView.IDENTIFIED)
     if equivalent(source, target, selected):
         return Patch(base_fingerprint, base_fingerprint, ())
+    recognized_shift = _shift_patch(source, target)
+    if recognized_shift is not None:
+        return recognized_shift
     if not _schemas_are_compatible(source, target):
         return _delta_patch(source, target)
     try:

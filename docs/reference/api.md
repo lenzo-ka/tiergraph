@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 315 top-level `tiergraph` exports exactly once.
+It covers 318 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -949,6 +949,16 @@ ClockEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int')
 
 Move an item through fixed boundary times under the named policy.
 
+#### `ClockEditor.move_run`
+
+Method.
+
+```text
+ClockEditor.move_run(self, run: 'ItemRun', at: 'int | BoundaryRef') -> 'ClockEditor'
+```
+
+Move a run through fixed boundary times under the named policy.
+
 #### `ClockEditor.swap_items`
 
 Method.
@@ -958,6 +968,26 @@ ClockEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef
 ```
 
 Exchange two items through fixed boundary times under the policy.
+
+#### `ClockEditor.swap_runs`
+
+Method.
+
+```text
+ClockEditor.swap_runs(self, first: 'ItemRun', second: 'ItemRun') -> 'ClockEditor'
+```
+
+Exchange two runs through fixed boundary times under the policy.
+
+#### `ClockEditor.shift`
+
+Method.
+
+```text
+ClockEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None) -> 'ClockEditor'
+```
+
+Shift a containment boundary without moving either timed item tier.
 
 #### `ClockEditor.reparent`
 
@@ -1955,6 +1985,40 @@ GraphEditor.swap_subtrees(self, first: 'ItemRef | DurableItemRef', second: 'Item
 
 Exchange two non-nested containment descendant sets.
 
+#### `GraphEditor.cut`
+
+Method.
+
+```text
+GraphEditor.cut(self, run: 'ItemRun') -> 'HeldRun'
+```
+
+Hold one contiguous run for a following identity-preserving insert.
+
+The cut is resolved atomically by :meth:`insert_held`. If the editor is
+frozen first, the unresolved cut has the same result as
+:meth:`remove_items` and therefore the same dependency refusals.
+
+#### `GraphEditor.insert_held`
+
+Method.
+
+```text
+GraphEditor.insert_held(self, held: 'HeldRun', at: 'int | BoundaryRef') -> 'GraphEditor'
+```
+
+Insert this editor's held run at a same-tier zero-width boundary.
+
+#### `GraphEditor.move_run`
+
+Method.
+
+```text
+GraphEditor.move_run(self, run: 'ItemRun', at: 'int | BoundaryRef') -> 'GraphEditor'
+```
+
+Cut and reinsert one contiguous run as a single structural move.
+
 #### `GraphEditor.move_item`
 
 Method.
@@ -1963,11 +2027,23 @@ Method.
 GraphEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'GraphEditor'
 ```
 
-Move one item to another index of its own tier, carrying references.
+Move one item through the length-one :meth:`move_run` case.
 
-A move across tiers is not this operation.  Membership decides an
-item's type, so carrying an item into another tier retypes it, and a
-caller who means that says so with a removal and an insertion.
+A move across tiers is not this operation. Membership decides an
+item's type, so carrying an item into another tier retypes it.
+
+#### `GraphEditor.swap_runs`
+
+Method.
+
+```text
+GraphEditor.swap_runs(self, first: 'ItemRun', second: 'ItemRun') -> 'GraphEditor'
+```
+
+Exchange disjoint runs as blocks, retaining the intervening items.
+
+Either run may be empty; an empty run is the boundary with which the
+other run trades places. Both empty is a checked no-op.
 
 #### `GraphEditor.swap_items`
 
@@ -1977,7 +2053,22 @@ Method.
 GraphEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef') -> 'GraphEditor'
 ```
 
-Exchange two items of one tier, carrying their references with them.
+Exchange two items through the ``(1, 1)`` run-swap case.
+
+#### `GraphEditor.shift`
+
+Method.
+
+```text
+GraphEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'GraphEditor'
+```
+
+Move edge children across the shared boundary of adjacent sisters.
+
+Right moves the last ``k`` children to the beginning of the right
+sister. Left moves the first ``k`` children to the end of the left
+sister. The operation changes containment incidence only; child tiers
+and all their timing remain untouched.
 
 #### `GraphEditor.add_relation`
 
@@ -2011,6 +2102,49 @@ GraphEditor.set_endpoints(self, target: 'RelationTarget', sources: 'RelationEndp
 ```
 
 Replace one instance's endpoints while preserving its other content.
+
+### `HeldRun`
+
+```text
+HeldRun(run: 'ItemRun', items: 'tuple[Item, ...]') -> None
+```
+
+Hold a cut item run until its identity-preserving insertion point is known.
+
+Held items remain attached to their originating editor until
+:meth:`GraphEditor.insert_held` resolves the cut. Freezing first realizes
+the cut as an ordinary deletion.
+
+### `ItemRun`
+
+```text
+ItemRun(tier: 'QualifiedName', start: 'int', count: 'int') -> None
+```
+
+Name a contiguous, possibly empty run on one ordered tier.
+
+An empty run is the zero-width boundary at ``start``. It spells epsilon as
+``""`` in rewrite data; ``None`` is never used to mean an empty run.
+
+#### `ItemRun.stop`
+
+Property.
+
+```text
+ItemRun.stop(self) -> 'int'
+```
+
+Return the exclusive end of this run.
+
+#### `ItemRun.to_data`
+
+Method.
+
+```text
+ItemRun.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the run, spelling its empty sequence as the empty string.
 
 ### `Journal`
 
@@ -2497,6 +2631,26 @@ JournalEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int
 
 Move one item and record the reverse move.
 
+#### `JournalEditor.move_run`
+
+Method.
+
+```text
+JournalEditor.move_run(self, run: 'ItemRun', at: 'int | BoundaryRef') -> 'JournalEditor'
+```
+
+Move one held run and record one inverse move and hole alignment.
+
+#### `JournalEditor.swap_runs`
+
+Method.
+
+```text
+JournalEditor.swap_runs(self, first: 'ItemRun', second: 'ItemRun') -> 'JournalEditor'
+```
+
+Swap two runs as one self-inverse journal event.
+
 #### `JournalEditor.swap_items`
 
 Method.
@@ -2506,6 +2660,16 @@ JournalEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemR
 ```
 
 Swap two items and record the same swap as inverse.
+
+#### `JournalEditor.shift`
+
+Method.
+
+```text
+JournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'JournalEditor'
+```
+
+Shift edge children and record the opposite sister shift as inverse.
 
 #### `JournalEditor.add_relation`
 
@@ -2693,6 +2857,26 @@ ClockJournalEditor.move_item(self, reference: 'ItemRef | DurableItemRef', index:
 
 Move one item under the named rebinding policy.
 
+#### `ClockJournalEditor.move_run`
+
+Method.
+
+```text
+ClockJournalEditor.move_run(self, run: 'ItemRun', at: 'int | BoundaryRef') -> 'ClockJournalEditor'
+```
+
+Move one run under the named clock policy.
+
+#### `ClockJournalEditor.swap_runs`
+
+Method.
+
+```text
+ClockJournalEditor.swap_runs(self, first: 'ItemRun', second: 'ItemRun') -> 'ClockJournalEditor'
+```
+
+Swap two runs under the named clock policy.
+
 #### `ClockJournalEditor.swap_items`
 
 Method.
@@ -2702,6 +2886,16 @@ ClockJournalEditor.swap_items(self, first: 'ItemRef | DurableItemRef', second: '
 ```
 
 Swap two items under the named rebinding policy.
+
+#### `ClockJournalEditor.shift`
+
+Method.
+
+```text
+ClockJournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None) -> 'ClockJournalEditor'
+```
+
+Shift containment without moving either timed tier.
 
 #### `ClockJournalEditor.reparent`
 
@@ -3054,6 +3248,19 @@ SubtreeCorrespondence.to_data(self) -> 'dict[str, JsonValue]'
 ```
 
 Return named alignment holes with optional identity claims.
+
+### `ShiftDirection`
+
+```text
+ShiftDirection(*values)
+```
+
+Choose the adjacent sister that receives a container's edge children.
+
+#### `ShiftDirection` members
+
+- `LEFT` = `left`
+- `RIGHT` = `right`
 
 ### `PathChoice`
 
@@ -5592,6 +5799,26 @@ Graph.move_item(self, reference: 'ItemRef | DurableItemRef', index: 'int') -> 'G
 
 Return a new graph with this item at another index of its own tier.
 
+#### `Graph.move_run`
+
+Method.
+
+```text
+Graph.move_run(self, run: 'ItemRun', at: 'int') -> 'Graph'
+```
+
+Return a new graph with one contiguous run at a new tier position.
+
+#### `Graph.swap_runs`
+
+Method.
+
+```text
+Graph.swap_runs(self, first: 'ItemRun', second: 'ItemRun') -> 'Graph'
+```
+
+Return a new graph with two disjoint runs exchanged as blocks.
+
 #### `Graph.swap_items`
 
 Method.
@@ -5601,6 +5828,16 @@ Graph.swap_items(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | Dur
 ```
 
 Return a new graph with two items of one tier exchanged.
+
+#### `Graph.shift`
+
+Method.
+
+```text
+Graph.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'Graph'
+```
+
+Move edge children to an adjacent sister while retaining identity.
 
 #### `Graph.add_relation`
 

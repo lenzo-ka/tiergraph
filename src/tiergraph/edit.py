@@ -43,6 +43,7 @@ from tiergraph.core import (
     GraphValidationError,
     Item,
     ItemRef,
+    ItemRun,
     JsonAttributeValue,
     JsonType,
     JsonValue,
@@ -62,6 +63,7 @@ from tiergraph.core import (
     RelationInstanceRef,
     RelationTarget,
     SealedCarrier,
+    ShiftDirection,
     SimpleRelationDeclaration,
     TierDeclaration,
     TierRef,
@@ -1272,7 +1274,10 @@ def _inverse_name(operation: str) -> str:
         "remove_items": "insert_items",
         "replace_item": "replace_item",
         "move_item": "move_item",
+        "move_run": "move_run",
+        "shift": "shift",
         "swap_items": "swap_items",
+        "swap_runs": "swap_runs",
         "add_relation": "remove_relation",
         "remove_relation": "add_relation",
         "set_endpoints": "set_endpoints",
@@ -2497,6 +2502,7 @@ class JournalEditor(_JournalEditorBase):
         provenance_subjects: Iterable[LayerSubject] = (),
         retire_subjects: Iterable[LayerSubject] = (),
         retire_all_provenance: bool = False,
+        correspondence: SubtreeCorrespondence | None = None,
     ) -> JournalEditor:
         acted = tuple(provenance_subjects)
         retiring = tuple(retire_subjects)
@@ -2527,6 +2533,7 @@ class JournalEditor(_JournalEditorBase):
             patch_operations=patch_operations,
             operation_before=operation_before,
             provenance_subjects=acted,
+            correspondence=correspondence,
         )
         return self
 
@@ -3091,6 +3098,113 @@ class JournalEditor(_JournalEditorBase):
             ),
         )
 
+    def move_run(self, run: ItemRun, at: int | BoundaryRef) -> JournalEditor:
+        """Move one held run and record one inverse move and hole alignment."""
+        member = self._graph._tiers_by_name.get(run.tier)
+        size = -1 if member is None else len(member.items)
+        destination = at.index if isinstance(at, BoundaryRef) else at
+        # The native editor owns the public refusal wording. These guarded
+        # values only make a valid operation's inverse and correspondence.
+        valid = (
+            member is not None
+            and run.count > 0
+            and run.start >= 0
+            and run.stop <= size
+            and isinstance(destination, int)
+            and not isinstance(destination, bool)
+            and 0 <= destination <= size - run.count
+        )
+        operations = None
+        correspondence = None
+        subjects: tuple[LayerSubject, ...] = ()
+        if valid:
+            assert isinstance(destination, int)
+            inverse_run = ItemRun(run.tier, destination, run.count)
+            operations = _operation_pair(
+                "move_run",
+                (run, destination),
+                "move_run",
+                (inverse_run, run.start),
+            )
+            alignment = {
+                ItemRef(run.tier, run.start + offset): (
+                    ItemRef(run.tier, destination + offset),
+                )
+                for offset in range(run.count)
+            }
+            correspondence = SubtreeCorrespondence(alignment, alignment)
+            subjects = tuple(
+                stable
+                for offset in range(run.count)
+                if (
+                    stable := _stable_subject(
+                        self._graph, ItemRef(run.tier, run.start + offset)
+                    )
+                )
+                is not None
+            )
+        return self._apply(
+            "move_run",
+            lambda editor: editor.move_run(run, at),
+            operations,
+            provenance_subjects=subjects,
+            correspondence=correspondence,
+        )
+
+    def swap_runs(self, first: ItemRun, second: ItemRun) -> JournalEditor:
+        """Swap two runs as one self-inverse journal event."""
+        operations = None
+        correspondence = None
+        subjects: tuple[LayerSubject, ...] = ()
+        member = self._graph._tiers_by_name.get(first.tier)
+        if member is not None and first.tier == second.tier:
+            left, right = (
+                (first, second) if first.start <= second.start else (second, first)
+            )
+            valid = (
+                left.stop <= right.start
+                and right.stop <= len(member.items)
+                and left.start >= 0
+            )
+            if valid:
+                left_after = ItemRun(left.tier, left.start, right.count)
+                right_after = ItemRun(
+                    left.tier, right.start + right.count - left.count, left.count
+                )
+                operations = _operation_pair(
+                    "swap_runs",
+                    (first, second),
+                    "swap_runs",
+                    (left_after, right_after),
+                )
+                alignment = {
+                    **{
+                        ItemRef(left.tier, left.start + offset): (
+                            ItemRef(left.tier, right_after.start + offset),
+                        )
+                        for offset in range(left.count)
+                    },
+                    **{
+                        ItemRef(right.tier, right.start + offset): (
+                            ItemRef(right.tier, left_after.start + offset),
+                        )
+                        for offset in range(right.count)
+                    },
+                }
+                correspondence = SubtreeCorrespondence(alignment, alignment)
+                subjects = tuple(
+                    stable
+                    for reference in alignment
+                    if (stable := _stable_subject(self._graph, reference)) is not None
+                )
+        return self._apply(
+            "swap_runs",
+            lambda editor: editor.swap_runs(first, second),
+            operations,
+            provenance_subjects=subjects,
+            correspondence=correspondence,
+        )
+
     def swap_items(
         self,
         first: ItemRef | DurableItemRef,
@@ -3111,6 +3225,76 @@ class JournalEditor(_JournalEditorBase):
                 for coordinate in (left, right)
                 if (stable := _stable_subject(self._graph, coordinate)) is not None
             ),
+        )
+
+    def shift(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+    ) -> JournalEditor:
+        """Shift edge children and record the opposite sister shift as inverse."""
+        probe = GraphEditor(self._graph)
+        coordinate = self._graph.resolve_item(container)
+        try:
+            selected = ShiftDirection(direction)
+        except ValueError:
+            selected = None
+        operations = None
+        correspondence = None
+        subjects: tuple[LayerSubject, ...] = ()
+        if selected is not None:
+            sister = ItemRef(
+                coordinate.tier,
+                coordinate.index + (1 if selected is ShiftDirection.RIGHT else -1),
+            )
+            _, instances = probe._containment_instances(containment)
+            source_index = instances.get(coordinate)
+            if (
+                source_index is not None
+                and isinstance(k, int)
+                and not isinstance(k, bool)
+            ):
+                targets = self._graph.polyadic_relations[source_index].targets
+                held = targets[-k:] if selected is ShiftDirection.RIGHT else targets[:k]
+                moved = (
+                    tuple(
+                        self._graph.resolve_item(
+                            cast(ItemRef | DurableItemRef, endpoint)
+                        )
+                        for endpoint in held
+                    )
+                    if k > 0
+                    else ()
+                )
+                alignment = {reference: (reference,) for reference in moved}
+                correspondence = SubtreeCorrespondence(alignment, alignment)
+                inverse_direction = (
+                    ShiftDirection.LEFT
+                    if selected is ShiftDirection.RIGHT
+                    else ShiftDirection.RIGHT
+                )
+                operations = _operation_pair(
+                    "shift",
+                    (coordinate, k, selected.value, containment, policy),
+                    "shift",
+                    (sister, k, inverse_direction.value, containment, policy),
+                )
+                subjects = tuple(
+                    stable
+                    for reference in moved
+                    if (stable := _stable_subject(self._graph, reference)) is not None
+                )
+        exact_delta = policy == "drop-to-provisional"
+        return self._apply(
+            "shift",
+            lambda editor: editor.shift(container, k, direction, containment, policy),
+            None if exact_delta else operations,
+            patch_operations=operations if exact_delta else None,
+            provenance_subjects=subjects,
+            correspondence=correspondence,
         )
 
     def add_relation(
@@ -3387,6 +3571,7 @@ class ClockJournalEditor(_JournalEditorBase):
         provenance_subjects: Iterable[LayerSubject] = (),
         retire_subjects: Iterable[LayerSubject] = (),
         retire_all_provenance: bool = False,
+        correspondence: SubtreeCorrespondence | None = None,
     ) -> ClockJournalEditor:
         if not self._profile_active:
             raise GraphValidationError(
@@ -3439,6 +3624,7 @@ class ClockJournalEditor(_JournalEditorBase):
             before_clock_active=self._profile_active,
             after_clock_active=active,
             detached_dependencies=native._detached_dependencies,
+            correspondence=correspondence,
         )
         self._profile_active = active
         if active:
@@ -3557,6 +3743,47 @@ class ClockJournalEditor(_JournalEditorBase):
             ),
         )
 
+    def move_run(self, run: ItemRun, at: int | BoundaryRef) -> ClockJournalEditor:
+        """Move one run under the named clock policy."""
+        destination = at.index if isinstance(at, BoundaryRef) else at
+        alignment = (
+            {
+                ItemRef(run.tier, run.start + offset): (
+                    ItemRef(run.tier, destination + offset),
+                )
+                for offset in range(run.count)
+            }
+            if isinstance(destination, int) and not isinstance(destination, bool)
+            else {}
+        )
+        return self._apply_clock(
+            "move_run",
+            lambda editor: editor.move_run(run, at),
+            provenance_subjects=tuple(
+                stable
+                for reference in alignment
+                if (stable := _stable_subject(self._graph, reference)) is not None
+            ),
+            correspondence=SubtreeCorrespondence(alignment, alignment),
+        )
+
+    def swap_runs(self, first: ItemRun, second: ItemRun) -> ClockJournalEditor:
+        """Swap two runs under the named clock policy."""
+        references = tuple(
+            ItemRef(run.tier, run.start + offset)
+            for run in (first, second)
+            for offset in range(run.count)
+        )
+        return self._apply_clock(
+            "swap_runs",
+            lambda editor: editor.swap_runs(first, second),
+            provenance_subjects=tuple(
+                stable
+                for reference in references
+                if (stable := _stable_subject(self._graph, reference)) is not None
+            ),
+        )
+
     def swap_items(
         self,
         first: ItemRef | DurableItemRef,
@@ -3573,6 +3800,48 @@ class ClockJournalEditor(_JournalEditorBase):
                 for coordinate in (left, right)
                 if (stable := _stable_subject(self._graph, coordinate)) is not None
             ),
+        )
+
+    def shift(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: ClockRebindingPolicy | str | None = None,
+    ) -> ClockJournalEditor:
+        """Shift containment without moving either timed tier."""
+        coordinate = self._graph.resolve_item(container)
+        try:
+            selected = ShiftDirection(direction)
+        except ValueError:
+            selected = None
+        moved: tuple[ItemRef, ...] = ()
+        if selected is not None and isinstance(k, int) and not isinstance(k, bool):
+            probe = GraphEditor(self._graph)
+            _, instances = probe._containment_instances(containment)
+            source_index = instances.get(coordinate)
+            if source_index is not None and k > 0:
+                relation = self._graph.polyadic_relations[source_index]
+                held = (
+                    relation.targets[-k:]
+                    if selected is ShiftDirection.RIGHT
+                    else relation.targets[:k]
+                )
+                moved = tuple(
+                    self._graph.resolve_item(cast(ItemRef | DurableItemRef, endpoint))
+                    for endpoint in held
+                )
+        alignment = {reference: (reference,) for reference in moved}
+        return self._apply_clock(
+            "shift",
+            lambda editor: editor.shift(container, k, direction, containment, policy),
+            provenance_subjects=tuple(
+                stable
+                for reference in moved
+                if (stable := _stable_subject(self._graph, reference)) is not None
+            ),
+            correspondence=SubtreeCorrespondence(alignment, alignment),
         )
 
     def reparent(
