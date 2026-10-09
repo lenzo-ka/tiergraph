@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including a published bundle-index schema and verified payload streams.
 - Added deterministic per-asset bundle writing and streaming moves between
   embedded payloads and explicit links.
+- Added opt-in exact clock-agreement checks for linear blob attachment spans.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
 - Added a tested `DotPresentation` guide example.
 - Added a hand-authored exact `dumps_spans()` DOT golden.

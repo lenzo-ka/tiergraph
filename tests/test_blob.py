@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 from dataclasses import replace
+from decimal import Decimal
 from typing import BinaryIO, cast
 
 import pytest
@@ -21,8 +22,10 @@ from tiergraph import (
     BlobResolver,
     BlobSink,
     BlobSpan,
+    BoundaryRef,
     BoundarySide,
     ChainResolver,
+    ClockProfile,
     DurableBoundaryRef,
     DurableItemRef,
     EquivalenceView,
@@ -44,9 +47,11 @@ from tiergraph import (
     RelationInstanceRef,
     RelationSideDeclaration,
     SimpleRelationDeclaration,
+    Tier,
     TierDeclaration,
     VerifiedReader,
     XsdType,
+    anchored_boundary,
     apply_patch,
     declare_blob_vocabulary,
     diff,
@@ -68,6 +73,15 @@ BLOB_MEMBERS = QualifiedName(NS, "blob-members")
 RESOURCE = QualifiedName(NS, "resource")
 METADATA = QualifiedName(NS, "metadata")
 TITLE = QualifiedName(NS, "title")
+CLOCK = QualifiedName(NS, "clock")
+CLOCK_TYPE = QualifiedName(NS, "clock-position")
+CLOCK_MEMBERS = QualifiedName(NS, "clock-members")
+CLOCK_BINDING = QualifiedName(NS, "clock-binding")
+CLOCK_RATE = QualifiedName(NS, "clock-rate")
+CLOCK_UNIT = QualifiedName(NS, "clock-unit")
+CLOCK_UNTIMED = QualifiedName(NS, "clock-untimed")
+CLOCK_START = QualifiedName(NS, "clock-start")
+CLOCK_DURATION = QualifiedName(NS, "clock-duration")
 
 
 def blob_name(local: str) -> QualifiedName:
@@ -261,6 +275,94 @@ def with_item_value(
     return graph.set_attribute(reference, value(name, declaration.value_type, lexical))
 
 
+def clock_fixture(
+    *,
+    clock_rate: str = "1",
+    transcript_rate: str = "4",
+    audio_rate: str = "8",
+    stored_timing: bool = False,
+) -> tuple[Graph, ClockProfile]:
+    """Add exact word timing and an explicitly untimed blob tier."""
+    graph = fixture()
+    graph = graph.set_attribute(
+        ItemRef(BLOBS, 0), value(RATE, XsdType.DECIMAL, transcript_rate)
+    )
+    graph = with_item_value(graph, ItemRef(BLOBS, 0), UNIT, "second")
+    graph = with_item_value(graph, ItemRef(BLOBS, 1), RATE, audio_rate)
+    graph = with_item_value(graph, ItemRef(BLOBS, 1), UNIT, "second")
+    words = graph.tiers[0]
+    if stored_timing:
+        words = replace(
+            words,
+            items=tuple(
+                replace(
+                    item,
+                    attributes=(
+                        value(CLOCK_START, XsdType.DECIMAL, str(index)),
+                        value(CLOCK_DURATION, XsdType.DECIMAL, "1"),
+                    ),
+                )
+                for index, item in enumerate(words.items)
+            ),
+        )
+    blobs = replace(
+        graph.tiers[1],
+        attributes=(value(CLOCK_UNTIMED, XsdType.BOOLEAN, "true"),),
+    )
+    clock = Tier(
+        TierDeclaration(CLOCK, "Clock"),
+        (Item("clock-0"), Item("clock-1")),
+    )
+    bare = replace(
+        graph,
+        tiers=(words, blobs, clock),
+        relation_declarations=(
+            *graph.relation_declarations,
+            SimpleRelationDeclaration(CLOCK_MEMBERS, CLOCK, CLOCK_TYPE),
+            BipartiteRelationDeclaration(
+                CLOCK_BINDING,
+                WORD_TYPE,
+                CLOCK_TYPE,
+                RelationEndpointKind.BOUNDARY,
+                RelationEndpointKind.BOUNDARY,
+            ),
+        ),
+        attribute_declarations=(
+            *graph.attribute_declarations,
+            AttributeDeclaration(CLOCK_RATE, AttributeDomain.DOCUMENT, XsdType.DECIMAL),
+            AttributeDeclaration(CLOCK_UNIT, AttributeDomain.DOCUMENT, XsdType.STRING),
+            AttributeDeclaration(CLOCK_UNTIMED, AttributeDomain.TIER, XsdType.BOOLEAN),
+            AttributeDeclaration(CLOCK_START, AttributeDomain.ITEM, XsdType.DECIMAL),
+            AttributeDeclaration(CLOCK_DURATION, AttributeDomain.ITEM, XsdType.DECIMAL),
+        ),
+        attributes=(
+            *graph.attributes,
+            value(CLOCK_RATE, XsdType.DECIMAL, clock_rate),
+            value(CLOCK_UNIT, XsdType.STRING, "second"),
+        ),
+    )
+    bindings = tuple(
+        RelationInstance(
+            CLOCK_BINDING,
+            anchored_boundary(bare, BoundaryRef(WORDS, index)),
+            anchored_boundary(bare, BoundaryRef(CLOCK, index)),
+            f"clock-binding-{index}",
+        )
+        for index in range(3)
+    )
+    timed = replace(bare, relations=(*bare.relations, *bindings))
+    return timed, ClockProfile(
+        timed,
+        CLOCK,
+        CLOCK_BINDING,
+        None if stored_timing else CLOCK_RATE,
+        CLOCK_UNIT,
+        untimed_attribute=CLOCK_UNTIMED,
+        start_attribute=CLOCK_START if stored_timing else None,
+        duration_attribute=CLOCK_DURATION if stored_timing else None,
+    )
+
+
 def test_public_values_validate_context_free_identity_and_spans() -> None:
     """Canonical references and unit-neutral spans refuse malformed primitives."""
     assert BlobRef("00" * 32, 0) < BlobRef("11" * 32, 0)
@@ -313,6 +415,175 @@ def test_profile_preserves_declared_order_ids_roles_and_resource_types() -> None
     )
     assert BlobProfile(inspected).required() == profile.required()
     assert inspected.layers[0].name.source == "media-inspector"
+
+
+def test_clock_agreement_accepts_absolute_and_duration_only_spans_exactly() -> None:
+    """Uniform timing uses exact products even for nonterminating tick ratios."""
+    graph, clock = clock_fixture(clock_rate="3", transcript_rate="12", audio_rate="24")
+    assert clock.rate == Decimal("3")
+    BlobProfile(graph).check_clock(clock)
+
+
+def test_clock_agreement_accepts_stored_timing_without_a_uniform_rate() -> None:
+    """Stored decimal timing supports both absolute and duration-only spans."""
+    graph, clock = clock_fixture(stored_timing=True)
+    assert clock.rate is None
+    BlobProfile(graph).check_clock(clock)
+
+
+def test_blob_tier_must_be_untimed_under_clock() -> None:
+    """A blob tier cannot silently participate in structural clock timing."""
+    graph, clock = clock_fixture()
+    words = replace(
+        graph.tiers[0],
+        attributes=(value(CLOCK_UNTIMED, XsdType.BOOLEAN, "true"),),
+    )
+    blobs = replace(graph.tiers[1], attributes=())
+    bare = replace(
+        graph,
+        tiers=(words, blobs, graph.tiers[2]),
+        relation_declarations=tuple(
+            replace(declaration, left_type=BLOB_TYPE)
+            if isinstance(declaration, BipartiteRelationDeclaration)
+            and declaration.name == CLOCK_BINDING
+            else declaration
+            for declaration in graph.relation_declarations
+        ),
+        relations=tuple(
+            relation
+            for relation in graph.relations
+            if relation.declaration != CLOCK_BINDING
+        ),
+    )
+    blob_bindings = tuple(
+        RelationInstance(
+            CLOCK_BINDING,
+            anchored_boundary(bare, BoundaryRef(BLOBS, index)),
+            anchored_boundary(bare, BoundaryRef(CLOCK, min(index, 2))),
+            f"blob-clock-binding-{index}",
+        )
+        for index in range(len(bare.tiers[1].items) + 1)
+    )
+    timed = replace(bare, relations=(*bare.relations, *blob_bindings))
+    timed_clock = replace(clock, graph=timed)
+    assert timed_clock.is_timed(BLOBS)
+    with pytest.raises(ValueError, match="blob tier .* must be explicitly untimed"):
+        BlobProfile(timed).check_clock(timed_clock)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "lexical", "message"),
+    (
+        (LENGTH, "3", "length disagrees"),
+        (OFFSET, "1", "offset disagrees"),
+    ),
+)
+def test_clock_agreement_refuses_uniform_span_disagreement(
+    attribute: QualifiedName, lexical: str, message: str
+) -> None:
+    """Uniform-clock length and offset disagreements name edge and subject."""
+    graph, clock = clock_fixture()
+    changed = graph.set_attribute(
+        RelationInstanceRef(0), value(attribute, XsdType.INTEGER, lexical)
+    )
+    with pytest.raises(ValueError, match=rf"attachment 0 .*subject .*{message}"):
+        BlobProfile(changed).check_clock(replace(clock, graph=changed))
+
+
+@pytest.mark.parametrize(
+    ("attribute", "lexical", "message"),
+    (
+        (LENGTH, "3", "length disagrees"),
+        (OFFSET, "1", "offset disagrees"),
+    ),
+)
+def test_clock_agreement_refuses_stored_span_disagreement(
+    attribute: QualifiedName, lexical: str, message: str
+) -> None:
+    """Stored-clock length and offset disagreements remain exact and named."""
+    graph, clock = clock_fixture(stored_timing=True)
+    changed = graph.set_attribute(
+        RelationInstanceRef(0), value(attribute, XsdType.INTEGER, lexical)
+    )
+    with pytest.raises(ValueError, match=rf"attachment 0 .*subject .*{message}"):
+        BlobProfile(changed).check_clock(replace(clock, graph=changed))
+
+
+def test_clock_agreement_refuses_missing_rate_unit_mismatch_and_missing_time() -> None:
+    """Uncomparable span claims refuse with stable attachment context."""
+    graph, clock = clock_fixture()
+    missing_rate = graph.remove_attribute(ItemRef(BLOBS, 1), RATE)
+    with pytest.raises(
+        ValueError, match=r"attachment 1 .*subject .*requires blob:rate"
+    ):
+        BlobProfile(missing_rate).check_clock(replace(clock, graph=missing_rate))
+
+    wrong_unit = with_item_value(graph, ItemRef(BLOBS, 1), UNIT, "millisecond")
+    with pytest.raises(
+        ValueError, match=r"attachment 1 .*subject .*not clock unit 'second'"
+    ):
+        BlobProfile(wrong_unit).check_clock(replace(clock, graph=wrong_unit))
+
+    uncalibrated = replace(clock, rate_attribute=None)
+    with pytest.raises(
+        ValueError, match=r"attachment 0 .*subject .*no physical subject timing"
+    ):
+        BlobProfile(graph).check_clock(uncalibrated)
+
+
+def test_clock_agreement_requires_profiles_for_the_same_graph() -> None:
+    """Coordinates from another graph cannot be applied to blob attachments."""
+    _, clock = clock_fixture()
+    with pytest.raises(ValueError, match="profiles must describe the same graph"):
+        BlobProfile(fixture()).check_clock(clock)
+
+
+def test_clock_agreement_refuses_untimed_and_unavailable_subjects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Untimed and structurally unqueryable subjects retain edge context."""
+    graph, clock = clock_fixture()
+    untimed_words = replace(
+        graph.tiers[0],
+        attributes=(value(CLOCK_UNTIMED, XsdType.BOOLEAN, "true"),),
+    )
+    untimed_graph = replace(
+        graph,
+        tiers=(untimed_words, *graph.tiers[1:]),
+        relations=tuple(
+            relation
+            for relation in graph.relations
+            if relation.declaration != CLOCK_BINDING
+        ),
+    )
+    with pytest.raises(
+        ValueError, match=r"attachment 0 .*subject .*no physical subject timing"
+    ):
+        BlobProfile(untimed_graph).check_clock(replace(clock, graph=untimed_graph))
+
+    def unavailable_status(self: ClockProfile, tier: QualifiedName) -> bool:
+        """Model a structural clock that cannot classify the blob tier."""
+        del self, tier
+        raise ValueError("structural clock has no event bindings")
+
+    monkeypatch.setattr(ClockProfile, "is_timed", unavailable_status)
+    with pytest.raises(
+        ValueError, match=r"blob tier .*no comparable clock status.*structural clock"
+    ):
+        BlobProfile(graph).check_clock(clock)
+
+    def unavailable_subject(self: ClockProfile, tier: QualifiedName) -> bool:
+        """Model a clock profile that cannot answer event timing queries."""
+        del self
+        if tier == BLOBS:
+            return False
+        raise ValueError("structural clock has no event bindings")
+
+    monkeypatch.setattr(ClockProfile, "is_timed", unavailable_subject)
+    with pytest.raises(
+        ValueError, match=r"attachment 0 .*subject .*no comparable.*structural clock"
+    ):
+        BlobProfile(graph).check_clock(clock)
 
 
 def test_vocabulary_round_trips_through_existing_formats_and_diff() -> None:
@@ -497,7 +768,10 @@ def test_profile_refuses_bad_span_shapes_and_targets() -> None:
     with pytest.raises(ValueError, match="offset without a length"):
         BlobProfile(graph)
     graph = with_item_value(fixture(), ItemRef(BLOBS, 0), EXTENT, "3")
-    with pytest.raises(ValueError, match="span exceeds"):
+    with pytest.raises(
+        ValueError,
+        match=r"attachment 0 \('word-transcript'\) for subject .* span exceeds",
+    ):
         BlobProfile(graph)
     graph = fixture().set_attribute(
         RelationInstanceRef(0), value(OFFSET, XsdType.INTEGER, "-1")

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, BinaryIO, Literal, Protocol, cast
 if TYPE_CHECKING:
     import zipfile
 
+    from tiergraph.clock import ClockProfile
+
 from tiergraph.core import (
     Attribute,
     AttributeDeclaration,
@@ -115,14 +117,16 @@ class BlobRef:
 
 @dataclass(frozen=True, slots=True)
 class BlobSpan:
-    """Describe a linear extent in the attached resource's declared unit.
+    """Describe a linear extent in a resource's intrinsic coordinates.
 
-    An absent ``offset`` makes the span duration-only. The resource's
-    ``blob:unit`` supplies the meaning of both integers, so the value does not
-    assume time: a unit can name characters, samples, frames, or another
-    resource-defined linear coordinate. Structured paths remain ordinary
-    relation-instance attributes in the resource schema rather than being
-    forced into this linear value.
+    An absent ``offset`` makes the span duration-only. The resource's media
+    type and schema supply the meaning of both integers, so the value does not
+    assume time: they can count characters, samples, frames, or another
+    resource-defined linear coordinate. ``blob:rate`` maps those intrinsic
+    coordinates to the clock unit named by ``blob:unit`` when clock agreement
+    is requested. Structured paths remain ordinary relation-instance
+    attributes in the resource schema rather than being forced into this
+    linear value.
     """
 
     offset: int | None
@@ -596,8 +600,9 @@ class BlobProfile:
                 start = 0 if span.offset is None else span.offset
                 if extent is not None and start + span.length > extent:
                     raise ValueError(
-                        f"blob attachment {index} span exceeds blob item {right} "
-                        f"extent {extent}"
+                        f"blob attachment {index} ({relation.durable_id!r}) for "
+                        f"subject {subject} span exceeds blob item {right} extent "
+                        f"{extent}"
                     )
             attachments[right].append((RelationInstanceRef(index), subject, span))
 
@@ -630,6 +635,161 @@ class BlobProfile:
                 seen.add(reference.sha256)
                 required.append(reference)
         return tuple(required)
+
+    def check_clock(self, clock: ClockProfile) -> None:
+        """Require every linear attachment span to agree with subject timing.
+
+        Every tier containing blob items must be explicitly untimed. The blob
+        rate counts intrinsic positions per clock unit. Duration-only spans
+        compare their length, while spans with an offset also compare absolute
+        position relative to ``blob:origin``, which defaults to zero. Units must
+        match exactly and every comparison uses integer products, without
+        decimal division or tolerance. This opt-in check reads only graph
+        metadata and never opens payload bytes or runs inspectors.
+        """
+        if self.graph != clock.graph:
+            raise ValueError("blob and clock profiles must describe the same graph")
+        blob_tiers = tuple(dict.fromkeys(blob.tier for blob, _ in self._blob_entries))
+        for tier in blob_tiers:
+            try:
+                timed = clock.is_timed(tier)
+            except ValueError as error:
+                raise ValueError(
+                    f"blob tier {str(tier)!r} has no comparable clock status: {error}"
+                ) from error
+            if timed:
+                raise ValueError(f"blob tier {str(tier)!r} must be explicitly untimed")
+        tiers = {tier.declaration.name: tier for tier in self.graph.tiers}
+        for blob, _ in self._blob_entries:
+            values = _values(tiers[blob.tier].items[blob.index].attributes)
+            rate_value = values.get(_RATE)
+            unit_value = values.get(_UNIT)
+            origin_value = values.get(_ORIGIN)
+            rate = None if rate_value is None else Decimal(rate_value.lexical)
+            unit = None if unit_value is None else unit_value.lexical
+            origin = (
+                Decimal(0) if origin_value is None else Decimal(origin_value.lexical)
+            )
+            for attachment, subject, span in self._attachment_entries[blob]:
+                if span is None:
+                    continue
+                label = self._clock_attachment_label(attachment, subject)
+                if rate is None:
+                    raise ValueError(f"{label} requires blob:rate")
+                if unit != clock.unit:
+                    raise ValueError(
+                        f"{label} has blob unit {unit!r}, not clock unit {clock.unit!r}"
+                    )
+                try:
+                    timed = clock.is_timed(subject.tier)
+                except ValueError as error:
+                    raise ValueError(
+                        f"{label} has no comparable physical subject timing: {error}"
+                    ) from error
+                if not timed:
+                    raise ValueError(f"{label} has no physical subject timing")
+                if clock.rate is not None:
+                    start, end = clock.structural_span(subject.tier, subject.index)
+                    if not _clock_ratio_times_rate_equals(
+                        end.tick - start.tick, clock.rate, rate, span.length
+                    ):
+                        raise ValueError(
+                            f"{label} length disagrees with subject timing"
+                        )
+                    if span.offset is not None and not _clock_offset_equals(
+                        start.tick, clock.rate, origin, rate, span.offset
+                    ):
+                        raise ValueError(
+                            f"{label} offset disagrees with subject timing"
+                        )
+                    continue
+                timing = clock.timing(subject.tier, subject.index)
+                if timing is None:
+                    raise ValueError(f"{label} has no physical subject timing")
+                if not _decimal_times_rate_equals(timing.duration, rate, span.length):
+                    raise ValueError(f"{label} length disagrees with subject timing")
+                if (
+                    span.offset is not None
+                    and not _decimal_difference_times_rate_equals(
+                        timing.start, origin, rate, span.offset
+                    )
+                ):
+                    raise ValueError(f"{label} offset disagrees with subject timing")
+
+    def _clock_attachment_label(
+        self, attachment: RelationInstanceRef, subject: ItemRef
+    ) -> str:
+        """Name one attachment by stable id and its subject for a refusal."""
+        durable_id = self.graph.relations[attachment.index].durable_id
+        return (
+            f"blob attachment {attachment.index} ({durable_id!r}) for subject {subject}"
+        )
+
+
+def _decimal_times_rate_equals(value: Decimal, rate: Decimal, count: int) -> bool:
+    """Compare one decimal times a rate with an integer using exact products."""
+    value_numerator, value_denominator = value.as_integer_ratio()
+    rate_numerator, rate_denominator = rate.as_integer_ratio()
+    return (
+        value_numerator * rate_numerator == count * value_denominator * rate_denominator
+    )
+
+
+def _decimal_difference_times_rate_equals(
+    value: Decimal,
+    origin: Decimal,
+    rate: Decimal,
+    count: int,
+) -> bool:
+    """Compare a decimal difference times a rate without rounded subtraction."""
+    value_numerator, value_denominator = value.as_integer_ratio()
+    origin_numerator, origin_denominator = origin.as_integer_ratio()
+    rate_numerator, rate_denominator = rate.as_integer_ratio()
+    difference_numerator = (
+        value_numerator * origin_denominator - origin_numerator * value_denominator
+    )
+    difference_denominator = value_denominator * origin_denominator
+    return (
+        difference_numerator * rate_numerator
+        == count * difference_denominator * rate_denominator
+    )
+
+
+def _clock_ratio_times_rate_equals(
+    ticks: int,
+    clock_rate: Decimal,
+    blob_rate: Decimal,
+    count: int,
+) -> bool:
+    """Compare ``ticks / clock_rate * blob_rate`` by integer products."""
+    clock_numerator, clock_denominator = clock_rate.as_integer_ratio()
+    blob_numerator, blob_denominator = blob_rate.as_integer_ratio()
+    return (
+        ticks * clock_denominator * blob_numerator
+        == count * clock_numerator * blob_denominator
+    )
+
+
+def _clock_offset_equals(
+    ticks: int,
+    clock_rate: Decimal,
+    origin: Decimal,
+    blob_rate: Decimal,
+    count: int,
+) -> bool:
+    """Compare ``(ticks / clock_rate - origin) * blob_rate`` exactly."""
+    clock_numerator, clock_denominator = clock_rate.as_integer_ratio()
+    origin_numerator, origin_denominator = origin.as_integer_ratio()
+    blob_numerator, blob_denominator = blob_rate.as_integer_ratio()
+    difference_numerator = (
+        ticks * clock_denominator * origin_denominator
+        - origin_numerator * clock_numerator
+    )
+    difference_denominator = clock_numerator * origin_denominator
+    return (
+        difference_numerator * blob_numerator
+        == count * difference_denominator * blob_denominator
+    )
 
 
 @dataclass(frozen=True, slots=True)

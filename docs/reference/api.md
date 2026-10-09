@@ -155,14 +155,16 @@ Identify payload bytes by their lowercase SHA-256 digest and exact size.
 BlobSpan(offset: 'int | None', length: 'int') -> None
 ```
 
-Describe a linear extent in the attached resource's declared unit.
+Describe a linear extent in a resource's intrinsic coordinates.
 
-An absent ``offset`` makes the span duration-only. The resource's
-``blob:unit`` supplies the meaning of both integers, so the value does not
-assume time: a unit can name characters, samples, frames, or another
-resource-defined linear coordinate. Structured paths remain ordinary
-relation-instance attributes in the resource schema rather than being
-forced into this linear value.
+An absent ``offset`` makes the span duration-only. The resource's media
+type and schema supply the meaning of both integers, so the value does not
+assume time: they can count characters, samples, frames, or another
+resource-defined linear coordinate. ``blob:rate`` maps those intrinsic
+coordinates to the clock unit named by ``blob:unit`` when clock agreement
+is requested. Structured paths remain ordinary relation-instance
+attributes in the resource schema rather than being forced into this
+linear value.
 
 ### `BlobProfile`
 
@@ -219,6 +221,24 @@ BlobProfile.required(self) -> 'tuple[BlobRef, ...]'
 ```
 
 Return distinct payload requirements in first blob-item order.
+
+#### `BlobProfile.check_clock`
+
+Method.
+
+```text
+BlobProfile.check_clock(self, clock: 'ClockProfile') -> 'None'
+```
+
+Require every linear attachment span to agree with subject timing.
+
+Every tier containing blob items must be explicitly untimed. The blob
+rate counts intrinsic positions per clock unit. Duration-only spans
+compare their length, while spans with an offset also compare absolute
+position relative to ``blob:origin``, which defaults to zero. Units must
+match exactly and every comparison uses integer products, without
+decimal division or tolerance. This opt-in check reads only graph
+metadata and never opens payload bytes or runs inspectors.
 
 ### `BlobResolver`
 
@@ -8277,6 +8297,24 @@ BlobProfile.required(self) -> 'tuple[BlobRef, ...]'
 
 Return distinct payload requirements in first blob-item order.
 
+#### `BlobProfile.check_clock`
+
+Method.
+
+```text
+BlobProfile.check_clock(self, clock: 'ClockProfile') -> 'None'
+```
+
+Require every linear attachment span to agree with subject timing.
+
+Every tier containing blob items must be explicitly untimed. The blob
+rate counts intrinsic positions per clock unit. Duration-only spans
+compare their length, while spans with an offset also compare absolute
+position relative to ``blob:origin``, which defaults to zero. Units must
+match exactly and every comparison uses integer products, without
+decimal division or tolerance. This opt-in check reads only graph
+metadata and never opens payload bytes or runs inspectors.
+
 ### `BlobRef`
 
 ```text
@@ -8335,14 +8373,16 @@ Store the bytes and return an optional href for a bundle index.
 BlobSpan(offset: 'int | None', length: 'int') -> None
 ```
 
-Describe a linear extent in the attached resource's declared unit.
+Describe a linear extent in a resource's intrinsic coordinates.
 
-An absent ``offset`` makes the span duration-only. The resource's
-``blob:unit`` supplies the meaning of both integers, so the value does not
-assume time: a unit can name characters, samples, frames, or another
-resource-defined linear coordinate. Structured paths remain ordinary
-relation-instance attributes in the resource schema rather than being
-forced into this linear value.
+An absent ``offset`` makes the span duration-only. The resource's media
+type and schema supply the meaning of both integers, so the value does not
+assume time: they can count characters, samples, frames, or another
+resource-defined linear coordinate. ``blob:rate`` maps those intrinsic
+coordinates to the clock unit named by ``blob:unit`` when clock agreement
+is requested. Structured paths remain ordinary relation-instance
+attributes in the resource schema rather than being forced into this
+linear value.
 
 ### `Bundle`
 
