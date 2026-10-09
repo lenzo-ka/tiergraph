@@ -85,6 +85,83 @@ undoable when it runs through a journal. The plain cascade is the module-level
 `undeclare_with_contents(graph, target)` function; journaled and clock-aware
 editors provide the session method.
 
+## Run moves, sister shifts, and the editing algebra
+
+The editing basis is insert, delete, substitute, shift left, shift right, and
+swap. The existing graph operations spell that basis without adding a new cost
+kind:
+
+- `insert_item()` is the rewrite `""@boundary -> X` (epsilon to an item);
+- `remove_item()` is `X -> ""@boundary`;
+- `replace_item()` is `X -> Y`;
+- `move_run()` cuts one named hole and inserts the held hole at another
+  boundary;
+- `shift()` is that move across an adjacent sister-container boundary; and
+- `swap_runs()` is `A B -> B A`, with `swap_items()` as its `(1, 1)` case.
+
+The empty sequence is epsilon, spelled `""`. It is not `None`, which means a
+missing value, and it is not the empty language. `ItemRun(tier, start, 0)` is
+the corresponding zero-width boundary in the operational API.
+
+`cut(run)` and `insert_held(held, at)` are the two views of one move. A held run
+keeps its items, identities, carried references, facts, and provenance. Freezing
+an unresolved cut realizes the ordinary delete and therefore has the same live
+dependency refusals as `remove_items()`. `move_run()` records the cut and insert
+as one journal event with one inverse. `swap_runs()` exchanges unequal adjacent
+runs as blocks; for separated runs, the middle remains in place. Either side
+may be a zero-width run. Moving or swapping a timed item tier still requires a
+clock rebinding policy.
+
+A phrase-break correction uses the same operation as a syllable-boundary
+correction. In this tested shape, the first phrase contains words `w0 w1 w2`
+and its right sister contains `w3 w4`:
+
+```text
+shifted = utterance.shift(
+    ItemRef(phrase_tier, 0),
+    1,
+    "right",
+    phrase_words,
+)
+```
+
+The result is `P0[w0 w1] P1[w2 w3 w4]`. A left shift takes the first children
+of the right container and appends them to the left container. The containers
+must be adjacent items on one tier, and the named ordered polyadic containment
+must give both containers their child sequences. A shift accepts only a
+nonempty edge run smaller than the source membership. It never wraps at a tier
+seam.
+
+Operationally, the child run and the shared zero-width sister boundary trade
+places. Declaratively, the right shift is the synchronous rewrite
+`P1[x Y] P2[Z] -> P1[x] P2[Y Z]`. The journal's
+`SubtreeCorrespondence` is the named hole alignment. Its optional
+`identity_correspondence` is present for held moves and shifts, declaring
+identified equality; delete-and-add leaves that field absent and claims only
+functional correspondence. The two views produce the same graph and do not
+invoke the grammar engine.
+
+Shift does not reorder or retime the child tier, or any aligned tier. It changes
+only the two containment instances. A clock-bound container boundary therefore
+needs no rebinding policy when it stores no independent boundary value. A
+stored container-boundary value, or a durable boundary shared with another
+tier, requires `keep-earlier` or `drop-to-provisional` on the plain editor; the
+other tier is never dragged. A clock-aware editor defaults an otherwise
+policy-free shift to `keep-earlier` because the active profile supplies that
+clock context. `drop-to-provisional` removes the independently stored boundary
+value, leaving it for later realignment. Container-emptying merge is
+intentionally not part of this operation because it needs a separate merge
+policy and inverse.
+
+Deleting two containers and inserting new containers with the shifted
+memberships is the alternative construction. It is functionally equal to the
+held shift but not identified equal. Use it only when the containers genuinely
+are new. Shift and run swap use the existing `swap_items` cost unit; `move_run`
+uses `move_item`. Consequently a shift is no more expensive than delete plus
+insert under the default table, and is strictly cheaper whenever those two
+costs sum to more than the swap cost. `diff()` recognizes a single retained-ID
+containment shift and emits the shift operation.
+
 ## References, displacement, and local refusal
 
 An `ItemRef` or `BoundaryRef` is a structural coordinate. Its index can change.

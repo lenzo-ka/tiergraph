@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added held item-run moves, unequal run swaps, and identity-preserving shifts
+  of edge children across adjacent ordered-containment sisters, with journal,
+  patch, diff, clock-policy, cost, and command-line support.
 - Added `EditResult` and ordered detachment reports for subtree replacement,
   subtree swapping, and path commitment. Reports retain withdrawn items,
   relation instances, facts, and individual boundary values with their original

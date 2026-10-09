@@ -1630,20 +1630,21 @@ Exit codes:
 ```text
 usage: tiergraph edit [-h]
                       GRAPH
-                      {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
+                      {apply,insert,delete,replace,move,swap,shift,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
                       ...
 
 Apply one checked edit to a graph document.
 
 positional arguments:
   GRAPH                 graph file, or - for stdin
-  {apply,insert,delete,replace,move,swap,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
+  {apply,insert,delete,replace,move,swap,shift,relate,unrelate,endpoints,feature,declare,undeclare,promote,demote,seal,layer,replace-subtree,swap-subtrees,bulk,prune-orphans,compact}
     apply               apply a fingerprint-guarded patch
     insert              insert one item
     delete              remove one item or an item run
     replace             replace one item's stored value
     move                move one item within its tier
     swap                swap two items
+    shift               shift edge children to an adjacent sister
     relate              insert one relation instance
     unrelate            remove one relation instance
     endpoints           replace one relation instance's endpoints
@@ -1920,6 +1921,59 @@ options:
 
 Examples:
   $ tiergraph edit graph.json swap /items/durable/alpha /items/durable/beta -o out.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph edit shift`
+
+```text
+usage: tiergraph edit GRAPH shift [-h] [-o FILE | --in-place] [--dry-run]
+                                  [--report FILE] [--record FILE]
+                                  [--inverse-out FILE] [--clock-profile FILE]
+                                  [--rebinding {keep-earlier,drop-to-provisional}]
+                                  [--annotate KEY=JSON] [--max-steps N]
+                                  --count N --direction {left,right}
+                                  --containment NS LOCAL
+                                  [--policy {keep-earlier,drop-to-provisional}]
+                                  TGPATH
+
+Shift edge children to an adjacent sister.
+
+positional arguments:
+  TGPATH                container item TG-PATH
+
+options:
+  -h, --help            show this help message and exit
+  -o FILE, --output FILE
+                        output graph (default: -)
+  --in-place            atomically replace GRAPH
+  --dry-run             validate and report without writing GRAPH
+  --report FILE         write the edit report as JSON
+  --record FILE         write the forward patch as JSONL
+  --inverse-out FILE    write the inverse patch as JSONL
+  --clock-profile FILE  validate and edit through this clock profile
+  --rebinding {keep-earlier,drop-to-provisional}
+                        named clock rebinding policy; requires --clock-profile
+  --annotate KEY=JSON   attach caller-supplied patch metadata; repeatable;
+                        requires --record, --inverse-out, --report, or --dry-
+                        run
+  --max-steps N         refuse after N deterministic work steps (maximum:
+                        1000000000)
+  --count N             edge child count
+  --direction {left,right}
+                        receiving sister
+  --containment NS LOCAL
+                        ordered containment relation
+  --policy {keep-earlier,drop-to-provisional}
+                        stored or shared boundary policy
+
+Examples:
+  $ tiergraph edit shift-graph.json shift /items/durable/alpha --count 1 --direction right --containment urn:path shift-contains -o out.json
 
 Exit codes:
   0  success

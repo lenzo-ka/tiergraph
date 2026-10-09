@@ -224,6 +224,13 @@ class BoundarySide(StrEnum):
     AFTER = "after"
 
 
+class ShiftDirection(StrEnum):
+    """Choose the adjacent sister that receives a container's edge children."""
+
+    LEFT = "left"
+    RIGHT = "right"
+
+
 class RelationEndpointKind(StrEnum):
     """Declare whether one relation endpoint is an item or a boundary."""
 
@@ -912,6 +919,54 @@ class ItemRef:
     def __str__(self) -> str:
         """Return a compact coordinate spelling for diagnostics."""
         return f"{self.tier}[{self.index}]"
+
+
+@dataclass(frozen=True, slots=True)
+class ItemRun:
+    """Name a contiguous, possibly empty run on one ordered tier.
+
+    An empty run is the zero-width boundary at ``start``. It spells epsilon as
+    ``""`` in rewrite data; ``None`` is never used to mean an empty run.
+    """
+
+    tier: QualifiedName
+    start: int
+    count: int
+
+    def __post_init__(self) -> None:
+        """Require integral, nonnegative run coordinates."""
+        for value, subject in ((self.start, "start"), (self.count, "count")):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise GraphValidationError(
+                    f"item run {subject} must be a nonnegative integer"
+                )
+
+    @property
+    def stop(self) -> int:
+        """Return the exclusive end of this run."""
+        return self.start + self.count
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the run, spelling its empty sequence as the empty string."""
+        return {
+            "tier": self.tier.to_data(),
+            "start": self.start,
+            "count": self.count,
+            "sequence": "" if self.count == 0 else "items",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class HeldRun:
+    """Hold a cut item run until its identity-preserving insertion point is known.
+
+    Held items remain attached to their originating editor until
+    :meth:`GraphEditor.insert_held` resolves the cut. Freezing first realizes
+    the cut as an ordinary deletion.
+    """
+
+    run: ItemRun
+    items: tuple[Item, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2403,6 +2458,14 @@ class Graph:
         """Return a new graph with this item at another index of its own tier."""
         return self.edit().move_item(reference, index).freeze()
 
+    def move_run(self, run: ItemRun, at: int) -> Graph:
+        """Return a new graph with one contiguous run at a new tier position."""
+        return self.edit().move_run(run, at).freeze()
+
+    def swap_runs(self, first: ItemRun, second: ItemRun) -> Graph:
+        """Return a new graph with two disjoint runs exchanged as blocks."""
+        return self.edit().swap_runs(first, second).freeze()
+
     def swap_items(
         self,
         first: ItemRef | DurableItemRef,
@@ -2410,6 +2473,17 @@ class Graph:
     ) -> Graph:
         """Return a new graph with two items of one tier exchanged."""
         return self.edit().swap_items(first, second).freeze()
+
+    def shift(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+    ) -> Graph:
+        """Move edge children to an adjacent sister while retaining identity."""
+        return self.edit().shift(container, k, direction, containment, policy).freeze()
 
     def add_relation(
         self,
@@ -2654,7 +2728,7 @@ class GraphEditor:
 
     def freeze(self) -> Graph:
         """Return a fully validated graph without consuming this editor."""
-        return replace(
+        candidate = replace(
             self._source,
             namespaces=tuple(self._namespaces),
             tiers=tuple(
@@ -2670,6 +2744,13 @@ class GraphEditor:
             seals=tuple(self._seals),
             layers=tuple(self._layers),
         )
+        pending = getattr(self, "_pending_held", None)
+        if pending is None:
+            return candidate
+        self._require_current_held(pending)
+        temporary = GraphEditor(candidate)
+        temporary.remove_items(pending.run.tier, pending.run.start, pending.run.count)
+        return temporary.freeze()
 
     def displacement(self) -> Displacement:
         """Return where every position of this editor's input now stands."""
@@ -3356,30 +3437,145 @@ class GraphEditor:
         self._last_detachment = outcome.report
         return self
 
-    def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:
-        """Move one item to another index of its own tier, carrying references.
+    def _run(self, run: ItemRun, subject: str, *, empty: bool) -> _MutableTier:
+        """Validate one run against its current tier and return that tier."""
+        if not isinstance(run, ItemRun):
+            raise GraphValidationError(f"{subject} requires an ItemRun")
+        member = self._member(run.tier, subject)
+        size = len(member.items)
+        if run.count == 0 and not empty:
+            raise GraphValidationError(f"{subject} run must not be empty")
+        if run.start > size or run.stop > size:
+            raise GraphValidationError(
+                f"{subject} range {run.start}:{run.stop} is outside tier "
+                f"{str(run.tier)!r} with {size} items"
+            )
+        return member
 
-        A move across tiers is not this operation.  Membership decides an
-        item's type, so carrying an item into another tier retypes it, and a
-        caller who means that says so with a removal and an insertion.
+    def cut(self, run: ItemRun) -> HeldRun:
+        """Hold one contiguous run for a following identity-preserving insert.
+
+        The cut is resolved atomically by :meth:`insert_held`. If the editor is
+        frozen first, the unresolved cut has the same result as
+        :meth:`remove_items` and therefore the same dependency refusals.
+        """
+        if getattr(self, "_pending_held", None) is not None:
+            raise GraphValidationError("an editor can hold only one cut run at a time")
+        member = self._run(run, "item cut", empty=False)
+        held = HeldRun(run, tuple(member.items[run.start : run.stop]))
+        self._pending_held = held
+        self._pending_held_displacement = self._displacement
+        return held
+
+    def _require_current_held(self, held: HeldRun) -> None:
+        """Refuse to reinterpret an unresolved cut after another restructure."""
+        member = self._member(held.run.tier, "held-run insertion")
+        current = tuple(member.items[held.run.start : held.run.stop])
+        if (
+            self._displacement != self._pending_held_displacement
+            or current != held.items
+        ):
+            raise GraphValidationError(
+                "cannot resolve an item cut after another structural edit; "
+                "insert or freeze the held run before restructuring the editor"
+            )
+
+    def _clear_pending_held(self) -> None:
+        """Forget the one editor-local held run and its structural checkpoint."""
+        del self._pending_held
+        del self._pending_held_displacement
+
+    @staticmethod
+    def _insertion_index(at: int | BoundaryRef, tier: QualifiedName) -> int:
+        """Return an insertion boundary on ``tier`` from either public spelling."""
+        if isinstance(at, BoundaryRef):
+            if at.tier != tier:
+                raise GraphValidationError(
+                    "held-run insertion point is on a different tier"
+                )
+            return at.index
+        if isinstance(at, bool) or not isinstance(at, int):
+            raise GraphValidationError("held-run insertion point must be an integer")
+        return at
+
+    def _move_run(self, run: ItemRun, at: int, subject: str) -> None:
+        """Move a validated run to a result-coordinate insertion boundary."""
+        member = self._run(run, subject, empty=False)
+        size = len(member.items)
+        if at < 0 or at > size - run.count:
+            raise GraphValidationError(
+                f"{subject} insertion point {at} is outside tier "
+                f"{str(run.tier)!r} after cutting {run.count} items"
+            )
+        order = list(range(size))
+        moved = order[run.start : run.stop]
+        del order[run.start : run.stop]
+        order[at:at] = moved
+        self._restructure(
+            member,
+            [member.items[index] for index in order],
+            {old: new for new, old in enumerate(order)},
+            subject,
+        )
+
+    def insert_held(self, held: HeldRun, at: int | BoundaryRef) -> GraphEditor:
+        """Insert this editor's held run at a same-tier zero-width boundary."""
+        if held is not getattr(self, "_pending_held", None):
+            raise GraphValidationError("held run does not belong to this editor")
+        self._require_current_held(held)
+        index = self._insertion_index(at, held.run.tier)
+        self._move_run(held.run, index, "held-run insertion")
+        self._clear_pending_held()
+        return self
+
+    def move_run(self, run: ItemRun, at: int | BoundaryRef) -> GraphEditor:
+        """Cut and reinsert one contiguous run as a single structural move."""
+        held = self.cut(run)
+        try:
+            return self.insert_held(held, at)
+        except BaseException:
+            self._clear_pending_held()
+            raise
+
+    def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:
+        """Move one item through the length-one :meth:`move_run` case.
+
+        A move across tiers is not this operation. Membership decides an
+        item's type, so carrying an item into another tier retypes it.
         """
         coordinate = self._resolve_item(reference)
-        member = self._member(coordinate.tier, "item move")
-        count = len(member.items)
+        count = len(self._member(coordinate.tier, "item move").items)
         if index < 0 or index >= count:
             raise GraphValidationError(
                 f"item move index {index} is outside tier {str(coordinate.tier)!r}"
             )
-        items = list(member.items)
-        items.insert(index, items.pop(coordinate.index))
-        order = list(range(count))
-        order.insert(index, order.pop(coordinate.index))
-        self._restructure(
-            member,
-            items,
-            {old: new for new, old in enumerate(order)},
-            "item move",
+        self._move_run(
+            ItemRun(coordinate.tier, coordinate.index, 1), index, "item move"
         )
+        return self
+
+    def swap_runs(self, first: ItemRun, second: ItemRun) -> GraphEditor:
+        """Exchange disjoint runs as blocks, retaining the intervening items.
+
+        Either run may be empty; an empty run is the boundary with which the
+        other run trades places. Both empty is a checked no-op.
+        """
+        self._run(first, "item run swap", empty=True)
+        self._run(second, "item run swap", empty=True)
+        if first.tier != second.tier:
+            raise GraphValidationError("item run swap names different tiers")
+        if first == second:
+            return self
+        left, right = (
+            (first, second) if first.start <= second.start else (second, first)
+        )
+        if left.stop > right.start:
+            raise GraphValidationError("item run swap ranges overlap")
+        if right.count:
+            self.move_run(right, left.start)
+        if left.count:
+            shifted_left = ItemRun(left.tier, left.start + right.count, left.count)
+            self.move_run(shifted_left, right.stop - left.count)
         return self
 
     def swap_items(
@@ -3387,7 +3583,7 @@ class GraphEditor:
         first: ItemRef | DurableItemRef,
         second: ItemRef | DurableItemRef,
     ) -> GraphEditor:
-        """Exchange two items of one tier, carrying their references with them."""
+        """Exchange two items through the ``(1, 1)`` run-swap case."""
         left = self._resolve_item(first)
         right = self._resolve_item(second)
         if left.tier != right.tier:
@@ -3395,13 +3591,173 @@ class GraphEditor:
                 f"item swap names {str(left)!r} and {str(right)!r} in different "
                 "tiers; an item's tier decides its type"
             )
-        member = self._member(left.tier, "item swap")
-        items = list(member.items)
-        items[left.index], items[right.index] = items[right.index], items[left.index]
-        mapping = {old: old for old in range(len(items))}
-        mapping[left.index] = right.index
-        mapping[right.index] = left.index
-        self._restructure(member, items, mapping, "item swap")
+        if left.index == right.index:
+            return self
+        lower, upper = sorted((left.index, right.index))
+        self._move_run(ItemRun(left.tier, upper, 1), lower, "item swap")
+        self._move_run(ItemRun(left.tier, lower + 1, 1), upper, "item swap")
+        return self
+
+    def _containment_instances(
+        self, containment: QualifiedName
+    ) -> tuple[PolyadicRelationDeclaration, dict[ItemRef, int]]:
+        """Validate and index one ordered polyadic containment relation."""
+        declaration = next(
+            (
+                candidate
+                for candidate in self._relation_declarations
+                if candidate.name == containment
+            ),
+            None,
+        )
+        item_only = (RelationEndpointKind.ITEM,)
+        if not isinstance(declaration, PolyadicRelationDeclaration):
+            raise GraphValidationError(
+                f"shift containment {str(containment)!r} is not polyadic"
+            )
+        if (
+            declaration.sources.endpoint_kinds != item_only
+            or declaration.targets.endpoint_kinds != item_only
+            or declaration.sources.maximum != 1
+            or not declaration.unique_sources
+            or not declaration.acyclic
+        ):
+            raise GraphValidationError(
+                f"shift containment {str(containment)!r} is not ordered containment"
+            )
+        instances: dict[ItemRef, int] = {}
+        for index, instance in enumerate(self._polyadic_relations):
+            if instance.declaration != containment:
+                continue
+            if len(instance.sources) != 1:
+                raise GraphValidationError(
+                    f"shift containment {str(containment)!r} instance {index} "
+                    "does not have one source"
+                )
+            source = self._resolve_item(
+                cast(ItemRef | DurableItemRef, instance.sources[0])
+            )
+            instances[source] = index
+        return declaration, instances
+
+    def _shared_boundary_is_bound(self, boundary: BoundaryRef) -> bool:
+        """Report whether another relation durably names this tier boundary."""
+        endpoints: Iterable[RelationEndpointRef] = (
+            endpoint
+            for relation in self._relations
+            for endpoint in (relation.left, relation.right)
+        )
+        polyadic_endpoints = (
+            endpoint
+            for relation in self._polyadic_relations
+            for endpoint in (*relation.sources, *relation.targets)
+        )
+        for endpoint in (*endpoints, *polyadic_endpoints):
+            if (
+                isinstance(endpoint, DurableBoundaryRef)
+                and self._resolve_boundary(endpoint) == boundary
+            ):
+                return True
+        return False
+
+    def _swap_containment_boundary(
+        self,
+        source_index: int,
+        sister_index: int,
+        k: int,
+        direction: ShiftDirection,
+    ) -> tuple[ItemRef, ...]:
+        """Swap an edge target run with the zero-width sister boundary."""
+        source = self._polyadic_relations[source_index]
+        sister = self._polyadic_relations[sister_index]
+        if direction is ShiftDirection.RIGHT:
+            held = source.targets[-k:]
+            source_targets = source.targets[:-k]
+            sister_targets = (*held, *sister.targets)
+        else:
+            held = source.targets[:k]
+            source_targets = source.targets[k:]
+            sister_targets = (*sister.targets, *held)
+        self._polyadic_relations[source_index] = replace(source, targets=source_targets)
+        self._polyadic_relations[sister_index] = replace(sister, targets=sister_targets)
+        return tuple(
+            self._resolve_item(cast(ItemRef | DurableItemRef, endpoint))
+            for endpoint in held
+        )
+
+    def shift(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+    ) -> GraphEditor:
+        """Move edge children across the shared boundary of adjacent sisters.
+
+        Right moves the last ``k`` children to the beginning of the right
+        sister. Left moves the first ``k`` children to the end of the left
+        sister. The operation changes containment incidence only; child tiers
+        and all their timing remain untouched.
+        """
+        try:
+            selected = ShiftDirection(direction)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"shift direction must be 'left' or 'right', got {direction!r}"
+            ) from error
+        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+            raise GraphValidationError("shift count must be at least 1")
+        if policy not in {None, "keep-earlier", "drop-to-provisional"}:
+            raise GraphValidationError(
+                "shift policy must be 'keep-earlier' or 'drop-to-provisional'"
+            )
+        coordinate = self._resolve_item(container)
+        member = self._member(coordinate.tier, "shift")
+        sister_position = coordinate.index + (
+            1 if selected is ShiftDirection.RIGHT else -1
+        )
+        if sister_position < 0 or sister_position >= len(member.items):
+            raise GraphValidationError(
+                f"container {str(coordinate)!r} has no {selected.value} sister; "
+                "wrap-around shift is not supported"
+            )
+        sister = ItemRef(coordinate.tier, sister_position)
+        _, instances = self._containment_instances(containment)
+        source_index = instances.get(coordinate)
+        sister_index = instances.get(sister)
+        if source_index is None:
+            raise GraphValidationError(
+                f"container {str(coordinate)!r} has no {str(containment)!r} membership"
+            )
+        if sister_index is None:
+            raise GraphValidationError(
+                f"adjacent sister {str(sister)!r} has no {str(containment)!r} membership"
+            )
+        child_count = len(self._polyadic_relations[source_index].targets)
+        if k > child_count:
+            raise GraphValidationError(
+                f"shift count {k} exceeds container child count {child_count}"
+            )
+        if k == child_count:
+            raise GraphValidationError(
+                "shift would empty the container; container merge is not supported"
+            )
+        shared = BoundaryRef(coordinate.tier, max(coordinate.index, sister.index))
+        stored_index = self._boundary_index(shared)
+        bound = self._shared_boundary_is_bound(shared)
+        if policy is None and stored_index is not None:
+            raise GraphValidationError(
+                "shift relocates a stored container boundary; name a clock policy"
+            )
+        if policy is None and bound:
+            raise GraphValidationError(
+                "shift relocates a durable boundary shared with another tier; "
+                "name a clock policy"
+            )
+        self._swap_containment_boundary(source_index, sister_index, k, selected)
+        if policy == "drop-to-provisional" and stored_index is not None:
+            del self._boundary_values[stored_index]
         return self
 
     def add_relation(

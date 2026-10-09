@@ -1921,6 +1921,54 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
         (AttributeDeclaration(note, AttributeDomain.ITEM, XsdType.STRING),),
     )
     (directory / "graph.json").write_bytes(tiergraph.dump_bytes(source_graph))
+
+    if arguments[:3] == ["edit", "shift-graph.json", "shift"]:
+        children = QualifiedName("urn:path", "children")
+        child_type = QualifiedName("urn:path", "Child")
+        shift_contains = QualifiedName("urn:path", "shift-contains")
+        shift_graph = tiergraph.Graph(
+            source_graph.namespaces,
+            (
+                source_graph.tiers[0],
+                Tier(
+                    TierDeclaration(children, "Children"),
+                    (Item("child-0"), Item("child-1"), Item("child-2")),
+                ),
+            ),
+            (
+                *source_graph.relation_declarations,
+                SimpleRelationDeclaration(
+                    QualifiedName("urn:path", "child-members"), children, child_type
+                ),
+                PolyadicRelationDeclaration(
+                    shift_contains,
+                    RelationSideDeclaration(
+                        (RelationEndpointKind.ITEM,), tiers=(tier_name,), maximum=1
+                    ),
+                    RelationSideDeclaration(
+                        (RelationEndpointKind.ITEM,), tiers=(children,)
+                    ),
+                    unique_sources=True,
+                    single_parent=True,
+                    acyclic=True,
+                ),
+            ),
+            source_graph.relations,
+            source_graph.attribute_declarations,
+            polyadic_relations=(
+                PolyadicRelationInstance(
+                    shift_contains,
+                    (ItemRef(tier_name, 0),),
+                    (ItemRef(children, 0), ItemRef(children, 1)),
+                ),
+                PolyadicRelationInstance(
+                    shift_contains,
+                    (ItemRef(tier_name, 1),),
+                    (ItemRef(children, 2),),
+                ),
+            ),
+        )
+        (directory / "shift-graph.json").write_bytes(tiergraph.dump_bytes(shift_graph))
     (directory / "new-graph.json").write_bytes(tiergraph.dump_bytes(source_graph))
     (directory / "item.json").write_text(
         json.dumps(Item("inserted").to_data()), encoding="utf-8"
@@ -2040,7 +2088,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 75
+    assert len(examples) == 76
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

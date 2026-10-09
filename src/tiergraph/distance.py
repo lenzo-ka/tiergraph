@@ -72,9 +72,12 @@ _COST_KIND_ALIASES = {
     "declare_namespace": "declare",
     "declare_relation": "declare",
     "declare_tier": "declare",
+    "move_run": "move_item",
     "promote_position": "promote_boundary",
     "relate": "add_relation",
     "seal_prefix": "seal",
+    "shift": "swap_items",
+    "swap_runs": "swap_items",
 }
 
 # These are the one-step graph changes that every lower-bound relaxation must
@@ -1261,6 +1264,7 @@ def _operation_declaration(
         "remove_item",
         "replace_item",
         "move_item",
+        "shift",
         "swap_items",
         "promote_item",
         "demote_item",
@@ -1270,6 +1274,9 @@ def _operation_declaration(
         if graph is not None and isinstance(argument, DurableItemRef):
             return graph.resolve_item(argument).tier
         return None
+    if call.method in {"move_run", "swap_runs"}:
+        tier = getattr(argument, "tier", None)
+        return tier if isinstance(tier, QualifiedName) else None
     if call.method in {"promote_boundary", "demote_boundary"}:
         if isinstance(argument, BoundaryRef):
             return argument.tier

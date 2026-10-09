@@ -884,6 +884,7 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
         "replace": "tiergraph edit graph.json replace /items/durable/alpha --item replacement-item.json -o out.json",
         "move": "tiergraph edit graph.json move /items/durable/alpha --to 1 -o out.json",
         "swap": "tiergraph edit graph.json swap /items/durable/alpha /items/durable/beta -o out.json",
+        "shift": "tiergraph edit shift-graph.json shift /items/durable/alpha --count 1 --direction right --containment urn:path shift-contains -o out.json",
         "relate": "tiergraph edit graph.json relate --instance relation.json -o out.json",
         "unrelate": "tiergraph edit graph.json unrelate relation:0 -o out.json",
         "endpoints": "tiergraph edit graph.json endpoints relation:0 --sources sources.json --targets targets.json -o out.json",
@@ -957,6 +958,32 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
     swap = operation("swap", "swap two items", clock_profile=True)
     swap.add_argument("first", metavar="TGPATH", help="first item TG-PATH")
     swap.add_argument("second", metavar="TGPATH", help="second item TG-PATH")
+
+    shift = operation(
+        "shift", "shift edge children to an adjacent sister", clock_profile=True
+    )
+    shift.add_argument("target", metavar="TGPATH", help="container item TG-PATH")
+    shift.add_argument(
+        "--count", required=True, type=int, metavar="N", help="edge child count"
+    )
+    shift.add_argument(
+        "--direction",
+        required=True,
+        choices=("left", "right"),
+        help="receiving sister",
+    )
+    shift.add_argument(
+        "--containment",
+        required=True,
+        nargs=2,
+        metavar=("NS", "LOCAL"),
+        help="ordered containment relation",
+    )
+    shift.add_argument(
+        "--policy",
+        choices=("keep-earlier", "drop-to-provisional"),
+        help="stored or shared boundary policy",
+    )
 
     relate = operation("relate", "insert one relation instance")
     relate.add_argument(
@@ -2340,13 +2367,14 @@ def _handle_edit(args: argparse.Namespace) -> None:
                 raise ValueError("--rebinding requires --clock-profile")
             editor = graph.edit() if journal is None else graph.edit(journal=journal)
         else:
-            if args.rebinding is None:
+            if args.rebinding is None and args.edit_command != "shift":
                 raise ValueError("--clock-profile requires --rebinding")
             clock_commands = {
                 "insert",
                 "delete",
                 "move",
                 "swap",
+                "shift",
                 "endpoints",
                 "replace-subtree",
             }
@@ -2506,6 +2534,14 @@ def _dispatch_edit(  # noqa: PLR0915 -- command vocabulary
         editor.move_item(_item_path(graph, args.target), args.to)
     elif command == "swap":
         editor.swap_items(_item_path(graph, args.first), _item_path(graph, args.second))
+    elif command == "shift":
+        editor.shift(
+            _item_path(graph, args.target),
+            args.count,
+            args.direction,
+            _qname(args.containment),
+            args.policy,
+        )
     elif command == "relate":
         editor.add_relation(_relation_json(args.instance), args.at)
     elif command == "unrelate":

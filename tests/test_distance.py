@@ -407,12 +407,15 @@ def many_incidence_cases() -> tuple[PrimitiveCase, ...]:
     )
 
 
+MANY_INCIDENCE_CASES = many_incidence_cases()
+
+
 # Per-example cost varies with machine load; correctness is in the assertions.
 @settings(max_examples=20, deadline=None)
 @given(costs=cost_tables())
 def test_atom_bound_dominates_many_incidence_primitives(costs: CostTable) -> None:
-    """One primitive cost dominates rewiring and arbitrarily wide payloads."""
-    for case in many_incidence_cases():
+    """One primitive cost dominates each fixed wide-payload example."""
+    for case in MANY_INCIDENCE_CASES:
         bound = _atom_multiset_lower_bound(
             case.before, case.after, costs, EquivalenceView.EXACT
         )

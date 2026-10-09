@@ -28,6 +28,7 @@ from tiergraph.core import (
     GraphValidationError,
     Item,
     ItemRef,
+    ItemRun,
     JsonAttributeValue,
     JsonType,
     JsonValue,
@@ -112,6 +113,7 @@ EDIT_OPCODE_NAMES = frozenset(
         "insert_item",
         "insert_items",
         "move_item",
+        "move_run",
         "promote_boundary",
         "promote_item",
         "promote_relation",
@@ -135,6 +137,8 @@ EDIT_OPCODE_NAMES = frozenset(
         "set_attribute",
         "set_endpoints",
         "swap_items",
+        "swap_runs",
+        "shift",
         "undeclare",
         "undeclare_with_contents",
         "unseal",
@@ -153,6 +157,7 @@ EDIT_CALL_NAMES = frozenset(
         "insert_item",
         "insert_items",
         "move_item",
+        "move_run",
         "promote_boundary",
         "promote_item",
         "promote_relation",
@@ -169,6 +174,8 @@ EDIT_CALL_NAMES = frozenset(
         "set_attribute",
         "set_endpoints",
         "swap_items",
+        "swap_runs",
+        "shift",
         "undeclare",
         "unseal",
     }
@@ -808,6 +815,15 @@ def _argument_data(value: object) -> JsonValue:
         return {"kind": "layer-fact", "value": facts[0]}
     if isinstance(value, ItemRef):
         return {"kind": "item-ref", "value": value.to_data()}
+    if isinstance(value, ItemRun):
+        return {
+            "kind": "item-run",
+            "value": {
+                "tier": value.tier.to_data(),
+                "start": value.start,
+                "count": value.count,
+            },
+        }
     if isinstance(value, DurableItemRef):
         return {"kind": "durable-item-ref", "value": value.to_data()}
     if isinstance(value, BoundaryRef):
@@ -922,6 +938,13 @@ def _decode_edit_argument(value: object, path: str) -> object:
         return _enum(GraphCarrier, item, f"{path}.value")
     if kind == "item-ref":
         return _decode_item_ref(item, f"{path}.value")
+    if kind == "item-run":
+        run = _decode_object(item, f"{path}.value", {"tier", "start", "count"})
+        return ItemRun(
+            _decode_qname(run["tier"], f"{path}.value.tier"),
+            _integer(run["start"], f"{path}.value.start"),
+            _integer(run["count"], f"{path}.value.count"),
+        )
     if kind == "durable-item-ref":
         endpoint = _decode_endpoint(item, f"{path}.value")
         if isinstance(endpoint, DurableItemRef):

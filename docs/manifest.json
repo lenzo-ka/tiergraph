@@ -64,6 +64,8 @@
     "editing": [
       "Displacement",
       "GraphEditor",
+      "HeldRun",
+      "ItemRun",
       "Journal",
       "JournalEditor",
       "JournalHorizon",
@@ -84,6 +86,7 @@
       "ReplacementPolicies",
       "Subtree",
       "SubtreeCorrespondence",
+      "ShiftDirection",
       "PathChoice",
       "PathStep",
       "apply_patch",
@@ -417,6 +420,7 @@
     ],
     "docs/guide/editing.md": [
       "python",
+      "text",
       "text",
       "python",
       "text",
