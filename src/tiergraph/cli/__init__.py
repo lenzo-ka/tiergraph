@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
@@ -13,6 +14,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO, cast
+from urllib.parse import unquote, urlsplit
 
 import tiergraph
 import tiergraph_dot
@@ -40,6 +42,14 @@ _SEMIRINGS: dict[str, semiring.Semiring[Any]] = {
     "tropical": semiring.TROPICAL,
 }
 _MATCH_MIN_ARGS = 3
+_ASCII_SPACE = 0x20
+_ASCII_DELETE = 0x7F
+_SHA256_TEXT = re.compile(r"[0-9a-f]{64}")
+_MEDIA_TYPE_TEXT = re.compile(
+    r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}/"
+    r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}"
+)
+_BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 
 _EXIT_STATUS_HELP = """Exit codes:
   0  success
@@ -96,6 +106,160 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     validate.set_defaults(handler=_handle_validate)
     validate.add_argument("file", metavar="FILE", help="graph file, or - for stdin")
+    validate.add_argument(
+        "--profile",
+        choices=("blob",),
+        help="also validate the named opt-in profile without opening payloads",
+    )
+
+    blob = _subcommand(
+        subparsers,
+        "blob",
+        summary="inspect and move external-resource payloads",
+        description="List, store, retrieve, or verify typed external resources.",
+        examples=("tiergraph blob list graph.json",),
+    )
+    blob_subparsers = blob.add_subparsers(dest="blob_command", required=True)
+    blob_list = _subcommand(
+        blob_subparsers,
+        "list",
+        summary="list declared external resources",
+        description="List blob items in declared graph order without opening payloads.",
+        examples=("tiergraph blob list graph.json --json",),
+    )
+    blob_list.set_defaults(handler=_handle_blob)
+    blob_list.add_argument("file", metavar="GRAPH|BUNDLE", help="graph or bundle file")
+    blob_list.add_argument("--json", action="store_true", help="emit structured JSON")
+
+    blob_put = _subcommand(
+        blob_subparsers,
+        "put",
+        summary="put a payload in a content-addressed directory",
+        description="Hash one payload and store it under its verified SHA-256 identity.",
+        examples=("tiergraph blob put audio.wav --store media",),
+    )
+    blob_put.set_defaults(handler=_handle_blob)
+    blob_put.add_argument("file", metavar="FILE", help="payload file")
+    blob_put.add_argument("--store", required=True, metavar="DIR", help="store root")
+    blob_put.add_argument(
+        "--media-type",
+        type=_media_type_argument,
+        metavar="TYPE",
+        help="lowercase media type to include in the descriptor report",
+    )
+
+    blob_get = _subcommand(
+        blob_subparsers,
+        "get",
+        summary="retrieve one verified payload",
+        description="Write one declared payload after verifying its size and digest.",
+        examples=(
+            "tiergraph blob get graph.tgb eb4e7e48106279b6d5823a05900c397c"
+            "60724d32288c3d0ea99de22d6cf410d7 -o payload.bin",
+        ),
+    )
+    blob_get.set_defaults(handler=_handle_blob)
+    blob_get.add_argument("file", metavar="GRAPH|BUNDLE", help="graph or bundle file")
+    blob_get.add_argument("sha256", metavar="SHA256", help="payload SHA-256 digest")
+    blob_get.add_argument(
+        "--store", metavar="DIR", help="explicit linked-payload store"
+    )
+    blob_get.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="FILE",
+        help="output payload file",
+    )
+
+    blob_verify = _subcommand(
+        blob_subparsers,
+        "verify",
+        summary="verify every required payload",
+        description="Read and verify every distinct payload in declared graph order.",
+        examples=("tiergraph blob verify graph.tgb --store media",),
+    )
+    blob_verify.set_defaults(handler=_handle_blob)
+    blob_verify.add_argument(
+        "file", metavar="GRAPH|BUNDLE", help="graph or bundle file"
+    )
+    blob_verify.add_argument(
+        "--store", metavar="DIR", help="explicit linked-payload store"
+    )
+
+    bundle = _subcommand(
+        subparsers,
+        "bundle",
+        summary="build and inspect external-resource bundles",
+        description="Build deterministic mixed-residency bundles or inspect their index.",
+        examples=("tiergraph bundle inspect graph.tgb",),
+    )
+    bundle_subparsers = bundle.add_subparsers(dest="bundle_command", required=True)
+    flatten = _subcommand(
+        bundle_subparsers,
+        "flatten",
+        summary="embed selected payloads in a bundle",
+        description="Embed all payloads, or exactly the digests named by --only.",
+        examples=("tiergraph bundle flatten graph.json --store media -o graph.tgb",),
+    )
+    flatten.set_defaults(handler=_handle_bundle)
+    flatten.add_argument("file", metavar="GRAPH|BUNDLE", help="graph or bundle file")
+    flatten.add_argument("--store", required=True, metavar="DIR", help="store root")
+    flatten.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="SHA256",
+        help="embed this digest; repeatable (default: all)",
+    )
+    flatten.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="BUNDLE",
+        help="output bundle",
+    )
+
+    unflatten = _subcommand(
+        bundle_subparsers,
+        "unflatten",
+        summary="move selected payloads to a directory store",
+        description="Externalize all embedded payloads, or those named by --only.",
+        examples=("tiergraph bundle unflatten graph.tgb --store media -o linked.tgb",),
+    )
+    unflatten.set_defaults(handler=_handle_bundle)
+    unflatten.add_argument("file", metavar="BUNDLE", help="bundle file")
+    unflatten.add_argument("--store", required=True, metavar="DIR", help="store root")
+    unflatten.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="SHA256",
+        help="externalize this digest; repeatable (default: all)",
+    )
+    unflatten.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="BUNDLE",
+        help="output bundle",
+    )
+
+    bundle_inspect = _subcommand(
+        bundle_subparsers,
+        "inspect",
+        summary="inspect a bundle index",
+        description="Report ordered asset identities and residency without opening payloads.",
+        examples=("tiergraph bundle inspect graph.tgb --json",),
+    )
+    bundle_inspect.set_defaults(handler=_handle_bundle)
+    bundle_inspect.add_argument("file", metavar="BUNDLE", help="bundle file")
+    bundle_inspect.add_argument(
+        "--json", action="store_true", help="emit structured JSON"
+    )
 
     discharge = _subcommand(
         subparsers,
@@ -1172,6 +1336,22 @@ def _positive_step_count(value: str) -> int:
     return parsed
 
 
+def _media_type_argument(value: str) -> str:
+    """Require the canonical media-type spelling accepted by the blob profile."""
+    if _MEDIA_TYPE_TEXT.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError(
+            "must be a lowercase type/subtype without parameters"
+        )
+    return value
+
+
+def _file_output_argument(value: str) -> str:
+    """Require a retractable filesystem destination for verified bytes."""
+    if value == "-":
+        raise argparse.ArgumentTypeError("must be a file path, not standard output")
+    return value
+
+
 def _work_budget(args: argparse.Namespace) -> tiergraph.WorkBudget | None:
     """Build the explicitly requested budget, leaving omission as exactly None."""
     return (
@@ -1272,8 +1452,453 @@ def _fold_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _handle_validate(args: argparse.Namespace) -> None:
     graph = tiergraph.loads(_read_bytes(args.file))
-    del graph
+    if args.profile == "blob":
+        tiergraph.BlobProfile(graph)
     _stdout_text("ok\n")
+
+
+class _DirectoryResolver:
+    """Resolve explicit relative links inside one content-addressed directory."""
+
+    def __init__(self, root: str | Path) -> None:
+        """Retain one caller-selected root without searching elsewhere."""
+        self._root = Path(root).resolve()
+
+    def open(self, ref: tiergraph.BlobRef, href: str | None) -> BinaryIO | None:
+        """Open a safe relative link, or the canonical digest path when absent."""
+        target = self._path(ref, href)
+        if not target.is_file():
+            return None
+        return target.open("rb")
+
+    def _path(self, ref: tiergraph.BlobRef, href: str | None) -> Path:
+        """Resolve one link under the root and refuse URI or traversal escapes."""
+        link = f"sha256/{ref.sha256}" if href is None else href
+        if (
+            not link
+            or any(
+                ord(character) <= _ASCII_SPACE or ord(character) >= _ASCII_DELETE
+                for character in link
+            )
+            or _BAD_PERCENT_ESCAPE.search(link) is not None
+        ):
+            raise ValueError(f"blob href {link!r} is not a safe relative path")
+        parsed = urlsplit(link)
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or parsed.path.startswith("/")
+            or "\\" in parsed.path
+        ):
+            raise ValueError(f"blob href {link!r} is not a safe relative path")
+        try:
+            parts = tuple(
+                unquote(part, errors="strict") for part in parsed.path.split("/")
+            )
+        except UnicodeError as error:
+            raise ValueError(
+                f"blob href {link!r} is not a safe relative path"
+            ) from error
+        if any(
+            part in {"", ".", ".."}
+            or "/" in part
+            or "\\" in part
+            or any(
+                ord(character) < _ASCII_SPACE or ord(character) == _ASCII_DELETE
+                for character in part
+            )
+            for part in parts
+        ):
+            raise ValueError(f"blob href {link!r} is not a safe relative path")
+        target = self._root.joinpath(*parts).resolve()
+        try:
+            target.relative_to(self._root)
+        except ValueError as error:
+            raise ValueError(f"blob href {link!r} escapes its store") from error
+        return target
+
+
+class _DirectorySink:
+    """Publish verified payloads under canonical digest paths in one directory."""
+
+    def __init__(self, root: str | Path) -> None:
+        """Retain the selected root; directories are made only by ``put``."""
+        self._root = Path(root).resolve()
+
+    def put(self, ref: tiergraph.BlobRef, source: BinaryIO) -> str:
+        """Verify and atomically publish one payload, returning its relative link."""
+        directory = self._root / "sha256"
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / ref.sha256
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{ref.sha256}.", dir=directory
+        )
+        published = False
+        try:
+            with os.fdopen(descriptor, "wb") as destination:
+                _copy_binary(source, destination)
+            with Path(temporary).open("rb") as candidate:
+                actual = tiergraph.hash_blob(candidate)
+            if actual != ref:
+                raise ValueError(
+                    f"blob identity mismatch: expected {ref.sha256} ({ref.size} bytes), "
+                    f"read {actual.sha256} ({actual.size} bytes)"
+                )
+            if target.exists():
+                with target.open("rb") as existing:
+                    stored = tiergraph.hash_blob(existing)
+                if stored != ref:
+                    raise ValueError(
+                        f"blob store path for {ref.sha256} contains different bytes"
+                    )
+            else:
+                os.replace(temporary, target)
+                published = True
+        finally:
+            if not published:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary)
+        return f"sha256/{ref.sha256}"
+
+
+class _BundleResolver:
+    """Resolve original embedded rows from a bundle and linked rows from a store."""
+
+    def __init__(self, bundle: tiergraph.Bundle, directory: _DirectoryResolver) -> None:
+        """Index the first row for each payload without changing declared order."""
+        self._bundle = bundle
+        self._directory = directory
+        self._assets: dict[tiergraph.BlobRef, tiergraph.BundleAsset] = {}
+        for asset in bundle.assets():
+            self._assets.setdefault(asset.ref, asset)
+
+    def open(self, ref: tiergraph.BlobRef, href: str | None) -> BinaryIO | None:
+        """Open the payload from its original residency."""
+        asset = self._assets[ref]
+        if asset.mode == "embedded":
+            return cast(BinaryIO, self._bundle.open_blob(ref))
+        return self._directory.open(ref, asset.href if asset.href is not None else href)
+
+
+@contextmanager
+def _blob_input(
+    filename: str,
+) -> Iterator[tuple[tiergraph.Graph, tiergraph.Bundle | None]]:
+    """Open one graph or canonical bundle while retaining its backing stream."""
+    with Path(filename).open("rb") as source:
+        signature = source.read(4)
+        source.seek(0)
+        if signature == b"PK\x03\x04":
+            with tiergraph.open_bundle(source) as bundle:
+                yield bundle.graph, bundle
+        else:
+            yield tiergraph.loads(source.read()), None
+
+
+def _copy_binary(source: BinaryIO, destination: BinaryIO) -> None:
+    """Copy one binary stream completely, requiring ordinary binary I/O."""
+    while True:
+        chunk = source.read(1 << 20)
+        if not isinstance(chunk, bytes):
+            raise TypeError("binary blob source read() must return bytes")
+        if not chunk:
+            return
+        written = destination.write(chunk)
+        if written != len(chunk):
+            raise OSError("short write while copying blob payload")
+
+
+def _blob_rows(
+    graph: tiergraph.Graph, bundle: tiergraph.Bundle | None
+) -> list[dict[str, object]]:
+    """Return ordered descriptor rows without resolving any payload."""
+    profile = tiergraph.BlobProfile(graph)
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    assets = None if bundle is None else bundle.assets()
+    rows: list[dict[str, object]] = []
+    media_name = tiergraph.QualifiedName(tiergraph.BLOB_NAMESPACE, "media-type")
+    schema_name = tiergraph.QualifiedName(tiergraph.BLOB_NAMESPACE, "schema")
+    for position, (item_ref, blob_ref) in enumerate(profile.blobs()):
+        item = tiers[item_ref.tier].items[item_ref.index]
+        values = {
+            attribute.name: attribute.lexical
+            for attribute in item.attributes
+            if isinstance(attribute, tiergraph.AttributeValue)
+        }
+        row: dict[str, object] = {
+            "id": cast(str, item.durable_id),
+            "position": position,
+            "sha256": blob_ref.sha256,
+            "size": blob_ref.size,
+            "media_type": values[media_name],
+            "schema": values.get(schema_name),
+            "mode": "linked" if assets is None else assets[position].mode,
+            "href": None if assets is None else assets[position].href,
+        }
+        rows.append(row)
+    return rows
+
+
+def _blob_rows_text(rows: list[dict[str, object]]) -> str:
+    """Render ordered descriptors as one stable tab-separated record per item."""
+    return "".join(
+        "\t".join(
+            _text_report_field(row[field])
+            for field in (
+                "position",
+                "id",
+                "sha256",
+                "size",
+                "media_type",
+                "schema",
+                "mode",
+                "href",
+            )
+        )
+        + "\n"
+        for row in rows
+    )
+
+
+def _text_report_field(value: object) -> str:
+    """Escape string controls so one value cannot create apparent records."""
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        escapes = {"\\": r"\\", "\t": r"\t", "\n": r"\n", "\r": r"\r"}
+        return "".join(
+            escapes.get(character, f"\\u{ord(character):04x}")
+            if ord(character) < _ASCII_SPACE
+            or ord(character) == _ASCII_DELETE
+            or character in "\x85\u2028\u2029"
+            else character
+            for character in value
+        )
+    return str(value)
+
+
+def _store_resolver(directory: str | None) -> _DirectoryResolver | None:
+    """Build only the explicitly requested directory resolver."""
+    return None if directory is None else _DirectoryResolver(directory)
+
+
+def _find_blob(profile: tiergraph.BlobProfile, digest: str) -> tiergraph.BlobRef:
+    """Find one required payload by digest and refuse absent or malformed input."""
+    if _SHA256_TEXT.fullmatch(digest) is None:
+        raise ValueError("blob SHA-256 must be 64 lowercase hexadecimal characters")
+    match = next((ref for ref in profile.required() if ref.sha256 == digest), None)
+    if match is None:
+        raise ValueError(f"graph does not declare blob {digest}")
+    return match
+
+
+class _MissingBlobError(ValueError):
+    """Identify an unavailable linked payload without masking content failures."""
+
+
+def _open_graph_blob(
+    bundle: tiergraph.Bundle | None,
+    resolver: _DirectoryResolver | None,
+    ref: tiergraph.BlobRef,
+) -> tiergraph.VerifiedReader:
+    """Open one bundle or plain-graph payload through explicit storage only."""
+    if bundle is not None:
+        asset = next(row for row in bundle.assets() if row.ref == ref)
+        if asset.mode == "embedded":
+            return bundle.open_blob(ref)
+        if resolver is None:
+            raise _MissingBlobError(f"linked blob {ref.sha256} requires --store")
+        source = resolver.open(ref, asset.href)
+        if source is None:
+            raise _MissingBlobError(
+                f"linked blob {ref.sha256} was not found in the store"
+            )
+        return tiergraph.VerifiedReader(source, ref)
+    if resolver is None:
+        raise _MissingBlobError(f"linked blob {ref.sha256} requires --store")
+    source = resolver.open(ref, None)
+    if source is None:
+        raise _MissingBlobError(f"linked blob {ref.sha256} was not found in the store")
+    return tiergraph.VerifiedReader(source, ref)
+
+
+def _verify_blobs(
+    profile: tiergraph.BlobProfile,
+    bundle: tiergraph.Bundle | None,
+    resolver: _DirectoryResolver | None,
+) -> None:
+    """List every missing payload, then verify available content without fallback."""
+    missing: list[str] = []
+    for ref in profile.required():
+        try:
+            reader = _open_graph_blob(bundle, resolver, ref)
+        except _MissingBlobError as error:
+            missing.append(str(error))
+        else:
+            reader.close()
+    if missing:
+        raise ValueError(
+            "missing payloads:\n" + "\n".join(f"- {item}" for item in missing)
+        )
+    for ref in profile.required():
+        with _open_graph_blob(bundle, resolver, ref) as reader:
+            _copy_binary(cast(BinaryIO, reader), cast(BinaryIO, _NullWriter()))
+            if not reader.verified:
+                raise ValueError(f"blob {ref.sha256} was not fully verified")
+
+
+def _handle_blob(args: argparse.Namespace) -> None:
+    """Run one external-resource listing, storage, retrieval, or verification."""
+    if args.blob_command == "put":
+        with Path(args.file).open("rb") as source:
+            ref = tiergraph.hash_blob(source)
+        with Path(args.file).open("rb") as source:
+            href = _DirectorySink(args.store).put(ref, source)
+        report: dict[str, object] = {
+            "sha256": ref.sha256,
+            "size": ref.size,
+            "href": href,
+        }
+        if args.media_type is not None:
+            report["media_type"] = args.media_type
+        _stdout_text(_json_text(report))
+        return
+    resolver = _store_resolver(getattr(args, "store", None))
+    with _blob_input(args.file) as (graph, bundle):
+        if args.blob_command == "list":
+            rows = _blob_rows(graph, bundle)
+            _stdout_text(
+                _json_text({"blobs": rows}) if args.json else _blob_rows_text(rows)
+            )
+            return
+        profile = tiergraph.BlobProfile(graph)
+        if args.blob_command == "get":
+            ref = _find_blob(profile, args.sha256)
+            with _open_graph_blob(bundle, resolver, ref) as reader:
+                with _output_stream(args.file, args.output) as destination:
+                    _copy_binary(cast(BinaryIO, reader), destination)
+                    if not reader.verified:
+                        raise ValueError(f"blob {ref.sha256} was not fully verified")
+            return
+        _verify_blobs(profile, bundle, resolver)
+        _stdout_text("ok\n")
+
+
+class _NullWriter:
+    """Accept binary verification reads without retaining payload bytes."""
+
+    def write(self, value: bytes) -> int:
+        """Report every byte consumed without storing it."""
+        return len(value)
+
+
+def _selected_refs(
+    profile: tiergraph.BlobProfile, requested: Sequence[str]
+) -> set[tiergraph.BlobRef]:
+    """Resolve a repeatable digest selection, with omission meaning every payload."""
+    available = {ref.sha256: ref for ref in profile.required()}
+    if not requested:
+        return set(available.values())
+    selected: set[tiergraph.BlobRef] = set()
+    for digest in requested:
+        if _SHA256_TEXT.fullmatch(digest) is None:
+            raise ValueError(
+                "bundle --only SHA-256 must be 64 lowercase hexadecimal characters"
+            )
+        if digest not in available:
+            raise ValueError(f"graph does not declare blob {digest}")
+        selected.add(available[digest])
+    return selected
+
+
+def _handle_bundle(args: argparse.Namespace) -> None:
+    """Run one deterministic bundle inspection or residency move."""
+    with _blob_input(args.file) as (graph, bundle):
+        if args.bundle_command == "inspect":
+            if bundle is None:
+                raise ValueError("bundle inspect requires a bundle input")
+            rows = _blob_rows(graph, bundle)
+            report = {"bundle_version": tiergraph.BUNDLE_VERSION, "assets": rows}
+            rendered = (
+                _json_text(report)
+                if args.json
+                else f"bundle version: {tiergraph.BUNDLE_VERSION}\n{_blob_rows_text(rows)}"
+            )
+            _stdout_text(rendered)
+            return
+        if args.bundle_command == "unflatten" and bundle is None:
+            raise ValueError("bundle unflatten requires a bundle input")
+        profile = tiergraph.BlobProfile(graph)
+        selected = _selected_refs(profile, args.only)
+        sink = _DirectorySink(args.store)
+        with _output_stream(args.file, args.output) as destination:
+            if args.bundle_command == "unflatten":
+                tiergraph.relink(
+                    cast(tiergraph.Bundle, bundle),
+                    destination,
+                    sink,
+                    which=lambda ref: ref in selected,
+                )
+            elif bundle is None:
+                tiergraph.write_bundle(
+                    graph,
+                    destination,
+                    cast(tiergraph.BlobResolver, _DirectoryResolver(args.store)),
+                    embed=lambda ref: ref in selected,
+                )
+            else:
+                _flatten_bundle(bundle, destination, args.store, selected, sink)
+
+
+def _flatten_bundle(
+    bundle: tiergraph.Bundle,
+    destination: BinaryIO,
+    store: str,
+    selected: set[tiergraph.BlobRef],
+    sink: _DirectorySink,
+) -> None:
+    """Write exactly the selected embedded set from an existing mixed bundle."""
+    _preflight_bundle_destination(destination)
+    first_assets: dict[tiergraph.BlobRef, tiergraph.BundleAsset] = {}
+    for asset in bundle.assets():
+        first_assets.setdefault(asset.ref, asset)
+    hrefs = {
+        asset.ref: asset.href
+        for asset in first_assets.values()
+        if asset.mode == "linked" and asset.href is not None
+    }
+    for ref, asset in first_assets.items():
+        if ref not in selected and asset.mode == "embedded":
+            with bundle.open_blob(ref) as reader:
+                hrefs[ref] = sink.put(ref, cast(BinaryIO, reader))
+                if not reader.verified:
+                    raise ValueError(f"blob {ref.sha256} was not fully verified")
+    resolver = _BundleResolver(bundle, _DirectoryResolver(store))
+    tiergraph.write_bundle(
+        bundle.graph,
+        destination,
+        resolver,
+        embed=lambda ref: ref in selected,
+        hrefs=hrefs,
+    )
+
+
+def _preflight_bundle_destination(destination: BinaryIO) -> None:
+    """Refuse a nonempty or nonseekable bundle output before external writes."""
+    try:
+        if not destination.writable() or not destination.seekable():
+            raise ValueError("bundle destination must be seekable and writable")
+        position = destination.tell()
+        end = destination.seek(0, os.SEEK_END)
+        destination.seek(position)
+    except (AttributeError, OSError, ValueError) as error:
+        raise ValueError(
+            "bundle destination must be a seekable binary stream"
+        ) from error
+    if position != 0 or end != 0:
+        raise ValueError("bundle destination must be empty and positioned at byte 0")
 
 
 def _discharge_seals(args: argparse.Namespace) -> object:
@@ -3043,6 +3668,8 @@ def _output_stream(input_name: str, output_name: str) -> Iterator[BinaryIO]:
         return
     output_path = Path(output_name).resolve()
     _check_distinct(input_name, output_name)
+    if output_path.is_dir():
+        raise ValueError(f"output path {output_name!r} is a directory")
     output_path.parent.mkdir(parents=False, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{output_path.name}.", dir=output_path.parent

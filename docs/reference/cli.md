@@ -6,11 +6,15 @@ The `tiergraph` command prints help when called without arguments. `--version` p
 
 ## Contracts
 
-Every command that reads an input document accepts `-` in place of that document's filename and reads it from standard input, including the inputs named by `--result`, `--profile`, and `--selector`; `step --interactive` is the one exception, below. `schema` and `semirings` read no document, and `discharge`, `path`, `grammar`, `clock`, and `span` take only a subcommand, so `-` is a command-line usage error for those and exits 2. Document-producing commands write to stdout by default or to `-o/--output`; diagnostics go only to stderr. Exit status 0 means success, 1 means invalid input or a refused operation, 2 means command-line usage error, and 3 means an I/O failure or an input the CLI could not decode. The CLI's own reports refuse a graph the writer could not write in the same way as the writer, with exit status 1.
+Every command that reads an input document accepts `-` in place of that document's filename and reads it from standard input, including the inputs named by `--result`, `--profile`, and `--selector`; `step --interactive` and the payload-oriented `blob` and `bundle` commands require files, as described below. `schema` and `semirings` read no document, and `discharge`, `path`, `grammar`, `clock`, and `span` take only a subcommand, so `-` is a command-line usage error for those and exits 2. Document-producing commands write to stdout by default or to `-o/--output`; diagnostics go only to stderr. Exit status 0 means success, 1 means invalid input or a refused operation, 2 means command-line usage error, and 3 means an I/O failure or an input the CLI could not decode. The CLI's own reports refuse a graph the writer could not write in the same way as the writer, with exit status 1.
 
 `--max-steps N` is an opt-in deterministic work guard on mutating `edit` and `patch apply` commands, `select`, `match`, `fold`, `discharge fold`, and the grammar commands that evaluate a fold (`recognize`, `count`, `best`, and `generate`). `N` is a positive integer no greater than 1,000,000,000; omission installs no budget and preserves the unbudgeted behavior. Use it when accepting untrusted pattern or predicate text. Exhaustion is a semantics-stage refusal on stderr and exits 1; a completed nonempty prefix from `match ... spans` instead succeeds with `extent` equal to `cut-at-budget`. Match request JSON accepts the same optional `max_steps` field for `exists`, `focus`, `spans`, `count`, `pairs`, and `lattice`; supplying both the field and the flag is refused rather than choosing one silently. `grammar lattice` takes no guard because it constructs and serializes topology without running a budgeted fold, path-plan evaluation, or lattice match.
 
 `validate` reports whether `loads()` accepts a document, and that is the same question `convert` settles before emitting anything. A document the encoder cannot write, such as one spelling a lone surrogate as an escape, is refused by both at the reader's encoding stage, producing exit status 1 for a refused operation. `convert` canonicalizes to indented `json`, compact `json-compact`, or `bytes`; bytes uses the canonical JSON byte API and is not another syntax.
+
+`validate --profile blob` additionally checks the fixed blob vocabulary and descriptors without resolving or opening payloads. `blob list` is the same metadata-only view in declared blob-item order. `blob put` writes to the explicit content-addressed path `DIR/sha256/SHA256`; `blob get` and `blob verify` verify size and digest while reading. The commands never search another directory or use the network. Graph and bundle operands must be files because strict bundle inspection requires a seekable source. Payload and bundle outputs also require file paths so verification can finish before publication; they do not accept `-` for standard output.
+
+`bundle flatten` embeds all required payloads by default. Repeated `--only` options instead name the exact embedded set, preserving every other asset as an explicit link. `bundle unflatten` moves all embedded payloads to the selected directory store by default, or only the named digests. Both commands retain graph bytes, declared asset order, durable IDs, and content identity. Bundle outputs and directory-store writes are published through temporary files only after verified streaming succeeds.
 
 `run` consumes a CLI-owned JSONL stream. Its first line is exactly `{"machine_version":"2"}` and each later line has one opcode's public `to_data()` shape (a repeat body remains nested on that line). Header-only programs are valid, CRLF and a final line without a newline are accepted, and whitespace-only lines are rejected. The decoder caps each line at 1 MiB and the stream at `MAX_DOCUMENT_BYTES`; public `Repeat` and `Program` enforce repeat and total expansion bounds.
 
@@ -325,14 +329,16 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
+                 {validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
                  ...
 
 Validate, query, transform, and render tiergraph documents.
 
 positional arguments:
-  {validate,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
+  {validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
     validate            validate a graph document
+    blob                inspect and move external-resource payloads
+    bundle              build and inspect external-resource bundles
     discharge           discharge a declaration against its inputs
     render              render a graph as DOT
     inspect             inspect a graph document
@@ -372,18 +378,253 @@ Exit codes:
 ### `tiergraph validate`
 
 ```text
-usage: tiergraph validate [-h] FILE
+usage: tiergraph validate [-h] [--profile {blob}] FILE
 
 Validate one graph document and print 'ok' when it is accepted.
 
 positional arguments:
-  FILE        graph file, or - for stdin
+  FILE              graph file, or - for stdin
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help        show this help message and exit
+  --profile {blob}  also validate the named opt-in profile without opening
+                    payloads
 
 Examples:
   $ tiergraph validate graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph blob`
+
+```text
+usage: tiergraph blob [-h] {list,put,get,verify} ...
+
+List, store, retrieve, or verify typed external resources.
+
+positional arguments:
+  {list,put,get,verify}
+    list                list declared external resources
+    put                 put a payload in a content-addressed directory
+    get                 retrieve one verified payload
+    verify              verify every required payload
+
+options:
+  -h, --help            show this help message and exit
+
+Examples:
+  $ tiergraph blob list graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph blob list`
+
+```text
+usage: tiergraph blob list [-h] [--json] GRAPH|BUNDLE
+
+List blob items in declared graph order without opening payloads.
+
+positional arguments:
+  GRAPH|BUNDLE  graph or bundle file
+
+options:
+  -h, --help    show this help message and exit
+  --json        emit structured JSON
+
+Examples:
+  $ tiergraph blob list graph.json --json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph blob put`
+
+```text
+usage: tiergraph blob put [-h] --store DIR [--media-type TYPE] FILE
+
+Hash one payload and store it under its verified SHA-256 identity.
+
+positional arguments:
+  FILE               payload file
+
+options:
+  -h, --help         show this help message and exit
+  --store DIR        store root
+  --media-type TYPE  lowercase media type to include in the descriptor report
+
+Examples:
+  $ tiergraph blob put audio.wav --store media
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph blob get`
+
+```text
+usage: tiergraph blob get [-h] [--store DIR] -o FILE GRAPH|BUNDLE SHA256
+
+Write one declared payload after verifying its size and digest.
+
+positional arguments:
+  GRAPH|BUNDLE          graph or bundle file
+  SHA256                payload SHA-256 digest
+
+options:
+  -h, --help            show this help message and exit
+  --store DIR           explicit linked-payload store
+  -o FILE, --output FILE
+                        output payload file
+
+Examples:
+  $ tiergraph blob get graph.tgb eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7 -o payload.bin
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph blob verify`
+
+```text
+usage: tiergraph blob verify [-h] [--store DIR] GRAPH|BUNDLE
+
+Read and verify every distinct payload in declared graph order.
+
+positional arguments:
+  GRAPH|BUNDLE  graph or bundle file
+
+options:
+  -h, --help    show this help message and exit
+  --store DIR   explicit linked-payload store
+
+Examples:
+  $ tiergraph blob verify graph.tgb --store media
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph bundle`
+
+```text
+usage: tiergraph bundle [-h] {flatten,unflatten,inspect} ...
+
+Build deterministic mixed-residency bundles or inspect their index.
+
+positional arguments:
+  {flatten,unflatten,inspect}
+    flatten             embed selected payloads in a bundle
+    unflatten           move selected payloads to a directory store
+    inspect             inspect a bundle index
+
+options:
+  -h, --help            show this help message and exit
+
+Examples:
+  $ tiergraph bundle inspect graph.tgb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph bundle flatten`
+
+```text
+usage: tiergraph bundle flatten [-h] --store DIR [--only SHA256] -o BUNDLE
+                                GRAPH|BUNDLE
+
+Embed all payloads, or exactly the digests named by --only.
+
+positional arguments:
+  GRAPH|BUNDLE          graph or bundle file
+
+options:
+  -h, --help            show this help message and exit
+  --store DIR           store root
+  --only SHA256         embed this digest; repeatable (default: all)
+  -o BUNDLE, --output BUNDLE
+                        output bundle
+
+Examples:
+  $ tiergraph bundle flatten graph.json --store media -o graph.tgb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph bundle unflatten`
+
+```text
+usage: tiergraph bundle unflatten [-h] --store DIR [--only SHA256] -o BUNDLE
+                                  BUNDLE
+
+Externalize all embedded payloads, or those named by --only.
+
+positional arguments:
+  BUNDLE                bundle file
+
+options:
+  -h, --help            show this help message and exit
+  --store DIR           store root
+  --only SHA256         externalize this digest; repeatable (default: all)
+  -o BUNDLE, --output BUNDLE
+                        output bundle
+
+Examples:
+  $ tiergraph bundle unflatten graph.tgb --store media -o linked.tgb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph bundle inspect`
+
+```text
+usage: tiergraph bundle inspect [-h] [--json] BUNDLE
+
+Report ordered asset identities and residency without opening payloads.
+
+positional arguments:
+  BUNDLE      bundle file
+
+options:
+  -h, --help  show this help message and exit
+  --json      emit structured JSON
+
+Examples:
+  $ tiergraph bundle inspect graph.tgb --json
 
 Exit codes:
   0  success

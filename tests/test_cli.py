@@ -1806,12 +1806,14 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,discharge,render,inspect,convert,schema,run,step,walk,path,"
+        "{validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,"
         "grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,"
         "program}" in capsys.readouterr().out
     )
     for command in (
         "validate",
+        "blob",
+        "bundle",
         "discharge",
         "render",
         "inspect",
@@ -1845,6 +1847,8 @@ def test_version_default_help_and_every_command_help(
     )
     assert list(action.choices) == [
         "validate",
+        "blob",
+        "bundle",
         "discharge",
         "render",
         "inspect",
@@ -1995,6 +1999,31 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
         json.dumps(span_profile_data(span_profile)), encoding="utf-8"
     )
 
+    if arguments and arguments[0] in {"blob", "bundle"}:
+        from tests.test_bundle import (  # noqa: PLC0415 -- help fixture only
+            PAYLOAD_A,
+            PAYLOAD_B,
+            REF_A,
+            REF_B,
+            graph_and_rows,
+        )
+
+        blob_graph = tiergraph.loads(graph_and_rows()[0])
+        (directory / "graph.json").write_bytes(tiergraph.dump_bytes(blob_graph))
+        (directory / "audio.wav").write_bytes(PAYLOAD_A)
+        for ref, payload in ((REF_A, PAYLOAD_A), (REF_B, PAYLOAD_B)):
+            path = directory / "media" / "sha256" / ref.sha256
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        with (directory / "graph.tgb").open("w+b") as destination:
+            tiergraph.write_bundle(
+                blob_graph,
+                destination,
+                tiergraph.MappingResolver(
+                    {REF_A.sha256: PAYLOAD_A, REF_B.sha256: PAYLOAD_B}
+                ),
+            )
+
     if arguments[:2] == ["discharge", "seals"]:
         _, source = _sealed_source(directory)
         (directory / "result.json").write_bytes(tiergraph.dump_bytes(source))
@@ -2011,7 +2040,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 66
+    assert len(examples) == 75
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
