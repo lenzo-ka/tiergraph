@@ -592,6 +592,17 @@ def _source_dependencies(
             )
         elif dependency.carrier == "polyadic_relations":
             result.append(replace(dependency, index=inverse_polyadic[dependency.index]))
+        elif dependency.carrier == "polyadic_endpoints":
+            endpoint = dependency.endpoint
+            if isinstance(endpoint, ItemRef):
+                endpoint = inverse_items[endpoint]
+            result.append(
+                replace(
+                    dependency,
+                    index=inverse_polyadic[dependency.index],
+                    endpoint=endpoint,
+                )
+            )
         elif dependency.carrier == "boundary_values" and dependency.tier is not None:
             source_boundary = inverse_boundaries[
                 BoundaryRef(dependency.tier, dependency.index)
@@ -921,6 +932,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     if old_declarations != new_declarations:
         raise GraphValidationError("old and new containment declarations differ")
     chosen = ReplacementPolicies() if policies is None else policies
+    _validate_relation_policies(graph, chosen)
     old_runs = _tier_runs(graph, old_shape.descendants)
     new_runs = _tier_runs(new.graph, new_shape.descendants)
     insertions: dict[QualifiedName, int] = {}
@@ -1049,7 +1061,9 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     for index, binary_relation in old_binary:
         if index in old_shape.binary:
             continue
-        crossing_policy = _crossing_policy(chosen, binary_relation.declaration)
+        crossing_policy = _crossing_policy(
+            chosen, binary_relation.declaration, polyadic=False
+        )
         binary_carried = _carry_binary_relation(
             graph,
             inserted_graph,
@@ -1071,7 +1085,9 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     for index, polyadic_relation in old_polyadic:
         if index in old_shape.polyadic:
             continue
-        crossing_policy = _crossing_policy(chosen, polyadic_relation.declaration)
+        crossing_policy = _crossing_policy(
+            chosen, polyadic_relation.declaration, polyadic=True
+        )
         polyadic_carried, removed_endpoints = _carry_polyadic_relation(
             graph,
             inserted_graph,
@@ -1537,13 +1553,37 @@ def _donor_relation_fact(
 
 
 def _crossing_policy(
-    policies: ReplacementPolicies, declaration: QualifiedName
+    policies: ReplacementPolicies,
+    declaration: QualifiedName,
+    *,
+    polyadic: bool,
 ) -> ReplacementAction | None:
     """Return the explicitly named fallback for an uncarryable crossing."""
     action = policies.relations.get(declaration, policies.default)
+    if action is ReplacementAction.TRIM and not polyadic:
+        raise GraphValidationError(
+            f"TRIM policy for relation {str(declaration)!r} requires a polyadic "
+            "declaration"
+        )
     return (
         action if action in {ReplacementAction.DROP, ReplacementAction.TRIM} else None
     )
+
+
+def _validate_relation_policies(graph: Graph, policies: ReplacementPolicies) -> None:
+    """Refuse TRIM unless every named relation declaration is polyadic."""
+    declarations = {
+        declaration.name: declaration for declaration in graph.relation_declarations
+    }
+    for name, action in policies.relations.items():
+        if action is not ReplacementAction.TRIM:
+            continue
+        declaration = declarations.get(name)
+        if not isinstance(declaration, PolyadicRelationDeclaration):
+            raise GraphValidationError(
+                f"TRIM policy for relation {str(name)!r} requires a polyadic "
+                "declaration"
+            )
 
 
 def _crossing_targets(
@@ -2081,7 +2121,7 @@ def _detachment_report(
     polyadic_sites = set(polyadic) | {
         dependency.index
         for dependency in ordered_dependencies
-        if dependency.carrier == "polyadic_relations"
+        if dependency.carrier in {"polyadic_relations", "polyadic_endpoints"}
     }
     fact_sites = set(facts) | {
         (dependency.layer, dependency.index)

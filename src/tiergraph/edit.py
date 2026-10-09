@@ -94,6 +94,7 @@ _GRAPH_FIELDS = (
     "layers",
 )
 _POSITIONAL_PATCH_LIMIT = 4
+_LEDGER_RECORD_LENGTH = 3
 type _ProvenanceKey = tuple[LayerSubject, QualifiedName]
 type _ProvenanceOwnershipDelta = tuple[
     frozenset[_ProvenanceKey], frozenset[_ProvenanceKey]
@@ -2121,10 +2122,12 @@ class Journal:
             self._editor._source = dropped.inverse._delta.forward(self._editor._source)
             self._history_truncated = True
 
-    def _attach_graph(self, graph: Graph) -> JournalEditor:
+    def _attach_graph(
+        self, graph: Graph, *, check_links: bool = False
+    ) -> JournalEditor:
         if self._editor is not None:
             raise GraphValidationError("journal is already attached to an editor")
-        editor = JournalEditor(graph, self)
+        editor = JournalEditor(graph, self, check_links=check_links)
         self._editor = editor
         return editor
 
@@ -2144,10 +2147,16 @@ class Journal:
 class _JournalEditorBase:
     """Share history, dry-run, protection, and provenance mechanics."""
 
-    def __init__(self, graph: Graph, journal: Journal) -> None:
+    def __init__(
+        self, graph: Graph, journal: Journal, *, check_links: bool = False
+    ) -> None:
+        if not isinstance(check_links, bool):
+            raise TypeError("check_links must be a boolean")
         self._source = graph
         self._graph = graph
         self._journal = journal
+        if check_links:
+            self._check_links = True
 
     def freeze(self) -> Graph:
         """Return the current fully validated graph."""
@@ -2322,6 +2331,8 @@ class _JournalEditorBase:
             ),
             operations if patch_operations is None else patch_operations,
         )
+        if getattr(self, "_check_links", False):
+            link_ledger(before, candidate, record)
         self._graph = candidate
         self._journal._owned_provenance = set(after_owned)
         self._journal._record(record)
@@ -3499,6 +3510,380 @@ def _displacement_between(
         frozenset(departed_boundaries),
         frozenset(set(range(len(before.relations))) - set(relations)),
         frozenset(set(range(len(before.polyadic_relations))) - set(polyadic)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _LinkSnapshot:
+    """Keep one complete link value and the carrier position that owns it."""
+
+    kind: str
+    carrier: str
+    owner: object
+    value: object
+    side: str | None = None
+    position: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _LinkLedger:
+    """Partition every source link and name links introduced by the edit."""
+
+    carried: tuple[_LinkSnapshot, ...]
+    repointed: tuple[_LinkSnapshot, ...]
+    dropped: tuple[_LinkSnapshot, ...]
+    introduced: tuple[_LinkSnapshot, ...]
+
+
+def _relation_at(
+    graph: Graph, carrier: str, index: int
+) -> RelationInstance | PolyadicRelationInstance:
+    """Return one relation from its arity-specific carrier."""
+    values = (
+        graph.polyadic_relations if carrier == "polyadic_relations" else graph.relations
+    )
+    return values[index]
+
+
+def _graph_links(graph: Graph) -> tuple[_LinkSnapshot, ...]:
+    """Flatten every graph link while retaining its complete typed content."""
+    links: list[_LinkSnapshot] = []
+
+    def _attributes(carrier: str, owner: object, values: Iterable[Attribute]) -> None:
+        kind = "boundary-value" if carrier == "boundary_values" else "attribute"
+        links.extend(_LinkSnapshot(kind, carrier, owner, value) for value in values)
+
+    _attributes("document", None, graph.attributes)
+    for tier in graph.tiers:
+        name = tier.declaration.name
+        _attributes("tiers", name, tier.attributes)
+        for index, item in enumerate(tier.items):
+            _attributes("items", ItemRef(name, index), item.attributes)
+    for declaration in graph.relation_declarations:
+        _attributes("relation_declarations", declaration.name, declaration.attributes)
+    for boundary in graph.boundary_values:
+        _attributes("boundary_values", boundary.reference, boundary.attributes)
+    for carrier, relations in (
+        ("relations", graph.relations),
+        ("polyadic_relations", graph.polyadic_relations),
+    ):
+        for index, raw_relation in enumerate(relations):
+            relation = cast(RelationInstance | PolyadicRelationInstance, raw_relation)
+            owner = (carrier, index)
+            links.append(
+                _LinkSnapshot(
+                    "relation",
+                    carrier,
+                    owner,
+                    (relation.declaration, relation.durable_id),
+                )
+            )
+            _attributes(carrier, owner, relation.attributes)
+            sides = (
+                (("left", (relation.left,)), ("right", (relation.right,)))
+                if isinstance(relation, RelationInstance)
+                else (("sources", relation.sources), ("targets", relation.targets))
+            )
+            for side, endpoints in sides:
+                links.extend(
+                    _LinkSnapshot("endpoint", carrier, owner, endpoint, side, position)
+                    for position, endpoint in enumerate(endpoints)
+                )
+    for layer in graph.layers:
+        links.extend(
+            _LinkSnapshot("fact", "layers", (layer.name, fact.subject), fact.value)
+            for fact in layer.facts
+        )
+    return tuple(links)
+
+
+def _relation_image(
+    before: Graph,
+    after: Graph,
+    carrier: str,
+    index: int,
+    displacement: Displacement,
+) -> int | None:
+    """Locate a surviving relation by identity, then by structural displacement."""
+    relation = _relation_at(before, carrier, index)
+    values = cast(
+        tuple[RelationInstance | PolyadicRelationInstance, ...],
+        (
+            after.polyadic_relations
+            if carrier == "polyadic_relations"
+            else after.relations
+        ),
+    )
+    if relation.durable_id is not None:
+        found = next(
+            (
+                position
+                for position, candidate in enumerate(values)
+                if candidate.durable_id == relation.durable_id
+            ),
+            None,
+        )
+        if found is not None:
+            return found
+    mapping = (
+        displacement.polyadic_relations
+        if carrier == "polyadic_relations"
+        else displacement.relations
+    )
+    return mapping.get(index)
+
+
+def _reference_images(
+    reference: LayerSubject | RelationEndpointRef,
+    displacement: Displacement,
+    correspondence: SubtreeCorrespondence | None,
+) -> tuple[LayerSubject | RelationEndpointRef, ...]:
+    """Return every declared image of one link endpoint or fact subject."""
+    if isinstance(reference, ItemRef):
+        item_image = displacement.items.get(reference)
+        if item_image is not None:
+            return (item_image,)
+        if correspondence is not None:
+            return correspondence.items.get(reference, ())
+        return ()
+    if isinstance(reference, BoundaryRef):
+        boundary_image = displacement.boundaries.get(reference)
+        return () if boundary_image is None else (boundary_image,)
+    if isinstance(reference, RelationInstanceRef):
+        relation_image = displacement.relations.get(reference.index)
+        return () if relation_image is None else (RelationInstanceRef(relation_image),)
+    if isinstance(reference, PolyadicInstanceRef):
+        polyadic_image = displacement.polyadic_relations.get(reference.index)
+        return () if polyadic_image is None else (PolyadicInstanceRef(polyadic_image),)
+    return (reference,)
+
+
+def _owner_images(
+    link: _LinkSnapshot,
+    before: Graph,
+    after: Graph,
+    displacement: Displacement,
+    correspondence: SubtreeCorrespondence | None,
+) -> tuple[object, ...]:
+    """Return candidate owners for one source link in the result graph."""
+    if link.carrier == "items":
+        return cast(
+            tuple[object, ...],
+            _reference_images(cast(ItemRef, link.owner), displacement, correspondence),
+        )
+    if link.carrier == "boundary_values":
+        owner = cast(BoundaryRef | DurableBoundaryRef, link.owner)
+        if isinstance(owner, DurableBoundaryRef):
+            try:
+                after.resolve_boundary(owner)
+            except ValueError:
+                return ()
+            return (owner,)
+        return cast(
+            tuple[object, ...],
+            _reference_images(owner, displacement, correspondence),
+        )
+    if link.carrier in {"relations", "polyadic_relations"}:
+        _, index = cast(tuple[str, int], link.owner)
+        image = _relation_image(before, after, link.carrier, index, displacement)
+        return () if image is None else ((link.carrier, image),)
+    if link.carrier == "layers":
+        layer, subject = cast(tuple[LayerName, LayerSubject], link.owner)
+        return tuple(
+            (layer, image)
+            for image in _reference_images(subject, displacement, correspondence)
+        )
+    return (link.owner,)
+
+
+def _value_images(
+    link: _LinkSnapshot,
+    displacement: Displacement,
+    correspondence: SubtreeCorrespondence | None,
+) -> tuple[object, ...]:
+    """Return the possible carried values for a source link."""
+    if link.kind != "endpoint":
+        return (link.value,)
+    return cast(
+        tuple[object, ...],
+        _reference_images(
+            cast(RelationEndpointRef, link.value), displacement, correspondence
+        ),
+    )
+
+
+def _reported_detachment(record: object) -> DetachmentReport | None:
+    """Return the public withdrawal snapshot carried by a result report."""
+    if isinstance(record, DetachmentReport):
+        return record
+    if (
+        isinstance(record, tuple)
+        and len(record) == _LEDGER_RECORD_LENGTH
+        and isinstance(record[0], DetachmentReport)
+    ):
+        return record[0]
+    return None
+
+
+def _detachment_has_link(
+    link: _LinkSnapshot, before: Graph, after: Graph, report: DetachmentReport
+) -> bool:
+    """Check that one dropped link has complete content in a result report."""
+    if link.carrier in {"relations", "polyadic_relations"}:
+        carrier, index = cast(tuple[str, int], link.owner)
+        relation = _relation_at(before, carrier, index)
+        snapshotted = any(
+            reference.index == index and value == relation
+            for reference, value in report.relations
+            if (carrier == "polyadic_relations")
+            == isinstance(reference, PolyadicInstanceRef)
+        )
+        if not snapshotted:
+            return False
+        if link.kind != "endpoint":
+            return True
+        endpoint_reported = any(
+            dependency.carrier == "polyadic_endpoints"
+            and dependency.index == index
+            and dependency.endpoint == link.value
+            and dependency.endpoint_side == link.side
+            and dependency.endpoint_index == link.position
+            for dependency in report.dependencies
+        )
+        relation_reported = any(
+            dependency.carrier == carrier and dependency.index == index
+            for dependency in report.dependencies
+        )
+        if endpoint_reported or relation_reported:
+            return True
+        if relation.durable_id is None:
+            return True
+        surviving = (
+            after.polyadic_relations
+            if carrier == "polyadic_relations"
+            else after.relations
+        )
+        return all(
+            candidate.durable_id != relation.durable_id for candidate in surviving
+        )
+    if link.kind == "fact":
+        layer, subject = cast(tuple[LayerName, LayerSubject], link.owner)
+        return (layer, LayerFact(subject, cast(Attribute, link.value))) in report.facts
+    if link.carrier == "boundary_values":
+        return (link.owner, link.value) in report.boundary_values
+    if link.carrier == "items":
+        owner = cast(ItemRef, link.owner)
+        item = before._tiers_by_name[owner.tier].items[owner.index]
+        return (owner, item) in report.items
+    return False  # pragma: no cover - _graph_links exhausts link carriers
+
+
+def _ledger_context(
+    before: Graph, after: Graph, record: object
+) -> tuple[Displacement, SubtreeCorrespondence | None, DetachmentReport | None]:
+    """Resolve one journal or result account into its ledger inputs."""
+    if isinstance(record, JournalRecord):
+        try:
+            restored = record.inverse._delta.reverse(after)
+        except GraphValidationError as error:
+            raise GraphValidationError(
+                "link ledger found a journal inverse that cannot restore the edit"
+            ) from error
+        if restored != before:
+            raise GraphValidationError(
+                "link ledger found a journal inverse without the complete source snapshot"
+            )
+        journal_report = record.report
+        return (
+            journal_report.displacement,
+            journal_report.correspondence,
+            journal_report.detached_content,
+        )
+    report = record if isinstance(record, EditReport) else None
+    if (
+        isinstance(record, tuple)
+        and len(record) == _LEDGER_RECORD_LENGTH
+        and isinstance(record[1], Displacement)
+        and isinstance(record[2], SubtreeCorrespondence | None)
+    ):
+        return record[1], record[2], _reported_detachment(record)
+    if report is not None:
+        return report.displacement, report.correspondence, report.detached_content
+    return _displacement_between(before, after), None, _reported_detachment(record)
+
+
+def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedger:
+    """Balance the complete before/after link diff against one edit account.
+
+    A journal record accounts through its exact inverse. A derived result report
+    accounts through complete detached-content snapshots. With no external
+    record, the returned ledger itself is the drop report used by the checked
+    plain editor.
+    """
+    if not isinstance(before, Graph) or not isinstance(after, Graph):
+        raise TypeError("link ledger requires before and after Graph values")
+    displacement, correspondence, detachment = _ledger_context(before, after, record)
+
+    source = _graph_links(before)
+    target = _graph_links(after)
+    used: set[int] = set()
+    carried: list[_LinkSnapshot] = []
+    repointed: list[_LinkSnapshot] = []
+    dropped: list[_LinkSnapshot] = []
+    for link in source:
+        owners = _owner_images(link, before, after, displacement, correspondence)
+        structural_fallback = False
+        if (
+            not owners
+            and link.carrier in {"relations", "polyadic_relations"}
+            and (
+                detachment is None
+                or not _detachment_has_link(link, before, after, detachment)
+            )
+        ):
+            owners = (link.owner,)
+            structural_fallback = True
+        values = _value_images(link, displacement, correspondence)
+        if structural_fallback and link.value not in values:
+            values = (*values, link.value)
+        match = next(
+            (
+                (index, candidate)
+                for index, candidate in enumerate(target)
+                if index not in used
+                and candidate.kind == link.kind
+                and candidate.carrier == link.carrier
+                and candidate.owner in owners
+                and candidate.value in values
+                and candidate.side == link.side
+            ),
+            None,
+        )
+        if match is None:
+            dropped.append(link)
+            if detachment is not None and not _detachment_has_link(
+                link, before, after, detachment
+            ):
+                raise GraphValidationError(
+                    f"link ledger found an unreported dropped {link.kind} link"
+                )
+            continue
+        index, candidate = match
+        used.add(index)
+        if candidate == link:
+            carried.append(link)
+        else:
+            repointed.append(link)
+
+    if len(carried) + len(repointed) + len(dropped) != len(
+        source
+    ):  # pragma: no cover - loop appends exactly once per source link
+        raise GraphValidationError("link ledger did not partition every source link")
+    return _LinkLedger(
+        tuple(carried),
+        tuple(repointed),
+        tuple(dropped),
+        tuple(link for index, link in enumerate(target) if index not in used),
     )
 
 

@@ -2330,16 +2330,18 @@ class Graph:
         return replace(self, seals=(*kept, Seal(carrier, sealed)))
 
     @overload
-    def edit(self) -> GraphEditor:
+    def edit(self, *, check_links: bool = False) -> GraphEditor:
         """Return a plain editor when no journal is attached."""
         ...
 
     @overload
-    def edit(self, journal: Journal) -> JournalEditor:
+    def edit(self, journal: Journal, *, check_links: bool = False) -> JournalEditor:
         """Return an opt-in journaled editor."""
         ...
 
-    def edit(self, journal: Journal | None = None) -> GraphEditor | JournalEditor:
+    def edit(
+        self, journal: Journal | None = None, *, check_links: bool = False
+    ) -> GraphEditor | JournalEditor:
         """Return a mutable editor holding a copy of this graph's content.
 
         The editor answers the same operations this graph answers, and answers
@@ -2351,10 +2353,16 @@ class Graph:
         an existing :class:`tiergraph.clock.ClockProfile` invalid without a
         rebinding refusal or report. Use ``ClockProfile.edit()`` when clock
         validity and the explicit rebinding policy must be preserved.
+
+        Set ``check_links=True`` to audit every successful or refused edit
+        against the complete before-and-after link ledger. The default
+        ``False`` path allocates no ledger state and performs no ledger work.
         """
+        if not isinstance(check_links, bool):
+            raise TypeError("check_links must be a boolean")
         if journal is None:
-            return GraphEditor(self)
-        return journal._attach_graph(self)
+            return GraphEditor(self, check_links=check_links)
+        return journal._attach_graph(self, check_links=check_links)
 
     def declare(self, declaration: EditDeclaration, at: int | None = None) -> Graph:
         """Return a new graph carrying one declaration at its carrier position."""
@@ -2708,8 +2716,17 @@ class GraphEditor:
     validation at freeze, which is the same validation a frozen graph runs.
     """
 
-    def __init__(self, graph: Graph) -> None:
+    def __new__(cls, graph: Graph, *, check_links: bool = False) -> GraphEditor:
+        """Select the opt-in checked carrier without changing the plain class."""
+        del graph
+        if cls is GraphEditor and check_links:
+            return object.__new__(_LinkCheckingGraphEditor)
+        return object.__new__(cls)
+
+    def __init__(self, graph: Graph, *, check_links: bool = False) -> None:
         """Copy one graph's content into carriers this editor may change."""
+        if not isinstance(check_links, bool):
+            raise TypeError("check_links must be a boolean")
         self._source = graph
         self._displacement = Displacement.stationary(graph)
         self._namespaces = list(graph.namespaces)
@@ -2725,6 +2742,9 @@ class GraphEditor:
         self._polyadic_relations = list(graph.polyadic_relations)
         self._seals = list(graph.seals)
         self._layers = list(graph.layers)
+        if check_links:
+            self._checked_graph = graph
+            self._link_check_depth = 0
 
     def freeze(self) -> Graph:
         """Return a fully validated graph without consuming this editor."""
@@ -3397,6 +3417,7 @@ class GraphEditor:
         self._layers = list(candidate.layers)
         self._advance_displacement(outcome.displacement)
         self._last_detachment = outcome.report
+        self._last_correspondence = outcome.correspondence
         return self
 
     def swap_subtrees(
@@ -3435,6 +3456,7 @@ class GraphEditor:
         self._layers = list(candidate.layers)
         self._advance_displacement(outcome.displacement)
         self._last_detachment = outcome.report
+        self._last_correspondence = outcome.correspondence
         return self
 
     def _run(self, run: ItemRun, subject: str, *, empty: bool) -> _MutableTier:
@@ -4917,6 +4939,128 @@ class GraphEditor:
             relation.durable_id,
             relation.attributes,
         )
+
+
+_LINK_CHECKED_OPERATIONS = frozenset(
+    {
+        "declare",
+        "undeclare",
+        "promote_item",
+        "promote_boundary",
+        "promote_relation",
+        "demote_item",
+        "demote_boundary",
+        "demote_relation",
+        "seal",
+        "unseal",
+        "drop_seal",
+        "add_layer",
+        "remove_layer",
+        "put_fact",
+        "remove_fact",
+        "prune_orphans",
+        "compact",
+        "set_attribute",
+        "remove_attribute",
+        "insert_item",
+        "insert_items",
+        "remove_item",
+        "remove_items",
+        "replace_item",
+        "replace_subtree",
+        "swap_subtrees",
+        "cut",
+        "insert_held",
+        "move_run",
+        "move_item",
+        "swap_runs",
+        "swap_items",
+        "shift",
+        "add_relation",
+        "remove_relation",
+        "set_endpoints",
+    }
+)
+
+
+class _LinkCheckingGraphEditor(GraphEditor):
+    """Run the complete link ledger around each opted-in edit operation."""
+
+    def _snapshot_state(self) -> dict[str, object]:
+        """Copy mutable carriers so a checked operation can be rolled back."""
+        state = self.__dict__.copy()
+        state["_tiers"] = [
+            _MutableTier(tier.declaration, list(tier.items), list(tier.attributes))
+            for tier in self._tiers
+        ]
+        for name in (
+            "_namespaces",
+            "_relation_declarations",
+            "_relations",
+            "_attribute_declarations",
+            "_boundary_values",
+            "_attributes",
+            "_polyadic_relations",
+            "_seals",
+            "_layers",
+        ):
+            state[name] = list(object.__getattribute__(self, name))
+        return state
+
+    def _restore_state(self, state: dict[str, object]) -> None:
+        """Restore the exact pre-operation carrier and held-cut state."""
+        self.__dict__.clear()
+        self.__dict__.update(state)
+
+    def __getattribute__(self, name: str) -> object:
+        value = super().__getattribute__(name)
+        if name not in _LINK_CHECKED_OPERATIONS or not callable(value):
+            return value
+        if object.__getattribute__(self, "_link_check_depth"):
+            return value
+
+        def _checked(*args: object, **kwargs: object) -> object:
+            from tiergraph.edit import link_ledger  # noqa: PLC0415
+
+            before = object.__getattribute__(self, "_checked_graph")
+            state = self._snapshot_state()
+            object.__setattr__(self, "_link_check_depth", 1)
+            try:
+                result = value(*args, **kwargs)
+                if getattr(self, "_pending_held", None) is not None:
+                    return result
+                after = GraphEditor.freeze(self)
+                record = (
+                    (
+                        self.last_detachment,
+                        self.displacement(),
+                        getattr(self, "_last_correspondence", None),
+                    )
+                    if name in {"replace_subtree", "swap_subtrees"}
+                    else None
+                )
+                link_ledger(before, after, record)
+                object.__setattr__(self, "_checked_graph", after)
+                return result
+            except BaseException:
+                self._restore_state(state)
+                raise
+            finally:
+                object.__setattr__(self, "_link_check_depth", 0)
+
+        return _checked
+
+    def freeze(self) -> Graph:
+        """Validate an unresolved cut and ledger its removal before returning."""
+        from tiergraph.edit import link_ledger  # noqa: PLC0415
+
+        result = super().freeze()
+        if object.__getattribute__(self, "_link_check_depth"):
+            return result
+        before = object.__getattribute__(self, "_checked_graph")
+        if result != before:
+            link_ledger(before, result)
+        return result
 
 
 def undeclare_with_contents(

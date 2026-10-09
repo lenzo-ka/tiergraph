@@ -143,9 +143,10 @@ class CostTable:
 
     Operation costs are global unless ``declarations`` overrides one operation
     for a qualified declaration. Names must belong to :data:`PRIMITIVE_KINDS`,
-    and inverse pairs must have equal costs. Zero is accepted for projections,
-    but an exact result is a metric only when every operation visible in its
-    equivalence view has positive cost.
+    and inverse pairs must have equal costs. Zero is accepted for callers that
+    intentionally treat some graph changes as free, but an exact result is a
+    metric only when every operation visible in its equivalence view has
+    positive cost.
 
     The two callbacks remain Python-only because a data file cannot safely name
     executable code. :meth:`from_data` therefore reads numeric operation and

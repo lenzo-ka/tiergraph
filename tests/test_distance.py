@@ -14,8 +14,9 @@ from typing import cast
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from hypothesis.strategies import DrawFn
+from hypothesis.strategies import DataObject, DrawFn
 
+from tests.generated_graphs import GENERATED_HIERARCHIES, GeneratedHierarchy
 from tests.test_edit_primitives import fixture as primitive_fixture
 from tiergraph import (
     PRIMITIVE_KINDS,
@@ -40,6 +41,7 @@ from tiergraph import (
     GraphValidationError,
     Item,
     ItemRef,
+    ItemRun,
     Journal,
     JournalEditor,
     Layer,
@@ -297,6 +299,208 @@ def cost_tables(draw: DrawFn) -> CostTable:
     return CostTable(operations)
 
 
+@st.composite
+def scoped_cost_tables(
+    draw: DrawFn, declarations: tuple[QualifiedName, ...]
+) -> CostTable:
+    """Generate complete global and declaration-specific symmetric costs."""
+    global_costs = draw(cost_tables())
+    chosen = draw(
+        st.lists(
+            st.sampled_from(declarations),
+            min_size=1,
+            max_size=len(declarations),
+            unique=True,
+        )
+    )
+    overrides: dict[QualifiedName, dict[str, int]] = {}
+    for declaration in chosen:
+        values: dict[str, int] = {}
+        for operation, inverse in _INVERSE_KINDS.items():
+            value = draw(st.integers(min_value=0, max_value=20))
+            values[operation] = value
+            values[inverse] = value
+        for operation in PRIMITIVE_KINDS - values.keys():
+            values[operation] = draw(st.integers(min_value=0, max_value=20))
+        overrides[declaration] = values
+    return CostTable(global_costs.operations, overrides)
+
+
+def generated_reorder_cases(case: GeneratedHierarchy) -> tuple[PrimitiveCase, ...]:
+    """Realize the generalized reorder primitives on one generated hierarchy."""
+    graph = case.graph
+    return (
+        edit_case(
+            graph,
+            lambda editor: editor.move_run(ItemRun(case.word, 0, 2), 2),
+        ),
+        edit_case(
+            graph,
+            lambda editor: editor.shift(
+                ItemRef(case.phrase, 0), 1, "right", case.phrase_words
+            ),
+        ),
+        edit_case(
+            graph,
+            lambda editor: editor.swap_runs(
+                ItemRun(case.word, 0, 1), ItemRun(case.word, 3, 1)
+            ),
+        ),
+        edit_case(
+            graph,
+            lambda editor: editor.swap_items(
+                ItemRef(case.word, 0), ItemRef(case.word, 3)
+            ),
+        ),
+        edit_case(
+            graph,
+            lambda editor: editor.set_endpoints(
+                PolyadicInstanceRef(len(graph.polyadic_relations) - 1),
+                (ItemRef(case.segment, 1),),
+                (ItemRef(case.segment, 6),),
+            ),
+        ),
+    )
+
+
+def generated_primitive_cases(
+    case: GeneratedHierarchy,
+) -> tuple[PrimitiveCase, ...]:
+    """Realize every costed primitive on variants of a generated hierarchy."""
+    base = case.graph
+    layer = LayerName(case.utterance.namespace, "generated-distance")
+    fact = LayerFact(
+        DurableItemRef("word-0"),
+        AttributeValue(case.label, XsdType.STRING, "observed"),
+    )
+    layered = base.add_layer(layer)
+    with_fact = layered.put_fact(layer, fact)
+    relation = RelationInstance(
+        case.attachment,
+        ItemRef(case.segment, 3),
+        ItemRef(case.blob, 0),
+    )
+    related = base.add_relation(relation)
+    extra_tier = TierDeclaration(
+        QualifiedName(case.utterance.namespace, "generated-extra"),
+        "Generated extra",
+    )
+    declared = base.declare(extra_tier)
+    inserted = base.insert_item(
+        case.segment,
+        len(base._tiers_by_name[case.segment].items),
+        Item(),
+    )
+    inserted_ref = ItemRef(case.segment, len(base._tiers_by_name[case.segment].items))
+    promoted_item, _ = inserted.promote_item(inserted_ref, "generated-distance-item")
+    promoted_boundary, boundary_id = base.promote_boundary(
+        BoundaryRef(case.segment, 4),
+        "segment-4",
+    )
+    promoted_relation, relation_id = related.promote_relation(
+        RelationInstanceRef(len(base.relations)), "generated-distance-relation"
+    )
+    sealed = base.seal(case.word, 4)
+    valued = base.set_attribute(
+        ItemRef(case.word, 0),
+        AttributeValue(case.label, XsdType.STRING, "distance"),
+    )
+    replacement = Item(
+        "word-0",
+        (AttributeValue(case.label, XsdType.STRING, "replacement"),),
+    )
+    return (
+        edit_case(base, lambda editor: editor.add_layer(layer)),
+        edit_case(layered, lambda editor: editor.remove_layer(layer)),
+        edit_case(base, lambda editor: editor.add_relation(relation)),
+        edit_case(
+            related,
+            lambda editor: editor.remove_relation(
+                RelationInstanceRef(len(base.relations))
+            ),
+        ),
+        edit_case(base, lambda editor: editor.declare(extra_tier)),
+        edit_case(declared, lambda editor: editor.undeclare(extra_tier)),
+        edit_case(
+            base,
+            lambda editor: editor.insert_item(
+                case.segment,
+                len(base._tiers_by_name[case.segment].items),
+                Item(),
+            ),
+        ),
+        edit_case(inserted, lambda editor: editor.remove_item(inserted_ref)),
+        edit_case(
+            base,
+            lambda editor: editor.promote_boundary(
+                BoundaryRef(case.segment, 4),
+                "segment-4",
+            ),
+        ),
+        edit_case(
+            promoted_boundary, lambda editor: editor.demote_boundary(boundary_id)
+        ),
+        edit_case(
+            inserted,
+            lambda editor: editor.promote_item(inserted_ref, "generated-distance-item"),
+        ),
+        edit_case(
+            promoted_item,
+            lambda editor: editor.demote_item(
+                DurableItemRef("generated-distance-item")
+            ),
+        ),
+        edit_case(
+            related,
+            lambda editor: editor.promote_relation(
+                RelationInstanceRef(len(base.relations)),
+                "generated-distance-relation",
+            ),
+        ),
+        edit_case(
+            promoted_relation, lambda editor: editor.demote_relation(relation_id)
+        ),
+        edit_case(layered, lambda editor: editor.put_fact(layer, fact)),
+        edit_case(
+            with_fact,
+            lambda editor: editor.remove_fact(layer, fact.subject, fact.value.name),
+        ),
+        edit_case(base, lambda editor: editor.seal(case.word, 4)),
+        edit_case(sealed, lambda editor: editor.drop_seal(case.word)),
+        edit_case(
+            base,
+            lambda editor: editor.set_attribute(
+                ItemRef(case.word, 0),
+                AttributeValue(case.label, XsdType.STRING, "distance"),
+            ),
+        ),
+        edit_case(
+            valued,
+            lambda editor: editor.remove_attribute(ItemRef(case.word, 0), case.label),
+        ),
+        edit_case(base, lambda editor: editor.move_item(ItemRef(case.word, 0), 3)),
+        edit_case(
+            base,
+            lambda editor: editor.replace_item(ItemRef(case.word, 0), replacement),
+        ),
+        edit_case(
+            base,
+            lambda editor: editor.set_endpoints(
+                RelationInstanceRef(2),
+                ItemRef(case.segment, 2),
+                ItemRef(case.blob, 0),
+            ),
+        ),
+        edit_case(
+            base,
+            lambda editor: editor.swap_items(
+                ItemRef(case.word, 0), ItemRef(case.word, 3)
+            ),
+        ),
+        edit_case(sealed, lambda editor: editor.unseal(case.word, 2)),
+    )
+
+
 def test_atom_bound_has_a_realized_case_for_every_primitive() -> None:
     """The local proof surface covers the complete public primitive vocabulary."""
     assert {case.kind for case in PRIMITIVE_CASES} == PRIMITIVE_KINDS
@@ -313,6 +517,111 @@ def test_atom_bound_is_dominated_by_every_primitive(
         case.before, case.after, costs, EquivalenceView.EXACT
     )
     assert bound <= costs.operation(case.kind, case.declaration)
+
+
+@settings(max_examples=20, deadline=None)
+@given(case=GENERATED_HIERARCHIES, data=st.data())
+def test_generated_graphs_prove_primitive_and_path_atom_bounds(
+    case: GeneratedHierarchy, data: DataObject
+) -> None:
+    """Generated shapes, scoped costs, and paths preserve both FR4 bounds."""
+    declarations = tuple(
+        {
+            *(tier.declaration.name for tier in case.graph.tiers),
+            *(item.name for item in case.graph.relation_declarations),
+            *(item.name for item in case.graph.attribute_declarations),
+        }
+    )
+    costs = data.draw(scoped_cost_tables(declarations), label="costs")
+    primitives = generated_primitive_cases(case)
+    assert {primitive.kind for primitive in primitives} == PRIMITIVE_KINDS
+    for primitive in (*primitives, *generated_reorder_cases(case)):
+        bound = _atom_multiset_lower_bound(
+            primitive.before, primitive.after, costs, EquivalenceView.EXACT
+        )
+        assert bound <= costs.operation(primitive.kind, primitive.declaration)
+
+    operations: tuple[Callable[[JournalEditor], object], ...] = (
+        lambda editor: editor.move_run(ItemRun(case.word, 0, 1), 3),
+        lambda editor: editor.shift(
+            ItemRef(case.phrase, 0), 1, "right", case.phrase_words
+        ),
+        lambda editor: editor.swap_runs(
+            ItemRun(case.word, 0, 1), ItemRun(case.word, 3, 1)
+        ),
+        lambda editor: editor.set_attribute(
+            ItemRef(case.segment, 2),
+            AttributeValue(case.label, XsdType.STRING, "path"),
+        ),
+    )
+    selected = data.draw(
+        st.lists(
+            st.integers(min_value=0, max_value=len(operations) - 1),
+            min_size=1,
+            max_size=len(operations),
+            unique=True,
+        ),
+        label="path",
+    )
+    journal = Journal()
+    editor = case.graph.edit(journal=journal)
+    for index in selected:
+        operations[index](editor)
+    target = editor.freeze()
+    patch = journal.to_patch()
+    assert _atom_multiset_lower_bound(
+        case.graph, target, costs, EquivalenceView.EXACT
+    ) <= price_patch(patch, costs, case.graph)
+
+    word_tier = case.graph._tiers_by_name[case.word]
+    membership = next(
+        declaration
+        for declaration in case.graph.relation_declarations
+        if isinstance(declaration, SimpleRelationDeclaration)
+        and declaration.tier == case.word
+    )
+    ordered = Graph(
+        case.graph.namespaces,
+        (word_tier,),
+        (membership,),
+        attribute_declarations=(
+            next(
+                declaration
+                for declaration in case.graph.attribute_declarations
+                if declaration.name == case.label
+            ),
+        ),
+    )
+    ordered_target = (
+        ordered.edit()
+        .replace_item(
+            ItemRef(case.word, 0),
+            Item(
+                "word-0",
+                (AttributeValue(case.label, XsdType.STRING, "ordered"),),
+            ),
+        )
+        .insert_item(case.word, 1, Item("ordered-extra"))
+        .freeze()
+    )
+    operations_costs = dict(costs.operations)
+    insertion = costs.operation("insert_item", case.word)
+    deletion = costs.operation("remove_item", case.word)
+    declaration_costs = {
+        name: dict(values) for name, values in costs.declarations.items()
+    }
+    word_costs = declaration_costs.setdefault(case.word, {})
+    word_costs["move_item"] = insertion + deletion
+    word_costs["swap_items"] = insertion + deletion
+    exact_costs = CostTable(operations_costs, declaration_costs)
+    exact = distance(ordered, ordered_target, exact_costs, view=EquivalenceView.EXACT)
+    assert exact.exact
+    assert (
+        _atom_multiset_lower_bound(
+            ordered, ordered_target, exact_costs, EquivalenceView.EXACT
+        )
+        <= exact.lower
+    )
 
 
 def many_incidence_cases() -> tuple[PrimitiveCase, ...]:

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an opt-in per-edit link ledger that verifies carried, re-pointed, and
+  reported links for plain and journaled graph editors.
 - Added held item-run moves, unequal run swaps, and identity-preserving shifts
   of edge children across adjacent ordered-containment sisters, with journal,
   patch, diff, clock-policy, cost, and command-line support.
