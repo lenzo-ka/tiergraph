@@ -154,13 +154,14 @@ A clock profile requires all nine fields below. The clock tier, binding relation
 
 ### Editing operands and replacement policies
 
-Item, attribute, relation-instance, declaration, and layer-fact files use the corresponding public `to_data()` object shape. Every operand is bounded strict JSON. A replacement-policy object may contain only the fields shown below. `default` and each `action` are `abandon`, `follow`, or `split`; `correspond` enables local equal-content alignment; explicit `correspondence` entries map one old item reference to an ordered array of new item references. Relation, layer, and insertion-point arrays override the default for their named carriers. Omitted fields use the library's abandonment defaults.
+Item, attribute, relation-instance, declaration, and layer-fact files use the corresponding public `to_data()` object shape. Every operand is bounded strict JSON. A replacement-policy object may contain only the fields shown below. `default` and each `action` may be `abandon`, `follow`, `split`, `drop`, or `trim`; `drop` and the polyadic-only `trim` are fallbacks for crossing relations that cannot carry. `correspond` enables local equal-content alignment. Explicit `correspondence` entries map one old item reference to an ordered array of new item references; optional `identity_correspondence` is either `true` for that same alignment or the exact aligned array. Relation, layer, and insertion-point arrays override the default for their named carriers. Omitted fields use the library's abandonment defaults, while an uncarryable crossing relation refuses unless `drop` or `trim` was named.
 
 ```json
 {
   "correspond": true,
   "correspondence": [
     {
+      "identity_correspondence": true,
       "new": [
         {
           "index": 0,

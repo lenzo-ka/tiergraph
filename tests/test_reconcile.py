@@ -452,6 +452,33 @@ def test_commit_path_removes_departing_positional_boundary_content() -> None:
     ) in edit_result.report.facts
 
 
+def test_commit_path_reports_a_departing_fact_despite_shifted_equal_content() -> None:
+    """A survivor shifting onto the same fact coordinate cannot hide a loss."""
+    graph = path_graph()
+    value = AttributeValue(ITEM_NOTE, XsdType.STRING, "same-position-value")
+    graph = replace(
+        graph,
+        layers=(
+            replace(
+                graph.layers[0],
+                facts=(
+                    *graph.layers[0].facts,
+                    LayerFact(ItemRef(NODES, 2), value),
+                    LayerFact(ItemRef(NODES, 3), value),
+                ),
+            ),
+        ),
+    )
+
+    direct = commit_path(path_plan(graph), ("s", "a", "f"))
+
+    assert LayerFact(ItemRef(NODES, 2), value) in direct.graph.layers[0].facts
+    assert (PROVENANCE, LayerFact(ItemRef(NODES, 2), value)) in direct.report.facts
+    journal = Journal()
+    journaled = commit_path(path_plan(graph), ("s", "a", "f"), journal=journal)
+    assert journaled.report == direct.report
+
+
 @pytest.mark.parametrize(
     "path, message",
     (

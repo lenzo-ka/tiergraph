@@ -92,14 +92,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added guarded containment-subtree replacement with abandon-by-default and
   opt-in per-tier correspondence. Replacements preserve the root, copy the new
   subtree's items, internal relations, boundary values, and layer facts, and
-  either carry or report every dependency on departing descendants. Journal
-  edits undo and redo replacements exactly and expose detached dependencies in
-  their reports. Subtree swaps compose replacements and refuse nested roots.
+  carry binary and ordered-polyadic crossing relations through correspondence.
+  Missing or ambiguous crossing endpoints refuse unless `drop` or polyadic
+  `trim` is named; reports snapshot only dropped relations, endpoints, attached
+  facts, and donor-side crossings. Journal edits undo and redo replacements
+  exactly, record functional versus identity correspondence, and expose
+  detached dependencies in their reports. Subtree swaps compose replacements,
+  report lost boundary values, and refuse nested roots.
   Boundary-subject facts follow the same exact one-to-one correspondence as
   boundary values and retain the existing refusal reports for ambiguous maps.
   Clock-aware replacement requires a named rebinding policy, creates
   provisional bindings for unmatched boundaries, and carries unambiguous
   corresponding timings under `keep-earlier`.
+- Completed path-commit loss reports for positional facts whose equal content
+  shifts into the departing coordinate.
 - Added atomic `apply_selected()` bulk editing for selectors, materialized node
   sets, and exhaustive match spans. Selections are evaluated once, overlapping
   spans are deduplicated, every target follows preceding displacement, and one
@@ -170,6 +176,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reported binary donor relations that cross a supplied replacement subtree
   edge as `donor_relations` dependencies instead of silently omitting them.
   Such relations remain uncopied when no external endpoint mapping exists.
+- Separated donor relation and fact snapshots from source-graph snapshots so
+  colliding coordinates remain unambiguous in detachment reports.
+- Made carried polyadic crossings refuse with the relation and endpoint when
+  flattening or trimming would violate local declaration invariants.
+- Kept automatic and caller-declared functional correspondence from being
+  reported as retained identity merely because a crossing relation carries.
+- Removed superseded private replacement helpers and their unreachable tests.
 - Refused CLI annotations on direct edits and patch application when no patch,
   report, or dry-run output can carry them.
 - Removed false open-stream pending watermarks for start-anchored patterns in

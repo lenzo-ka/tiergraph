@@ -73,6 +73,7 @@ from tiergraph.replacement import (
     DetachmentReport,
     ReplacementPolicies,
     Subtree,
+    SubtreeCorrespondence,
     _replace_subtree,
     _swap_subtrees,
 )
@@ -518,6 +519,7 @@ class EditReport:
     detached_dependencies: tuple[DetachedDependency, ...] = ()
     pruned_orphans: tuple[PrunedFact, ...] = ()
     detached_content: DetachmentReport | None = None
+    correspondence: SubtreeCorrespondence | None = None
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return this report in deterministic JSON-compatible form."""
@@ -545,6 +547,8 @@ class EditReport:
         }
         if self.detached_content is not None:
             data["detached_content"] = self.detached_content.to_data()
+        if self.correspondence is not None:
+            data["correspondence"] = self.correspondence.to_data()
         return data
 
 
@@ -644,6 +648,7 @@ class _ReportRecipe:
     detached_dependencies: tuple[DetachedDependency, ...]
     detached_content: DetachmentReport | None
     pruned_orphans: tuple[PrunedFact, ...]
+    correspondence: SubtreeCorrespondence | None
 
     @classmethod
     def create(
@@ -656,6 +661,7 @@ class _ReportRecipe:
         detached_dependencies: tuple[DetachedDependency, ...] = (),
         detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
+        correspondence: SubtreeCorrespondence | None = None,
     ) -> _ReportRecipe:
         """Capture eagerly derived touches without retaining expanded tuples."""
         return cls(
@@ -676,6 +682,7 @@ class _ReportRecipe:
             detached_dependencies,
             detached_content,
             pruned_orphans,
+            correspondence,
         )
 
     def build(self) -> EditReport:
@@ -692,6 +699,7 @@ class _ReportRecipe:
             self.detached_dependencies,
             pruned_orphans=self.pruned_orphans,
             detached_content=self.detached_content,
+            correspondence=self.correspondence,
         )
 
     @classmethod
@@ -709,6 +717,7 @@ class _ReportRecipe:
             report.detached_dependencies,
             report.detached_content,
             report.pruned_orphans,
+            report.correspondence,
         )
 
 
@@ -2235,6 +2244,7 @@ class _JournalEditorBase:
         detached_dependencies: tuple[DetachedDependency, ...] = (),
         detached_content: DetachmentReport | None = None,
         pruned_orphans: tuple[PrunedFact, ...] = (),
+        correspondence: SubtreeCorrespondence | None = None,
     ) -> None:
         before = self._graph
         acted_subjects = tuple(provenance_subjects)
@@ -2286,6 +2296,7 @@ class _JournalEditorBase:
             detached_dependencies,
             detached_content,
             pruned_orphans,
+            correspondence,
         )
         inverse = EditInverse._create(
             _inverse_name(operation),
@@ -3019,6 +3030,7 @@ class JournalEditor(_JournalEditorBase):
             ),
             detached_dependencies=outcome.detached,
             detached_content=outcome.report,
+            correspondence=outcome.correspondence,
         )
         return self
 
@@ -3055,6 +3067,7 @@ class JournalEditor(_JournalEditorBase):
             ),
             detached_dependencies=outcome.detached,
             detached_content=outcome.report,
+            correspondence=outcome.correspondence,
         )
         return self
 

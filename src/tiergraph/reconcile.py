@@ -342,7 +342,11 @@ def _detached_fact_sites(
         for index, fact in enumerate(layer.facts):
             if isinstance(fact.subject, OrphanedSubject):
                 continue
-            if fact in result_facts:
+            positional = isinstance(
+                fact.subject,
+                ItemRef | BoundaryRef | RelationInstanceRef | PolyadicInstanceRef,
+            )
+            if not positional and fact in result_facts:
                 continue
             subject = _resolve_layer_subject(graph, fact.subject)
             image: object | None

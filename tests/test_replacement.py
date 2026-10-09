@@ -79,6 +79,23 @@ def tts_replacement_profile() -> ReplacementPolicies:
     return ReplacementPolicies.corresponding()
 
 
+def drop_crossings(
+    case: Case, policies: ReplacementPolicies | None = None
+) -> ReplacementPolicies:
+    """Name DROP for fixture crossings irrelevant to the test at hand."""
+    chosen = (
+        ReplacementPolicies(ReplacementAction.DROP) if policies is None else policies
+    )
+    return replace(
+        chosen,
+        relations={
+            **chosen.relations,
+            case.link: ReplacementAction.DROP,
+            case.group: ReplacementAction.DROP,
+        },
+    )
+
+
 def fixture(domain: str) -> Case:
     """Build parallel speech, text, or music containment with cross-links."""
     namespace = f"urn:tiergraph:replacement:{domain}"
@@ -102,7 +119,12 @@ def fixture(domain: str) -> Case:
     side = RelationSideDeclaration(
         (RelationEndpointKind.ITEM,), (middle,), maximum=None
     )
-    declarations = (
+    declarations: tuple[
+        SimpleRelationDeclaration
+        | BipartiteRelationDeclaration
+        | PolyadicRelationDeclaration,
+        ...,
+    ] = (
         SimpleRelationDeclaration(root_members, root, root_type),
         SimpleRelationDeclaration(middle_members, middle, middle_type),
         SimpleRelationDeclaration(leaf_members, leaf, leaf_type),
@@ -213,7 +235,11 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     case = fixture(domain)
     source = Subtree(case.alternative, ItemRef(case.root, 0))
     edit_result = replace_subtree(
-        case.graph, DurableItemRef("root"), case.containment, source
+        case.graph,
+        DurableItemRef("root"),
+        case.containment,
+        source,
+        drop_crossings(case),
     )
     expected = edit_result.graph
     assert tuple(item.durable_id for _, item in edit_result.report.items) == (
@@ -266,7 +292,9 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
 
     journal = Journal(reason="replace")
     editor = case.graph.edit(journal=journal)
-    editor.replace_subtree(DurableItemRef("root"), case.containment, source)
+    editor.replace_subtree(
+        DurableItemRef("root"), case.containment, source, drop_crossings(case)
+    )
     assert editor.freeze() == expected
     report = journal.records[0].report
     assert report.detached_content == edit_result.report
@@ -280,7 +308,7 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     plain_editor = case.graph.edit()
     assert plain_editor.last_detachment is None
     returned_editor = plain_editor.replace_subtree(
-        DurableItemRef("root"), case.containment, source
+        DurableItemRef("root"), case.containment, source, drop_crossings(case)
     )
     assert returned_editor is plain_editor
     assert plain_editor.freeze() == expected
@@ -291,14 +319,17 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     assert editor.freeze() == expected
 
 
-def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
-    """A donor Token-to-Word link is visible even without an anchor map."""
+def test_donor_crossings_and_their_facts_are_snapshotted() -> None:
+    """Rejected donor relations and provenance are complete report content."""
     case = fixture("speech")
     namespace = case.root.namespace
     token = QualifiedName(namespace, "token")
     token_members = QualifiedName(namespace, "tokens")
     token_type = QualifiedName(namespace, "Token")
     token_to_word = QualifiedName(namespace, "token-to-word")
+    token_words = QualifiedName(namespace, "token-words")
+    relation_note = QualifiedName(namespace, "donor-relation-note")
+    donor_layer = LayerName(namespace, "donor-source")
     word_type = next(
         declaration.item_type
         for declaration in case.alternative.relation_declarations
@@ -312,6 +343,17 @@ def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
         ItemRef(case.root, 0),
         "donor-token-to-word",
     )
+    donor_group_index = len(case.alternative.polyadic_relations)
+    donor_group = PolyadicRelationInstance(
+        token_words,
+        (ItemRef(token, 0),),
+        (ItemRef(case.root, 0),),
+        "donor-token-words",
+    )
+    donor_fact = LayerFact(
+        DurableRelationRef("donor-token-to-word"),
+        AttributeValue(relation_note, XsdType.STRING, "source-offset:4"),
+    )
     donor = replace(
         case.alternative,
         tiers=(
@@ -322,8 +364,25 @@ def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
             *case.alternative.relation_declarations,
             SimpleRelationDeclaration(token_members, token, token_type),
             BipartiteRelationDeclaration(token_to_word, token_type, word_type),
+            PolyadicRelationDeclaration(
+                token_words,
+                RelationSideDeclaration(
+                    (RelationEndpointKind.ITEM,), (token,), maximum=None
+                ),
+                RelationSideDeclaration(
+                    (RelationEndpointKind.ITEM,), (case.root,), maximum=None
+                ),
+            ),
         ),
         relations=(*case.alternative.relations, donor_link),
+        attribute_declarations=(
+            *case.alternative.attribute_declarations,
+            AttributeDeclaration(
+                relation_note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        polyadic_relations=(*case.alternative.polyadic_relations, donor_group),
+        layers=(Layer(donor_layer, (donor_fact,)),),
     )
     source = Subtree(donor, ItemRef(case.root, 0))
     dependency = DetachedDependency(
@@ -331,14 +390,55 @@ def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
     )
 
     result = replace_subtree(
-        case.graph, DurableItemRef("root"), case.containment, source
+        case.graph,
+        DurableItemRef("root"),
+        case.containment,
+        source,
+        drop_crossings(case),
     )
 
     assert dependency in result.report.dependencies
     result_dependencies = result.report.to_data()["dependencies"]
     assert isinstance(result_dependencies, list)
     assert dependency.to_data() in result_dependencies
-    assert all(relation != donor_link for _, relation in result.report.relations)
+    assert result.report.donor_relations == (
+        (RelationInstanceRef(donor_link_index), donor_link),
+        (PolyadicInstanceRef(donor_group_index), donor_group),
+    )
+    assert any(
+        reference == RelationInstanceRef(donor_link_index)
+        for reference, _ in result.report.relations
+    )
+    assert result.report.donor_facts == ((donor_layer, donor_fact),)
+    assert donor_link not in tuple(relation for _, relation in result.report.relations)
+    report_data = result.report.to_data()
+    assert report_data["donor_relations"] == [
+        {
+            "carrier": "relations",
+            "index": donor_link_index,
+            "instance": donor_link.to_data(),
+        },
+        {
+            "carrier": "polyadic_relations",
+            "index": donor_group_index,
+            "instance": donor_group.to_data(),
+        },
+    ]
+    assert (
+        DetachedDependency(
+            "donor_relations", donor_group_index, declaration=token_words
+        )
+        in result.report.dependencies
+    )
+    assert (
+        DetachedDependency(
+            "donor_layer",
+            0,
+            layer=donor_layer,
+            subject=DurableRelationRef("donor-token-to-word"),
+        )
+        in result.report.dependencies
+    )
     assert all(
         relation.durable_id != donor_link.durable_id
         for relation in result.graph.relations
@@ -346,7 +446,7 @@ def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
 
     journal = Journal()
     case.graph.edit(journal=journal).replace_subtree(
-        DurableItemRef("root"), case.containment, source
+        DurableItemRef("root"), case.containment, source, drop_crossings(case)
     )
     assert dependency in journal.records[0].report.detached_dependencies
     journal_dependencies = journal.records[0].report.to_data()["detached_dependencies"]
@@ -402,6 +502,357 @@ def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> 
     )
 
 
+def test_nested_phrase_crossing_carries_refuses_drops_and_trims() -> None:
+    """A phrase link follows a deep ordered replacement under every K3 outcome."""
+    namespace = "urn:tiergraph:replacement:hierarchy"
+
+    def name(local: str) -> QualifiedName:
+        return QualifiedName(namespace, local)
+
+    utterance, phrase, word, syllable, segment = (
+        name("utterance"),
+        name("phrase"),
+        name("word"),
+        name("syllable"),
+        name("segment"),
+    )
+    tiers = (utterance, phrase, word, syllable, segment)
+    types = tuple(name(f"{tier.local_name}-type") for tier in tiers)
+    memberships = tuple(name(f"{tier.local_name}-members") for tier in tiers)
+    containments = tuple(
+        name(local)
+        for local in (
+            "utterance-phrases",
+            "phrase-words",
+            "word-syllables",
+            "syllable-segments",
+        )
+    )
+    span = name("phrase-span")
+    relation_note = name("relation-note")
+
+    def source_side(tier: QualifiedName) -> RelationSideDeclaration:
+        return RelationSideDeclaration((RelationEndpointKind.ITEM,), (tier,), maximum=1)
+
+    def target_side(tier: QualifiedName) -> RelationSideDeclaration:
+        return RelationSideDeclaration(
+            (RelationEndpointKind.ITEM,), (tier,), maximum=None
+        )
+
+    declarations: tuple[
+        SimpleRelationDeclaration | PolyadicRelationDeclaration, ...
+    ] = (
+        *(
+            SimpleRelationDeclaration(member, tier, item_type)
+            for member, tier, item_type in zip(memberships, tiers, types, strict=True)
+        ),
+        *(
+            PolyadicRelationDeclaration(
+                relation,
+                source_side(parent),
+                target_side(child),
+                unique_sources=True,
+                distinct_targets=True,
+                single_parent=True,
+                acyclic=True,
+            )
+            for relation, parent, child in zip(
+                containments, tiers[:-1], tiers[1:], strict=True
+            )
+        ),
+        PolyadicRelationDeclaration(
+            span,
+            source_side(phrase),
+            target_side(word),
+            distinct_targets=True,
+        ),
+    )
+    old_relations = (
+        PolyadicRelationInstance(
+            containments[0],
+            (ItemRef(utterance, 0),),
+            (ItemRef(phrase, 0), ItemRef(phrase, 1)),
+        ),
+        PolyadicRelationInstance(
+            containments[1], (ItemRef(phrase, 0),), (ItemRef(word, 0), ItemRef(word, 1))
+        ),
+        PolyadicRelationInstance(
+            containments[1], (ItemRef(phrase, 1),), (ItemRef(word, 2),)
+        ),
+        *(
+            PolyadicRelationInstance(
+                containments[2], (ItemRef(word, index),), (ItemRef(syllable, index),)
+            )
+            for index in range(3)
+        ),
+        *(
+            PolyadicRelationInstance(
+                containments[3],
+                (ItemRef(syllable, index),),
+                (ItemRef(segment, index),),
+            )
+            for index in range(3)
+        ),
+        PolyadicRelationInstance(
+            span,
+            (ItemRef(phrase, 0),),
+            (ItemRef(word, 0), ItemRef(word, 1)),
+            "phrase-span",
+        ),
+    )
+    span_fact = LayerFact(
+        DurablePolyadicRef("phrase-span"),
+        AttributeValue(relation_note, XsdType.STRING, "hand-corrected"),
+    )
+    layer = LayerName(namespace, "source")
+    graph = Graph(
+        (NamespaceDeclaration("h", namespace),),
+        (
+            Tier(TierDeclaration(utterance, "Utterances"), (Item("u"),)),
+            Tier(TierDeclaration(phrase, "Phrases"), (Item("p0"), Item("p1"))),
+            Tier(
+                TierDeclaration(word, "Words"),
+                (Item("w0"), Item("w1"), Item("w2")),
+            ),
+            Tier(
+                TierDeclaration(syllable, "Syllables"),
+                (Item("s0"), Item("s1"), Item("s2")),
+            ),
+            Tier(
+                TierDeclaration(segment, "Segments"),
+                (Item("g0"), Item("g1"), Item("g2")),
+            ),
+        ),
+        declarations,
+        attribute_declarations=(
+            AttributeDeclaration(
+                relation_note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        polyadic_relations=old_relations,
+        layers=(Layer(layer, (span_fact,)),),
+    )
+    source = Graph(
+        graph.namespaces,
+        (
+            Tier(TierDeclaration(utterance, "Utterances"), ()),
+            Tier(TierDeclaration(phrase, "Phrases"), (Item("new-p0"),)),
+            Tier(
+                TierDeclaration(word, "Words"),
+                (Item("nw0"), Item("nw1"), Item("nw2")),
+            ),
+            Tier(
+                TierDeclaration(syllable, "Syllables"),
+                (Item("ns0"), Item("ns1"), Item("ns2")),
+            ),
+            Tier(
+                TierDeclaration(segment, "Segments"),
+                (Item("ng0"), Item("ng1"), Item("ng2")),
+            ),
+        ),
+        declarations,
+        attribute_declarations=graph.attribute_declarations,
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                containments[1],
+                (ItemRef(phrase, 0),),
+                (ItemRef(word, 0), ItemRef(word, 1), ItemRef(word, 2)),
+            ),
+            *(
+                PolyadicRelationInstance(
+                    containments[2],
+                    (ItemRef(word, index),),
+                    (ItemRef(syllable, index),),
+                )
+                for index in range(3)
+            ),
+            *(
+                PolyadicRelationInstance(
+                    containments[3],
+                    (ItemRef(syllable, index),),
+                    (ItemRef(segment, index),),
+                )
+                for index in range(3)
+            ),
+        ),
+    )
+    for old_root, new_root in (
+        (DurableItemRef("w0"), ItemRef(word, 0)),
+        (DurableItemRef("s0"), ItemRef(syllable, 0)),
+    ):
+        deep = replace_subtree(
+            graph,
+            old_root,
+            containments,
+            Subtree(source, new_root),
+        ).graph
+        assert all(
+            any(
+                relation.declaration == declaration
+                for relation in deep.polyadic_relations
+            )
+            for declaration in containments
+        )
+        assert next(
+            relation
+            for relation in deep.polyadic_relations
+            if relation.declaration == containments[0]
+        ).targets == (ItemRef(phrase, 0), ItemRef(phrase, 1))
+
+    alignment = SubtreeCorrespondence(
+        {
+            ItemRef(word, 0): (ItemRef(word, 0), ItemRef(word, 1)),
+            ItemRef(word, 1): (ItemRef(word, 2),),
+        }
+    )
+    subtree = Subtree(source, ItemRef(phrase, 0))
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.replace_subtree(
+        DurableItemRef("p0"),
+        containments,
+        subtree,
+        ReplacementPolicies(correspondence=alignment),
+    )
+    carried = editor.freeze()
+    carried_span = next(
+        relation
+        for relation in carried.polyadic_relations
+        if relation.declaration == span
+    )
+    assert carried_span.targets == (
+        ItemRef(word, 0),
+        ItemRef(word, 1),
+        ItemRef(word, 2),
+    )
+    assert span_fact in carried.layers[0].facts
+    assert all(
+        any(
+            relation.declaration == declaration
+            for relation in carried.polyadic_relations
+        )
+        for declaration in containments
+    )
+    recorded = journal.records[0].report.correspondence
+    assert recorded is not None
+    assert not recorded.identity_correspondence
+    assert "identity_correspondence" not in str(journal.records[0].to_data())
+    editor.undo()
+    assert editor.freeze() == graph
+
+    functional_graph = replace(graph, polyadic_relations=old_relations[:-1], layers=())
+    functional_journal = Journal()
+    functional_graph.edit(journal=functional_journal).replace_subtree(
+        DurableItemRef("p0"),
+        containments,
+        subtree,
+        ReplacementPolicies(correspondence=alignment),
+    )
+    functional = functional_journal.records[0].report.correspondence
+    assert functional is not None
+    assert not functional.identity_correspondence
+
+    partial = SubtreeCorrespondence(
+        {ItemRef(word, 0): (ItemRef(word, 0), ItemRef(word, 1))}
+    )
+    with pytest.raises(
+        GraphValidationError, match=r"phrase-span.*word\[1\].*DROP.*TRIM"
+    ):
+        replace_subtree(
+            graph,
+            DurableItemRef("p0"),
+            containments,
+            subtree,
+            ReplacementPolicies(correspondence=partial),
+        )
+
+    merged = SubtreeCorrespondence(
+        {
+            ItemRef(word, 0): (ItemRef(word, 0),),
+            ItemRef(word, 1): (ItemRef(word, 0),),
+        }
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"phrase-span.*word\[0\].*duplicate declared-distinct targets.*DROP",
+    ):
+        replace_subtree(
+            graph,
+            DurableItemRef("p0"),
+            containments,
+            subtree,
+            ReplacementPolicies(correspondence=merged),
+        )
+
+    with pytest.raises(
+        GraphValidationError,
+        match=r"phrase-span.*word\[0\].*empty target side.*DROP",
+    ):
+        replace_subtree(
+            graph,
+            DurableItemRef("p0"),
+            containments,
+            subtree,
+            ReplacementPolicies(relations={span: ReplacementAction.TRIM}),
+        )
+
+    dropped = replace_subtree(
+        graph,
+        DurableItemRef("p0"),
+        containments,
+        subtree,
+        ReplacementPolicies(
+            correspondence=partial,
+            relations={span: ReplacementAction.DROP},
+        ),
+    )
+    assert all(
+        relation.declaration != span for relation in dropped.graph.polyadic_relations
+    )
+    assert any(
+        relation == old_relations[-1] for _, relation in dropped.report.relations
+    )
+    assert (layer, span_fact) in dropped.report.facts
+
+    trimmed = replace_subtree(
+        graph,
+        DurableItemRef("p0"),
+        containments,
+        subtree,
+        ReplacementPolicies(
+            correspondence=partial,
+            relations={span: ReplacementAction.TRIM},
+        ),
+    )
+    trimmed_span = next(
+        relation
+        for relation in trimmed.graph.polyadic_relations
+        if relation.declaration == span
+    )
+    assert trimmed_span.targets == (ItemRef(word, 0), ItemRef(word, 1))
+    assert span_fact in trimmed.graph.layers[0].facts
+    removed = next(
+        dependency
+        for dependency in trimmed.report.dependencies
+        if dependency.carrier == "polyadic_endpoints"
+    )
+    assert removed.endpoint == ItemRef(word, 1)
+    assert removed.endpoint_side == "targets"
+    assert removed.endpoint_index == 1
+    assert removed.to_data() == {
+        "carrier": "polyadic_endpoints",
+        "index": len(old_relations) - 1,
+        "declaration": span.to_data(),
+        "endpoint": {
+            "kind": "item-coordinate",
+            "tier": word.to_data(),
+            "index": 1,
+        },
+        "endpoint_side": "targets",
+        "endpoint_index": 1,
+    }
+
+
 def test_follow_carries_a_boundary_fact_and_has_an_exact_inverse() -> None:
     """One corresponding boundary carries its fact through a journaled edit."""
     case = fixture("speech")
@@ -422,10 +873,13 @@ def test_follow_carries_a_boundary_fact_and_has_an_exact_inverse() -> None:
             ItemRef(case.leaf, 1): (ItemRef(case.leaf, 1),),
         }
     )
-    policies = ReplacementPolicies(
-        ReplacementAction.FOLLOW,
-        correspondence=correspondence,
-        layers={case.layer: ReplacementAction.FOLLOW},
+    policies = drop_crossings(
+        case,
+        ReplacementPolicies(
+            ReplacementAction.FOLLOW,
+            correspondence=correspondence,
+            layers={case.layer: ReplacementAction.FOLLOW},
+        ),
     )
     source = Subtree(case.alternative, ItemRef(case.root, 0))
 
@@ -487,10 +941,13 @@ def test_follow_reports_carried_boundary_content_overwritten_by_source() -> None
             ItemRef(case.leaf, 1): (ItemRef(case.leaf, 1),),
         }
     )
-    policies = ReplacementPolicies(
-        ReplacementAction.FOLLOW,
-        correspondence=correspondence,
-        layers={case.layer: ReplacementAction.FOLLOW},
+    policies = drop_crossings(
+        case,
+        ReplacementPolicies(
+            ReplacementAction.FOLLOW,
+            correspondence=correspondence,
+            layers={case.layer: ReplacementAction.FOLLOW},
+        ),
     )
     subtree = Subtree(source, ItemRef(case.root, 0))
 
@@ -548,9 +1005,12 @@ def test_follow_reports_content_lost_when_outer_boundaries_collapse() -> None:
         ),
         relations=(),
     )
-    policies = ReplacementPolicies(
-        ReplacementAction.FOLLOW,
-        layers={case.layer: ReplacementAction.FOLLOW},
+    policies = drop_crossings(
+        case,
+        ReplacementPolicies(
+            ReplacementAction.FOLLOW,
+            layers={case.layer: ReplacementAction.FOLLOW},
+        ),
     )
 
     result = replace_subtree(
@@ -623,6 +1083,7 @@ def test_replacement_copies_new_subtree_relations_values_and_facts() -> None:
         DurableItemRef("root"),
         case.containment,
         Subtree(source, ItemRef(case.root, 0)),
+        drop_crossings(case),
     ).graph
     copied_link = next(
         relation for relation in result.relations if relation.durable_id == "new-link"
@@ -744,7 +1205,7 @@ def test_replacement_inserts_descendants_on_a_newly_used_tier() -> None:
         DurableItemRef("root"),
         case.containment,
         Subtree(source, ItemRef(case.root, 0)),
-        ReplacementPolicies(insertion_points={extra: 0}),
+        drop_crossings(case, ReplacementPolicies(insertion_points={extra: 0})),
     ).graph
     assert result._tiers_by_name[extra].items == (Item("new-caption"),)
 
@@ -816,20 +1277,114 @@ def test_swap_subtrees_is_exactly_undoable_and_refuses_nested_roots() -> None:
         swap_subtrees(graph, DurableItemRef("left"), DurableItemRef("left"), contains)
 
 
+def test_swap_subtrees_carries_crossings_through_both_correspondences() -> None:
+    """Each side's crossing links re-point and the swap records held identity."""
+    namespace = "urn:tiergraph:replacement:swap-carry"
+    tier = QualifiedName(namespace, "node")
+    item_type = QualifiedName(namespace, "Node")
+    members = QualifiedName(namespace, "nodes")
+    contains = QualifiedName(namespace, "contains")
+    link = QualifiedName(namespace, "link")
+    graph = Graph(
+        (NamespaceDeclaration("s", namespace),),
+        (
+            Tier(
+                TierDeclaration(tier, "Nodes"),
+                (
+                    Item("left"),
+                    Item("a"),
+                    Item("right"),
+                    Item("b"),
+                    Item("outside"),
+                ),
+            ),
+        ),
+        (
+            SimpleRelationDeclaration(members, tier, item_type),
+            BipartiteRelationDeclaration(
+                contains, item_type, item_type, single_parent=True, acyclic=True
+            ),
+            BipartiteRelationDeclaration(link, item_type, item_type),
+        ),
+        (
+            RelationInstance(contains, ItemRef(tier, 0), ItemRef(tier, 1)),
+            RelationInstance(contains, ItemRef(tier, 2), ItemRef(tier, 3)),
+            RelationInstance(link, DurableItemRef("outside"), ItemRef(tier, 1), "to-a"),
+            RelationInstance(link, DurableItemRef("outside"), ItemRef(tier, 3), "to-b"),
+        ),
+    )
+    first = ReplacementPolicies(
+        correspondence=SubtreeCorrespondence({ItemRef(tier, 1): (ItemRef(tier, 3),)})
+    )
+    second = ReplacementPolicies(
+        correspondence=SubtreeCorrespondence({ItemRef(tier, 3): (ItemRef(tier, 1),)})
+    )
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.swap_subtrees(
+        DurableItemRef("left"), DurableItemRef("right"), contains, first, second
+    )
+    result = editor.freeze()
+    targets = {
+        relation.durable_id: replacement._item_endpoint(result, relation.right)
+        for relation in result.relations
+        if relation.declaration == link
+    }
+    assert targets == {
+        "to-a": result.resolve_item(DurableItemRef("b")),
+        "to-b": result.resolve_item(DurableItemRef("a")),
+    }
+    correspondence = journal.records[0].report.correspondence
+    assert correspondence is not None
+    assert correspondence.identity_correspondence == correspondence.items
+    assert correspondence.to_data() == {
+        "holes": [
+            {
+                "name": str(source),
+                "old": source.to_data(),
+                "new": [target.to_data() for target in targets],
+                "identity_correspondence": [target.to_data() for target in targets],
+            }
+            for source, targets in sorted(
+                correspondence.items.items(),
+                key=lambda pair: (str(pair[0].tier), pair[0].index),
+            )
+        ]
+    }
+    assert not journal.records[0].report.detached_dependencies
+    editor.undo()
+    assert editor.freeze() == graph
+
+
 def test_swap_reports_only_dependencies_absent_from_the_result() -> None:
     """Subtree-owned values and facts moved by a swap are not reported detached."""
     case = fixture("speech")
     direct = swap_subtrees(
-        case.graph, DurableItemRef("root"), DurableItemRef("other"), case.containment
+        case.graph,
+        DurableItemRef("root"),
+        DurableItemRef("other"),
+        case.containment,
+        drop_crossings(case),
+        drop_crossings(case),
     )
     assert {relation.durable_id for _, relation in direct.report.relations} == {
         "link",
         "group",
     }
+    assert direct.report.boundary_values == (
+        (
+            BoundaryRef(case.leaf, 1),
+            AttributeValue(case.edge, XsdType.STRING, "aligned"),
+        ),
+    )
     journal = Journal()
     editor = case.graph.edit(journal=journal)
     editor.swap_subtrees(
-        DurableItemRef("root"), DurableItemRef("other"), case.containment
+        DurableItemRef("root"),
+        DurableItemRef("other"),
+        case.containment,
+        drop_crossings(case),
+        drop_crossings(case),
     )
     result = editor.freeze()
     assert any(boundary.attributes for boundary in result.boundaries(case.leaf))
@@ -859,12 +1414,24 @@ def test_graph_conveniences_skip_report_construction(
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(replacement, "_detachment_report", counted)
-    case.graph.replace_subtree(DurableItemRef("root"), case.containment, source)
+    case.graph.replace_subtree(
+        DurableItemRef("root"), case.containment, source, drop_crossings(case)
+    )
     assert calls == 0
-    replace_subtree(case.graph, DurableItemRef("root"), case.containment, source)
+    replace_subtree(
+        case.graph,
+        DurableItemRef("root"),
+        case.containment,
+        source,
+        drop_crossings(case),
+    )
     assert calls == 1
     case.graph.swap_subtrees(
-        DurableItemRef("root"), DurableItemRef("other"), case.containment
+        DurableItemRef("root"),
+        DurableItemRef("other"),
+        case.containment,
+        drop_crossings(case),
+        drop_crossings(case),
     )
     assert calls == 1
     swap_subtrees(
@@ -872,6 +1439,8 @@ def test_graph_conveniences_skip_report_construction(
         DurableItemRef("root"),
         DurableItemRef("other"),
         case.containment,
+        drop_crossings(case),
+        drop_crossings(case),
     )
     assert calls == 2
 
@@ -947,8 +1516,14 @@ def test_swap_reports_second_stage_content_in_source_coordinates() -> None:
         ),
     )
 
+    policies = ReplacementPolicies(relations={link: ReplacementAction.DROP})
     result = swap_subtrees(
-        graph, DurableItemRef("left"), DurableItemRef("right"), contains
+        graph,
+        DurableItemRef("left"),
+        DurableItemRef("right"),
+        contains,
+        policies,
+        policies,
     )
 
     assert [relation.durable_id for _, relation in result.report.relations] == [
@@ -1067,7 +1642,12 @@ def test_replacement_guards_policy_shapes_and_protected_layers() -> None:
         )
     editor = case.graph.edit(journal=Journal().protect(case.layer))
     with pytest.raises(GraphValidationError, match="protected layer"):
-        editor.replace_subtree(ItemRef(case.root, 0), case.containment, source)
+        editor.replace_subtree(
+            ItemRef(case.root, 0),
+            case.containment,
+            source,
+            drop_crossings(case),
+        )
     assert editor.freeze() == case.graph
 
 
@@ -1605,6 +2185,19 @@ def test_replacement_value_and_helper_refusals_are_typed() -> None:
         SubtreeCorrespondence(
             {ItemRef(case.middle, 0): (object(),)}  # type: ignore[dict-item]
         )
+    aligned = {ItemRef(case.middle, 0): (ItemRef(case.middle, 0),)}
+    with pytest.raises(TypeError, match="identity correspondence sources"):
+        SubtreeCorrespondence(aligned, {object(): ()})  # type: ignore[dict-item]
+    with pytest.raises(TypeError, match="identity correspondence targets"):
+        SubtreeCorrespondence(
+            aligned,
+            {ItemRef(case.middle, 0): (object(),)},  # type: ignore[dict-item]
+        )
+    with pytest.raises(ValueError, match="match its alignment hole"):
+        SubtreeCorrespondence(
+            aligned,
+            {ItemRef(case.middle, 0): (ItemRef(case.middle, 1),)},
+        )
     with pytest.raises(TypeError, match="qualified names"):
         replacement._containment_names([])
     with pytest.raises(ValueError, match="unique"):
@@ -1617,6 +2210,9 @@ def test_replacement_value_and_helper_refusals_are_typed() -> None:
     with pytest.raises(GraphValidationError, match="must be items"):
         replacement._item_endpoint(case.graph, boundary)
     assert replacement._endpoint_item(case.graph, boundary) is None
+    assert replacement._endpoint_item(
+        case.graph, DurableItemRef("middle-0")
+    ) == ItemRef(case.middle, 0)
     assert replacement._remap_unaffected_endpoint(
         DurableItemRef("root"), {}
     ) == DurableItemRef("root")
@@ -1722,7 +2318,7 @@ def test_boundary_and_fact_correspondence_helpers_cover_all_subject_kinds() -> N
         old_runs,
         insertions,
         new_runs,
-    ) == (PolyadicInstanceRef(1),)
+    ) == (DurablePolyadicRef("group"),)
     assert (
         replacement._fact_subjects(
             case.graph,
@@ -1915,13 +2511,19 @@ def test_correspondence_alignment_and_structural_guards() -> None:
             for tier in case.alternative.tiers
         ),
     )
-    aligned = replace_subtree(
-        case.graph,
+    journal = Journal()
+    editor = case.graph.edit(journal=journal)
+    editor.replace_subtree(
         DurableItemRef("root"),
         case.containment,
         Subtree(aligned_source, ItemRef(case.root, 0)),
-        tts_replacement_profile(),
-    ).graph
+        drop_crossings(case, tts_replacement_profile()),
+    )
+    aligned = editor.freeze()
+    effective = journal.records[0].report.correspondence
+    assert effective is not None
+    assert ItemRef(case.middle, 0) in effective.items
+    assert ItemRef(case.middle, 0) not in effective.identity_correspondence
     assert next(
         relation for relation in aligned.relations if relation.declaration == case.link
     ).right == ItemRef(case.middle, 0)
@@ -1932,7 +2534,7 @@ def test_correspondence_alignment_and_structural_guards() -> None:
         DurableItemRef("root"),
         case.containment,
         Subtree(aligned_source, ItemRef(case.root, 0)),
-        tts_replacement_profile(),
+        drop_crossings(case, tts_replacement_profile()),
     ).graph
     assert equivalent(second, aligned, EquivalenceView.IDENTIFIED)
 
@@ -2062,9 +2664,12 @@ def test_boundary_fact_and_outer_value_follow_correspondence() -> None:
             ),
         ),
     )
-    policies = ReplacementPolicies.corresponding(
-        SubtreeCorrespondence({ItemRef(case.leaf, 0): (ItemRef(case.leaf, 0),)}),
-        layers={case.layer: ReplacementAction.FOLLOW},
+    policies = drop_crossings(
+        case,
+        ReplacementPolicies.corresponding(
+            SubtreeCorrespondence({ItemRef(case.leaf, 0): (ItemRef(case.leaf, 0),)}),
+            layers={case.layer: ReplacementAction.FOLLOW},
+        ),
     )
     journal = Journal()
     editor = graph.edit(journal=journal)
@@ -2097,15 +2702,18 @@ def test_boundary_fact_and_outer_value_follow_correspondence() -> None:
 def test_ambiguous_follow_boundary_is_reported_with_its_tier() -> None:
     """A boundary that cannot follow exactly one counterpart never vanishes silently."""
     case = fixture("speech")
-    policies = ReplacementPolicies(
-        ReplacementAction.FOLLOW,
-        correspondence=SubtreeCorrespondence(
-            {
-                ItemRef(case.leaf, 0): (
-                    ItemRef(case.leaf, 0),
-                    ItemRef(case.leaf, 1),
-                )
-            }
+    policies = drop_crossings(
+        case,
+        ReplacementPolicies(
+            ReplacementAction.FOLLOW,
+            correspondence=SubtreeCorrespondence(
+                {
+                    ItemRef(case.leaf, 0): (
+                        ItemRef(case.leaf, 0),
+                        ItemRef(case.leaf, 1),
+                    )
+                }
+            ),
         ),
     )
     journal = Journal()
@@ -2146,6 +2754,7 @@ def test_boundary_detachments_on_different_tiers_remain_distinct() -> None:
         DurableItemRef("root"),
         case.containment,
         Subtree(case.alternative, ItemRef(case.root, 0)),
+        drop_crossings(case),
     )
     dependencies = {
         (item.tier, item.index)
@@ -2184,11 +2793,11 @@ def test_dependency_helpers_cover_boundary_and_durable_relation_subjects() -> No
     assert not replacement._subject_touches(
         case.graph, DocumentRef(), descendants, {5}, {0}
     )
-    assert (
-        replacement._endpoint_targets(
-            case.graph, anchored, {}, ReplacementAction.FOLLOW
-        )
-        == ()
+    assert replacement._donor_relation_fact(
+        case.graph, PolyadicInstanceRef(0), set(), {0}
+    )
+    assert replacement._donor_relation_fact(
+        case.graph, DurablePolyadicRef("group"), set(), {0}
     )
     multi = {
         ItemRef(case.middle, 0): (
@@ -2196,56 +2805,171 @@ def test_dependency_helpers_cover_boundary_and_durable_relation_subjects() -> No
             ItemRef(case.middle, 1),
         )
     }
+    tier_boundary = DurableBoundaryRef(case.middle, BoundarySide.BEFORE)
     assert (
-        replacement._endpoint_targets(
-            case.graph,
-            ItemRef(case.middle, 0),
-            multi,
-            ReplacementAction.ABANDON,
-        )
+        replacement._crossing_targets(case.graph, case.graph, tier_boundary, multi)
         == ()
     )
+    assert replacement._crossing_targets(case.graph, case.graph, anchored, multi) == (
+        DurableBoundaryRef(DurableItemRef("middle-0"), BoundarySide.BEFORE),
+        DurableBoundaryRef(DurableItemRef("middle-1"), BoundarySide.BEFORE),
+    )
+    anonymous = replace(
+        case.graph,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(Item(None, item.attributes) for item in tier.items),
+            )
+            if tier.declaration.name == case.middle
+            else tier
+            for tier in case.graph.tiers
+        ),
+        relations=(),
+        polyadic_relations=(),
+        layers=(),
+    )
     assert (
-        replacement._endpoint_targets(
+        replacement._crossing_targets(
             case.graph,
-            ItemRef(case.middle, 0),
-            multi,
-            ReplacementAction.FOLLOW,
+            anonymous,
+            anchored,
+            {ItemRef(case.middle, 0): (ItemRef(case.middle, 0),)},
         )
         == ()
     )
 
+    crossing = RelationInstance(
+        case.link, ItemRef(case.root, 1), ItemRef(case.middle, 0)
+    )
+    with pytest.raises(GraphValidationError, match="no correspondence"):
+        replacement._carry_binary_relation(
+            case.graph,
+            case.graph,
+            5,
+            crossing,
+            descendants,
+            {},
+            {ItemRef(case.root, 1): ItemRef(case.root, 1)},
+            None,
+        )
+    with pytest.raises(GraphValidationError, match="ambiguous correspondence"):
+        replacement._carry_binary_relation(
+            case.graph,
+            case.graph,
+            5,
+            crossing,
+            descendants,
+            multi,
+            {ItemRef(case.root, 1): ItemRef(case.root, 1)},
+            None,
+        )
 
-def test_relation_helpers_detach_boundary_endpoints_and_track_insertions() -> None:
-    """Boundary dependencies abandon and positional insertion images remain exact."""
+    source_missing = PolyadicRelationInstance(
+        case.group,
+        (ItemRef(case.middle, 0),),
+        (ItemRef(case.middle, 2),),
+    )
+    assert replacement._carry_polyadic_relation(
+        case.graph,
+        case.graph,
+        0,
+        source_missing,
+        descendants,
+        {},
+        {ItemRef(case.middle, 2): ItemRef(case.middle, 2)},
+        ReplacementAction.DROP,
+    ) == (None, ())
+
+
+def test_polyadic_crossing_invariants_name_invalid_carried_shapes() -> None:
+    """Carried crossings enforce side arity and resolved source uniqueness."""
+    case = fixture("speech")
+    item_side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), (case.middle,), maximum=1
+    )
+    bounded = PolyadicRelationDeclaration(case.group, item_side, item_side)
+    first = ItemRef(case.middle, 0)
+    second = ItemRef(case.middle, 1)
+    assert (
+        replacement._polyadic_crossing_issue(
+            case.graph, bounded, (first, second), (first,)
+        )
+        == "source arity 2 outside declared bounds 1..1"
+    )
+    assert (
+        replacement._polyadic_crossing_issue(
+            case.graph, bounded, (first,), (first, second)
+        )
+        == "target arity 2 outside declared bounds 1..1"
+    )
+
+    mixed_side = RelationSideDeclaration(
+        (RelationEndpointKind.BOUNDARY, RelationEndpointKind.ITEM),
+        (case.middle,),
+        maximum=2,
+    )
+    unique = PolyadicRelationDeclaration(
+        case.group, mixed_side, item_side, unique_sources=True
+    )
+    anchored = DurableBoundaryRef(DurableItemRef("middle-0"), BoundarySide.BEFORE)
+    assert (
+        replacement._polyadic_crossing_issue(
+            case.graph, unique, (anchored, anchored), (first,)
+        )
+        == "duplicate sources in a declared unique-source relation"
+    )
+
+    target = replace(
+        case.graph,
+        relation_declarations=tuple(
+            replace(declaration, unique_sources=True)
+            if isinstance(declaration, PolyadicRelationDeclaration)
+            and declaration.name == case.group
+            else declaration
+            for declaration in case.graph.relation_declarations
+        ),
+    )
+    crossing = PolyadicRelationInstance(
+        case.group, (first,), (ItemRef(case.middle, 2),)
+    )
+    assert replacement._carry_polyadic_relation(
+        case.graph,
+        target,
+        0,
+        crossing,
+        frozenset({first}),
+        {first: (second, second)},
+        {ItemRef(case.middle, 2): ItemRef(case.middle, 2)},
+        ReplacementAction.DROP,
+    ) == (None, ())
+
+
+def test_report_helpers_track_durable_boundaries_and_insertions() -> None:
+    """Boundary loss and positional relation insertion images remain exact."""
     case = fixture("speech")
     anchored = DurableBoundaryRef(DurableItemRef("middle-0"), BoundarySide.BEFORE)
-    binary = RelationInstance(case.link, ItemRef(case.root, 1), anchored)
-    assert (
-        replacement._binary_replacements(
-            case.graph,
-            binary,
-            {ItemRef(case.middle, 0): ()},
-            {ItemRef(case.root, 1): ItemRef(case.root, 1)},
-            ReplacementAction.FOLLOW,
-        )
-        == ()
+    durable_value = AttributeValue(case.edge, XsdType.STRING, "durable")
+    durable_graph = replace(
+        case.graph,
+        boundary_values=(
+            *case.graph.boundary_values,
+            Boundary(anchored, (durable_value,)),
+        ),
     )
-    polyadic = PolyadicRelationInstance(
-        case.group,
-        (ItemRef(case.middle, 2),),
-        (anchored,),
+    without_durable_value = replace(
+        durable_graph,
+        boundary_values=tuple(
+            boundary
+            for boundary in durable_graph.boundary_values
+            if boundary.reference != anchored
+        ),
     )
-    assert (
-        replacement._polyadic_replacements(
-            case.graph,
-            polyadic,
-            {ItemRef(case.middle, 0): ()},
-            {ItemRef(case.middle, 2): ItemRef(case.middle, 1)},
-            ReplacementAction.FOLLOW,
-        )
-        == ()
-    )
+    assert replacement._removed_boundary_values(
+        durable_graph,
+        without_durable_value,
+        durable_graph.edit().displacement(),
+    ) == ((anchored, durable_value),)
     editor = case.graph.edit()
     images = replacement._insert_relations(
         editor,

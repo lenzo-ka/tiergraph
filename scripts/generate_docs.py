@@ -406,6 +406,7 @@ def _json_input_formats() -> str:
             {
                 "old": {"tier": qname, "index": 0},
                 "new": [{"tier": qname, "index": 0}],
+                "identity_correspondence": True,
             }
         ],
         "relations": [{"name": qname, "action": "follow"}],
@@ -474,12 +475,17 @@ def _json_input_formats() -> str:
         "Item, attribute, relation-instance, declaration, and layer-fact files "
         "use the corresponding public `to_data()` object shape. Every operand is "
         "bounded strict JSON. A replacement-policy object may contain only the "
-        "fields shown below. `default` and each `action` are `abandon`, `follow`, "
-        "or `split`; `correspond` enables local equal-content alignment; explicit "
+        "fields shown below. `default` and each `action` may be `abandon`, "
+        "`follow`, `split`, `drop`, or `trim`; `drop` and the polyadic-only "
+        "`trim` are fallbacks for crossing relations that cannot carry. "
+        "`correspond` enables local equal-content alignment. Explicit "
         "`correspondence` entries map one old item reference to an ordered array "
-        "of new item references. Relation, layer, and insertion-point arrays "
-        "override the default for their named carriers. Omitted fields use the "
-        "library's abandonment defaults.\n\n"
+        "of new item references; optional `identity_correspondence` is either "
+        "`true` for that same alignment or the exact aligned array. Relation, "
+        "layer, and insertion-point arrays override the default for their named "
+        "carriers. Omitted fields use the library's abandonment defaults, while "
+        "an uncarryable crossing relation refuses unless `drop` or `trim` was "
+        "named.\n\n"
         + _json_block(replacement_policies)
         + "\n\n### Grammar documents and inputs\n\n"
         "A grammar document contains `nonterminals`, `start`, and `rules`. Each rule "
