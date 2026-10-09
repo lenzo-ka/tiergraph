@@ -3518,14 +3518,16 @@ Return graph-edit distance as a synonym for :func:`graph_distance`.
 EquivalenceView(*values)
 ```
 
-Choose which observable graph identity an equivalence query compares.
+Choose a fixed, graph-wide observational projection for comparison.
 
-``FUNCTIONAL`` ignores namespace prefixes and carried durable ids, and
-resolves durable references to structural coordinates. ``IDENTIFIED`` adds
-carried durable ids while retaining those resolved references. ``EXACT``
-is graph equality (``==``), including prefixes and reference spellings.
+A view says what a comparison reads; it does not declare a domain symmetry.
+``FUNCTIONAL`` omits carried durable IDs, namespace prefixes, and reference
+spellings. ``IDENTIFIED`` also reads durable IDs. ``EXACT`` reads all three
+and is graph equality (``==``). Facts within each layer are canonicalized
+at construction, so their supplied order is not observed by any view.
+Declared order is content under every view. Per-tier declared
+order-insensitivity is a separate, future concept.
 
-Fact order within a layer is not part of ``FUNCTIONAL`` or ``IDENTIFIED``.
 Values compare after construction-time canonicalization with no tolerance;
 tolerance belongs to a distance measure, not equivalence.
 

@@ -24,6 +24,17 @@ and grammars parse token input into a chart that folds read the same way.
 None of these views adds a new kind of stored node; each is a reading of the
 same graph.
 
+## Equivalence projections
+
+`FUNCTIONAL`, `IDENTIFIED`, and `EXACT` are fixed, graph-wide observational
+projections. They say what a comparison reads; they do not declare domain
+symmetries. `FUNCTIONAL` omits durable IDs, namespace prefixes, and reference
+spellings. `IDENTIFIED` also reads durable IDs. `EXACT` reads all three and is
+graph equality. Facts within each layer are canonicalized at construction, so
+their supplied order is not observed by any view. Declared order is content
+under every view. Per-tier declared order-insensitivity is a separate, future
+concept.
+
 ## What a graph is built from
 
 - **Namespaces** bind a document-local prefix to a URI. Every qualified name a
