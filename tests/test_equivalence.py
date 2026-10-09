@@ -52,6 +52,7 @@ from tiergraph import (
     TierRef,
     XsdType,
     abstract_form,
+    dump_bytes,
     equivalent,
     fingerprint,
     first_difference,
@@ -227,6 +228,27 @@ def test_layer_reads_resolve_the_fugu_reference_counterexample() -> None:
             (delivery.layers[0], expected[0]),
             (delivery.layers[1], expected[1]),
         )
+
+
+def test_supplied_layer_fact_order_is_canonical_under_every_view() -> None:
+    """Layer facts are keyed content, so their supplied order is not observable."""
+    base = _domain_graph("speech")
+    namespace = base.namespaces[0].namespace
+    source = _name(namespace, "source")
+    offset = _name(namespace, "source-offset")
+    facts = (
+        LayerFact(ItemRef(source, 1), _value(offset, "second")),
+        LayerFact(ItemRef(source, 0), _value(offset, "first")),
+    )
+    left = replace(base, layers=(Layer(LayerName(namespace, "ordered"), facts),))
+    right = replace(
+        base, layers=(Layer(LayerName(namespace, "ordered"), tuple(reversed(facts))),)
+    )
+
+    for view in EquivalenceView:
+        assert equivalent(left, right, view)
+    assert left == right
+    assert dump_bytes(left) == dump_bytes(right)
 
 
 def test_functionally_equal_graphs_have_equal_layer_reads() -> None:

@@ -37,6 +37,7 @@ from tiergraph.core import (
     RelationInstanceRef,
     RelationSideDeclaration,
     SealDeclaration,
+    _boundary_images,
 )
 
 
@@ -530,8 +531,11 @@ def _swap_subtrees(
             if source in right.descendants
         },
     }
+    final_graph, displacement = _swap_boundary_values(
+        graph, final_outcome.graph, displacement, swap_correspondence
+    )
     return _ReplacementOutcome(
-        final_outcome.graph,
+        final_graph,
         displacement,
         detached,
         (
@@ -539,7 +543,7 @@ def _swap_subtrees(
                 graph,
                 dependencies=detached,
                 boundary_values=_removed_boundary_values(
-                    graph, final_outcome.graph, displacement
+                    graph, final_graph, displacement
                 ),
             )
             if capture_report
@@ -548,6 +552,81 @@ def _swap_subtrees(
         SubtreeCorrespondence(swap_correspondence, swap_correspondence),
         final_outcome.new_items,
     )
+
+
+def _swap_boundary_values(
+    source: Graph,
+    target: Graph,
+    displacement: Displacement,
+    correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+) -> tuple[Graph, Displacement]:
+    """Carry each source boundary value through the completed item permutation.
+
+    The staged replacements temporarily remove and reinsert both descendant
+    runs.  Their intermediate boundary maps cannot decide the final adjacency:
+    an internal boundary may disappear in one stage and return in the next,
+    while a cut boundary may be visited from both sides.  Derive the boundary
+    map once from the final item permutation, then rebuild sparse values from
+    the source so every surviving value has exactly one carrier.
+    """
+    item_displacement = dict(displacement.items)
+    item_displacement.update(
+        (old, targets[0]) for old, targets in correspondence.items()
+    )
+    boundary_images: dict[BoundaryRef, BoundaryRef] = {}
+    departed_boundaries: set[BoundaryRef] = set()
+    for tier in source.tiers:
+        name = tier.declaration.name
+        old_count = len(tier.items)
+        new_count = len(target._tiers_by_name[name].items)
+        item_images = {
+            old.index: new.index
+            for old, new in item_displacement.items()
+            if old.tier == name
+        }
+        images = (
+            {0: 0}
+            if old_count == 0 and new_count == 0
+            else _boundary_images(old_count, new_count, item_images)
+        )
+        for index in range(old_count + 1):
+            reference = BoundaryRef(name, index)
+            image = images.get(index)
+            if image is None:
+                departed_boundaries.add(reference)
+            else:
+                boundary_images[reference] = BoundaryRef(name, image)
+
+    corrected = Displacement(
+        items=item_displacement,
+        boundaries=boundary_images,
+        relations=displacement.relations,
+        polyadic_relations=displacement.polyadic_relations,
+        departed_items=displacement.departed_items.difference(item_displacement),
+        departed_boundaries=frozenset(departed_boundaries),
+        departed_relations=displacement.departed_relations,
+        departed_polyadic_relations=displacement.departed_polyadic_relations,
+    )
+    boundary_values = tuple(
+        stored
+        if isinstance(stored.reference, DurableBoundaryRef)
+        else replace(stored, reference=boundary_images[stored.reference])
+        for stored in source.boundary_values
+        if isinstance(stored.reference, DurableBoundaryRef)
+        or stored.reference in boundary_images
+    )
+    sites: dict[BoundaryRef, BoundaryRef | DurableBoundaryRef] = {}
+    for stored in boundary_values:
+        site = target.resolve_boundary(stored.reference)
+        previous = sites.get(site)
+        if previous is not None:
+            raise GraphValidationError(
+                "subtree swap maps stored boundary values "
+                f"{str(previous)!r} and {str(stored.reference)!r} to the same "
+                f"boundary {str(site)!r}"
+            )
+        sites[site] = stored.reference
+    return replace(target, boundary_values=boundary_values), corrected
 
 
 def _translated_swap_policies(

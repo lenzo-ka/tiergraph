@@ -40,6 +40,7 @@ from tiergraph import (
     PolyadicRelationDeclaration,
     PolyadicRelationInstance,
     QualifiedName,
+    RefusalStage,
     RelationEndpointKind,
     RelationInstance,
     RelationInstanceRef,
@@ -1397,6 +1398,187 @@ def test_swap_subtrees_is_exactly_undoable_and_refuses_nested_roots() -> None:
         swap_subtrees(graph, DurableItemRef("left"), DurableItemRef("left"), contains)
 
 
+def _boundary_swap_graph(
+    *, include_cut_value: bool = False
+) -> tuple[Graph, QualifiedName, QualifiedName, QualifiedName]:
+    """Build two roots whose three children expose internal and cut boundaries."""
+    namespace = "urn:tiergraph:replacement:swap-boundaries"
+    root = QualifiedName(namespace, "root")
+    child = QualifiedName(namespace, "child")
+    root_type = QualifiedName(namespace, "Root")
+    child_type = QualifiedName(namespace, "Child")
+    contains = QualifiedName(namespace, "contains")
+    edge = QualifiedName(namespace, "edge")
+    boundaries = [
+        Boundary(
+            BoundaryRef(child, 1),
+            (AttributeValue(edge, XsdType.STRING, "inner"),),
+        )
+    ]
+    if include_cut_value:
+        boundaries.append(
+            Boundary(
+                BoundaryRef(child, 2),
+                (AttributeValue(edge, XsdType.STRING, "between"),),
+            )
+        )
+    graph = Graph(
+        (NamespaceDeclaration("s", namespace),),
+        (
+            Tier(TierDeclaration(root, "Roots"), (Item("left"), Item("right"))),
+            Tier(
+                TierDeclaration(child, "Children"),
+                (Item("left-a"), Item("left-b"), Item("right-a")),
+            ),
+        ),
+        (
+            SimpleRelationDeclaration(
+                QualifiedName(namespace, "roots"), root, root_type
+            ),
+            SimpleRelationDeclaration(
+                QualifiedName(namespace, "children"), child, child_type
+            ),
+            BipartiteRelationDeclaration(
+                contains,
+                root_type,
+                child_type,
+                single_parent=True,
+                acyclic=True,
+            ),
+        ),
+        (
+            RelationInstance(contains, ItemRef(root, 0), ItemRef(child, 0)),
+            RelationInstance(contains, ItemRef(root, 0), ItemRef(child, 1)),
+            RelationInstance(contains, ItemRef(root, 1), ItemRef(child, 2)),
+        ),
+        (AttributeDeclaration(edge, AttributeDomain.BOUNDARY, XsdType.STRING),),
+        tuple(boundaries),
+    )
+    return graph, child, contains, edge
+
+
+def test_swap_subtrees_carries_a_two_tier_boundary_value_once() -> None:
+    """An internal child boundary follows its run and is not detached."""
+    graph, child, contains, edge = _boundary_swap_graph()
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.swap_subtrees(DurableItemRef("left"), DurableItemRef("right"), contains)
+    result = editor.freeze()
+
+    assert tuple(item.durable_id for item in result._tiers_by_name[child].items) == (
+        "right-a",
+        "left-a",
+        "left-b",
+    )
+    assert result.boundary_values == (
+        Boundary(
+            BoundaryRef(child, 2),
+            (AttributeValue(edge, XsdType.STRING, "inner"),),
+        ),
+    )
+    report = journal.records[0].report.detached_content
+    assert report is not None
+    assert not report.boundary_values
+    editor.undo()
+    assert editor.freeze() == graph
+
+
+def test_swap_subtrees_reports_a_departed_three_child_cut_value_once() -> None:
+    """A cut boundary departs instead of being copied onto both run edges."""
+    graph, child, contains, edge = _boundary_swap_graph(include_cut_value=True)
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.swap_subtrees(DurableItemRef("left"), DurableItemRef("right"), contains)
+    result = editor.freeze()
+
+    assert result.boundary_values == (
+        Boundary(
+            BoundaryRef(child, 2),
+            (AttributeValue(edge, XsdType.STRING, "inner"),),
+        ),
+    )
+    report = journal.records[0].report.detached_content
+    assert report is not None
+    assert report.boundary_values == (
+        (
+            BoundaryRef(child, 2),
+            AttributeValue(edge, XsdType.STRING, "between"),
+        ),
+    )
+    editor.undo()
+    assert editor.freeze() == graph
+
+
+def test_swap_subtrees_preserves_an_untouched_empty_tier_boundary() -> None:
+    """An unrelated empty tier keeps its sole coordinate boundary value."""
+    graph, child, contains, edge = _boundary_swap_graph()
+    empty = QualifiedName(child.namespace, "empty")
+    empty_type = QualifiedName(child.namespace, "Empty")
+    graph = replace(
+        graph,
+        tiers=(*graph.tiers, Tier(TierDeclaration(empty, "Empty"))),
+        relation_declarations=(
+            *graph.relation_declarations,
+            SimpleRelationDeclaration(
+                QualifiedName(child.namespace, "empties"), empty, empty_type
+            ),
+        ),
+        boundary_values=(
+            *graph.boundary_values,
+            Boundary(
+                BoundaryRef(empty, 0),
+                (AttributeValue(edge, XsdType.STRING, "empty"),),
+            ),
+        ),
+    )
+
+    result = swap_subtrees(
+        graph, DurableItemRef("left"), DurableItemRef("right"), contains
+    )
+
+    assert result.graph.boundary_values == (
+        Boundary(
+            BoundaryRef(child, 2),
+            (AttributeValue(edge, XsdType.STRING, "inner"),),
+        ),
+        Boundary(
+            BoundaryRef(empty, 0),
+            (AttributeValue(edge, XsdType.STRING, "empty"),),
+        ),
+    )
+    assert not result.report.boundary_values
+
+
+def test_swap_subtrees_refuses_colliding_durable_boundary_values_atomically() -> None:
+    """A swap names durable anchors that converge on one boundary."""
+    graph, _, contains, edge = _boundary_swap_graph()
+    before_left = DurableBoundaryRef(DurableItemRef("left-a"), BoundarySide.BEFORE)
+    after_right = DurableBoundaryRef(DurableItemRef("right-a"), BoundarySide.AFTER)
+    graph = replace(
+        graph,
+        boundary_values=(
+            Boundary(
+                before_left,
+                (AttributeValue(edge, XsdType.STRING, "before-left"),),
+            ),
+            Boundary(
+                after_right,
+                (AttributeValue(edge, XsdType.STRING, "after-right"),),
+            ),
+        ),
+    )
+    editor = graph.edit()
+
+    with pytest.raises(
+        GraphValidationError,
+        match=r"subtree swap maps stored boundary values .*left-a.*right-a.*child\[1\]",
+    ) as caught:
+        editor.swap_subtrees(DurableItemRef("left"), DurableItemRef("right"), contains)
+
+    assert caught.value.stage is RefusalStage.SEMANTICS
+    assert editor.freeze() == graph
+
+
 def test_swap_subtrees_carries_crossings_through_both_correspondences() -> None:
     """Each side's crossing links re-point and the swap records held identity."""
     namespace = "urn:tiergraph:replacement:swap-carry"
@@ -1487,16 +1669,11 @@ def test_swap_reports_only_dependencies_absent_from_the_result() -> None:
         drop_crossings(case),
         drop_crossings(case),
     )
-    assert {relation.durable_id for _, relation in direct.report.relations} == {
+    assert [relation.durable_id for _, relation in direct.report.relations] == [
         "link",
         "group",
-    }
-    assert direct.report.boundary_values == (
-        (
-            BoundaryRef(case.leaf, 1),
-            AttributeValue(case.edge, XsdType.STRING, "aligned"),
-        ),
-    )
+    ]
+    assert not direct.report.boundary_values
     journal = Journal()
     editor = case.graph.edit(journal=journal)
     editor.swap_subtrees(
