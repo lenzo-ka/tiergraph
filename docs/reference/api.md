@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 320 top-level `tiergraph` exports exactly once.
+It covers 315 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -3334,10 +3334,10 @@ Decode strict numeric cost-table data for command-line use.
 ### `DistanceInterval`
 
 ```text
-DistanceInterval(lower: 'Decimal', upper: 'Decimal', exact: 'bool', method: 'str') -> None
+DistanceInterval(lower: 'Decimal', upper: 'Decimal', exact: 'bool', method: 'str', lower_bound_method: 'str | None' = None) -> None
 ```
 
-Hold exact distance or certified lower and realized upper bounds.
+Hold an exact distance or named lower and realized upper bounds.
 
 #### `DistanceInterval.value`
 
@@ -3384,81 +3384,6 @@ SequenceProjection.distance(self, source: 'Graph', target: 'Graph') -> 'Decimal'
 ```
 
 Return this projection's exact sequence distance.
-
-### `ProjectionWitness`
-
-```text
-ProjectionWitness()
-```
-
-Show one replayed graph operation for projection admissibility.
-
-Use :meth:`from_patch`; arbitrary labeled graph pairs cannot serve as
-evidence because their claimed operation would not have been checked.
-
-#### `ProjectionWitness.from_patch`
-
-Class method.
-
-```text
-ProjectionWitness.from_patch(cls, before: 'Graph', patch: 'Patch') -> 'ProjectionWitness'
-```
-
-Build a witness by replaying one non-residual patch operation.
-
-### `ProjectionViolation`
-
-```text
-ProjectionViolation(operation: 'str', projected: 'Decimal', allowed: 'Decimal') -> None
-```
-
-Describe one graph operation that a projection overprices.
-
-### `ProjectionAdmissibility`
-
-```text
-ProjectionAdmissibility(projection: 'SequenceProjection', costs: 'CostTable', checked: 'frozenset[str]', required: 'frozenset[str]', violations: 'tuple[ProjectionViolation, ...]') -> None
-```
-
-Report coverage and failures from an admissibility check.
-
-#### `ProjectionAdmissibility.missing`
-
-Property.
-
-```text
-ProjectionAdmissibility.missing(self) -> 'frozenset[str]'
-```
-
-Return required primitive kinds with no supplied witness.
-
-#### `ProjectionAdmissibility.admissible`
-
-Property.
-
-```text
-ProjectionAdmissibility.admissible(self) -> 'bool'
-```
-
-Report whether coverage is complete and every inequality holds.
-
-#### `ProjectionAdmissibility.certify`
-
-Method.
-
-```text
-ProjectionAdmissibility.certify(self) -> 'AdmissibleProjection'
-```
-
-Return a lower-bound certificate or refuse an incomplete check.
-
-### `AdmissibleProjection`
-
-```text
-AdmissibleProjection(projection: 'SequenceProjection', operations: 'frozenset[str]', costs: 'CostTable') -> None
-```
-
-Certify that a projection is a lower bound for named graph operations.
 
 ### `weighted_sequence_distance`
 
@@ -3525,19 +3450,6 @@ format_control_insensitive_projection(pieces: 'TextPieces', *, join: 'TextJoin')
 
 Build a character projection that gives Unicode Cf controls zero cost.
 
-### `check_projection_admissibility`
-
-```text
-check_projection_admissibility(projection: 'SequenceProjection', costs: 'CostTable', witnesses: 'Iterable[ProjectionWitness]', *, required: 'Iterable[str] | None' = None) -> 'ProjectionAdmissibility'
-```
-
-Check projection cost against realized one-step graph operations.
-
-Callers supply small-graph witnesses for every required operation kind. A
-witness passes only when the projected change can be expressed at no more
-than the graph operation's declared cost. Missing operation kinds prevent a
-certificate; a projection never becomes a lower bound by assertion alone.
-
 ### `price_patch`
 
 ```text
@@ -3554,23 +3466,23 @@ resolves declaration-specific costs for structural and durable references.
 ### `graph_distance`
 
 ```text
-graph_distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>, projections: 'Iterable[AdmissibleProjection]' = ()) -> 'DistanceInterval'
+graph_distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'DistanceInterval'
 ```
 
-Return exact distance where proved, otherwise certified graph-edit bounds.
+Return exact distance where proved, otherwise named graph-edit bounds.
 
 Independent ordered tiers use exact weighted sequence distance when move and
 swap shortcuts cannot undercut insertion plus deletion. General graphs use
-the maximum certified projection distance as a lower bound and the cost of
-an executable diff as an upper bound. If the diff contains a residual data
-delta, a conservative dependency-ordered rebuild supplies the upper bound.
-Overlapping and non-nesting relations therefore receive an interval rather
-than an unsupported exact graph-edit claim.
+the incidence-free atom-multiset relaxation as a lower bound and the cost
+of an executable diff as an upper bound. If the diff contains a residual
+data delta, a conservative dependency-ordered rebuild supplies the upper
+bound. Overlapping and non-nesting relations therefore receive an interval
+rather than an unsupported exact graph-edit claim.
 
 ### `distance`
 
 ```text
-distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>, projections: 'Iterable[AdmissibleProjection]' = ()) -> 'DistanceInterval'
+distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'DistanceInterval'
 ```
 
 Return graph-edit distance as a synonym for :func:`graph_distance`.

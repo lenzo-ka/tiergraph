@@ -1202,8 +1202,9 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
         ),
         details=(
             "Independent ordered tiers can produce an exact value. General and "
-            "overlapping relation structures produce certified lower and upper "
-            "bounds. Cost files use the CostTable.to_data() shape.\n\n"
+            "overlapping relation structures produce a named atom-multiset lower "
+            "bound and a realized upper bound. Cost files use the "
+            "CostTable.to_data() shape.\n\n"
         ),
     )
     distance.set_defaults(handler=_handle_distance)
@@ -2455,7 +2456,7 @@ def _handle_diff(args: argparse.Namespace) -> None:
 
 
 def _handle_distance(args: argparse.Namespace) -> None:
-    """Write exact graph distance or a certified interval as JSON."""
+    """Write exact graph distance or a named interval as JSON."""
     _check_distinct(args.target, args.output)
     if args.costs is not None:
         _check_distinct(args.costs, args.output)
