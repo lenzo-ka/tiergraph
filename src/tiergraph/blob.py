@@ -8,7 +8,10 @@ import re
 from collections.abc import Buffer, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import BinaryIO, Protocol
+from typing import TYPE_CHECKING, BinaryIO, Literal, Protocol, cast
+
+if TYPE_CHECKING:
+    import zipfile
 
 from tiergraph.core import (
     Attribute,
@@ -24,9 +27,36 @@ from tiergraph.core import (
     RelationInstanceRef,
     XsdType,
 )
+from tiergraph.wire import MAX_DOCUMENT_BYTES, loads
 
 BLOB_NAMESPACE = "urn:tiergraph:blob"
 """Namespace for the fixed external-resource vocabulary."""
+
+BUNDLE_VERSION = "1"
+"""Version of the strict ZIP bundle container."""
+
+_BUNDLE_INDEX = "bundle.json"
+_BUNDLE_GRAPH = "graph.json"
+_BLOB_PATH = "blobs/sha256/"
+_CANONICAL_DATE = (1980, 1, 1, 0, 0, 0)
+_CANONICAL_DOS_TIME = 0
+_CANONICAL_DOS_DATE = 33
+_CANONICAL_EXTERNAL_ATTR = 0o100644 << 16
+_EOCD_SIGNATURE = b"PK\x05\x06"
+_ZIP64_EOCD_SIGNATURE = b"PK\x06\x06"
+_ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_LOCAL_SIGNATURE = b"PK\x03\x04"
+_EOCD_SIZE = 22
+_ZIP64_LOCATOR_SIZE = 20
+_ZIP64_EOCD_MINIMUM_BODY_SIZE = 44
+_REQUIRED_METADATA_ENTRIES = 2
+_UNIX_SYSTEM = 3
+_ZIP_VERSION = 20
+_ZIP64_VERSION = 45
+_EXTRA_HEADER_SIZE = 4
+_UINT16_MAX = (1 << 16) - 1
+_UINT32_MAX = (1 << 32) - 1
+_ZIP64_EXTRA = 0x0001
 
 _SHA256 = QualifiedName(BLOB_NAMESPACE, "sha256")
 _SIZE = QualifiedName(BLOB_NAMESPACE, "size")
@@ -593,6 +623,765 @@ class BlobProfile:
         return tuple(required)
 
 
+@dataclass(frozen=True, slots=True)
+class BundleLimits:
+    """Bound bundle metadata and declared uncompressed entry sizes."""
+
+    max_entries: int = 100_000
+    max_entry_bytes: int = 1 << 40
+    max_total_bytes: int = 1 << 44
+    max_central_directory_bytes: int = 64 << 20
+    max_index_bytes: int = 16 << 20
+    max_graph_bytes: int = MAX_DOCUMENT_BYTES
+
+    def __post_init__(self) -> None:
+        """Require every configured resource limit to be a positive integer."""
+        for name in (
+            "max_entries",
+            "max_entry_bytes",
+            "max_total_bytes",
+            "max_central_directory_bytes",
+            "max_index_bytes",
+            "max_graph_bytes",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"bundle limit {name}={value!r} is not integral")
+            if value <= 0:
+                raise ValueError(f"bundle limit {name}={value} is not positive")
+
+
+@dataclass(frozen=True, slots=True)
+class BundleAsset:
+    """Describe one durably identified asset row in declared graph order."""
+
+    id: str
+    position: int
+    ref: BlobRef
+    mode: Literal["embedded", "linked"]
+    href: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CentralDirectory:
+    count: int
+    size: int
+    offset: int
+    eocd_offset: int
+    zip64: bool
+
+
+class Bundle:
+    """Expose one validated bundle graph and its lazily opened payloads.
+
+    Opening validates the complete index, graph bytes, inventory, ZIP metadata,
+    and local entry headers. Payload bodies are not read until ``open_blob`` is
+    called. The bundle borrows the caller's binary source; closing the bundle
+    releases ZIP state but does not close that source.
+    """
+
+    graph: Graph
+    _archive: zipfile.ZipFile
+    _assets: tuple[BundleAsset, ...]
+    _closed: bool
+
+    def __init__(self) -> None:
+        """Refuse direct construction because bundle state must be validated."""
+        raise TypeError("Bundle objects are created by open_bundle()")
+
+    @classmethod
+    def _from_validated(
+        cls,
+        graph: Graph,
+        archive: zipfile.ZipFile,
+        assets: tuple[BundleAsset, ...],
+    ) -> Bundle:
+        """Construct a bundle from state already validated by ``open_bundle``."""
+        bundle = object.__new__(cls)
+        bundle.graph = graph
+        bundle._archive = archive
+        bundle._assets = assets
+        bundle._closed = False
+        return bundle
+
+    def assets(self) -> tuple[BundleAsset, ...]:
+        """Return durably identified asset rows in declared blob-item order."""
+        return self._assets
+
+    def open_blob(
+        self, ref: BlobRef, resolver: BlobResolver | None = None
+    ) -> VerifiedReader:
+        """Open one declared payload and verify a complete sequential read."""
+        import zipfile  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+        if self._closed:
+            raise ValueError("bundle is closed")
+        asset = next((row for row in self._assets if row.ref == ref), None)
+        if asset is None:
+            raise ValueError(
+                f"bundle does not declare blob {ref.sha256} with size {ref.size}"
+            )
+        if asset.mode == "embedded":
+            try:
+                source = self._archive.open(_BLOB_PATH + ref.sha256, "r")
+            except (KeyError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
+                raise ValueError(
+                    f"bundle cannot open embedded blob {ref.sha256}: {error}"
+                ) from error
+            return VerifiedReader(cast(BinaryIO, source), ref)
+        if resolver is None:
+            raise ValueError(f"linked blob {ref.sha256} requires a resolver")
+        linked_source = resolver.open(ref, asset.href)
+        if linked_source is None:
+            raise ValueError(f"linked blob {ref.sha256} was not found by the resolver")
+        return VerifiedReader(linked_source, ref)
+
+    def close(self) -> None:
+        """Release bundle ZIP state without closing the caller-owned source."""
+        if not self._closed:
+            self._archive.close()
+            self._closed = True
+
+    def __enter__(self) -> Bundle:
+        """Return this open bundle for a context-managed read session."""
+        if self._closed:
+            raise ValueError("bundle is closed")
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        """Close ZIP state when leaving a context-managed read session."""
+        del exception
+        self.close()
+
+
+def open_bundle(
+    source: BinaryIO,
+    *,
+    limits: BundleLimits = BundleLimits(),  # noqa: B008 -- frozen public default
+) -> Bundle:
+    """Validate and open a strict store-only bundle without reading payloads."""
+    import zipfile  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    directory = _read_central_directory(source, limits)
+    try:
+        archive = zipfile.ZipFile(source, "r")
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise ValueError(f"invalid bundle ZIP: {error}") from error
+    try:
+        infos = tuple(archive.infolist())
+        _check_archive_profile(source, archive, infos, directory, limits)
+        index_bytes = _read_metadata_entry(
+            archive, infos[0], limits.max_index_bytes, "bundle index"
+        )
+        index = _parse_bundle_index(index_bytes)
+        assets = _parse_assets(index["assets"])
+        _check_index_entry_order(infos, assets)
+        graph_entry = _graph_row(index["graph"])
+        graph_info = infos[1]
+        if graph_entry[0] != _BUNDLE_GRAPH:
+            raise ValueError("bundle graph path must be 'graph.json'")
+        if graph_entry[2] != graph_info.file_size:
+            raise ValueError(
+                "bundle graph size does not match the graph.json entry size"
+            )
+        graph_bytes = _read_metadata_entry(
+            archive, graph_info, limits.max_graph_bytes, "bundle graph"
+        )
+        actual_digest = hashlib.sha256(graph_bytes).hexdigest()
+        if actual_digest != graph_entry[1]:
+            raise ValueError(
+                f"bundle graph SHA-256 mismatch: expected {graph_entry[1]}, "
+                f"read {actual_digest}"
+            )
+        graph = loads(graph_bytes)
+        _check_inventory(graph, assets)
+        return Bundle._from_validated(graph, archive, assets)
+    except Exception:
+        archive.close()
+        raise
+
+
+def bundle_json_schema() -> dict[str, object]:
+    """Return the strict JSON Schema for bundle version 1 indexes."""
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    size = {"type": "integer", "minimum": 0}
+    identity = {
+        "id": {"type": "string", "minLength": 1},
+        "position": {"type": "integer", "minimum": 0},
+        "sha256": digest,
+        "size": size,
+    }
+    embedded = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["id", "position", "sha256", "size", "mode"],
+        "properties": {**identity, "mode": {"const": "embedded"}},
+    }
+    linked = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["id", "position", "sha256", "size", "mode"],
+        "properties": {
+            **identity,
+            "mode": {"const": "linked"},
+            "href": {"type": "string"},
+        },
+    }
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://tiergraph.org/schema/bundle-1.json",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["bundle_version", "graph", "assets"],
+        "properties": {
+            "bundle_version": {"const": BUNDLE_VERSION},
+            "graph": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path", "sha256", "size"],
+                "properties": {
+                    "path": {"const": _BUNDLE_GRAPH},
+                    "sha256": digest,
+                    "size": size,
+                },
+            },
+            "assets": {"type": "array", "items": {"oneOf": [embedded, linked]}},
+        },
+    }
+
+
+def _read_central_directory(  # noqa: PLR0915 -- fixed binary record sequence
+    source: BinaryIO, limits: BundleLimits
+) -> _CentralDirectory:
+    """Read bounded end records and reject limits before ZIP allocates entries."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    if not source.seekable() or not source.readable():
+        raise ValueError("bundle source must be a seekable, readable binary stream")
+    try:
+        file_size = source.seek(0, io.SEEK_END)
+    except (OSError, ValueError) as error:
+        raise ValueError("bundle source cannot be measured") from error
+    if (
+        isinstance(file_size, bool)
+        or not isinstance(file_size, int)
+        or file_size < _EOCD_SIZE
+    ):
+        raise ValueError("bundle ZIP has no complete end record")
+    eocd_offset = file_size - _EOCD_SIZE
+    tail = _read_at(source, eocd_offset, _EOCD_SIZE, "bundle ZIP end record")
+    if not tail.startswith(_EOCD_SIGNATURE):
+        raise ValueError(
+            "bundle ZIP end record is missing or archive comments are not allowed"
+        )
+    fields = struct.unpack("<4s4H2LH", tail)
+    _, disk, central_disk, disk_count, count, size, offset, comment_size = fields
+    if comment_size:
+        raise ValueError("bundle ZIP archive comments are not allowed")
+    if disk != 0 or central_disk != 0 or disk_count != count:
+        raise ValueError("bundle ZIP must be a single-disk archive")
+    sentinels = count == _UINT16_MAX or size == _UINT32_MAX or offset == _UINT32_MAX
+    zip64_offset = eocd_offset - _ZIP64_LOCATOR_SIZE
+    has_locator = (
+        zip64_offset >= 0
+        and _read_at(source, zip64_offset, 4, "ZIP64 locator")
+        == _ZIP64_LOCATOR_SIGNATURE
+    )
+    zip64 = False
+    if sentinels:
+        if not has_locator:
+            raise ValueError("bundle ZIP64 end records are missing")
+        locator = struct.unpack(
+            "<4sLQL",
+            _read_at(source, zip64_offset, _ZIP64_LOCATOR_SIZE, "ZIP64 locator"),
+        )
+        _, zip64_disk, record_offset, total_disks = locator
+        if zip64_disk != 0 or total_disks != 1:
+            raise ValueError("bundle ZIP64 must be a single-disk archive")
+        if record_offset + 56 != zip64_offset:
+            raise ValueError("bundle ZIP64 end-record layout is inconsistent")
+        record = _read_at(source, record_offset, 56, "ZIP64 end record")
+        values = struct.unpack("<4sQ2H2L4Q", record)
+        (
+            signature,
+            record_size,
+            _,
+            _,
+            record_disk,
+            record_cd_disk,
+            disk_count64,
+            count64,
+            size64,
+            offset64,
+        ) = values
+        if (
+            signature != _ZIP64_EOCD_SIGNATURE
+            or record_size != _ZIP64_EOCD_MINIMUM_BODY_SIZE
+        ):
+            raise ValueError("bundle ZIP64 end record is malformed")
+        if record_disk != 0 or record_cd_disk != 0 or disk_count64 != count64:
+            raise ValueError("bundle ZIP64 must be a single-disk archive")
+        for classic, expanded, sentinel in (
+            (count, count64, _UINT16_MAX),
+            (size, size64, _UINT32_MAX),
+            (offset, offset64, _UINT32_MAX),
+        ):
+            if classic == sentinel:
+                if expanded < sentinel:
+                    raise ValueError(
+                        "bundle ZIP64 is allowed only when a field requires it"
+                    )
+            elif expanded != classic:
+                raise ValueError("bundle ZIP64 end records disagree")
+        if offset64 + size64 != record_offset:
+            raise ValueError("bundle ZIP64 central-directory layout is inconsistent")
+        count, size, offset = count64, size64, offset64
+        zip64 = True
+    elif has_locator:
+        raise ValueError("bundle ZIP64 is allowed only when a size requires it")
+    _check_limit(count, limits.max_entries, "entry count")
+    _check_limit(size, limits.max_central_directory_bytes, "central directory size")
+    if offset + size != (record_offset if zip64 else eocd_offset):
+        raise ValueError(
+            "bundle central directory lies outside the archive or leaves "
+            "undeclared bytes"
+        )
+    return _CentralDirectory(count, size, offset, eocd_offset, zip64)
+
+
+def _check_archive_profile(  # noqa: PLR0915 -- complete closed ZIP profile
+    source: BinaryIO,
+    archive: zipfile.ZipFile,
+    infos: tuple[zipfile.ZipInfo, ...],
+    directory: _CentralDirectory,
+    limits: BundleLimits,
+) -> None:
+    """Enforce the closed, canonical store-only ZIP profile."""
+    import zipfile  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    if len(infos) != directory.count:
+        raise ValueError("bundle ZIP entry count disagrees with its end record")
+    if archive.comment:
+        raise ValueError("bundle ZIP archive comments are not allowed")
+    if len(infos) < _REQUIRED_METADATA_ENTRIES:
+        raise ValueError("bundle ZIP must contain bundle.json and graph.json")
+    for info in infos:
+        try:
+            info.filename.encode("ascii", "strict")
+        except UnicodeEncodeError as error:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} name is not ASCII"
+            ) from error
+    names = [info.filename for info in infos]
+    if len(names) != len(set(names)):
+        raise ValueError("bundle ZIP contains a duplicate entry name")
+    if names[:2] != [_BUNDLE_INDEX, _BUNDLE_GRAPH]:
+        raise ValueError(
+            "bundle ZIP entry order must begin with bundle.json, graph.json"
+        )
+    total = 0
+    previous_end = 0
+    for index, info in enumerate(infos):
+        if info.filename.startswith("/") or "\\" in info.filename:
+            raise ValueError(f"bundle ZIP entry {info.filename!r} is not a safe name")
+        if info.is_dir():
+            raise ValueError(f"bundle ZIP entry {info.filename!r} is a directory")
+        parts = info.filename.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ValueError(f"bundle ZIP entry {info.filename!r} is not a safe name")
+        if info.compress_type != zipfile.ZIP_STORED:
+            raise ValueError(f"bundle ZIP entry {info.filename!r} is compressed")
+        if info.flag_bits & 0x1:
+            raise ValueError(f"bundle ZIP entry {info.filename!r} is encrypted")
+        if info.flag_bits & 0x8:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} uses a data descriptor"
+            )
+        if info.flag_bits:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} has unsupported flags"
+            )
+        if info.date_time != _CANONICAL_DATE:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} has a noncanonical timestamp"
+            )
+        if (
+            info.create_system != _UNIX_SYSTEM
+            or info.external_attr != _CANONICAL_EXTERNAL_ATTR
+        ):
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} has noncanonical permissions"
+            )
+        if info.comment:
+            raise ValueError(f"bundle ZIP entry {info.filename!r} has a comment")
+        _check_zip64_extra(info)
+        _check_limit(
+            info.file_size, limits.max_entry_bytes, f"entry {info.filename!r} size"
+        )
+        total += info.file_size
+        _check_limit(total, limits.max_total_bytes, "total entry size")
+        if info.header_offset != previous_end:
+            detail = "prefix bytes" if index == 0 else "gaps or overlapping entries"
+            raise ValueError(f"bundle ZIP contains {detail}")
+        previous_end = _check_local_header(source, info)
+    if previous_end != directory.offset:
+        raise ValueError("bundle ZIP contains bytes outside its declared entries")
+    if infos[0].file_size > limits.max_index_bytes:
+        _raise_limit("bundle index size", infos[0].file_size, limits.max_index_bytes)
+    if infos[1].file_size > limits.max_graph_bytes:
+        _raise_limit("bundle graph size", infos[1].file_size, limits.max_graph_bytes)
+
+
+def _check_local_header(source: BinaryIO, info: zipfile.ZipInfo) -> int:
+    """Validate one local header and return the byte after its stored payload."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    header = _read_at(source, info.header_offset, 30, f"entry {info.filename!r} header")
+    values = struct.unpack("<4s5H3L2H", header)
+    (
+        signature,
+        version,
+        flags,
+        compression,
+        stamp_time,
+        stamp_date,
+        crc,
+        compressed,
+        size,
+        name_size,
+        extra_size,
+    ) = values
+    if signature != _LOCAL_SIGNATURE:
+        raise ValueError(f"bundle ZIP entry {info.filename!r} has a bad local header")
+    if flags != info.flag_bits or compression != info.compress_type:
+        raise ValueError(f"bundle ZIP entry {info.filename!r} local header disagrees")
+    if stamp_time != _CANONICAL_DOS_TIME or stamp_date != _CANONICAL_DOS_DATE:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} local timestamp disagrees"
+        )
+    name = _read_at(source, info.header_offset + 30, name_size, "local entry name")
+    try:
+        canonical_name = info.filename.encode("ascii", "strict")
+    except UnicodeEncodeError as error:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} name is not ASCII"
+        ) from error
+    if name != canonical_name:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} has a noncanonical local name"
+        )
+    extra = _read_at(
+        source, info.header_offset + 30 + name_size, extra_size, "local entry extra"
+    )
+    needs_zip64 = info.file_size >= _UINT32_MAX or info.compress_size >= _UINT32_MAX
+    if needs_zip64:
+        if size != _UINT32_MAX or compressed != _UINT32_MAX:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} omits required ZIP64 sizes"
+            )
+        values = _check_extra_bytes(extra, required_values=2, subject=info.filename)
+        if values != (info.file_size, info.compress_size):
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} local ZIP64 sizes disagree"
+            )
+    elif extra:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} has an unsupported local extra field"
+        )
+    elif size != info.file_size or compressed != info.compress_size:
+        raise ValueError(f"bundle ZIP entry {info.filename!r} local sizes disagree")
+    if crc != info.CRC or version != info.extract_version:
+        raise ValueError(f"bundle ZIP entry {info.filename!r} local header disagrees")
+    return int(info.header_offset + 30 + name_size + extra_size + info.compress_size)
+
+
+def _check_zip64_extra(info: zipfile.ZipInfo) -> None:
+    """Allow exactly the ZIP64 metadata required by an oversized field."""
+    expected = tuple(
+        value
+        for value, maximum in (
+            (info.file_size, _UINT32_MAX),
+            (info.compress_size, _UINT32_MAX),
+            (info.header_offset, _UINT32_MAX),
+        )
+        if value >= maximum
+    )
+    if expected:
+        values = _check_extra_bytes(
+            info.extra, required_values=len(expected), subject=info.filename
+        )
+        if values != expected:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} ZIP64 metadata disagrees"
+            )
+        if info.extract_version != _ZIP64_VERSION:
+            raise ValueError(
+                f"bundle ZIP entry {info.filename!r} requires ZIP64 version 45"
+            )
+    elif info.extra:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} has an unsupported extra field"
+        )
+    elif info.extract_version != _ZIP_VERSION or info.create_version != _ZIP_VERSION:
+        raise ValueError(
+            f"bundle ZIP entry {info.filename!r} has a noncanonical ZIP version"
+        )
+
+
+def _check_extra_bytes(
+    extra: bytes, *, required_values: int, subject: str
+) -> tuple[int, ...]:
+    """Require one minimally sized ZIP64 extra record and no other records."""
+    import struct  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    if len(extra) < _EXTRA_HEADER_SIZE:
+        raise ValueError(f"bundle ZIP entry {subject!r} has malformed ZIP64 metadata")
+    identifier, length = struct.unpack_from("<HH", extra)
+    if (
+        identifier != _ZIP64_EXTRA
+        or length != required_values * 8
+        or len(extra) != length + _EXTRA_HEADER_SIZE
+    ):
+        raise ValueError(f"bundle ZIP entry {subject!r} has nonminimal ZIP64 metadata")
+    return struct.unpack_from(f"<{required_values}Q", extra, _EXTRA_HEADER_SIZE)
+
+
+def _read_metadata_entry(
+    archive: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int, subject: str
+) -> bytes:
+    """Read one already bounded metadata entry and reject short or extra bytes."""
+    _check_limit(info.file_size, limit, f"{subject} size")
+    with archive.open(info, "r") as reader:
+        data = reader.read(info.file_size + 1)
+        if not isinstance(data, bytes):
+            raise TypeError(f"{subject} reader did not return bytes")
+    if len(data) != info.file_size:
+        raise ValueError(f"{subject} bytes disagree with the declared entry size")
+    return data
+
+
+def _parse_bundle_index(document: bytes) -> dict[str, object]:
+    """Parse a closed strict-JSON bundle index before the graph is read."""
+    import json  # noqa: PLC0415 -- loaded only for opted-in bundle reads
+
+    def _reject_constant(value: str) -> object:
+        raise ValueError(f"bundle index contains non-JSON number {value!r}")
+
+    def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for name, value in pairs:
+            if name in result:
+                raise ValueError(f"bundle index repeats field {name!r}")
+            result[name] = value
+        return result
+
+    try:
+        parsed = json.loads(
+            document.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise ValueError(f"bundle index is not strict UTF-8 JSON: {error}") from error
+    root = _closed_object(parsed, {"bundle_version", "graph", "assets"}, "bundle index")
+    if root["bundle_version"] != BUNDLE_VERSION:
+        raise ValueError(
+            f"bundle version must be {BUNDLE_VERSION!r}, got {root['bundle_version']!r}"
+        )
+    return root
+
+
+def _graph_row(value: object) -> tuple[str, str, int]:
+    """Validate and return the graph index row."""
+    row = _closed_object(value, {"path", "sha256", "size"}, "bundle graph row")
+    path = _string_field(row["path"], "bundle graph path")
+    digest = _string_field(row["sha256"], "bundle graph SHA-256")
+    size = _integer_field(row["size"], "bundle graph size")
+    return path, BlobRef(digest, size).sha256, size
+
+
+def _parse_assets(value: object) -> tuple[BundleAsset, ...]:
+    """Validate closed asset rows in their explicit total order."""
+    if not isinstance(value, list):
+        raise ValueError("bundle assets must be an array")
+    rows: list[BundleAsset] = []
+    seen_ids: set[str] = set()
+    by_ref: dict[BlobRef, tuple[str, str | None]] = {}
+    for position, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ValueError(f"bundle asset {position} must be an object")
+        mode = raw.get("mode")
+        fields = {"id", "position", "sha256", "size", "mode"}
+        if mode == "linked" and "href" in raw:
+            fields.add("href")
+        row = _closed_object(raw, fields, f"bundle asset {position}")
+        durable_id = _string_field(row["id"], f"bundle asset {position} id")
+        DurableItemRef(durable_id)
+        if durable_id in seen_ids:
+            raise ValueError(f"bundle assets repeat durable id {durable_id!r}")
+        seen_ids.add(durable_id)
+        declared_position = _integer_field(
+            row["position"], f"bundle asset {position} position"
+        )
+        if declared_position != position:
+            raise ValueError(
+                f"bundle asset {position} declares out-of-order position "
+                f"{declared_position}"
+            )
+        ref = BlobRef(
+            _string_field(row["sha256"], f"bundle asset {position} SHA-256"),
+            _integer_field(row["size"], f"bundle asset {position} size"),
+        )
+        if mode not in {"embedded", "linked"}:
+            raise ValueError(f"bundle asset {position} has unsupported mode {mode!r}")
+        href = (
+            _string_field(row["href"], f"bundle asset {position} href")
+            if "href" in row
+            else None
+        )
+        location = (cast(str, mode), href)
+        previous = by_ref.setdefault(ref, location)
+        if previous != location:
+            raise ValueError(
+                f"bundle assets give blob {ref.sha256} conflicting locations"
+            )
+        rows.append(
+            BundleAsset(
+                durable_id,
+                position,
+                ref,
+                cast(Literal["embedded", "linked"], mode),
+                href,
+            )
+        )
+    return tuple(rows)
+
+
+def _check_index_entry_order(
+    infos: tuple[zipfile.ZipInfo, ...], assets: tuple[BundleAsset, ...]
+) -> None:
+    """Require exactly one payload entry per first embedded digest, in row order."""
+    digests: list[str] = []
+    seen: set[str] = set()
+    for asset in assets:
+        if asset.mode == "embedded" and asset.ref.sha256 not in seen:
+            seen.add(asset.ref.sha256)
+            digests.append(asset.ref.sha256)
+    expected = [
+        _BUNDLE_INDEX,
+        _BUNDLE_GRAPH,
+        *(_BLOB_PATH + value for value in digests),
+    ]
+    actual = [info.filename for info in infos]
+    if actual != expected:
+        raise ValueError(
+            "bundle ZIP entries must be exactly bundle.json, graph.json, and "
+            "embedded blobs in declared asset order"
+        )
+    by_name = {info.filename: info for info in infos}
+    for asset in assets:
+        if asset.mode != "embedded":
+            continue
+        info = by_name[_BLOB_PATH + asset.ref.sha256]
+        if info.file_size != asset.ref.size:
+            raise ValueError(
+                f"bundle embedded blob {asset.ref.sha256} entry size "
+                "does not match its asset row"
+            )
+
+
+def _check_inventory(graph: Graph, assets: tuple[BundleAsset, ...]) -> None:
+    """Match each ordered index row to one durably identified graph blob item."""
+    has_vocabulary = any(
+        namespace.namespace == BLOB_NAMESPACE for namespace in graph.namespaces
+    )
+    entries = BlobProfile(graph).blobs() if has_vocabulary else ()
+    if len(entries) != len(assets):
+        raise ValueError(
+            f"bundle inventory has {len(assets)} rows for {len(entries)} blob items"
+        )
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    for position, ((reference, expected_ref), asset) in enumerate(
+        zip(entries, assets, strict=True)
+    ):
+        item = tiers[reference.tier].items[reference.index]
+        expected_id = item.durable_id
+        if (
+            asset.position != position
+            or asset.id != expected_id
+            or asset.ref != expected_ref
+        ):
+            raise ValueError(
+                f"bundle asset {position} does not match graph blob item "
+                f"{reference} with durable id {expected_id!r}"
+            )
+
+
+def _closed_object(value: object, fields: set[str], subject: str) -> dict[str, object]:
+    """Require one object to have exactly its closed field set."""
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{subject} must be an object")
+    actual = set(value)
+    if actual != fields:
+        missing = sorted(fields - actual)
+        unknown = sorted(actual - fields)
+        raise ValueError(
+            f"{subject} fields differ; missing={missing}, unknown={unknown}"
+        )
+    return cast(dict[str, object], value)
+
+
+def _string_field(value: object, subject: str) -> str:
+    """Require one JSON value to be a string."""
+    if not isinstance(value, str):
+        raise ValueError(f"{subject} must be a string")
+    return value
+
+
+def _integer_field(value: object, subject: str) -> int:
+    """Require one JSON value to be a nonnegative integer other than bool."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{subject} must be a nonnegative integer")
+    return value
+
+
+def _check_limit(value: int, limit: int, subject: str) -> None:
+    """Refuse a declared resource amount above its configured limit."""
+    if value > limit:
+        _raise_limit(subject, value, limit)
+
+
+def _raise_limit(subject: str, value: int, limit: int) -> None:
+    """Raise the common limit-class refusal used by bundle parsing."""
+    raise ValueError(f"bundle limit: {subject} {value} exceeds {limit}")
+
+
+def _read_at(source: BinaryIO, offset: int, size: int, subject: str) -> bytes:
+    """Read exactly one bounded byte range from a seekable binary source."""
+    try:
+        source.seek(offset)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot seek to {subject}") from error
+    return _read_exact(source, size, subject)
+
+
+def _read_exact(source: BinaryIO, size: int, subject: str) -> bytes:
+    """Read an exact small structure without accepting oversized read results."""
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = source.read(remaining)
+        if not isinstance(chunk, bytes):
+            raise TypeError(f"{subject} reader did not return bytes")
+        if len(chunk) > remaining:
+            raise ValueError(f"{subject} reader returned more bytes than requested")
+        if not chunk:
+            raise ValueError(f"{subject} is truncated")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def declare_blob_vocabulary(editor: GraphEditor) -> GraphEditor:
     """Declare the fixed blob prefix and attributes on a mutable graph editor.
 
@@ -608,14 +1397,20 @@ def declare_blob_vocabulary(editor: GraphEditor) -> GraphEditor:
 
 __all__ = [
     "BLOB_NAMESPACE",
+    "BUNDLE_VERSION",
     "BlobProfile",
     "BlobRef",
     "BlobResolver",
     "BlobSink",
     "BlobSpan",
+    "Bundle",
+    "BundleAsset",
+    "BundleLimits",
     "ChainResolver",
     "MappingResolver",
     "VerifiedReader",
+    "bundle_json_schema",
     "declare_blob_vocabulary",
     "hash_blob",
+    "open_bundle",
 ]

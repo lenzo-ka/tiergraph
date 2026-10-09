@@ -147,6 +147,7 @@ _STDLIB_IMPORTS = {
     "shutil",
     "signal",
     "statistics",
+    "struct",
     "subprocess",
     "sys",
     "tarfile",
@@ -158,6 +159,7 @@ _STDLIB_IMPORTS = {
     "unicodedata",
     "urllib",
     "venv",
+    "zipfile",
 }
 # This distribution's packages and its in-repository runnable/test modules.
 _PROJECT_IMPORTS = {

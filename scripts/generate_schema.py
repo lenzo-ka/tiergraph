@@ -9,11 +9,13 @@ import subprocess
 from pathlib import Path
 
 from tiergraph import __version__
+from tiergraph.blob import bundle_json_schema
 from tiergraph.schema import json_schema, shape_hash
 from tiergraph.wire import FORMAT_VERSION
 
 SCHEMA_PATH = Path("schema/tiergraph.schema.json")
 STAMP_PATH = Path("schema/tiergraph.schema.sha256")
+BUNDLE_SCHEMA_PATH = Path("schema/tiergraph.bundle.schema.json")
 
 
 def generated_bytes() -> bytes:
@@ -22,6 +24,14 @@ def generated_bytes() -> bytes:
         json.dumps(
             json_schema(FORMAT_VERSION), ensure_ascii=False, indent=2, sort_keys=True
         )
+        + "\n"
+    ).encode()
+
+
+def generated_bundle_bytes() -> bytes:
+    """Return canonical generated bundle-index schema bytes."""
+    return (
+        json.dumps(bundle_json_schema(), ensure_ascii=False, indent=2, sort_keys=True)
         + "\n"
     ).encode()
 
@@ -85,6 +95,7 @@ def main(
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args(argv)
     schema_bytes = generated_bytes()
+    bundle_schema_bytes = generated_bundle_bytes()
     expected_stamp = stamp_bytes(schema_bytes)
     current = json.loads(expected_stamp)
     try:
@@ -100,10 +111,13 @@ def main(
             raise SystemExit(
                 f"{STAMP_PATH} does not match the declaration and artifact"
             )
+        if BUNDLE_SCHEMA_PATH.read_bytes() != bundle_schema_bytes:
+            raise SystemExit(f"{BUNDLE_SCHEMA_PATH} is stale; regenerate it")
         return 0
     SCHEMA_PATH.parent.mkdir(exist_ok=True)
     SCHEMA_PATH.write_bytes(schema_bytes)
     STAMP_PATH.write_bytes(expected_stamp)
+    BUNDLE_SCHEMA_PATH.write_bytes(bundle_schema_bytes)
     return 0
 
 
