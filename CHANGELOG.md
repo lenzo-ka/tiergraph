@@ -150,6 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reported binary donor relations that cross a supplied replacement subtree
+  edge as `donor_relations` dependencies instead of silently omitting them.
+  Such relations remain uncopied when no external endpoint mapping exists.
 - Refused CLI annotations on direct edits and patch application when no patch,
   report, or dry-run output can carry them.
 - Removed false open-stream pending watermarks for start-anchored patterns in

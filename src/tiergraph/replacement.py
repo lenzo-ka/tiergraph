@@ -161,7 +161,14 @@ class ReplacementPolicies:
 
 @dataclass(frozen=True, slots=True)
 class DetachedDependency:
-    """Name one dependency removed from the live graph by replacement."""
+    """Name one dependency omitted or removed by replacement.
+
+    Ordinary carrier coordinates address the graph passed to the replacement
+    function before editing. A
+    ``donor_relations`` coordinate addresses :attr:`Subtree.graph` and names a
+    binary relation that crossed the supplied subtree edge, so it could not be
+    copied.
+    """
 
     carrier: str
     index: int
@@ -276,7 +283,8 @@ def replace_subtree(
     The root, its incoming containment link, its attributes, and its layer facts
     remain live. The default abandons dependencies on descendants. The result
     reports the abandoned items, relation instances, and facts whether or not a
-    journal is used. Correspondence is explicitly opt-in.
+    journal is used. A binary donor relation that crosses the supplied subtree
+    edge is also reported, but not copied. Correspondence is explicitly opt-in.
     """
     outcome = _replace_subtree(
         graph, root, containment, new, policies, capture_report=True
@@ -330,6 +338,7 @@ def _swap_subtrees(
         names,
         Subtree(temporary_graph, right.root),
         first_policies,
+        report_donor_edges=False,
     )
     if isinstance(second, DurableItemRef):
         current_second: ItemRef | DurableItemRef = second
@@ -342,6 +351,7 @@ def _swap_subtrees(
         names,
         Subtree(graph, first),
         second_policies,
+        report_donor_edges=False,
     )
     current_temporary = {
         source: second_outcome.graph.resolve_item(DurableItemRef(durable_id))
@@ -364,6 +374,7 @@ def _swap_subtrees(
         names,
         Subtree(graph, right.root),
         ReplacementPolicies.corresponding(final_correspondence),
+        report_donor_edges=False,
     )
     detached = _ordered_detached(
         (
@@ -738,6 +749,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     policies: ReplacementPolicies | None,
     *,
     capture_report: bool = False,
+    report_donor_edges: bool = True,
 ) -> _ReplacementOutcome:
     names = _containment_names(containment)
     _validated_containment(graph, names)
@@ -902,14 +914,20 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
 
     inserted_graph = editor.freeze()
     source_members = frozenset({new_shape.root, *new_shape.descendants})
-    source_binary = tuple(
-        index
-        for index, relation in enumerate(new.graph.relations)
-        if all(
+    source_binary: list[int] = []
+    for index, relation in enumerate(new.graph.relations):
+        inside = tuple(
             _source_endpoint_inside(new.graph, endpoint, source_members)
             for endpoint in (relation.left, relation.right)
         )
-    )
+        if all(inside):
+            source_binary.append(index)
+        elif report_donor_edges and any(inside):
+            detached.append(
+                DetachedDependency(
+                    "donor_relations", index, declaration=relation.declaration
+                )
+            )
     source_polyadic = tuple(
         index
         for index, relation in enumerate(new.graph.polyadic_relations)

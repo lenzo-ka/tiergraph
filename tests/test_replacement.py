@@ -279,6 +279,70 @@ def test_abandon_replaces_descendants_reports_dependencies_and_undoes(
     assert editor.freeze() == expected
 
 
+def test_donor_link_crossing_subtree_edge_is_reported_not_copied() -> None:
+    """A donor Token-to-Word link is visible even without an anchor map."""
+    case = fixture("speech")
+    namespace = case.root.namespace
+    token = QualifiedName(namespace, "token")
+    token_members = QualifiedName(namespace, "tokens")
+    token_type = QualifiedName(namespace, "Token")
+    token_to_word = QualifiedName(namespace, "token-to-word")
+    word_type = next(
+        declaration.item_type
+        for declaration in case.alternative.relation_declarations
+        if isinstance(declaration, SimpleRelationDeclaration)
+        and declaration.tier == case.root
+    )
+    donor_link_index = len(case.alternative.relations)
+    donor_link = RelationInstance(
+        token_to_word,
+        ItemRef(token, 0),
+        ItemRef(case.root, 0),
+        "donor-token-to-word",
+    )
+    donor = replace(
+        case.alternative,
+        tiers=(
+            *case.alternative.tiers,
+            Tier(TierDeclaration(token, "token"), (Item("outside-token"),)),
+        ),
+        relation_declarations=(
+            *case.alternative.relation_declarations,
+            SimpleRelationDeclaration(token_members, token, token_type),
+            BipartiteRelationDeclaration(token_to_word, token_type, word_type),
+        ),
+        relations=(*case.alternative.relations, donor_link),
+    )
+    source = Subtree(donor, ItemRef(case.root, 0))
+    dependency = DetachedDependency(
+        "donor_relations", donor_link_index, declaration=token_to_word
+    )
+
+    result = replace_subtree(
+        case.graph, DurableItemRef("root"), case.containment, source
+    )
+
+    assert dependency in result.report.dependencies
+    result_dependencies = result.report.to_data()["dependencies"]
+    assert isinstance(result_dependencies, list)
+    assert dependency.to_data() in result_dependencies
+    assert all(relation != donor_link for _, relation in result.report.relations)
+    assert all(
+        relation.durable_id != donor_link.durable_id
+        for relation in result.graph.relations
+    )
+
+    journal = Journal()
+    case.graph.edit(journal=journal).replace_subtree(
+        DurableItemRef("root"), case.containment, source
+    )
+    assert dependency in journal.records[0].report.detached_dependencies
+    journal_dependencies = journal.records[0].report.to_data()["detached_dependencies"]
+    assert isinstance(journal_dependencies, list)
+    assert dependency.to_data() in journal_dependencies
+    assert journal.records[0].report.detached_content == result.report
+
+
 def test_correspondence_carries_links_facts_boundaries_and_split_relations() -> None:
     """Opt-in correspondence follows one-to-one and one-to-many mappings."""
     case = fixture("speech")
