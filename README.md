@@ -105,6 +105,12 @@ schema, TextGrid in and out, and span views as JSON, JSON Lines, text, HTML, or
 DOT. See [serialization](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/serialization.md) and
 [span views](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/span-views.md).
 
+**Attach external resources.** Ordered, durably identified items describe
+typed payloads by digest, size, media type, and schema. Ordinary relations
+attach any number of resources to graph items or other resources, while strict
+bundles choose embedded or linked storage per payload. See
+[external resources](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/external-resources.md).
+
 Queries that come from someone else can carry a
 [work budget](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/work-budgets.md).
 
