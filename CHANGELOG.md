@@ -161,6 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `FoldDeclaration` now refuses repeated declared roots at construction, and
+  `Equals` requires its literal collection to be an actual tuple.
+- Predicate binding now resolves a `Spans` predicate's other tier before
+  evaluation. Malformed offset-profile JSON that supplies both or neither of
+  `extent` and `end` is now a staged shape refusal naming the profile path.
 - Bring documentation current with the editing API and path-result serialization.
 - Removed the finite projection-witness admission types, helper, and
   `graph_distance(..., projections=...)` parameter. General graph distance now
@@ -224,6 +229,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Documented and demonstrated that `Spans`, like `span_pairs`, excludes an item
+  from relating to itself.
 - Described the equivalence views as fixed, graph-wide observational
   projections and clarified that declared order remains content under every
   view.

@@ -12,7 +12,7 @@ from importlib import import_module
 from typing import cast
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given, seed, settings
 from hypothesis import strategies as st
 
 import tiergraph.semiring as semiring_module
@@ -978,6 +978,17 @@ def test_declaration_refusals_name_the_offender(
         replace(base, **change)  # type: ignore[arg-type]
 
 
+def test_declaration_refuses_the_first_repeated_root() -> None:
+    """A repeated root cannot make the fold total disagree with an outside pass."""
+    base = declaration()
+    first, second = (state[0] for state in FIXTURE.states(base.graph)[:2])
+    with pytest.raises(ValueError) as caught:
+        replace(base, roots=(first, second, first, second))
+    assert str(caught.value) == (
+        f"fold 'mix-path' lists root {first.to_data()!r} more than once"
+    )
+
+
 def test_a_declared_non_bipartite_dependency_is_named_for_what_it_is() -> None:
     """A fold reports the declaration it found, not that the name is undeclared.
 
@@ -1851,6 +1862,7 @@ def tied_layer_fold(widths: tuple[int, ...], cap: int) -> FoldDeclaration[PathVa
     )
 
 
+@seed(3106)
 @settings(max_examples=40, deadline=None)
 @given(
     tail_widths=st.lists(st.integers(min_value=1, max_value=3), min_size=1, max_size=4),
@@ -1860,49 +1872,45 @@ def test_variable_tie_shapes_match_forced_eager_across_fold_policies(
     tail_widths: list[int], cap: int
 ) -> None:
     """Differentially compare lazy and eager schedules over generated tied DAGs."""
-    for widths in ((1, *tail_widths),):
-        for selected_cap in (cap,):
-            ranked = tied_layer_fold(widths, selected_cap)
-            generic_ranked = cast(FoldDeclaration[object], ranked)
-            configurations: tuple[FoldDeclaration[object], ...] = (
-                generic_ranked,
-                replace(
-                    generic_ranked,
-                    semiring=cast(Semiring[object], DECIMAL_TROPICAL),
-                    lift=cast(Lift[object], decimal_lift),
-                    ranked_output=False,
-                    witness_order=minimum_order,
-                    tie_policy=TiePolicy.ALL,
-                ),
-                replace(
-                    generic_ranked,
-                    semiring=cast(Semiring[object], DECIMAL_TROPICAL),
-                    lift=cast(Lift[object], decimal_lift),
-                    ranked_output=False,
-                    witness_order=minimum_order,
-                    tie_policy=TiePolicy.CHOOSE_FIRST,
-                ),
-                replace(
-                    generic_ranked,
-                    semiring=cast(Semiring[object], COUNTING),
-                    lift=cast(Lift[object], lambda value, label: 1),
-                    ranked_output=False,
-                ),
+    ranked = tied_layer_fold((1, *tail_widths), cap)
+    generic_ranked = cast(FoldDeclaration[object], ranked)
+    configurations: tuple[FoldDeclaration[object], ...] = (
+        generic_ranked,
+        replace(
+            generic_ranked,
+            semiring=cast(Semiring[object], DECIMAL_TROPICAL),
+            lift=cast(Lift[object], decimal_lift),
+            ranked_output=False,
+            witness_order=minimum_order,
+            tie_policy=TiePolicy.ALL,
+        ),
+        replace(
+            generic_ranked,
+            semiring=cast(Semiring[object], DECIMAL_TROPICAL),
+            lift=cast(Lift[object], decimal_lift),
+            ranked_output=False,
+            witness_order=minimum_order,
+            tie_policy=TiePolicy.CHOOSE_FIRST,
+        ),
+        replace(
+            generic_ranked,
+            semiring=cast(Semiring[object], COUNTING),
+            lift=cast(Lift[object], lambda value, label: 1),
+            ranked_output=False,
+        ),
+    )
+    for configured in configurations:
+        lazy = configured.run()
+        with pytest.MonkeyPatch.context() as eager_patch:
+            eager_patch.setattr(
+                FoldDeclaration,
+                "_lazy_ranked_product",
+                lambda self, left, right, witness_operations, ranked_additions: None,
             )
-            for configured in configurations:
-                lazy = configured.run()
-                with pytest.MonkeyPatch.context() as eager_patch:
-                    eager_patch.setattr(
-                        FoldDeclaration,
-                        "_lazy_ranked_product",
-                        lambda self, left, right, witness_operations, ranked_additions: (
-                            None
-                        ),
-                    )
-                    eager = configured.run()
-                assert _without_operation_counters(
-                    lazy, configured.semiring
-                ) == _without_operation_counters(eager, configured.semiring)
+            eager = configured.run()
+        assert _without_operation_counters(
+            lazy, configured.semiring
+        ) == _without_operation_counters(eager, configured.semiring)
 
 
 def test_fold_selects_the_winning_payload_through_semiring_addition() -> None:

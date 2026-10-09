@@ -30,6 +30,7 @@ from tiergraph import (
     XsdType,
     evaluate_selection,
 )
+from tiergraph.core import JsonValue
 from tiergraph.match import Extent, _pairs_request_loads, span_pairs
 from tiergraph.predicate import (
     And,
@@ -398,6 +399,19 @@ def test_o3_partitions_and_self_pairs_are_excluded() -> None:
     assert pair_labels(source, result.pairs) == []
 
 
+def test_spans_excludes_self_relations_on_one_tier() -> None:
+    """A same-tier predicate needs a distinct interval-related item."""
+    source = offset_graph()
+    predicate = Spans(
+        offsets(),
+        IntervalRelation.EQUAL,
+        Quantifier.ANY,
+        q("det"),
+        And(()),
+    )
+    assert selected(source, "det", predicate) == []
+
+
 def test_o4_pairs_retain_left_major_declared_order() -> None:
     source = Graph(
         (NamespaceDeclaration("ex", NS),),
@@ -472,6 +486,69 @@ def test_o5_offset_profile_requires_one_measure() -> None:
         ValueError, match="^OffsetProfile needs exactly one of extent or end$"
     ):
         OffsetProfile(q("start"), extent=q("extent"), end=q("end"))
+
+
+@pytest.mark.parametrize(
+    "measure",
+    ({}, {"extent": q("extent").to_data(), "end": q("end").to_data()}),
+)
+def test_offset_profile_json_cardinality_is_a_staged_shape_refusal(
+    measure: dict[str, JsonValue],
+) -> None:
+    predicate = predicate_to_data(
+        Spans(
+            offsets(),
+            IntervalRelation.EQUAL,
+            Quantifier.ANY,
+            q("gold"),
+            And(()),
+        )
+    )
+    assert isinstance(predicate, dict)
+    predicate["offsets"] = {"origin": q("start").to_data(), **measure}
+    with pytest.raises(Refusal) as caught:
+        predicate_loads(json.dumps(predicate))
+    assert caught.value.stage is RefusalStage.SHAPE
+    assert str(caught.value) == (
+        "$.offsets must contain exactly one of 'extent' or 'end'"
+    )
+
+
+def test_spans_resolves_other_tier_at_binding_in_declared_order() -> None:
+    source = offset_graph()
+    undeclared = Spans(
+        offsets(), IntervalRelation.EQUAL, Quantifier.ANY, q("missing"), And(())
+    )
+    with pytest.raises(Refusal) as caught:
+        compile_predicate(undeclared).bind(source)
+    assert caught.value.stage is RefusalStage.REFERENCE
+    assert str(caught.value) == "Spans other tier ex:missing is undeclared"
+
+    item_type_is_not_a_tier = Spans(
+        offsets(), IntervalRelation.EQUAL, Quantifier.ANY, q("det-item"), And(())
+    )
+    with pytest.raises(Refusal, match="other tier ex:det-item is undeclared"):
+        compile_predicate(item_type_is_not_a_tier).bind(source)
+
+    bad_offsets_and_other = Spans(
+        OffsetProfile(q("missing-offset"), end=q("end")),
+        IntervalRelation.EQUAL,
+        Quantifier.ANY,
+        q("missing"),
+        And(()),
+    )
+    with pytest.raises(Refusal) as caught:
+        compile_predicate(bad_offsets_and_other).bind(source)
+    assert caught.value.stage is RefusalStage.REFERENCE
+    assert str(caught.value) == (
+        "offset profile names undeclared attribute ex:missing-offset"
+    )
+
+    bound = compile_predicate(
+        Spans(offsets(), IntervalRelation.EQUAL, Quantifier.ANY, q("gold"), And(()))
+    ).bind(source)
+    tiers = evaluate_selection(source, TierSelector(q("det")))
+    assert bound.select(tiers).nodes == ()
 
 
 def test_o6_limit_reports_cut_only_when_a_pair_is_omitted() -> None:

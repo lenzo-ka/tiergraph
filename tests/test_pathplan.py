@@ -467,6 +467,25 @@ def test_marginals_agree_with_enumerated_derivations() -> None:
     assert isinstance(marginals, PathMarginals)
 
 
+def test_distinct_roots_contribute_once_to_fold_total_and_outside_mass() -> None:
+    """Each declared root contributes one total and one outside identity."""
+    graph = lattice({"left": 0.0, "right": 0.0}, ())
+    plan = PathPlan.prepare(
+        declare(
+            graph,
+            COUNTING,
+            lift=lambda value, label: 1,
+            roots=("left", "right"),
+            attribute=COST,
+        )
+    )
+    folded = plan.evaluate()
+    marginals = plan.marginals()
+    assert folded.value == marginals.total == 2
+    assert marginals.outside == (1, 1)
+    assert marginals.marginals == (1, 1)
+
+
 @given(
     st.lists(
         st.one_of(
@@ -969,11 +988,15 @@ def test_the_cost_accounts_for_both_passes() -> None:
     assert both.index_product_size == 1 and both.witness_count == 0
 
 
-def test_a_root_listed_twice_is_refused() -> None:
-    """The fold counts a repeated root per listing; the plan refuses the ambiguity."""
+def test_a_root_list_mutated_to_repeat_is_refused_by_the_plan() -> None:
+    """A plan rechecks an accepted list if its caller mutates it after construction."""
     graph = lattice({"r": math.log(0.5), "x": 0.0}, (("r", "x"),))
-    declaration = declare(graph, LOG_PROBABILITY, roots=("r", "r"))
-    assert declaration.run().value == pytest.approx(0.0)
+    base = declare(graph, LOG_PROBABILITY, roots=("r",))
+    # Duplicate roots are rejected at construction. Mutating a deliberately
+    # mis-typed list is the only way to exercise the plan's defense-in-depth.
+    roots = list(base.roots)
+    declaration = replace(base, roots=cast(tuple[ItemRef, ...], roots))
+    roots.append(roots[0])
     with pytest.raises(ValueError, match="lists root .*'index': 0.* more than once"):
         PathPlan.prepare(declaration)
 

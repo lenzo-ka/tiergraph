@@ -316,8 +316,10 @@ extent: exhaustive
 
 `Spans` uses the same interval relations inside a predicate. Its `other` tier
 supplies the items tested against each candidate, and its target predicate
-filters those items first. `ANY` requires one matching item; `NONE` and `ALL`
-use the same vacuous truth as `Related` when no interval-related item remains.
+filters those items first. Like `span_pairs`, `Spans` never relates an item to
+itself, including when `other` names the candidate's own tier. `ANY` requires
+one matching item; `NONE` and `ALL` use the same vacuous truth as `Related` when
+no interval-related item remains.
 
 ```python
 from tiergraph.predicate import Spans
@@ -332,10 +334,25 @@ aligned_with_an_annotation = Spans(
 aligned_segments = (
     compile_predicate(aligned_with_an_annotation).bind(graph).select(all_segments)
 )
+equal_to_another_segment = (
+    compile_predicate(
+        Spans(
+            OffsetProfile(start, end=end),
+            IntervalRelation.EQUAL,
+            Quantifier.ANY,
+            segments,
+            And(()),
+        )
+    )
+    .bind(graph)
+    .select(all_segments)
+)
 print("segments aligned with an annotation:", labels(aligned_segments))
+print("segments equal to another segment:", labels(equal_to_another_segment))
 ```
 ```text
 segments aligned with an annotation: ['s0', 's1']
+segments equal to another segment: []
 ```
 
 An origin, end, extent, or partition missing from an item that the operation
