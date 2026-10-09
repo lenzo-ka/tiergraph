@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed external resources and their ordinary graph attachments.
 - Added streaming blob hashing, verified readers, digest-keyed in-memory
   resolution, ordered resolver chains, and resolver and sink protocols.
+- Added strict, bounded, lazy reading for versioned store-only ZIP bundles,
+  including a published bundle-index schema and verified payload streams.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
 - Added a tested `DotPresentation` guide example.
 - Added a hand-authored exact `dumps_spans()` DOT golden.

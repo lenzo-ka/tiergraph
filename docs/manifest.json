@@ -11,6 +11,7 @@
     ],
     "blobs": [
       "BLOB_NAMESPACE",
+      "BUNDLE_VERSION",
       "BlobRef",
       "BlobSpan",
       "BlobProfile",
@@ -19,8 +20,13 @@
       "ChainResolver",
       "BlobSink",
       "VerifiedReader",
+      "BundleLimits",
+      "BundleAsset",
+      "Bundle",
       "declare_blob_vocabulary",
-      "hash_blob"
+      "hash_blob",
+      "open_bundle",
+      "bundle_json_schema"
     ],
     "clock": [
       "ClockProfile",
@@ -553,6 +559,7 @@
   ],
   "constant_descriptions": {
     "BLOB_NAMESPACE": "Namespace for the fixed external-resource vocabulary.",
+    "BUNDLE_VERSION": "Version of the strict ZIP bundle container.",
     "FORMAT_VERSION": "Version tag written by the JSON wire codec.",
     "MACHINE_VERSION": "Version tag for serialized construction programs.",
     "PATCH_VERSION": "Version tag for serialized graph patches.",
@@ -597,16 +604,22 @@
   "secondary": {
     "tiergraph.blob": [
       "BLOB_NAMESPACE",
+      "BUNDLE_VERSION",
       "BlobProfile",
       "BlobRef",
       "BlobResolver",
       "BlobSink",
       "BlobSpan",
+      "Bundle",
+      "BundleAsset",
+      "BundleLimits",
       "ChainResolver",
       "MappingResolver",
       "VerifiedReader",
+      "bundle_json_schema",
       "declare_blob_vocabulary",
-      "hash_blob"
+      "hash_blob",
+      "open_bundle"
     ],
     "tiergraph.build": [
       "Document",

@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 309 top-level `tiergraph` exports exactly once.
+It covers 315 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -136,6 +136,10 @@ Normalize a complete yield after first restoring structural order.
 ### `BLOB_NAMESPACE`
 
 Namespace for the fixed external-resource vocabulary. Current value: `urn:tiergraph:blob`.
+
+### `BUNDLE_VERSION`
+
+Version of the strict ZIP bundle container. Current value: `1`.
 
 ### `BlobRef`
 
@@ -431,6 +435,65 @@ VerifiedReader.close(self) -> 'None'
 
 Close both the wrapped source and this reader without forcing a read.
 
+### `BundleLimits`
+
+```text
+BundleLimits(max_entries: 'int' = 100000, max_entry_bytes: 'int' = 1099511627776, max_total_bytes: 'int' = 17592186044416, max_central_directory_bytes: 'int' = 67108864, max_index_bytes: 'int' = 16777216, max_graph_bytes: 'int' = 16777216) -> None
+```
+
+Bound bundle metadata and declared uncompressed entry sizes.
+
+### `BundleAsset`
+
+```text
+BundleAsset(id: 'str', position: 'int', ref: 'BlobRef', mode: "Literal['embedded', 'linked']", href: 'str | None') -> None
+```
+
+Describe one durably identified asset row in declared graph order.
+
+### `Bundle`
+
+```text
+Bundle() -> 'None'
+```
+
+Expose one validated bundle graph and its lazily opened payloads.
+
+Opening validates the complete index, graph bytes, inventory, ZIP metadata,
+and local entry headers. Payload bodies are not read until ``open_blob`` is
+called. The bundle borrows the caller's binary source; closing the bundle
+releases ZIP state but does not close that source.
+
+#### `Bundle.assets`
+
+Method.
+
+```text
+Bundle.assets(self) -> 'tuple[BundleAsset, ...]'
+```
+
+Return durably identified asset rows in declared blob-item order.
+
+#### `Bundle.open_blob`
+
+Method.
+
+```text
+Bundle.open_blob(self, ref: 'BlobRef', resolver: 'BlobResolver | None' = None) -> 'VerifiedReader'
+```
+
+Open one declared payload and verify a complete sequential read.
+
+#### `Bundle.close`
+
+Method.
+
+```text
+Bundle.close(self) -> 'None'
+```
+
+Release bundle ZIP state without closing the caller-owned source.
+
 ### `declare_blob_vocabulary`
 
 ```text
@@ -450,6 +513,22 @@ hash_blob(source: 'BinaryIO', *, chunk_size: 'int' = 1048576) -> 'BlobRef'
 ```
 
 Hash bytes from the source's current position through end of stream.
+
+### `open_bundle`
+
+```text
+open_bundle(source: 'BinaryIO', *, limits: 'BundleLimits' = BundleLimits(max_entries=100000, max_entry_bytes=1099511627776, max_total_bytes=17592186044416, max_central_directory_bytes=67108864, max_index_bytes=16777216, max_graph_bytes=16777216)) -> 'Bundle'
+```
+
+Validate and open a strict store-only bundle without reading payloads.
+
+### `bundle_json_schema`
+
+```text
+bundle_json_schema() -> 'dict[str, object]'
+```
+
+Return the strict JSON Schema for bundle version 1 indexes.
 
 ## Clock
 
@@ -8089,6 +8168,10 @@ This module is importable and usable, but carries no API-stability promise at ve
 
 Namespace for the fixed external-resource vocabulary. Current value: `urn:tiergraph:blob`.
 
+### `BUNDLE_VERSION`
+
+Version of the strict ZIP bundle container. Current value: `1`.
+
 ### `BlobProfile`
 
 ```text
@@ -8206,6 +8289,65 @@ assume time: a unit can name characters, samples, frames, or another
 resource-defined linear coordinate. Structured paths remain ordinary
 relation-instance attributes in the resource schema rather than being
 forced into this linear value.
+
+### `Bundle`
+
+```text
+Bundle() -> 'None'
+```
+
+Expose one validated bundle graph and its lazily opened payloads.
+
+Opening validates the complete index, graph bytes, inventory, ZIP metadata,
+and local entry headers. Payload bodies are not read until ``open_blob`` is
+called. The bundle borrows the caller's binary source; closing the bundle
+releases ZIP state but does not close that source.
+
+#### `Bundle.assets`
+
+Method.
+
+```text
+Bundle.assets(self) -> 'tuple[BundleAsset, ...]'
+```
+
+Return durably identified asset rows in declared blob-item order.
+
+#### `Bundle.open_blob`
+
+Method.
+
+```text
+Bundle.open_blob(self, ref: 'BlobRef', resolver: 'BlobResolver | None' = None) -> 'VerifiedReader'
+```
+
+Open one declared payload and verify a complete sequential read.
+
+#### `Bundle.close`
+
+Method.
+
+```text
+Bundle.close(self) -> 'None'
+```
+
+Release bundle ZIP state without closing the caller-owned source.
+
+### `BundleAsset`
+
+```text
+BundleAsset(id: 'str', position: 'int', ref: 'BlobRef', mode: "Literal['embedded', 'linked']", href: 'str | None') -> None
+```
+
+Describe one durably identified asset row in declared graph order.
+
+### `BundleLimits`
+
+```text
+BundleLimits(max_entries: 'int' = 100000, max_entry_bytes: 'int' = 1099511627776, max_total_bytes: 'int' = 17592186044416, max_central_directory_bytes: 'int' = 67108864, max_index_bytes: 'int' = 16777216, max_graph_bytes: 'int' = 16777216) -> None
+```
+
+Bound bundle metadata and declared uncompressed entry sizes.
 
 ### `ChainResolver`
 
@@ -8383,6 +8525,14 @@ VerifiedReader.close(self) -> 'None'
 
 Close both the wrapped source and this reader without forcing a read.
 
+### `bundle_json_schema`
+
+```text
+bundle_json_schema() -> 'dict[str, object]'
+```
+
+Return the strict JSON Schema for bundle version 1 indexes.
+
 ### `declare_blob_vocabulary`
 
 ```text
@@ -8402,6 +8552,14 @@ hash_blob(source: 'BinaryIO', *, chunk_size: 'int' = 1048576) -> 'BlobRef'
 ```
 
 Hash bytes from the source's current position through end of stream.
+
+### `open_bundle`
+
+```text
+open_bundle(source: 'BinaryIO', *, limits: 'BundleLimits' = BundleLimits(max_entries=100000, max_entry_bytes=1099511627776, max_total_bytes=17592186044416, max_central_directory_bytes=67108864, max_index_bytes=16777216, max_graph_bytes=16777216)) -> 'Bundle'
+```
+
+Validate and open a strict store-only bundle without reading payloads.
 
 ### `tiergraph.build`
 
