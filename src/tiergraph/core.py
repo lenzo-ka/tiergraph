@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol, cast, overload
 
 if TYPE_CHECKING:
     from tiergraph.edit import Journal, JournalEditor
-    from tiergraph.replacement import ReplacementPolicies, Subtree
+    from tiergraph.replacement import (
+        DetachmentReport,
+        ReplacementPolicies,
+        Subtree,
+    )
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -2362,8 +2366,14 @@ class Graph:
         new: Subtree,
         policies: ReplacementPolicies | None = None,
     ) -> Graph:
-        """Return a graph with one root's containment descendants replaced."""
-        return self.edit().replace_subtree(root, containment, new, policies).freeze()
+        """Return a graph with one root's descendants replaced.
+
+        Call :func:`tiergraph.replace_subtree` to also receive the detachment
+        report.
+        """
+        from tiergraph.replacement import _replace_subtree  # noqa: PLC0415
+
+        return _replace_subtree(self, root, containment, new, policies).graph
 
     def swap_subtrees(
         self,
@@ -2373,18 +2383,21 @@ class Graph:
         first_policies: ReplacementPolicies | None = None,
         second_policies: ReplacementPolicies | None = None,
     ) -> Graph:
-        """Return a graph with two non-nested descendant sets exchanged."""
-        return (
-            self.edit()
-            .swap_subtrees(
-                first,
-                second,
-                containment,
-                first_policies,
-                second_policies,
-            )
-            .freeze()
-        )
+        """Return a graph with two non-nested descendant sets exchanged.
+
+        Call :func:`tiergraph.swap_subtrees` to also receive the detachment
+        report.
+        """
+        from tiergraph.replacement import _swap_subtrees  # noqa: PLC0415
+
+        return _swap_subtrees(
+            self,
+            first,
+            second,
+            containment,
+            first_policies,
+            second_policies,
+        ).graph
 
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> Graph:
         """Return a new graph with this item at another index of its own tier."""
@@ -2603,7 +2616,9 @@ class GraphEditor:
     This carrier answers the same operations by changing itself, so a caller
     chooses rewriting or mutation by choosing which carrier to hold.  Every
     operation returns this editor so operations chain, and nothing it returns
-    is a graph until ``freeze()`` builds and validates one.
+    is a graph until ``freeze()`` builds and validates one. Subtree replacement
+    and swapping expose their most recent detachment report through
+    :attr:`last_detachment`.
 
     Structural operations keep the graph's own references denoting what they
     denoted before the edit.  Item coordinates stored inside the graph are
@@ -2659,6 +2674,11 @@ class GraphEditor:
     def displacement(self) -> Displacement:
         """Return where every position of this editor's input now stands."""
         return self._displacement
+
+    @property
+    def last_detachment(self) -> DetachmentReport | None:
+        """Return the report from the most recent abandonment-capable edit."""
+        return getattr(self, "_last_detachment", None)
 
     def declare(
         self, declaration: EditDeclaration, at: int | None = None
@@ -3277,7 +3297,9 @@ class GraphEditor:
         """Replace containment descendants under explicit dependency policies."""
         from tiergraph.replacement import _replace_subtree  # noqa: PLC0415
 
-        outcome = _replace_subtree(self.freeze(), root, containment, new, policies)
+        outcome = _replace_subtree(
+            self.freeze(), root, containment, new, policies, capture_report=True
+        )
         candidate = outcome.graph
         self._namespaces = list(candidate.namespaces)
         self._tiers = [
@@ -3293,6 +3315,7 @@ class GraphEditor:
         self._seals = list(candidate.seals)
         self._layers = list(candidate.layers)
         self._advance_displacement(outcome.displacement)
+        self._last_detachment = outcome.report
         return self
 
     def swap_subtrees(
@@ -3313,6 +3336,7 @@ class GraphEditor:
             containment,
             first_policies,
             second_policies,
+            capture_report=True,
         )
         candidate = outcome.graph
         self._namespaces = list(candidate.namespaces)
@@ -3329,6 +3353,7 @@ class GraphEditor:
         self._seals = list(candidate.seals)
         self._layers = list(candidate.layers)
         self._advance_displacement(outcome.displacement)
+        self._last_detachment = outcome.report
         return self
 
     def move_item(self, reference: ItemRef | DurableItemRef, index: int) -> GraphEditor:

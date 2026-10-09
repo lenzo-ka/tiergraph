@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
+from typing import cast
 
 from tiergraph.core import (
     Attribute,
@@ -22,6 +23,7 @@ from tiergraph.core import (
     Item,
     ItemRef,
     JsonValue,
+    Layer,
     LayerFact,
     LayerName,
     LayerSubject,
@@ -186,10 +188,70 @@ class DetachedDependency:
 
 
 @dataclass(frozen=True, slots=True)
+class DetachmentReport:
+    """Snapshot graph content withdrawn by one derived edit.
+
+    Items follow tier and item order, relation instances follow their carrier
+    order, and facts follow canonical layer and fact order. The stored graph
+    values retain their durable identifiers.
+    """
+
+    items: tuple[tuple[ItemRef, Item], ...] = ()
+    relations: tuple[
+        tuple[
+            RelationInstanceRef | PolyadicInstanceRef,
+            RelationInstance | PolyadicRelationInstance,
+        ],
+        ...,
+    ] = ()
+    facts: tuple[tuple[LayerName, LayerFact], ...] = ()
+    dependencies: tuple[DetachedDependency, ...] = ()
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the ordered detached content as JSON-compatible data."""
+        relation_data: list[JsonValue] = []
+        for reference, relation in self.relations:
+            relation_data.append(
+                {
+                    "carrier": (
+                        "polyadic_relations"
+                        if isinstance(reference, PolyadicInstanceRef)
+                        else "relations"
+                    ),
+                    "index": reference.index,
+                    "instance": relation.to_data(),
+                }
+            )
+        fact_data: list[JsonValue] = []
+        for layer_name, fact in self.facts:
+            encoded = Layer(layer_name, (fact,)).to_data()
+            facts = cast(list[dict[str, JsonValue]], encoded["facts"])
+            fact_data.append({"layer": layer_name.to_data(), "fact": facts[0]})
+        return {
+            "items": [
+                {"reference": reference.to_data(), "item": item.to_data()}
+                for reference, item in self.items
+            ],
+            "relations": relation_data,
+            "facts": fact_data,
+            "dependencies": [item.to_data() for item in self.dependencies],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EditResult:
+    """Return an edited graph together with content withdrawn by the edit."""
+
+    graph: Graph
+    report: DetachmentReport
+
+
+@dataclass(frozen=True, slots=True)
 class _ReplacementOutcome:
     graph: Graph
     displacement: Displacement
     detached: tuple[DetachedDependency, ...]
+    report: DetachmentReport | None
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]]
     new_items: Mapping[ItemRef, ItemRef]
 
@@ -208,14 +270,18 @@ def replace_subtree(
     containment: QualifiedName | Iterable[QualifiedName],
     new: Subtree,
     policies: ReplacementPolicies | None = None,
-) -> Graph:
-    """Return ``graph`` with one root's containment descendants replaced.
+) -> EditResult:
+    """Replace one root's descendants and report withdrawn graph content.
 
     The root, its incoming containment link, its attributes, and its layer facts
-    remain live. The default abandons dependencies on descendants and reports
-    them when this operation is journaled. Correspondence is explicitly opt-in.
+    remain live. The default abandons dependencies on descendants. The result
+    reports the abandoned items, relation instances, and facts whether or not a
+    journal is used. Correspondence is explicitly opt-in.
     """
-    return _replace_subtree(graph, root, containment, new, policies).graph
+    outcome = _replace_subtree(
+        graph, root, containment, new, policies, capture_report=True
+    )
+    return EditResult(outcome.graph, cast(DetachmentReport, outcome.report))
 
 
 def swap_subtrees(
@@ -225,16 +291,18 @@ def swap_subtrees(
     containment: QualifiedName | Iterable[QualifiedName],
     first_policies: ReplacementPolicies | None = None,
     second_policies: ReplacementPolicies | None = None,
-) -> Graph:
-    """Exchange two non-nested descendant sets as two atomic replacements."""
-    return _swap_subtrees(
+) -> EditResult:
+    """Exchange descendant sets and report dependencies left detached."""
+    outcome = _swap_subtrees(
         graph,
         first,
         second,
         containment,
         first_policies,
         second_policies,
-    ).graph
+        capture_report=True,
+    )
+    return EditResult(outcome.graph, cast(DetachmentReport, outcome.report))
 
 
 def _swap_subtrees(
@@ -244,6 +312,8 @@ def _swap_subtrees(
     containment: QualifiedName | Iterable[QualifiedName],
     first_policies: ReplacementPolicies | None,
     second_policies: ReplacementPolicies | None,
+    *,
+    capture_report: bool = False,
 ) -> _ReplacementOutcome:
     names = _containment_names(containment)
     selected = set(names)
@@ -295,22 +365,97 @@ def _swap_subtrees(
         Subtree(graph, right.root),
         ReplacementPolicies.corresponding(final_correspondence),
     )
+    detached = _ordered_detached(
+        (
+            *_external_detached(graph, left, first_outcome.detached),
+            *_source_dependencies(
+                graph,
+                first_outcome.graph,
+                first_outcome.displacement,
+                _external_detached(
+                    first_outcome.graph, current_right, second_outcome.detached
+                ),
+            ),
+        )
+    )
     return _ReplacementOutcome(
         final_outcome.graph,
         first_outcome.displacement.then(second_outcome.displacement).then(
             final_outcome.displacement
         ),
-        _ordered_detached(
-            (
-                *_external_detached(graph, left, first_outcome.detached),
-                *_external_detached(
-                    first_outcome.graph, current_right, second_outcome.detached
-                ),
-            )
-        ),
+        detached,
+        (_detachment_report(graph, dependencies=detached) if capture_report else None),
         final_outcome.correspondence,
         final_outcome.new_items,
     )
+
+
+def _source_dependencies(
+    source: Graph,
+    current: Graph,
+    displacement: Displacement,
+    dependencies: Iterable[DetachedDependency],
+) -> tuple[DetachedDependency, ...]:
+    """Translate dependency coordinates from an intermediate graph to source."""
+    inverse_items = {target: origin for origin, target in displacement.items.items()}
+    inverse_boundaries = {
+        target: origin for origin, target in displacement.boundaries.items()
+    }
+    inverse_relations = {
+        target: origin for origin, target in displacement.relations.items()
+    }
+    inverse_polyadic = {
+        target: origin for origin, target in displacement.polyadic_relations.items()
+    }
+
+    def source_subject(subject: LayerSubject) -> LayerSubject:
+        """Recover a source coordinate from one surviving current subject."""
+        if isinstance(subject, ItemRef):
+            return inverse_items[subject]
+        if isinstance(subject, BoundaryRef):
+            return inverse_boundaries[subject]
+        if isinstance(subject, RelationInstanceRef):
+            return RelationInstanceRef(inverse_relations[subject.index])
+        if isinstance(subject, PolyadicInstanceRef):
+            return PolyadicInstanceRef(inverse_polyadic[subject.index])
+        return subject
+
+    result: list[DetachedDependency] = []
+    source_layers = {layer.name: layer for layer in source.layers}
+    current_layers = {layer.name: layer for layer in current.layers}
+    for dependency in dependencies:
+        if dependency.carrier == "relations":
+            result.append(
+                replace(dependency, index=inverse_relations[dependency.index])
+            )
+        elif dependency.carrier == "polyadic_relations":
+            result.append(replace(dependency, index=inverse_polyadic[dependency.index]))
+        elif dependency.carrier == "boundary_values" and dependency.tier is not None:
+            source_boundary = inverse_boundaries[
+                BoundaryRef(dependency.tier, dependency.index)
+            ]
+            result.append(
+                replace(
+                    dependency,
+                    index=source_boundary.index,
+                    tier=source_boundary.tier,
+                )
+            )
+        elif dependency.carrier == "layer" and dependency.layer is not None:
+            current_fact = current_layers[dependency.layer].facts[dependency.index]
+            original_subject = source_subject(current_fact.subject)
+            original_fact = LayerFact(original_subject, current_fact.value)
+            fact_index = source_layers[dependency.layer].facts.index(original_fact)
+            result.append(
+                replace(
+                    dependency,
+                    index=fact_index,
+                    subject=original_subject,
+                )
+            )
+        else:
+            result.append(dependency)
+    return tuple(result)
 
 
 def _temporary_subtree(graph: Graph, shape: _Shape) -> tuple[Graph, dict[ItemRef, str]]:
@@ -591,6 +736,8 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     containment: QualifiedName | Iterable[QualifiedName],
     new: Subtree,
     policies: ReplacementPolicies | None,
+    *,
+    capture_report: bool = False,
 ) -> _ReplacementOutcome:
     names = _containment_names(containment)
     _validated_containment(graph, names)
@@ -906,10 +1053,39 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
 
     candidate = editor.freeze()
     SealDeclaration("replace subtree", graph, candidate).check_seals()
+    ordered_detached = _ordered_detached(detached)
+    detached_binary = {
+        dependency.index
+        for dependency in ordered_detached
+        if dependency.carrier == "relations"
+    }
+    detached_polyadic = {
+        dependency.index
+        for dependency in ordered_detached
+        if dependency.carrier == "polyadic_relations"
+    }
+    detached_facts = {
+        (dependency.layer, dependency.index)
+        for dependency in ordered_detached
+        if dependency.carrier == "layer" and dependency.layer is not None
+    }
+    report = (
+        _detachment_report(
+            graph,
+            items=old_shape.descendants,
+            binary=old_shape.binary | detached_binary,
+            polyadic=old_shape.polyadic | detached_polyadic,
+            facts=detached_facts,
+            dependencies=ordered_detached,
+        )
+        if capture_report
+        else None
+    )
     return _ReplacementOutcome(
         candidate,
         editor.displacement(),
-        _ordered_detached(detached),
+        ordered_detached,
+        report,
         MappingProxyType(correspondence),
         MappingProxyType(source_to_target),
     )
@@ -1385,6 +1561,71 @@ def _ordered_detached(
     )
 
 
+def _detachment_report(
+    graph: Graph,
+    *,
+    items: Iterable[ItemRef] = (),
+    binary: Iterable[int] = (),
+    polyadic: Iterable[int] = (),
+    facts: Iterable[tuple[LayerName, int]] = (),
+    dependencies: Iterable[DetachedDependency] = (),
+) -> DetachmentReport:
+    """Snapshot selected source content in the graph's declared order."""
+    ordered_dependencies = tuple(dependencies)
+    item_sites = set(items)
+    binary_sites = set(binary) | {
+        dependency.index
+        for dependency in ordered_dependencies
+        if dependency.carrier == "relations"
+    }
+    polyadic_sites = set(polyadic) | {
+        dependency.index
+        for dependency in ordered_dependencies
+        if dependency.carrier == "polyadic_relations"
+    }
+    fact_sites = set(facts) | {
+        (dependency.layer, dependency.index)
+        for dependency in ordered_dependencies
+        if dependency.carrier == "layer" and dependency.layer is not None
+    }
+    detached_items = tuple(
+        (reference, item)
+        for tier in graph.tiers
+        for index, item in enumerate(tier.items)
+        if (reference := ItemRef(tier.declaration.name, index)) in item_sites
+    )
+    detached_relations: tuple[
+        tuple[
+            RelationInstanceRef | PolyadicInstanceRef,
+            RelationInstance | PolyadicRelationInstance,
+        ],
+        ...,
+    ] = (
+        *(
+            (RelationInstanceRef(index), relation)
+            for index, relation in enumerate(graph.relations)
+            if index in binary_sites
+        ),
+        *(
+            (PolyadicInstanceRef(index), relation)
+            for index, relation in enumerate(graph.polyadic_relations)
+            if index in polyadic_sites
+        ),
+    )
+    detached_facts = tuple(
+        (layer.name, fact)
+        for layer in graph.layers
+        for index, fact in enumerate(layer.facts)
+        if (layer.name, index) in fact_sites
+    )
+    return DetachmentReport(
+        detached_items,
+        detached_relations,
+        detached_facts,
+        ordered_dependencies,
+    )
+
+
 def _subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
     """Use the graph's canonical tagged encoding for a layer subject."""
     from tiergraph.core import _layer_subject_data  # noqa: PLC0415
@@ -1394,6 +1635,8 @@ def _subject_data(subject: LayerSubject) -> dict[str, JsonValue]:
 
 __all__ = [
     "DetachedDependency",
+    "DetachmentReport",
+    "EditResult",
     "ReplacementAction",
     "ReplacementPolicies",
     "Subtree",

@@ -263,12 +263,28 @@ def test_commit_path_keeps_chosen_substructure_offsets_and_provenance() -> None:
     graph = path_graph()
     plan = path_plan(graph)
     journal = Journal(stage="aligned")
-    result = commit_path(
+    edit_result = commit_path(
         plan,
         (("s", "a", "f"),),
         containment=HAS_SYLLABLE,
         journal=journal,
     )
+    result = edit_result.graph
+    assert [
+        relation.durable_id
+        for _, relation in edit_result.report.relations
+        if relation.durable_id is not None
+    ] == ["b-link", "b-boundary-link", "b-substructure"]
+    assert tuple(item.durable_id for _, item in edit_result.report.items) == (
+        "b",
+        "b-syllable",
+    )
+    assert {fact.subject for _, fact in edit_result.report.facts} == {
+        DurableItemRef("b"),
+        DurableBoundaryRef(DurableItemRef("b"), BoundarySide.BEFORE),
+        DurableRelationRef("b-link"),
+        DurablePolyadicRef("b-substructure"),
+    }
 
     ids = {item.durable_id for tier in result.tiers for item in tier.items}
     assert ids == {"s", "a", "f", "a-syllable", "money", "date"}
@@ -339,7 +355,7 @@ def test_commit_path_keeps_boundaries_anchored_to_surviving_items() -> None:
         ),
     )
 
-    result = commit_path(path_plan(graph), ("s", "a", "f"))
+    result = commit_path(path_plan(graph), ("s", "a", "f")).graph
 
     assert result.resolve_boundary(surviving) == BoundaryRef(NODES, 2)
     assert any(boundary.reference == surviving for boundary in result.boundary_values)
@@ -386,7 +402,7 @@ def test_commit_path_removes_departing_positional_boundary_content() -> None:
         ),
     )
 
-    result = commit_path(path_plan(graph), ("s", "a", "f"))
+    result = commit_path(path_plan(graph), ("s", "a", "f")).graph
 
     assert all(boundary.reference != departing for boundary in result.boundary_values)
     assert all(fact.subject != departing for fact in result.layers[0].facts)
@@ -445,7 +461,7 @@ def test_commit_path_refuses_invalid_containment_declarations(
 
 def test_commit_path_without_substructure_names_is_valid() -> None:
     """An empty containment list removes lattice alternatives only."""
-    result = commit_path(path_plan(path_graph()), ("s", "a", "f"))
+    result = commit_path(path_plan(path_graph()), ("s", "a", "f")).graph
     assert {item.durable_id for item in result.tiers[0].items} == {"s", "a", "f"}
     assert {item.durable_id for item in result.tiers[1].items} == {
         "a-syllable",
@@ -484,7 +500,7 @@ def test_commit_path_deduplicates_substructure_reached_by_two_declarations() -> 
         path_plan(graph),
         ("s", "a", "f"),
         containment=(HAS_SYLLABLE, other),
-    )
+    ).graph
     assert result.resolve_item(DurableItemRef("a-syllable")) == ItemRef(SYLLABLES, 0)
 
 
