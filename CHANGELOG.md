@@ -221,6 +221,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Described the equivalence views as fixed, graph-wide observational
+  projections and clarified that declared order remains content under every
+  view.
 - Named Apple's QuickTime as a spiritual ancestor of tiergraph's general,
   typed interchange format.
 

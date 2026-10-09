@@ -161,9 +161,9 @@ attributable through its journal record. `journal.protect(layer_name)` refuses
 an operation whose final candidate would change that layer or the live content
 its facts describe.
 
-Facts within a layer are a set for functional and identified equivalence; their
-storage order does not express rank. Store rank as a declared value when it is
-meaningful.
+Facts within each layer are canonicalized at construction, so their supplied
+order is not observed by any equivalence view and does not express rank. Store
+rank as a declared value when it is meaningful.
 
 ## Patches, programs, and differences
 
@@ -198,16 +198,18 @@ through a clock editor instead.
 ## Compare the result you meant to preserve
 
 Editing, replay, convergence, and testing do not always need the same notion of
-identity. The public equivalence operations share three views:
+identity. The public equivalence operations share three fixed, graph-wide
+observational projections. A projection says what a comparison reads; it does
+not declare a domain symmetry.
 
-- `FUNCTIONAL` compares namespace URIs, declarations, tier and item order,
-  values, globally ordered relation instances and endpoints, layers including
-  orphan facts, and seal records. It ignores namespace prefixes and durable ids
-  and resolves durable references to coordinates.
-- `IDENTIFIED` adds the durable ids carried by the graph. Use it to detect
-  identity churn and to guard patches.
-- `EXACT` is graph equality, including prefixes and the spelling of structural
-  versus durable references.
+- `FUNCTIONAL` omits durable IDs, namespace prefixes, and reference spellings.
+- `IDENTIFIED` also reads durable IDs. Use it to detect identity churn and to
+  guard patches.
+- `EXACT` reads all three and is graph equality.
+
+Facts within each layer are canonicalized at construction, so their supplied
+order is not observed by any view. Declared order is content under every view.
+Per-tier declared order-insensitivity is a separate, future concept.
 
 `equivalent()` answers the equality question. `first_difference()` names the
 first differing canonical element, `abstract_form()` exposes the canonical
