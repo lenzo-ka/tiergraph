@@ -298,6 +298,189 @@ application-specific structures in the kernel:
 These operations are generic graph and clock operations. Export to an external
 alignment format and import of an aligner's measurements belong in the caller.
 
+### Import keyed timing in a framework
+
+An alignment adapter should match observations to committed units before it
+turns them into the positional boundary sequence accepted by `retime()`. Use a
+compound key when a durable unit identifier alone does not prove which source
+occurrence was aligned. The following framework-side adapter requires exact
+coverage by `(unit ID, source span)`, restores graph order, checks shared
+boundaries, and only then calls the generic primitive:
+
+```python
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import NamedTuple
+
+from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValue,
+    BipartiteRelationDeclaration,
+    BoundaryRef,
+    BoundarySide,
+    ClockProfile,
+    DurableBoundaryRef,
+    DurableItemRef,
+    Graph,
+    QualifiedName,
+    RelationEndpointKind,
+    RelationInstance,
+    SimpleRelationDeclaration,
+    Tier,
+    TierDeclaration,
+    XsdType,
+    retime,
+)
+
+
+class AlignedUnit(NamedTuple):
+    """Carry one framework alignment keyed to its source occurrence."""
+
+    unit_id: str
+    source_span: str
+    start: int
+    end: int
+
+
+def import_unit_timings(
+    profile: ClockProfile,
+    tier: QualifiedName,
+    span_attribute: QualifiedName,
+    alignment: Sequence[AlignedUnit],
+    *,
+    journal: Journal | None = None,
+) -> Graph:
+    """Validate keyed framework rows and rebind the tier in graph order."""
+    member = next(
+        (
+            candidate
+            for candidate in profile.graph.tiers
+            if candidate.declaration.name == tier
+        ),
+        None,
+    )
+    if member is None:
+        raise ValueError(f"unknown timed tier: {tier}")
+
+    expected: list[tuple[str, str]] = []
+    for item in member.items:
+        if item.durable_id is None:
+            raise ValueError("every aligned unit needs a durable ID")
+        spans = tuple(
+            value.lexical
+            for value in item.attributes
+            if isinstance(value, AttributeValue) and value.name == span_attribute
+        )
+        if len(spans) != 1:
+            raise ValueError("every aligned unit needs one source span")
+        expected.append((item.durable_id, spans[0]))
+
+    rows = {(row.unit_id, row.source_span): row for row in alignment}
+    if len(rows) != len(alignment) or set(rows) != set(expected):
+        raise ValueError("alignment must cover each unit ID and source span once")
+    ordered = tuple(rows[key] for key in expected)
+    if not ordered:
+        raise ValueError("an empty tier needs an explicit extent policy")
+    if any(left.end != right.start for left, right in zip(ordered, ordered[1:])):
+        raise ValueError("adjacent aligned units must share a boundary")
+
+    boundaries = (ordered[0].start, *(row.end for row in ordered))
+    return retime(profile, tier, boundaries, journal=journal)
+
+
+timeline_namespace = tokens.name.namespace
+samples = QualifiedName(timeline_namespace, "samples")
+sample_type = QualifiedName(timeline_namespace, "sample")
+sample_membership = QualifiedName(timeline_namespace, "sample-membership")
+bindings = QualifiedName(timeline_namespace, "sample-bindings")
+source_span = QualifiedName(timeline_namespace, "source-span")
+unit = QualifiedName(timeline_namespace, "clock-unit")
+assert tokens.item_type is not None
+
+timed_tokens = replace(
+    base.tiers[0],
+    items=tuple(
+        Item(item_id, (AttributeValue(source_span, XsdType.STRING, span),))
+        for item_id, span in (("alpha", "0:5"), ("beta", "5:9"), ("gamma", "9:14"))
+    ),
+)
+clock_tier = Tier(
+    TierDeclaration(samples, "Samples"),
+    tuple(Item(f"sample-{index}") for index in range(6)),
+)
+unbound = Graph(
+    base.namespaces,
+    (timed_tokens, clock_tier),
+    (
+        *base.relation_declarations,
+        SimpleRelationDeclaration(sample_membership, samples, sample_type),
+        BipartiteRelationDeclaration(
+            bindings,
+            tokens.item_type,
+            sample_type,
+            left_endpoint=RelationEndpointKind.BOUNDARY,
+            right_endpoint=RelationEndpointKind.BOUNDARY,
+        ),
+    ),
+    attribute_declarations=(
+        AttributeDeclaration(source_span, AttributeDomain.ITEM, XsdType.STRING),
+        AttributeDeclaration(unit, AttributeDomain.DOCUMENT, XsdType.STRING),
+    ),
+    attributes=(AttributeValue(unit, XsdType.STRING, "sample"),),
+)
+timed = replace(
+    unbound,
+    relations=(
+        RelationInstance(
+            bindings,
+            DurableBoundaryRef(tokens.name, BoundarySide.BEFORE),
+            DurableBoundaryRef(samples, BoundarySide.BEFORE),
+        ),
+        RelationInstance(
+            bindings,
+            DurableBoundaryRef(DurableItemRef("beta"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("sample-2"), BoundarySide.BEFORE),
+        ),
+        RelationInstance(
+            bindings,
+            DurableBoundaryRef(DurableItemRef("gamma"), BoundarySide.BEFORE),
+            DurableBoundaryRef(DurableItemRef("sample-4"), BoundarySide.BEFORE),
+        ),
+        RelationInstance(
+            bindings,
+            DurableBoundaryRef(tokens.name, BoundarySide.AFTER),
+            DurableBoundaryRef(samples, BoundarySide.AFTER),
+        ),
+    ),
+)
+profile = ClockProfile(timed, samples, bindings, None, unit)
+timing_journal = Journal(stage="alignment")
+retimed = import_unit_timings(
+    profile,
+    tokens.name,
+    source_span,
+    (
+        AlignedUnit("gamma", "9:14", 4, 6),
+        AlignedUnit("alpha", "0:5", 0, 1),
+        AlignedUnit("beta", "5:9", 1, 4),
+    ),
+    journal=timing_journal,
+)
+checked_profile = ClockProfile(retimed, samples, bindings, None, unit)
+assert tuple(
+    checked_profile.clock_index(BoundaryRef(tokens.name, index)) for index in range(4)
+) == (0, 1, 4, 6)
+assert [record.operation for record in timing_journal.records] == ["set_endpoints"]
+```
+
+The row order is deliberately unrelated to tier order. Unknown, duplicate,
+stale-span, missing, and noncontiguous rows refuse before `retime()` changes the
+graph. If the framework also derives parent-child structure from the new
+timings, construct a `ClockProfile` over the returned graph and pass it to
+`contain_by_time()`. Keep source decoding, time-unit conversion, tolerance, and
+the choice of compound key in the framework; they are not graph semantics.
+
 ## Edit a materialized selection
 
 `apply_selected()` accepts a selector, a `NodeSet`, or exhaustive pattern
@@ -353,6 +536,168 @@ policy. They are standalone sequence distances and do not contribute a general
 graph lower bound. Zero-cost projected characters are compatible with a
 pseudometric for that projection; they do not make the exact positive-cost
 graph distance a metric on a finer view.
+
+### Build costs for text views
+
+Keep the graph equivalence view separate from application presentation views.
+A small application record can pair each sequence projection with a graph cost
+table that applies the same normalization to attribute substitutions. This
+example also raises item insertion and removal costs on the token declaration,
+and makes insertion and removal free only on a dedicated format-control tier:
+
+```python
+import unicodedata
+from collections.abc import Callable, Iterable
+from typing import NamedTuple
+
+from tiergraph import (
+    UNIT_COSTS,
+    Attribute,
+    CostTable,
+    SequenceProjection,
+    format_control_insensitive_projection,
+    text_projection,
+    whitespace_insensitive_projection,
+)
+
+
+class TextViewCosts(NamedTuple):
+    """Pair one projected reading with compatible graph operation costs."""
+
+    projection: SequenceProjection
+    costs: CostTable
+
+
+def item_text(graph: Graph) -> tuple[str, ...]:
+    """Read this application's ordered text pieces."""
+    return tuple(item.durable_id or "" for item in graph.tiers[0].items)
+
+
+def identity(text: str) -> str:
+    """Preserve strict text."""
+    return text
+
+
+def presentation(text: str) -> str:
+    """Apply this application's presentation normalization."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def without_whitespace(text: str) -> str:
+    """Remove the application's zero-cost whitespace class."""
+    return "".join(character for character in text if not character.isspace())
+
+
+def without_format_controls(text: str) -> str:
+    """Remove the Unicode Cf zero-cost class."""
+    return "".join(
+        character for character in text if unicodedata.category(character) != "Cf"
+    )
+
+
+def value_cost(
+    normalize: Callable[[str], str],
+) -> Callable[[Attribute, Attribute], int]:
+    """Price scalar string substitutions under one text normalization."""
+
+    def substitute(before: Attribute, after: Attribute) -> int:
+        """Return zero exactly when this view identifies the values."""
+        if isinstance(before, AttributeValue) and isinstance(after, AttributeValue):
+            return int(normalize(before.lexical) != normalize(after.lexical))
+        return int(before != after)
+
+    return substitute
+
+
+def join_pieces(pieces: Iterable[str]) -> str:
+    """Apply this application's no-separator joining policy."""
+    return "".join(pieces)
+
+
+format_controls = QualifiedName(tokens.name.namespace, "format-controls")
+
+
+def costs_for(
+    normalize: Callable[[str], str], *, controls_are_free: bool = False
+) -> CostTable:
+    """Build symmetric global costs with declaration-specific overrides."""
+    declarations: dict[QualifiedName, dict[str, int]] = {
+        tokens.name: {"insert_item": 2, "remove_item": 2}
+    }
+    if controls_are_free:
+        declarations[format_controls] = {"insert_item": 0, "remove_item": 0}
+    return CostTable(
+        UNIT_COSTS.operations,
+        declarations,
+        value_substitution=value_cost(normalize),
+    )
+
+
+views = {
+    "strict": TextViewCosts(
+        text_projection("strict", item_text, join=join_pieces), costs_for(identity)
+    ),
+    "presentation": TextViewCosts(
+        text_projection(
+            "presentation", item_text, join=join_pieces, transform=presentation
+        ),
+        costs_for(presentation),
+    ),
+    "whitespace-insensitive": TextViewCosts(
+        whitespace_insensitive_projection(item_text, join=join_pieces),
+        costs_for(without_whitespace),
+    ),
+    "format-control-insensitive": TextViewCosts(
+        format_control_insensitive_projection(item_text, join=join_pieces),
+        costs_for(without_format_controls, controls_are_free=True),
+    ),
+}
+
+upper = replace(
+    base,
+    tiers=(replace(base.tiers[0], items=(Item("ALPHA"), *base.tiers[0].items[1:])),),
+)
+spaced = replace(
+    base,
+    tiers=(replace(base.tiers[0], items=(Item("al pha"), *base.tiers[0].items[1:])),),
+)
+controlled = replace(
+    base,
+    tiers=(
+        replace(base.tiers[0], items=(Item("al\u200cpha"), *base.tiers[0].items[1:])),
+    ),
+)
+assert views["strict"].projection.distance(base, upper) == 5
+assert views["presentation"].projection.distance(base, upper) == 0
+assert views["whitespace-insensitive"].projection.distance(base, spaced) == 0
+assert views["format-control-insensitive"].projection.distance(base, controlled) == 0
+assert views["strict"].costs.operation("insert_item", tokens.name) == 2
+assert (
+    views["format-control-insensitive"].costs.operation("insert_item", format_controls)
+    == 0
+)
+
+surface = QualifiedName(tokens.name.namespace, "surface")
+plain_value = AttributeValue(surface, XsdType.STRING, "alpha")
+controlled_value = AttributeValue(surface, XsdType.STRING, "al\u200cpha")
+assert views["strict"].costs.substitute_value(plain_value, controlled_value) == 1
+assert (
+    views["format-control-insensitive"].costs.substitute_value(
+        plain_value, controlled_value
+    )
+    == 0
+)
+```
+
+The dedicated zero-cost declaration makes that table a pseudometric at the
+raw-graph level, which `metric_violations()` reports. It is appropriate only
+when the application intentionally quotients away that class. If format
+controls share ordinary items with visible text, their whole-item insertion and
+removal remain ordinary costs; the projection and `value_substitution` callback
+still make control-only replacements free. For a multi-tier graph result,
+normalize a copy under the selected view and call `graph_distance()` with the
+matching table. The sequence projection itself is not a lower-bound certificate
+for a general graph.
 
 ## Bound history and clean up explicitly
 

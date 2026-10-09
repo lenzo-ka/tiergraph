@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blob descriptors to a closed media-type set.
 - Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
 - Added a tested `DotPresentation` guide example.
+- Added tested editing recipes for view-specific text cost tables and
+  framework-side unit-ID-and-source-span timing import.
 - Added a hand-authored exact `dumps_spans()` DOT golden.
 - Added an editing guide covering primitive transactions, refusal and
   displacement, journals and provenance, clock-aware editing, patches and
