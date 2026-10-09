@@ -11233,7 +11233,10 @@ Quantify a target predicate over one relation step.
 Spans(offsets: 'OffsetProfile', relation: 'IntervalRelation', quantifier: 'Quantifier', other: 'QualifiedName', target: 'Predicate') -> None
 ```
 
-Quantify a target predicate over items in an interval relation.
+Quantify a target predicate over other items in an interval relation.
+
+An item is never interval-related to itself, including when ``other`` names
+the candidate's own tier.
 
 ### `compile_predicate`
 

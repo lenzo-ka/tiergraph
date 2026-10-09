@@ -197,6 +197,8 @@ class Equals:
     values: tuple[Literal, ...]
 
     def __post_init__(self) -> None:
+        if type(self.values) is not tuple:
+            raise ValueError("Equals values must be a tuple")
         if not self.values:
             raise ValueError("Equals needs at least one value")
         seen: set[tuple[type[object], object]] = set()
@@ -275,7 +277,11 @@ class Related:
 
 @dataclass(frozen=True, slots=True)
 class Spans:
-    """Quantify a target predicate over items in an interval relation."""
+    """Quantify a target predicate over other items in an interval relation.
+
+    An item is never interval-related to itself, including when ``other`` names
+    the candidate's own tier.
+    """
 
     offsets: OffsetProfile
     relation: IntervalRelation
@@ -1497,6 +1503,14 @@ class _Binder:
             return
         if isinstance(predicate, Spans):
             _validate_offset_profile(self.graph, predicate.offsets)
+            if all(
+                tier.declaration.name != predicate.other for tier in self.graph.tiers
+            ):
+                raise Refusal(
+                    RefusalStage.REFERENCE,
+                    f"Spans other tier {_display_name(self.graph, predicate.other)} "
+                    "is undeclared",
+                )
             self.check(predicate.target, current_allowed=False)
             return
         if isinstance(predicate, Elements):
@@ -2071,6 +2085,11 @@ def _decode_offset_profile(value: JsonValue, path: str) -> OffsetProfile:
     node = cast(dict[str, JsonValue], _object(value, path))
     allowed = {"origin", "extent", "end", "partition"}
     _refuse_field_set(node.keys(), allowed, {"origin"}, path)
+    if ("extent" in node) == ("end" in node):
+        raise Refusal(
+            RefusalStage.SHAPE,
+            f"{path} must contain exactly one of 'extent' or 'end'",
+        )
     return OffsetProfile(
         _decode_qname(node["origin"], f"{path}.origin"),
         (_decode_qname(node["extent"], f"{path}.extent") if "extent" in node else None),

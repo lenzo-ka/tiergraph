@@ -653,11 +653,17 @@ class FoldDeclaration[Value]:
                 "requires a bipartite relation or an ordered polyadic relation"
             )
         admitted = set(self._references())
+        seen_roots: set[ItemRef] = set()
         for root in self.roots:
             if root not in admitted:
                 raise ValueError(
                     f"fold {self.name!r} root {root.to_data()!r} is outside its domain"
                 )
+            if root in seen_roots:
+                raise ValueError(
+                    f"fold {self.name!r} lists root {root.to_data()!r} more than once"
+                )
+            seen_roots.add(root)
         self._dependency_graph()
 
     def _references(self) -> tuple[ItemRef, ...]:

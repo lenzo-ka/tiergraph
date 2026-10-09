@@ -200,6 +200,36 @@ def test_select_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "did not resolve to an item" in capsys.readouterr().err
 
 
+def test_match_cli_names_malformed_offset_profile_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pair request reports offset cardinality through the staged decoder."""
+    source = tmp_path / "graph.json"
+    request = tmp_path / "request.json"
+    _path_graph(source)
+    request.write_text(
+        json.dumps(
+            {
+                "match": "pairs",
+                "left": {"select": "items", "tier": q("seg").to_data()},
+                "right": {"select": "items", "tier": q("seg").to_data()},
+                "relation": "equal",
+                "offsets": {
+                    "origin": q("start").to_data(),
+                    "extent": q("extent").to_data(),
+                    "end": q("end").to_data(),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["match", str(source), "--request", str(request)]) == 1
+    assert capsys.readouterr().err == (
+        "tiergraph: match: ValueError: $.offsets must contain exactly one of "
+        "'extent' or 'end'\n"
+    )
+
+
 def test_t10_select_where_matches_the_json_selector(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

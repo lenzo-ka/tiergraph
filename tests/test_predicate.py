@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -570,6 +570,9 @@ def test_f15_where_complements_only_its_base_selection() -> None:
 
 
 def test_f16_construction_and_bind_refusals_are_literal_and_staged() -> None:
+    for values in ("ab", ["a", "b"]):
+        with pytest.raises(ValueError, match="^Equals values must be a tuple$"):
+            Equals(Cell(q("stress")), cast(Any, values))
     with pytest.raises(ValueError, match="^Equals needs at least one value$"):
         Equals(Cell(q("stress")), ())
     with pytest.raises(ValueError, match="^Equals lists 'a' twice$"):
