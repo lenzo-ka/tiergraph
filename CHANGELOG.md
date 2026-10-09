@@ -183,6 +183,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Required identity correspondence to be linear: every identified source names
+  exactly one target, and two sources cannot claim the same target. Splits and
+  merges remain available as functional correspondence.
 - Reported binary donor relations that cross a supplied replacement subtree
   edge as `donor_relations` dependencies instead of silently omitting them.
   Such relations remain uncopied when no external endpoint mapping exists.

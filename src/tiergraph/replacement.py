@@ -74,7 +74,8 @@ class SubtreeCorrespondence:
     items for a split. Missing old items have no counterpart. Each source
     reference names one alignment hole. ``identity_correspondence`` optionally
     marks holes whose aligned items retain identity; an absent entry claims
-    functional correspondence only.
+    functional correspondence only. Identity correspondence is linear: each
+    source names exactly one target, and no target is claimed by two sources.
     """
 
     items: Mapping[ItemRef, tuple[ItemRef, ...]] = field(default_factory=dict)
@@ -93,6 +94,7 @@ class SubtreeCorrespondence:
                 raise TypeError("correspondence targets must be item references")
             detached[source] = values
         identities: dict[ItemRef, tuple[ItemRef, ...]] = {}
+        identity_sources: dict[ItemRef, ItemRef] | None = None
         for source, targets in self.identity_correspondence.items():
             if not isinstance(source, ItemRef):
                 raise TypeError(
@@ -103,10 +105,26 @@ class SubtreeCorrespondence:
                 raise TypeError(
                     "identity correspondence targets must be item references"
                 )
-            if detached.get(source) != values:
+            if len(values) != 1:
                 raise ValueError(
-                    "identity correspondence must match its alignment hole"
+                    f"identity correspondence source {source} must name exactly "
+                    f"one target; got {values}"
                 )
+            target = values[0]
+            if target not in detached.get(source, ()):
+                raise ValueError(
+                    f"identity correspondence source {source} target {target} must "
+                    "belong to its alignment hole"
+                )
+            if identity_sources is None:
+                identity_sources = {}
+            previous = identity_sources.get(target)
+            if previous is not None:
+                raise ValueError(
+                    f"identity correspondence source {source} targets {values}, but "
+                    f"target {target} is already claimed by source {previous}"
+                )
+            identity_sources[target] = source
             identities[source] = values
         object.__setattr__(self, "items", MappingProxyType(detached))
         object.__setattr__(
