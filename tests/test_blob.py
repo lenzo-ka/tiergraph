@@ -28,12 +28,14 @@ from tiergraph import (
     ClockProfile,
     DurableBoundaryRef,
     DurableItemRef,
+    DurableRelationRef,
     EquivalenceView,
     Graph,
     GraphEditor,
     GraphValidationError,
     Item,
     ItemRef,
+    Journal,
     JsonAttributeValue,
     LayerFact,
     LayerName,
@@ -536,6 +538,122 @@ def test_clock_agreement_requires_profiles_for_the_same_graph() -> None:
     _, clock = clock_fixture()
     with pytest.raises(ValueError, match="profiles must describe the same graph"):
         BlobProfile(fixture()).check_clock(clock)
+
+
+def test_clock_editor_blob_guard_refuses_until_span_is_updated() -> None:
+    """A timing change cannot leave an opted-in attachment silently mistimed."""
+    graph, clock = clock_fixture()
+    editor = clock.edit("keep-earlier", blob=BlobProfile(graph))
+    editor.move_item(DurableItemRef("word-0"), 1)
+    with pytest.raises(
+        GraphValidationError,
+        match=r"clock edit violates blob span agreement: .*offset disagrees",
+    ):
+        editor.freeze()
+
+    assert (
+        editor.set_attribute(
+            DurableRelationRef("word-0-audio"),
+            value(OFFSET, XsdType.INTEGER, "8"),
+        )
+        is editor
+    )
+    editor.set_attribute(
+        DurableRelationRef("word-transcript"),
+        value(OFFSET, XsdType.INTEGER, "4"),
+    )
+    changed = editor.freeze()
+    BlobProfile(changed).check_clock(editor.profile)
+
+
+def test_clock_editor_attribute_refusals_are_atomic() -> None:
+    """Invalid clock attributes leave the plain editor and profile unchanged."""
+    graph, clock = clock_fixture()
+    editor = clock.edit()
+
+    with pytest.raises(
+        GraphValidationError,
+        match="attribute edit would invalidate.*clock unit.*is empty",
+    ):
+        editor.set_attribute(
+            None,
+            value(CLOCK_UNIT, XsdType.STRING, ""),
+        )
+    assert editor.freeze() is graph
+    assert editor.profile is clock
+
+    with pytest.raises(
+        GraphValidationError,
+        match="attribute edit would invalidate.*clock unit.*has no value",
+    ):
+        editor.remove_attribute(None, CLOCK_UNIT)
+    assert editor.freeze() is graph
+    assert editor.profile is clock
+
+
+def test_clock_editor_blob_guard_allows_duration_only_repair_and_retirement() -> None:
+    """The same session can drop absolute alignment or retire its clock profile."""
+    graph, clock = clock_fixture()
+    repaired = clock.edit("keep-earlier", blob=BlobProfile(graph))
+    repaired.move_item(DurableItemRef("word-0"), 1)
+    assert (
+        repaired.remove_attribute(DurableRelationRef("word-0-audio"), OFFSET)
+        is repaired
+    )
+    repaired.remove_attribute(DurableRelationRef("word-transcript"), OFFSET)
+    repaired.freeze()
+
+    retired = clock.edit("keep-earlier", blob=BlobProfile(graph))
+    retired.undeclare_with_contents(CLOCK)
+    result = retired.freeze()
+    assert all(tier.declaration.name != CLOCK for tier in result.tiers)
+
+
+def test_clock_journal_blob_guard_defers_until_freeze_and_tracks_span_edits() -> None:
+    """Journaled clock and span operations share the same final agreement gate."""
+    graph, clock = clock_fixture()
+    editor = clock.edit("keep-earlier", blob=BlobProfile(graph), journal=Journal())
+    duration_only = DurableRelationRef("word-1-audio")
+    with pytest.raises(GraphValidationError, match="carries no attribute"):
+        editor.remove_attribute(duration_only, OFFSET)
+    assert (
+        editor.set_attribute(duration_only, value(OFFSET, XsdType.INTEGER, "8"))
+        is editor
+    )
+    assert editor.remove_attribute(duration_only, OFFSET) is editor
+
+    editor.move_item(DurableItemRef("word-0"), 1)
+    with pytest.raises(GraphValidationError, match="offset disagrees"):
+        editor.freeze()
+    editor.set_attribute(
+        DurableRelationRef("word-transcript"),
+        value(OFFSET, XsdType.INTEGER, "4"),
+    )
+    editor.set_attribute(
+        DurableRelationRef("word-0-audio"),
+        value(OFFSET, XsdType.INTEGER, "8"),
+    )
+    changed = editor.freeze()
+    BlobProfile(changed).check_clock(editor.profile)
+    editor.undo()
+    with pytest.raises(GraphValidationError, match="offset disagrees"):
+        editor.freeze()
+    editor.redo()
+    editor.freeze()
+
+
+def test_clock_editor_blob_guard_requires_matching_valid_profiles() -> None:
+    """A guarded session starts only from one graph with agreed metadata."""
+    graph, clock = clock_fixture()
+    with pytest.raises(ValueError, match="editor's same graph"):
+        clock.edit(blob=BlobProfile(fixture()))
+
+    mismatched = graph.set_attribute(
+        DurableRelationRef("word-0-audio"),
+        value(LENGTH, XsdType.INTEGER, "3"),
+    )
+    with pytest.raises(GraphValidationError, match="length disagrees"):
+        replace(clock, graph=mismatched).edit(blob=BlobProfile(mismatched))
 
 
 def test_clock_agreement_refuses_untimed_and_unavailable_subjects(

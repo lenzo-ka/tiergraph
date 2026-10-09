@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from tiergraph.blob import BlobProfile
     from tiergraph.patch import Patch
 
 from tiergraph.clock import (
@@ -19,6 +20,7 @@ from tiergraph.clock import (
     ClockEditReport,
     ClockProfile,
     ClockRebindingPolicy,
+    _check_blob_profile,
 )
 from tiergraph.core import (
     Attribute,
@@ -2106,10 +2108,11 @@ class Journal:
         self,
         profile: ClockProfile,
         rebinding: ClockRebindingPolicy | str | None,
+        blob: BlobProfile | None,
     ) -> ClockJournalEditor:
         if self._editor is not None:
             raise GraphValidationError("journal is already attached to an editor")
-        editor = ClockJournalEditor(profile, rebinding, self)
+        editor = ClockJournalEditor(profile, rebinding, self, blob=blob)
         self._editor = editor
         return editor
 
@@ -3286,17 +3289,20 @@ def _displacement_between(
 
 
 class ClockJournalEditor(_JournalEditorBase):
-    """Record atomic edits that preserve an explicit clock profile."""
+    """Record atomic edits that preserve a clock and optional blob-span guard."""
 
     def __init__(
         self,
         profile: ClockProfile,
         rebinding: ClockRebindingPolicy | str | None,
         journal: Journal,
+        *,
+        blob: BlobProfile | None = None,
     ) -> None:
-        probe = ClockEditor(profile, rebinding)
+        probe = ClockEditor(profile, rebinding, blob=blob)
         super().__init__(profile.graph, journal)
         self._profile_template = profile
+        self._blob_profile = blob
         self._profile = profile
         self._policy = probe._policy
         self._profile_active = True
@@ -3321,7 +3327,9 @@ class ClockJournalEditor(_JournalEditorBase):
         )
 
     def freeze(self) -> Graph:
-        """Return the current fully validated graph."""
+        """Return the graph after checking any opted-in blob span agreement."""
+        if self._blob_profile is not None and self._profile_active:
+            _check_blob_profile(self._blob_profile, self._profile)
         return super().freeze()
 
     def displacement(self) -> Displacement:
@@ -3345,6 +3353,7 @@ class ClockJournalEditor(_JournalEditorBase):
         operation: str,
         edit: Callable[[ClockEditor], ClockEditor],
         *,
+        patch_operations: _OperationPair | None = None,
         provenance_subjects: Iterable[LayerSubject] = (),
         retire_subjects: Iterable[LayerSubject] = (),
         retire_all_provenance: bool = False,
@@ -3393,6 +3402,7 @@ class ClockJournalEditor(_JournalEditorBase):
             operation,
             candidate,
             step,
+            patch_operations=patch_operations,
             operation_before=operation_before,
             provenance_subjects=acted,
             clock_reports=native.reports,
@@ -3404,6 +3414,46 @@ class ClockJournalEditor(_JournalEditorBase):
         if active:
             self._profile = replace(native.profile, graph=self._graph)
         return self
+
+    def set_attribute(self, target: EditTarget, value: Attribute) -> ClockJournalEditor:
+        """Set one attribute within the guarded clock session."""
+        subject = _attribute_subject(self._graph, target, value.name)
+        prior = _attribute_at(self._graph, target, value.name)
+        inverse = (
+            _operation("remove_attribute", target, value.name)
+            if prior is None
+            else _operation("set_attribute", target, prior)
+        )
+        operations = _OperationPair(_operation("set_attribute", target, value), inverse)
+        return self._apply_clock(
+            "set_attribute",
+            lambda editor: editor.set_attribute(target, value),
+            patch_operations=operations,
+            provenance_subjects=_present_subject(subject),
+        )
+
+    def remove_attribute(
+        self, target: EditTarget, name: QualifiedName
+    ) -> ClockJournalEditor:
+        """Remove one attribute within the guarded clock session."""
+        subject = _attribute_subject(self._graph, target, name)
+        prior = _attribute_at(self._graph, target, name)
+        operations = (
+            None
+            if prior is None
+            else _operation_pair(
+                "remove_attribute",
+                (target, name),
+                "set_attribute",
+                (target, prior),
+            )
+        )
+        return self._apply_clock(
+            "remove_attribute",
+            lambda editor: editor.remove_attribute(target, name),
+            patch_operations=operations,
+            provenance_subjects=_present_subject(subject),
+        )
 
     def insert_item(
         self, tier: QualifiedName, index: int, item: Item
