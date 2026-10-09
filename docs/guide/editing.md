@@ -258,6 +258,11 @@ and facts in graph order, including their durable identifiers. Its `graph`
 field is the edited graph. `Graph.replace_subtree()` remains a graph-returning
 convenience; call the module function when the report is needed. A journal
 record exposes the same detached content, and its inverse restores it.
+Binary relations in the supplied graph are copied only when both endpoints
+belong to the supplied subtree. A binary relation that crosses that subtree edge
+is not copied; the report identifies it with a `donor_relations` dependency
+whose index addresses the supplied graph. Carrying such a relation requires an
+external endpoint mapping and is not inferred.
 
 Correspondence is opt-in through `ReplacementPolicies`. An explicit
 `SubtreeCorrespondence` maps an old descendant to zero, one, or several new

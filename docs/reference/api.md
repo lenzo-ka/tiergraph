@@ -2840,7 +2840,13 @@ type ContainmentRule = str | collections.abc.Callable[[tuple[int, int], tuple[tu
 DetachedDependency(carrier: 'str', index: 'int', declaration: 'QualifiedName | None' = None, layer: 'LayerName | None' = None, subject: 'LayerSubject | None' = None, tier: 'QualifiedName | None' = None) -> None
 ```
 
-Name one dependency removed from the live graph by replacement.
+Name one dependency omitted or removed by replacement.
+
+Ordinary carrier coordinates address the graph passed to the replacement
+function before editing. A
+``donor_relations`` coordinate addresses :attr:`Subtree.graph` and names a
+binary relation that crossed the supplied subtree edge, so it could not be
+copied.
 
 #### `DetachedDependency.to_data`
 
@@ -3177,7 +3183,8 @@ Replace one root's descendants and report withdrawn graph content.
 The root, its incoming containment link, its attributes, and its layer facts
 remain live. The default abandons dependencies on descendants. The result
 reports the abandoned items, relation instances, and facts whether or not a
-journal is used. Correspondence is explicitly opt-in.
+journal is used. A binary donor relation that crosses the supplied subtree
+edge is also reported, but not copied. Correspondence is explicitly opt-in.
 
 ### `retime`
 
