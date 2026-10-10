@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extended checked link accounting to shifts, clock editors, and path commitment;
   clock-aware shifts now report their exact binding endpoint changes.
 - Tightened checked shift, per-operation displacement, and clock endpoint accounting.
+- Made checked clock re-pointing require exact reported durable targets.
 - Added held item-run moves, unequal run swaps, and identity-preserving shifts
   of edge children across adjacent ordered-containment sisters, with journal,
   patch, diff, clock-policy, cost, and command-line support.

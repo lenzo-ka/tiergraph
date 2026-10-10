@@ -1153,6 +1153,8 @@ def test_report_encodes_detached_subject_and_every_clock_endpoint_shape() -> Non
         BoundaryRef(case.unit, 1),
         ItemRef(case.unit, 0),
         DurableItemRef("u0"),
+        DurableBoundaryRef(case.unit, BoundarySide.BEFORE),
+        DurableBoundaryRef(DurableItemRef("u0"), BoundarySide.AFTER),
         0,
         1,
         True,
@@ -1182,8 +1184,12 @@ def test_report_encodes_detached_subject_and_every_clock_endpoint_shape() -> Non
     changes = cast(list[dict[str, JsonValue]], clock_reports[0]["changes"])
     previous_source = cast(dict[str, JsonValue], changes[0]["previous_source"])
     source = cast(dict[str, JsonValue], changes[0]["source"])
+    previous_target = cast(dict[str, JsonValue], changes[0]["previous_target"])
+    target = cast(dict[str, JsonValue], changes[0]["target"])
     assert previous_source["kind"] == "item"
     assert source["kind"] == "durable_item"
+    assert previous_target["kind"] == "durable_boundary"
+    assert target["kind"] == "durable_boundary"
 
     tier_boundary = DurableBoundaryRef(case.unit, BoundarySide.BEFORE)
     item_boundary = DurableBoundaryRef(DurableItemRef("u0"), BoundarySide.AFTER)

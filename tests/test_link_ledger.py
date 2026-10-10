@@ -25,6 +25,7 @@ from tiergraph import (
     ClockEditOperation,
     ClockEditor,
     ClockEditReport,
+    ClockProfile,
     ClockRebindingPolicy,
     DetachedDependency,
     DetachmentReport,
@@ -64,6 +65,7 @@ from tiergraph.edit import (
     _displacement_between,
     _graph_links,
     _link_positions_match,
+    _LinkSnapshot,
     _owner_images,
     _shift_endpoint_match,
     _shift_endpoint_moves,
@@ -899,6 +901,86 @@ def test_checked_shift_refuses_an_unrelated_polyadic_repoint(
         editor._polyadic_relations[11] = replace(second, targets=first.targets)
         return result
 
+    unchecked = source.edit()
+    corrupt_shift(
+        unchecked,
+        ItemRef(test_shift.SYLLABLE, 0),
+        1,
+        ShiftDirection.RIGHT,
+        test_shift.SYLLABLE_SEGMENTS,
+        across_parent=True,
+    )
+    corrupted = unchecked.freeze()
+    source_links = _graph_links(source)
+    target_links = _graph_links(corrupted)
+
+    def endpoint(
+        links: tuple[_LinkSnapshot, ...], owner: int, position: int
+    ) -> _LinkSnapshot:
+        """Select one target endpoint by its literal carrier coordinates."""
+        found = tuple(
+            link
+            for link in links
+            if link.kind == "endpoint"
+            and link.owner == ("polyadic_relations", owner)
+            and link.side == "targets"
+            and link.position == position
+        )
+        assert len(found) == 1
+        return found[0]
+
+    expected_repointed = (
+        endpoint(source_links, 8, 2),
+        *(endpoint(source_links, 9, position) for position in range(3)),
+    )
+    expected_repointed_targets = tuple(
+        endpoint(target_links, 9, position) for position in range(4)
+    )
+    expected_dropped = (
+        endpoint(source_links, 10, 0),
+        endpoint(source_links, 11, 0),
+    )
+    expected_introduced = (
+        endpoint(target_links, 10, 0),
+        endpoint(target_links, 11, 0),
+    )
+    expected_carried = tuple(
+        link
+        for link in source_links
+        if link not in (*expected_repointed, *expected_dropped)
+    )
+    expected_partition = {
+        "carried": expected_carried,
+        "repointed": expected_repointed,
+        "dropped": expected_dropped,
+        "introduced": expected_introduced,
+    }
+    assert Counter(
+        (
+            *expected_partition["carried"],
+            *expected_partition["repointed"],
+            *expected_partition["dropped"],
+        )
+    ) == Counter(source_links)
+    assert Counter(
+        (
+            *expected_partition["carried"],
+            *expected_repointed_targets,
+            *expected_partition["introduced"],
+        )
+    ) == Counter(target_links)
+    assert tuple(link.value for link in expected_repointed) == tuple(
+        ItemRef(test_shift.SEGMENT, index) for index in range(2, 6)
+    )
+    assert tuple(link.value for link in expected_dropped) == (
+        ItemRef(test_shift.SEGMENT, 6),
+        ItemRef(test_shift.SEGMENT, 7),
+    )
+    assert tuple(link.value for link in expected_introduced) == (
+        ItemRef(test_shift.SEGMENT, 7),
+        ItemRef(test_shift.SEGMENT, 6),
+    )
+
     monkeypatch.setattr(GraphEditor, "shift", corrupt_shift)
     editor = source.edit(check_links=True)
     with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
@@ -980,8 +1062,33 @@ def test_checked_clock_refusal_restores_state(
 
 
 def test_clock_endpoint_match_refuses_an_equivalent_durable_spelling() -> None:
-    """A reported clock index does not license another durable endpoint ref."""
+    """A binding at the reported index does not license its durable spelling."""
     profile = test_shift.fully_timed_hierarchy()
+    clock_index = 6
+    previous_tick = profile.graph._tiers_by_name[test_shift.CLOCK].items[
+        clock_index - 1
+    ]
+    assert previous_tick.durable_id is not None
+    alternate = DurableBoundaryRef(
+        DurableItemRef(previous_tick.durable_id), BoundarySide.AFTER
+    )
+    relations = list(profile.graph.relations)
+    unrelated_index = 13
+    unrelated = relations[unrelated_index]
+    assert (
+        profile.graph.resolve_boundary(cast(DurableBoundaryRef, unrelated.right)).index
+        == clock_index
+    )
+    assert unrelated.right != alternate
+    relations[unrelated_index] = replace(unrelated, right=alternate)
+    source = replace(profile.graph, relations=tuple(relations))
+    profile = ClockProfile(
+        source,
+        test_shift.CLOCK,
+        test_shift.CLOCK_BINDING,
+        None,
+        test_shift.UNIT,
+    )
     editor = profile.edit()
     editor.shift(
         ItemRef(test_shift.PHRASE, 0),
@@ -998,16 +1105,17 @@ def test_clock_endpoint_match_refuses_an_equivalent_durable_spelling() -> None:
         if previous.right != current.right
     )
     relation = result.relations[changed_index]
-    clock_index = result.resolve_boundary(
-        cast(DurableBoundaryRef, relation.right)
-    ).index
-    previous_tick = result._tiers_by_name[test_shift.CLOCK].items[clock_index - 1]
-    assert previous_tick.durable_id is not None
-    alternate = DurableBoundaryRef(
-        DurableItemRef(previous_tick.durable_id), BoundarySide.AFTER
+    assert (
+        result.resolve_boundary(cast(DurableBoundaryRef, relation.right)).index
+        == clock_index
     )
     assert alternate != relation.right
     assert result.resolve_boundary(alternate).index == clock_index
+    assert any(
+        binding.right == alternate
+        for binding in profile.graph.relations
+        if binding.declaration == relation.declaration
+    )
     relations = list(result.relations)
     relations[changed_index] = replace(relation, right=alternate)
     corrupted = replace(result, relations=tuple(relations))
@@ -1194,6 +1302,8 @@ def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> Non
                 None,
                 timing.relations[4].left,
                 timing.relations[5].left,
+                cast(DurableBoundaryRef, timing.relations[4].right),
+                cast(DurableBoundaryRef, timing.relations[5].right),
                 1,
                 3,
                 False,
@@ -1201,7 +1311,7 @@ def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> Non
         ),
         False,
     )
-    nonmatching_change = replace(report.changes[0], previous_clock_index=None)
+    nonmatching_change = replace(report.changes[0], previous_target=None)
     assert _clock_endpoint_match(
         right,
         later_right,
