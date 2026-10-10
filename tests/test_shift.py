@@ -1102,20 +1102,30 @@ def test_cross_parent_shift_rebinds_container_and_parent_on_common_clock() -> No
 def test_cross_parent_shift_policies_cover_ancestor_boundary_content() -> None:
     """Ancestor values and facts require policy and drop with exact undo."""
     profile = fully_timed_hierarchy()
-    value = AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "source offset")
+    value = AttributeValue(SOURCE_OFFSET, XsdType.INTEGER, "2")
     fact = LayerFact(BoundaryRef(WORD, 1), value)
     graph = replace(
         profile.graph,
         attribute_declarations=(
             *profile.graph.attribute_declarations,
             AttributeDeclaration(
-                BOUNDARY_NOTE, AttributeDomain.BOUNDARY, XsdType.STRING
+                SOURCE_OFFSET, AttributeDomain.BOUNDARY, XsdType.INTEGER
             ),
         ),
         boundary_values=(Boundary(BoundaryRef(WORD, 1), (value,)),),
         layers=(Layer(SOURCE_LAYER, (fact,)),),
     )
     stored = ClockProfile(graph, CLOCK, CLOCK_BINDING, None, UNIT)
+    direct_graph = replace(
+        hierarchy(),
+        attribute_declarations=(
+            AttributeDeclaration(
+                SOURCE_OFFSET, AttributeDomain.BOUNDARY, XsdType.INTEGER
+            ),
+        ),
+        boundary_values=(Boundary(BoundaryRef(WORD, 1), (value,)),),
+        layers=(Layer(SOURCE_LAYER, (fact,)),),
+    )
 
     def shift(editor: Any) -> None:
         editor.shift(
@@ -1126,11 +1136,26 @@ def test_cross_parent_shift_policies_cover_ancestor_boundary_content() -> None:
             across_parent=True,
         )
 
+    for direct_editor in (
+        direct_graph.edit(),
+        direct_graph.edit(journal=Journal()),
+    ):
+        with pytest.raises(GraphValidationError, match="stored ancestor boundary"):
+            shift(direct_editor)
+
     with pytest.raises(GraphValidationError, match="stored ancestor boundary"):
         shift(stored.edit())
 
     facts_only_graph = replace(graph, boundary_values=())
     facts_only = ClockProfile(facts_only_graph, CLOCK, CLOCK_BINDING, None, UNIT)
+    direct_facts_only = replace(direct_graph, boundary_values=())
+    for direct_editor in (
+        direct_facts_only.edit(),
+        direct_facts_only.edit(journal=Journal()),
+    ):
+        with pytest.raises(GraphValidationError, match="ancestor boundary fact"):
+            shift(direct_editor)
+
     with pytest.raises(GraphValidationError, match="ancestor boundary fact"):
         shift(facts_only.edit())
 
