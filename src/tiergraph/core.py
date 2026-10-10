@@ -5386,6 +5386,15 @@ _LINK_CHECKED_OPERATIONS = frozenset(
 class _LinkCheckingGraphEditor(GraphEditor):
     """Run the complete link ledger around each opted-in edit operation."""
 
+    def _advance_displacement(self, step: Displacement) -> None:
+        """Accumulate both session-wide and current checked-operation movement."""
+        super()._advance_displacement(step)
+        operation = getattr(self, "_link_operation_displacement", None)
+        if operation is not None:
+            object.__setattr__(
+                self, "_link_operation_displacement", operation.then(step)
+            )
+
     def _snapshot_state(self) -> dict[str, object]:
         """Copy mutable carriers so a checked operation can be rolled back."""
         state = self.__dict__.copy()
@@ -5424,16 +5433,24 @@ class _LinkCheckingGraphEditor(GraphEditor):
 
             before = object.__getattribute__(self, "_checked_graph")
             state = self._snapshot_state()
+            object.__setattr__(
+                self,
+                "_link_operation_displacement",
+                Displacement.stationary(before),
+            )
             object.__setattr__(self, "_link_check_depth", 1)
             try:
                 result = value(*args, **kwargs)
                 if getattr(self, "_pending_held", None) is not None:
                     return result
                 after = GraphEditor.freeze(self)
+                operation_displacement = object.__getattribute__(
+                    self, "_link_operation_displacement"
+                )
                 record = (
                     (
                         self.last_detachment,
-                        self.displacement(),
+                        operation_displacement,
                         getattr(self, "_last_correspondence", None),
                     )
                     if name in {"replace_subtree", "swap_subtrees", "shift"}
@@ -5446,6 +5463,7 @@ class _LinkCheckingGraphEditor(GraphEditor):
                 self._restore_state(state)
                 raise
             finally:
+                self.__dict__.pop("_link_operation_displacement", None)
                 object.__setattr__(self, "_link_check_depth", 0)
 
         return _checked

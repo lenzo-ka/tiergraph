@@ -66,6 +66,7 @@ from tiergraph.edit import (
     _link_positions_match,
     _owner_images,
     _shift_endpoint_match,
+    _shift_endpoint_moves,
     _value_images,
     link_ledger,
 )
@@ -87,6 +88,56 @@ _REFUSED_UNREPORTED_DROPS = frozenset(
         "compact",
     }
 )
+
+
+def _expected_shift_endpoint_moves(
+    before: Graph, after: Graph, record: JournalRecord
+) -> frozenset[tuple[object, object]]:
+    """Derive a recorded shift's exact endpoint pairs without its matcher."""
+    report = record.report
+    correspondence = report.correspondence
+    assert correspondence is not None
+    moved = frozenset(correspondence.identity_correspondence)
+    changed = tuple(
+        touch.index
+        for touch in report.touched_relations
+        if touch.carrier == "polyadic_relations"
+        and before.polyadic_relations[touch.index].targets
+        != after.polyadic_relations[touch.index].targets
+    )
+    sources = tuple(
+        index
+        for index in changed
+        if len(before.polyadic_relations[index].targets)
+        > len(after.polyadic_relations[index].targets)
+    )
+    targets = tuple(
+        index
+        for index in changed
+        if len(before.polyadic_relations[index].targets)
+        < len(after.polyadic_relations[index].targets)
+    )
+    assert len(sources) == len(targets) == 1
+    source_owner = ("polyadic_relations", sources[0])
+    target_owner = ("polyadic_relations", targets[0])
+    old = tuple(
+        link
+        for link in _graph_links(before)
+        if link.kind == "endpoint"
+        and link.owner == source_owner
+        and link.side == "targets"
+        and before.resolve_item(cast(ItemRef | DurableItemRef, link.value)) in moved
+    )
+    new = tuple(
+        link
+        for link in _graph_links(after)
+        if link.kind == "endpoint"
+        and link.owner == target_owner
+        and link.side == "targets"
+        and after.resolve_item(cast(ItemRef | DurableItemRef, link.value)) in moved
+    )
+    assert tuple(link.value for link in old) == tuple(link.value for link in new)
+    return frozenset(zip(old, new, strict=True))
 
 
 def _assert_complete_partition(
@@ -125,6 +176,11 @@ def _assert_complete_partition(
         "repointed": [],
         "dropped": [],
     }
+    shift_moves = (
+        _expected_shift_endpoint_moves(before, after, record)
+        if record is not None and record.operation == "shift"
+        else frozenset()
+    )
     for link in _graph_links(before):
         reported = report is not None and _detachment_has_link(
             link,
@@ -168,7 +224,7 @@ def _assert_complete_partition(
                     (index, candidate)
                     for index, candidate in enumerate(targets)
                     if index not in used
-                    and _shift_endpoint_match(link, candidate, before, after, values)
+                    and (link, candidate) in shift_moves
                     and _link_positions_match(link, candidate, endpoint_positions)
                 ),
                 None,
@@ -585,6 +641,50 @@ def test_checked_shift_repoints_containment_on_both_editor_paths() -> None:
         assert results[0] == results[1]
 
 
+def test_plain_checked_insert_then_shift_uses_per_operation_displacement() -> None:
+    """A prior insertion does not offset the coordinates audited for a shift."""
+    source = test_shift.hierarchy()
+    expected = source.edit()
+    expected.insert_item(test_shift.WORD, 0, Item("inserted-word"))
+    expected.shift(
+        ItemRef(test_shift.PHRASE, 0),
+        1,
+        "right",
+        test_shift.PHRASE_WORDS,
+    )
+
+    checked = source.edit(check_links=True)
+    checked.insert_item(test_shift.WORD, 0, Item("inserted-word"))
+    checked.shift(
+        ItemRef(test_shift.PHRASE, 0),
+        1,
+        "right",
+        test_shift.PHRASE_WORDS,
+    )
+    assert checked.freeze() == expected.freeze()
+
+
+@settings(max_examples=10, deadline=None)
+@given(case=GENERATED_HIERARCHIES)
+def test_plain_checked_insert_then_replace_uses_per_operation_displacement(
+    case: GeneratedHierarchy,
+) -> None:
+    """A replacement is audited from its immediate post-insertion source."""
+    policies = ReplacementPolicies(ReplacementAction.DROP)
+    expected = case.graph.edit()
+    expected.insert_item(case.word, 0, Item("inserted-word"))
+    expected.replace_subtree(
+        DurableItemRef("phrase-0"), case.phrase_words, case.donor, policies
+    )
+
+    checked = case.graph.edit(check_links=True)
+    checked.insert_item(case.word, 0, Item("inserted-word"))
+    checked.replace_subtree(
+        DurableItemRef("phrase-0"), case.phrase_words, case.donor, policies
+    )
+    assert checked.freeze() == expected.freeze()
+
+
 def test_plain_checked_shift_uses_the_same_detachment_report_as_journaled() -> None:
     """A reported boundary withdrawal has one outcome on both checked paths."""
     source = test_shift.hierarchy()
@@ -602,6 +702,7 @@ def test_plain_checked_shift_uses_the_same_detachment_report_as_journaled() -> N
         boundary_values=(Boundary(BoundaryRef(test_shift.PHRASE, 1), (value,)),),
     )
     results = []
+    journaled_ledger = None
     for journaled in (False, True):
         journal = Journal() if journaled else None
         editor = (
@@ -616,9 +717,30 @@ def test_plain_checked_shift_uses_the_same_detachment_report_as_journaled() -> N
             test_shift.PHRASE_WORDS,
             "drop-to-provisional",
         )
-        results.append(editor.freeze())
+        result = editor.freeze()
+        results.append(result)
+        if journal is not None:
+            journaled_ledger = link_ledger(source, result, journal.records[0])
     assert results[0] == results[1]
     assert results[0].boundary_values == ()
+    assert journaled_ledger is not None
+    moved = ItemRef(test_shift.WORD, 2)
+    source_endpoint = next(
+        link
+        for link in _graph_links(source)
+        if link.kind == "endpoint"
+        and link.owner == ("polyadic_relations", 1)
+        and link.value == moved
+    )
+    intended_endpoint = next(
+        link
+        for link in _graph_links(results[1])
+        if link.kind == "endpoint"
+        and link.owner == ("polyadic_relations", 2)
+        and link.value == moved
+    )
+    assert source_endpoint in journaled_ledger.repointed
+    assert intended_endpoint not in journaled_ledger.introduced
 
 
 def test_clock_and_commit_path_expose_checked_link_accounting() -> None:
@@ -746,6 +868,97 @@ def test_checked_shift_refuses_an_unaccounted_binary_repoint(
     assert editor.freeze() == source
 
 
+def test_checked_shift_refuses_an_unrelated_polyadic_repoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shift cannot conceal a move between unrelated containment instances."""
+    source = test_shift.hierarchy()
+    original = GraphEditor.shift
+
+    def corrupt_shift(
+        editor: GraphEditor,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+        across_parent: bool = False,
+    ) -> GraphEditor:
+        result = original(
+            editor,
+            container,
+            k,
+            direction,
+            containment,
+            policy,
+            across_parent,
+        )
+        first = editor._polyadic_relations[10]
+        second = editor._polyadic_relations[11]
+        editor._polyadic_relations[10] = replace(first, targets=second.targets)
+        editor._polyadic_relations[11] = replace(second, targets=first.targets)
+        return result
+
+    monkeypatch.setattr(GraphEditor, "shift", corrupt_shift)
+    editor = source.edit(check_links=True)
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        editor.shift(
+            ItemRef(test_shift.SYLLABLE, 0),
+            1,
+            "right",
+            test_shift.SYLLABLE_SEGMENTS,
+            across_parent=True,
+        )
+    assert editor.freeze() == source
+
+
+def test_checked_shift_refuses_a_nonadjacent_held_run_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shift cannot redirect its held run past the adjacent sister."""
+    source = test_shift.hierarchy()
+    original = GraphEditor.shift
+
+    def corrupt_shift(
+        editor: GraphEditor,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+        across_parent: bool = False,
+    ) -> GraphEditor:
+        result = original(
+            editor,
+            container,
+            k,
+            direction,
+            containment,
+            policy,
+            across_parent,
+        )
+        sister = editor._polyadic_relations[9]
+        redirected = editor._polyadic_relations[10]
+        held = sister.targets[:1]
+        editor._polyadic_relations[9] = replace(sister, targets=sister.targets[1:])
+        editor._polyadic_relations[10] = replace(
+            redirected, targets=(*held, *redirected.targets)
+        )
+        return result
+
+    monkeypatch.setattr(GraphEditor, "shift", corrupt_shift)
+    editor = source.edit(check_links=True)
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        editor.shift(
+            ItemRef(test_shift.SYLLABLE, 0),
+            1,
+            "right",
+            test_shift.SYLLABLE_SEGMENTS,
+            across_parent=True,
+        )
+    assert editor.freeze() == source
+
+
 def test_checked_clock_refusal_restores_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -766,6 +979,53 @@ def test_checked_clock_refusal_restores_state(
     assert editor.reports == ()
 
 
+def test_clock_endpoint_match_refuses_an_equivalent_durable_spelling() -> None:
+    """A reported clock index does not license another durable endpoint ref."""
+    profile = test_shift.fully_timed_hierarchy()
+    editor = profile.edit()
+    editor.shift(
+        ItemRef(test_shift.PHRASE, 0),
+        1,
+        "right",
+        test_shift.PHRASE_WORDS,
+    )
+    result = editor.freeze()
+    changed_index = next(
+        index
+        for index, (previous, current) in enumerate(
+            zip(profile.graph.relations, result.relations, strict=True)
+        )
+        if previous.right != current.right
+    )
+    relation = result.relations[changed_index]
+    clock_index = result.resolve_boundary(
+        cast(DurableBoundaryRef, relation.right)
+    ).index
+    previous_tick = result._tiers_by_name[test_shift.CLOCK].items[clock_index - 1]
+    assert previous_tick.durable_id is not None
+    alternate = DurableBoundaryRef(
+        DurableItemRef(previous_tick.durable_id), BoundarySide.AFTER
+    )
+    assert alternate != relation.right
+    assert result.resolve_boundary(alternate).index == clock_index
+    relations = list(result.relations)
+    relations[changed_index] = replace(relation, right=alternate)
+    corrupted = replace(result, relations=tuple(relations))
+
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        link_ledger(
+            profile.graph,
+            corrupted,
+            (
+                None,
+                _displacement_between(profile.graph, corrupted),
+                cast(SubtreeCorrespondence, editor.__dict__["_link_correspondence"]),
+            ),
+            operation="shift",
+            clock_reports=editor.reports,
+        )
+
+
 def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> None:
     """Shift and clock matching require declared relation and report agreement."""
     case = test_replacement.fixture("speech")
@@ -777,13 +1037,7 @@ def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> Non
         if case.graph.relations[cast(tuple[str, int], source.owner)[1]].declaration
         != case.graph.relations[cast(tuple[str, int], target.owner)[1]].declaration
     )
-    assert not _shift_endpoint_match(
-        shift_source,
-        shift_target,
-        case.graph,
-        case.graph,
-        (shift_target.value,),
-    )
+    assert not _shift_endpoint_match(shift_source, shift_target, frozenset())
     hierarchy = test_shift.hierarchy()
     hierarchy_endpoints = [
         link for link in _graph_links(hierarchy) if link.kind == "endpoint"
@@ -800,13 +1054,106 @@ def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> Non
             cast(tuple[str, int], target.owner)[1]
         ].declaration
     )
-    assert not _shift_endpoint_match(
-        polyadic_source,
-        polyadic_target,
-        hierarchy,
-        hierarchy,
-        (polyadic_target.value,),
+    shifted = hierarchy.edit()
+    shifted.shift(
+        ItemRef(test_shift.PHRASE, 0),
+        1,
+        "right",
+        test_shift.PHRASE_WORDS,
     )
+    shifted_graph = shifted.freeze()
+    moves = _shift_endpoint_moves(
+        hierarchy,
+        shifted_graph,
+        cast(SubtreeCorrespondence, shifted.__dict__["_last_correspondence"]),
+    )
+    assert moves
+    actual_source, actual_target = next(iter(moves))
+    assert _shift_endpoint_match(actual_source, actual_target, moves)
+    assert not _shift_endpoint_match(polyadic_source, polyadic_target, moves)
+    target_index = cast(tuple[str, int], actual_target.owner)[1]
+
+    missing_source_before = list(hierarchy.polyadic_relations)
+    missing_source_after = list(shifted_graph.polyadic_relations)
+    missing_source_before[target_index] = replace(
+        missing_source_before[target_index], sources=()
+    )
+    missing_source_after[target_index] = replace(
+        missing_source_after[target_index], sources=()
+    )
+    missing_source_source = replace(hierarchy)
+    missing_source_result = replace(shifted_graph)
+    object.__setattr__(
+        missing_source_source,
+        "polyadic_relations",
+        tuple(missing_source_before),
+    )
+    object.__setattr__(
+        missing_source_result,
+        "polyadic_relations",
+        tuple(missing_source_after),
+    )
+    assert not _shift_endpoint_moves(
+        missing_source_source,
+        missing_source_result,
+        cast(SubtreeCorrespondence, shifted.__dict__["_last_correspondence"]),
+    )
+
+    boundary_source = (DurableBoundaryRef(test_shift.PHRASE, BoundarySide.BEFORE),)
+    boundary_source_before = list(hierarchy.polyadic_relations)
+    boundary_source_after = list(shifted_graph.polyadic_relations)
+    boundary_source_before[target_index] = replace(
+        boundary_source_before[target_index], sources=boundary_source
+    )
+    boundary_source_after[target_index] = replace(
+        boundary_source_after[target_index], sources=boundary_source
+    )
+    boundary_source_source = replace(hierarchy)
+    boundary_source_result = replace(shifted_graph)
+    object.__setattr__(
+        boundary_source_source,
+        "polyadic_relations",
+        tuple(boundary_source_before),
+    )
+    object.__setattr__(
+        boundary_source_result,
+        "polyadic_relations",
+        tuple(boundary_source_after),
+    )
+    assert not _shift_endpoint_moves(
+        boundary_source_source,
+        boundary_source_result,
+        cast(SubtreeCorrespondence, shifted.__dict__["_last_correspondence"]),
+    )
+    assert not _shift_endpoint_moves(hierarchy, hierarchy, None)
+    assert not _shift_endpoint_moves(
+        hierarchy,
+        replace(hierarchy, polyadic_relations=hierarchy.polyadic_relations[:-1]),
+        SubtreeCorrespondence(),
+    )
+    assert not _shift_endpoint_moves(hierarchy, hierarchy, SubtreeCorrespondence())
+    changed_metadata = replace(
+        shifted_graph,
+        polyadic_relations=(
+            replace(shifted_graph.polyadic_relations[0], durable_id="coverage-probe"),
+            *shifted_graph.polyadic_relations[1:],
+        ),
+    )
+    assert (
+        _shift_endpoint_moves(
+            hierarchy,
+            changed_metadata,
+            cast(SubtreeCorrespondence, shifted.__dict__["_last_correspondence"]),
+        )
+        == moves
+    )
+    assert not _shift_endpoint_moves(
+        hierarchy,
+        hierarchy,
+        cast(SubtreeCorrespondence, shifted.__dict__["_last_correspondence"]),
+    )
+    checked = hierarchy.edit(check_links=True)
+    checked._advance_displacement(Displacement.stationary(hierarchy))
 
     timing = test_reconcile.timing_graph()
     timing_links = _graph_links(timing)
