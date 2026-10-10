@@ -331,6 +331,25 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         metavar="JSON",
         help="EditAnnotations JSON object; --stage and --iteration override it",
     )
+    tgdb_batch = _subcommand(
+        tgdb_subparsers,
+        "batch",
+        summary="publish a graph batch",
+        description=(
+            "Publish every graph named by a JSON manifest in one atomic commit. "
+            "All graph and patch paths are relative to the manifest file."
+        ),
+        details=(
+            "Manifest shape:\n"
+            '  {"annotations": {...}, "publishes": [{"instance": NAME, '
+            '"graph": FILE, "expected": N, "collection": NAME?, '
+            '"patch": FILE?, "annotations": {...}?}]}\n\n'
+        ),
+        examples=("tiergraph tgdb batch corpus.tgdb pass.json",),
+    )
+    tgdb_batch.set_defaults(handler=_handle_tgdb)
+    tgdb_batch.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_batch.add_argument("manifest", metavar="MANIFEST", help="JSON batch manifest")
     tgdb_apply = _subcommand(
         tgdb_subparsers,
         "apply",
@@ -1841,8 +1860,16 @@ def _tgdb_annotations(value: str) -> tiergraph.EditAnnotations:
         data = json.loads(value)
     except json.JSONDecodeError as error:
         raise argparse.ArgumentTypeError("must be a JSON object") from error
-    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
+    if not isinstance(data, dict):
         raise argparse.ArgumentTypeError("must be a JSON object")
+    try:
+        return _tgdb_annotations_data(data)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _tgdb_annotations_data(data: dict[str, Any]) -> tiergraph.EditAnnotations:
+    """Validate one decoded EditAnnotations object for CLI store commands."""
     allowed = {
         "author",
         "reason",
@@ -1856,7 +1883,7 @@ def _tgdb_annotations(value: str) -> tiergraph.EditAnnotations:
     unknown = set(data) - allowed
     if unknown:
         names = ", ".join(sorted(unknown))
-        raise argparse.ArgumentTypeError(f"unknown annotation fields: {names}")
+        raise ValueError(f"unknown annotation fields: {names}")
     try:
         return tiergraph.EditAnnotations(
             author=data.get("author"),
@@ -1869,7 +1896,103 @@ def _tgdb_annotations(value: str) -> tiergraph.EditAnnotations:
             fields=cast(dict[str, _core.JsonValue], data.get("fields", {})),
         )
     except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(str(error)) from error
+        raise ValueError(str(error)) from error
+
+
+def _tgdb_batch_manifest(
+    path: Path,
+) -> tuple[
+    tiergraph.EditAnnotations | None,
+    tuple[dict[str, object], ...],
+]:
+    """Read and validate one atomic tgdb publish manifest."""
+    try:
+        data = json.loads(path.read_bytes())
+    except json.JSONDecodeError as error:
+        raise ValueError(f"batch manifest is not valid JSON: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError("batch manifest must be a JSON object")
+    unknown = set(data) - {"annotations", "publishes"}
+    if unknown:
+        raise ValueError("unknown batch manifest fields: " + ", ".join(sorted(unknown)))
+    raw_annotations = data.get("annotations")
+    if raw_annotations is not None and (not isinstance(raw_annotations, dict)):
+        raise ValueError("batch annotations must be a JSON object")
+    annotations = (
+        None
+        if raw_annotations is None
+        else _tgdb_annotations_data(cast(dict[str, Any], raw_annotations))
+    )
+    raw_publishes = data.get("publishes")
+    if not isinstance(raw_publishes, list) or not raw_publishes:
+        raise ValueError("batch publishes must be a nonempty JSON array")
+    publishes: list[dict[str, object]] = []
+    allowed = {
+        "annotations",
+        "collection",
+        "expected",
+        "graph",
+        "instance",
+        "patch",
+    }
+    for position, raw in enumerate(raw_publishes):
+        if not isinstance(raw, dict):
+            raise ValueError(f"batch publish {position} must be a JSON object")
+        unknown = set(raw) - allowed
+        if unknown:
+            raise ValueError(
+                f"unknown batch publish {position} fields: "
+                + ", ".join(sorted(unknown))
+            )
+        for field in ("instance", "graph"):
+            value = raw.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"batch publish {position} {field} must be a nonempty string"
+                )
+        expected = raw.get("expected")
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected <= 0:
+            raise ValueError(
+                f"batch publish {position} expected must be a positive integer"
+            )
+        for field in ("collection", "patch"):
+            value = raw.get(field)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(
+                    f"batch publish {position} {field} must be a nonempty string"
+                )
+        raw_version_annotations = raw.get("annotations")
+        if raw_version_annotations is not None and (
+            not isinstance(raw_version_annotations, dict)
+        ):
+            raise ValueError(
+                f"batch publish {position} annotations must be a JSON object"
+            )
+        publishes.append(
+            {
+                "annotations": (
+                    None
+                    if raw_version_annotations is None
+                    else _tgdb_annotations_data(
+                        cast(dict[str, Any], raw_version_annotations)
+                    )
+                ),
+                "collection": raw.get("collection"),
+                "expected": expected,
+                "graph": raw["graph"],
+                "instance": raw["instance"],
+                "patch": raw.get("patch"),
+            }
+        )
+    return annotations, tuple(publishes)
+
+
+def _tgdb_manifest_path(manifest: Path, value: str, description: str) -> Path:
+    """Resolve one required manifest-relative input path."""
+    relative = Path(value)
+    if relative.is_absolute():
+        raise ValueError(f"batch {description} path must be relative to the manifest")
+    return manifest.parent / relative
 
 
 def _media_type_argument(value: str) -> str:
@@ -2011,6 +2134,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
         writable = args.tgdb_command in {
             "add",
             "apply",
+            "batch",
             "collection",
             "move",
             "publish",
@@ -2094,6 +2218,59 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     f"created instance {args.name!r} {uid.hex()} version 1 in "
                     f"commit {receipt.commit_seq}\n"
                 )
+                return 0
+            if args.tgdb_command == "batch":
+                manifest_path = Path(args.manifest)
+                commit_annotations, publishes = _tgdb_batch_manifest(manifest_path)
+                with store.write(annotations=commit_annotations) as transaction:
+                    for publish in publishes:
+                        names = {
+                            instance.name
+                            for instance in store.instances(
+                                cast(str | None, publish["collection"]),
+                                include_retired=True,
+                            )
+                        }
+                        selector = _tgdb_selector(
+                            cast(str, publish["instance"]), names=names
+                        )
+                        graph_path = _tgdb_manifest_path(
+                            manifest_path, cast(str, publish["graph"]), "graph"
+                        )
+                        graph = tiergraph.loads(graph_path.read_bytes())
+                        patch_name = cast(str | None, publish["patch"])
+                        supplied_patch = (
+                            None
+                            if patch_name is None
+                            else tiergraph.patch_loads(
+                                _tgdb_manifest_path(
+                                    manifest_path, patch_name, "patch"
+                                ).read_bytes()
+                            )
+                        )
+                        transaction.publish(
+                            selector,
+                            graph,
+                            expected=cast(int, publish["expected"]),
+                            collection=cast(str | None, publish["collection"]),
+                            patch=supplied_patch,
+                            annotations=cast(
+                                tiergraph.EditAnnotations | None,
+                                publish["annotations"],
+                            ),
+                        )
+                    receipt = transaction.commit()
+                changed = sum(
+                    version.status == "published" for version in receipt.versions
+                )
+                unchanged = len(receipt.versions) - changed
+                if receipt.commit_seq is None:
+                    _stdout_text(f"unchanged: {unchanged} instances\n")
+                else:
+                    _stdout_text(
+                        f"committed {receipt.commit_seq}: {changed} published, "
+                        f"{unchanged} unchanged\n"
+                    )
                 return 0
             if args.tgdb_command in {
                 "apply",

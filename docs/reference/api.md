@@ -11624,6 +11624,108 @@ InstanceInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
 
 Return a JSON-compatible description in stable field order.
 
+### `Snapshot`
+
+```text
+Snapshot(path: 'Path', limits: 'TgdbLimits') -> 'None'
+```
+
+Hold one stable, explicitly bounded read view of a tgdb catalog.
+
+A snapshot owns a separate read-only SQLite connection. Version handles
+obtained from it remain bound to that connection and therefore load only
+while the snapshot is open.
+
+#### `Snapshot.commit_seq`
+
+Property.
+
+```text
+Snapshot.commit_seq(self) -> 'int'
+```
+
+Return the newest commit visible in this pinned catalog view.
+
+#### `Snapshot.closed`
+
+Property.
+
+```text
+Snapshot.closed(self) -> 'bool'
+```
+
+Return whether this snapshot's read transaction has closed.
+
+#### `Snapshot.info`
+
+Method.
+
+```text
+Snapshot.info(self) -> 'StoreInfo'
+```
+
+Return metadata for the store viewed by this snapshot.
+
+#### `Snapshot.collections`
+
+Method.
+
+```text
+Snapshot.collections(self, *, include_retired: 'bool' = False) -> 'tuple[CollectionInfo, ...]'
+```
+
+Return collections from the pinned catalog view in declared order.
+
+#### `Snapshot.instances`
+
+Method.
+
+```text
+Snapshot.instances(self, collection: 'bytes | str | None' = None, *, include_retired: 'bool' = False) -> 'tuple[InstanceInfo, ...]'
+```
+
+Return instances from the pinned catalog view in declared order.
+
+#### `Snapshot.get`
+
+Method.
+
+```text
+Snapshot.get(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None, seq: "int | Literal['head']" = 'head') -> 'VersionHandle'
+```
+
+Return one version handle from the pinned catalog view.
+
+#### `Snapshot.history`
+
+Method.
+
+```text
+Snapshot.history(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None) -> 'tuple[VersionHandle, ...]'
+```
+
+Return retained versions from the pinned catalog view in append order.
+
+#### `Snapshot.diff`
+
+Method.
+
+```text
+Snapshot.diff(self, instance: 'bytes | str', source: 'int', target: "int | Literal['head']" = 'head', *, collection: 'bytes | str | None' = None) -> 'Patch'
+```
+
+Return an exact patch between versions in the pinned catalog view.
+
+#### `Snapshot.close`
+
+Method.
+
+```text
+Snapshot.close(self) -> 'None'
+```
+
+End the read transaction; repeated calls have no effect.
+
 ### `SqliteTooOld`
 
 ```text
@@ -11646,7 +11748,7 @@ Refuse a journal patch whose base is not the stored instance head.
 StaleVersion(message: 'str') -> 'None'
 ```
 
-Refuse a write based on an instance version that is no longer current.
+Refuse a write whose instance version or catalog base is no longer current.
 
 ### `StoreBusy`
 
@@ -11709,7 +11811,7 @@ Bound store residency, waiting, query batches, and nested resources.
 ### `TgdbStore`
 
 ```text
-TgdbStore(path: 'Path', connection: 'sqlite3.Connection', info: 'StoreInfo') -> 'None'
+TgdbStore(path: 'Path', connection: 'sqlite3.Connection', info: 'StoreInfo', limits: 'TgdbLimits') -> 'None'
 ```
 
 Own one connection to a local tgdb catalog.
@@ -11837,6 +11939,20 @@ TgdbStore.write(self, *, annotations: 'EditAnnotations | None' = None) -> 'Write
 
 Open an explicit store transaction that commits only on request.
 
+#### `TgdbStore.snapshot`
+
+Method.
+
+```text
+TgdbStore.snapshot(self) -> 'Snapshot'
+```
+
+Open an independent, stable read transaction over the current catalog.
+
+The snapshot keeps its own SQLite connection and must be closed promptly;
+a long-lived snapshot can delay WAL checkpointing. Writers can continue
+while the snapshot is open, but every snapshot query sees the same heads.
+
 #### `TgdbStore.undo`
 
 Method.
@@ -11926,7 +12042,7 @@ Return a JSON-compatible description without loading the graph.
 WriteTransaction(store: 'TgdbStore', annotations: 'EditAnnotations | None') -> 'None'
 ```
 
-Apply ordered catalog changes in one explicit SQLite commit.
+Stage ordered changes and publish them in one explicit SQLite commit.
 
 #### `WriteTransaction.commit_seq`
 
@@ -12080,7 +12196,7 @@ Method.
 WriteTransaction.commit(self) -> 'CommitReceipt'
 ```
 
-Commit staged changes, or report version no-ops without a commit.
+Publish every staged change atomically after checking the base view.
 
 #### `WriteTransaction.discard`
 

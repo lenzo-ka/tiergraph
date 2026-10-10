@@ -2183,6 +2183,186 @@ class _FailingConnection:
         return getattr(self.wrapped, name)
 
 
+class _FailingStageConnection(sqlite3.Connection):
+    """Raise one configured SQLite error from a real backup-capable connection."""
+
+    statement = ""
+    failure: sqlite3.DatabaseError = sqlite3.DatabaseError("unconfigured")
+
+    def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+        """Raise for the configured staging statement and execute all others."""
+        if sql.startswith(self.statement):
+            raise self.failure
+        return super().execute(sql, parameters)  # type: ignore[arg-type]
+
+    def executemany(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+        """Raise for configured staged row copies and execute all others."""
+        if sql.startswith(self.statement):
+            raise self.failure
+        return super().executemany(sql, parameters)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("statement", "error", "expected"),
+    [
+        ("BEGIN", sqlite3.OperationalError("begin failed"), tgdb.StoreCorrupt),
+        (
+            "INSERT INTO commits",
+            sqlite3.OperationalError("insert failed"),
+            tgdb.StoreCorrupt,
+        ),
+        ("BEGIN", sqlite3.DatabaseError("begin failed"), tgdb.StoreCorrupt),
+        (
+            "INSERT INTO commits",
+            sqlite3.DatabaseError("insert failed"),
+            tgdb.StoreCorrupt,
+        ),
+        (
+            "INSERT INTO store_meta",
+            sqlite3.DatabaseError("copy failed"),
+            tgdb.StoreCorrupt,
+        ),
+    ],
+)
+def test_staging_catalog_failures_are_typed_and_cleaned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statement: str,
+    error: sqlite3.DatabaseError,
+    expected: type[Exception],
+) -> None:
+    """A staging-catalog failure closes and removes its private catalog."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    original = sqlite3.connect
+    _FailingStageConnection.statement = statement
+    _FailingStageConnection.failure = error
+
+    def failing_connect(
+        database: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        autocommit: bool = False,
+    ) -> sqlite3.Connection:
+        return original(
+            database,
+            factory=_FailingStageConnection,
+            autocommit=autocommit,
+        )
+
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+    with pytest.raises(expected, match="cannot begin"):
+        store.write()
+    assert list((store.path / "staging").iterdir()) == []
+    assert store._writer is None
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        sqlite3.OperationalError("unable to open database file"),
+        sqlite3.DatabaseError("unable to open database file"),
+    ),
+)
+def test_staging_connect_failure_is_typed_and_releases_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: sqlite3.DatabaseError,
+) -> None:
+    """A failure to create staging state never escapes as a raw SQLite error."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+
+    def failing_connect(
+        database: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        autocommit: bool = False,
+    ) -> sqlite3.Connection:
+        raise error
+
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot begin"):
+        store.write()
+    assert list((store.path / "staging").iterdir()) == []
+    assert store._writer is None
+    store.close()
+
+
+@pytest.mark.parametrize("active", (False, True))
+def test_unexpected_staging_failure_rolls_back_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, active: bool
+) -> None:
+    """Unexpected metadata staging failures close their active transaction."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+
+    def fail_copy(
+        catalog: sqlite3.Connection,
+        staged: sqlite3.Connection,
+        *,
+        batch_size: int,
+    ) -> int:
+        if active:
+            staged.execute("BEGIN")
+        raise RuntimeError("copy failed")
+
+    monkeypatch.setattr(tgdb, "_copy_catalog_metadata", fail_copy)
+    with pytest.raises(RuntimeError, match="copy failed"):
+        store.write()
+    assert list((store.path / "staging").iterdir()) == []
+    assert store._writer is None
+    store.close()
+
+
+def test_write_requires_a_plain_staging_directory(tmp_path: Path) -> None:
+    """Writer setup reports a substituted staging path through store taxonomy."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    staging = store.path / "staging"
+    staging.rmdir()
+    staging.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(tgdb.StoreCorrupt, match="staging directory"):
+        store.write()
+    assert store._writer is None
+    store.close()
+
+
+def test_write_staging_omits_existing_object_payloads(tmp_path: Path) -> None:
+    """Opening a writer does not copy catalog-resident object bytes."""
+    limits = tgdb.TgdbLimits(inline_threshold=2 * 1024 * 1024)
+    with tgdb.TgdbStore.create(tmp_path / "store", limits=limits) as store:
+        store._put_object(io.BytesIO(b"x" * 1024 * 1024))
+        transaction = store.write()
+        assert transaction._connection.execute(
+            "SELECT count(*) FROM objects"
+        ).fetchone() == (0,)
+        transaction.discard()
+
+
+def test_staging_busy_failure_uses_specific_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A staging lock error retains the public busy taxonomy."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    original = sqlite3.connect
+    error = sqlite3.OperationalError("busy")
+    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+    _FailingStageConnection.statement = "BEGIN"
+    _FailingStageConnection.failure = error
+
+    def failing_connect(
+        database: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        autocommit: bool = False,
+    ) -> sqlite3.Connection:
+        return original(
+            database,
+            factory=_FailingStageConnection,
+            autocommit=autocommit,
+        )
+
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+    with pytest.raises(tgdb.StoreBusy, match="remained busy"):
+        store.write()
+    store.close()
+
+
 @pytest.mark.parametrize(
     ("statement", "error", "expected"),
     [
@@ -2200,18 +2380,20 @@ class _FailingConnection:
         ),
     ],
 )
-def test_catalog_begin_failures_leave_no_transaction(
+def test_catalog_publication_failures_leave_no_transaction(
     tmp_path: Path,
     statement: str,
     error: sqlite3.DatabaseError,
     expected: type[Exception],
 ) -> None:
-    """Writer setup failures roll back and remain typed store refusals."""
+    """Publication failures roll back and remain typed store refusals."""
     store = tgdb.TgdbStore.create(tmp_path / "store")
     wrapped = store._connection
     store._connection = _FailingConnection(wrapped, statement, error)  # type: ignore[assignment]
-    with pytest.raises(expected, match="cannot begin"):
-        store.write()
+    transaction = store.write()
+    transaction.create_collection("collection")
+    with pytest.raises(expected, match="cannot commit"):
+        transaction.commit()
     assert wrapped.in_transaction is False
     store.close()
 
@@ -2267,7 +2449,7 @@ def test_catalog_discard_handles_an_already_ended_transaction(tmp_path: Path) ->
     """Discard closes its handle even when SQLite has no transaction to roll back."""
     store = tgdb.TgdbStore.create(tmp_path / "store")
     transaction = store.write()
-    store._connection.execute("ROLLBACK")
+    transaction._connection.execute("ROLLBACK")
     transaction.discard()
     assert transaction._active is False
     store.close()
@@ -2321,14 +2503,250 @@ def test_catalog_busy_errors_use_the_specific_refusal(
         wrapped, statement, error
     )
     if statement == "BEGIN":
+        transaction = store.write()
+        transaction.create_collection("collection")
         with pytest.raises(tgdb.StoreBusy, match="remained busy"):
-            store.write()
+            transaction.commit()
     else:
         transaction = store.write()
         transaction.create_collection("collection")
         with pytest.raises(tgdb.StoreBusy, match="remained busy"):
             transaction.commit()
     store.close()
+
+
+def test_snapshot_keeps_old_heads_while_a_batch_publishes(tmp_path: Path) -> None:
+    """A pinned reader sees all old heads while ordinary reads see all new heads."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(path) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            left = transaction.create_instance(collection, "left", first)
+            right = transaction.create_instance(collection, "right", first)
+            transaction.commit()
+
+        snapshot = store.snapshot()
+        assert snapshot.commit_seq == 1
+        assert snapshot.info().mode == "ro"
+        assert snapshot.closed is False
+        assert [entry.name for entry in snapshot.instances()] == ["left", "right"]
+        with store.write() as transaction:
+            transaction.publish(left, second, expected=1)
+            transaction.publish(right, second, expected=1)
+            assert store.get(left).seq == 1
+            transaction.commit()
+
+        assert snapshot.get(left).seq == snapshot.get(right).seq == 1
+        assert store.get(left).seq == store.get(right).seq == 2
+        assert [entry.seq for entry in snapshot.history(left)] == [1]
+        assert snapshot.diff(left, 1).operations == ()
+        snapshot.close()
+        snapshot.close()
+        assert snapshot.closed is True
+        with pytest.raises(tgdb.TgdbError, match="snapshot is closed"):
+            snapshot.__enter__()
+
+
+def test_snapshot_context_and_store_close_are_independent(tmp_path: Path) -> None:
+    """A snapshot owns its connection and closes it at its own context boundary."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    snapshot = store.snapshot()
+    store.close()
+    with snapshot:
+        assert snapshot.collections() == ()
+    assert snapshot.closed is True
+
+
+def test_snapshot_open_failure_closes_its_private_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed snapshot pin never leaks its independent reader connection."""
+    reader = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = reader._connection
+    reader._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped,
+        "SELECT coalesce(max(seq), 0) FROM commits",
+        sqlite3.DatabaseError("pin failed"),
+    )
+
+    def opened(
+        cls: type[tgdb.TgdbStore],
+        path: str | os.PathLike[str],
+        *,
+        mode: Literal["ro", "rw"] = "ro",
+        limits: tgdb.TgdbLimits | None = None,
+    ) -> tgdb.TgdbStore:
+        return reader
+
+    monkeypatch.setattr(tgdb.TgdbStore, "open", classmethod(opened))
+    with pytest.raises(sqlite3.DatabaseError, match="pin failed"):
+        tgdb.Snapshot(reader.path, tgdb.TgdbLimits())
+    assert reader.closed is True
+
+
+def test_staged_publication_internal_corruption_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing and conflicting staged rows never cross the publication point."""
+    graph = _version_graph("graph")
+
+    with tgdb.TgdbStore.create(tmp_path / "commit") as store:
+        transaction = store.write()
+        transaction.create_collection("collection")
+        transaction._connection.execute("DELETE FROM commit_ops")
+        transaction._connection.execute("DELETE FROM commits")
+        with pytest.raises(tgdb.StoreCorrupt, match="staged commit row is missing"):
+            transaction.commit()
+        assert store.collections() == ()
+    with tgdb.TgdbStore.create(tmp_path / "fact") as store:
+        transaction = store.write()
+        collection = transaction.create_collection("collection")
+        transaction.create_instance(collection, "sample", graph)
+        transaction._connection.execute("DELETE FROM graph_facts")
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_facts row .* is missing"):
+            transaction.commit()
+        assert store.collections() == ()
+
+    with tgdb.TgdbStore.create(tmp_path / "conflict") as store:
+        transaction = store.write()
+        collection = transaction.create_collection("collection")
+        transaction.create_instance(collection, "sample", graph)
+        digest = next(iter(transaction._staged_objects))
+        store._connection.execute(
+            "INSERT INTO objects(digest, size, residency, data) "
+            "VALUES (?, 5, 'inline', ?)",
+            (digest, b"wrong"),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="conflicts with the catalog"):
+            transaction.commit()
+        assert store.collections() == ()
+
+    with tgdb.TgdbStore.create(tmp_path / "ended") as store:
+        transaction = store.write()
+        transaction.create_collection("collection")
+
+        def ended(*args: object) -> None:
+            store._connection.execute("ROLLBACK")
+            raise RuntimeError("ended publication")
+
+        monkeypatch.setattr(tgdb, "_publish_staged_catalog", ended)
+        with pytest.raises(RuntimeError, match="ended publication"):
+            transaction.commit()
+        assert store.collections() == ()
+
+
+def test_publication_placeholder_avoids_user_name_collisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication-only names retry when a user already owns a candidate."""
+    uid = bytes.fromhex("11" * 16)
+    values = iter(("collision", "available"))
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            transaction.create_collection(f"staged-{uid.hex()}-collision")
+            transaction.commit()
+        monkeypatch.setattr(
+            "tiergraph.tgdb.secrets.token_hex", lambda _size: next(values)
+        )
+        assert tgdb._temporary_name(store._connection, "collections", uid) == (
+            f"staged-{uid.hex()}-available"
+        )
+
+
+def test_one_stale_member_aborts_the_whole_staged_batch(tmp_path: Path) -> None:
+    """A competing publication prevents every member of an older batch."""
+    first = _version_graph("first")
+    batch_target = _version_graph("batch")
+    competing = _version_graph("competing")
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(path) as setup:
+        with setup.write() as transaction:
+            collection = transaction.create_collection("collection")
+            left = transaction.create_instance(collection, "left", first)
+            right = transaction.create_instance(collection, "right", first)
+            transaction.commit()
+
+    with (
+        tgdb.TgdbStore.open(path, mode="rw") as older,
+        tgdb.TgdbStore.open(path, mode="rw") as newer,
+    ):
+        batch = older.write()
+        batch.publish(left, batch_target, expected=1)
+        batch.publish(right, batch_target, expected=1)
+        with newer.write() as transaction:
+            transaction.publish(left, competing, expected=1)
+            transaction.commit()
+        with pytest.raises(tgdb.StaleVersion, match="catalog advanced"):
+            batch.commit()
+        assert older.get(left).load() == competing
+        assert older.get(right).seq == 1
+
+
+def test_writer_contention_refuses_without_partial_publication(tmp_path: Path) -> None:
+    """An exhausted writer timeout is specific and publishes no staged row."""
+    path = _created(tmp_path)
+    limits = tgdb.TgdbLimits(busy_timeout_ms=0)
+    with (
+        tgdb.TgdbStore.open(path, mode="rw", limits=limits) as blocked,
+        tgdb.TgdbStore.open(path, mode="rw", limits=limits) as holder,
+    ):
+        transaction = blocked.write()
+        transaction.create_collection("blocked")
+        holder._connection.execute("BEGIN IMMEDIATE")
+        try:
+            with pytest.raises(tgdb.StoreBusy, match="remained busy"):
+                transaction.commit()
+        finally:
+            holder._connection.execute("ROLLBACK")
+        assert blocked.collections() == ()
+
+
+@pytest.mark.parametrize(
+    "step",
+    (
+        "locked",
+        "commit-row",
+        "objects",
+        "catalog",
+        "derived-rows",
+        "versions",
+        "heads",
+        "operations",
+    ),
+)
+def test_publication_fault_at_each_step_leaves_old_heads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    """Every injected precommit fault rolls the complete catalog batch back."""
+    root = tmp_path / step
+    with tgdb.TgdbStore.create(
+        root, limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(
+                collection, "sample", _version_graph("first")
+            )
+            transaction.commit()
+        baseline = store.get(uid)
+        original = tgdb._publication_step
+
+        def fail(selected: str) -> None:
+            if selected == step:
+                raise RuntimeError(f"fault at {step}")
+            original(selected)
+
+        monkeypatch.setattr(tgdb, "_publication_step", fail)
+        with store.write() as transaction:
+            transaction.publish(uid, _version_graph("second"), expected=1)
+            with pytest.raises(RuntimeError, match=f"fault at {step}"):
+                transaction.commit()
+        assert store.get(uid).to_data() == baseline.to_data()
+        assert store._connection.execute("SELECT max(seq) FROM commits").fetchone() == (
+            1,
+        )
 
 
 def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
@@ -2347,6 +2765,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "CollectionInfo",
         "CommitReceipt",
         "InstanceInfo",
+        "Snapshot",
         "SqliteTooOld",
         "StaleJournalBase",
         "StaleVersion",

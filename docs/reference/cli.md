@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,apply,diff,revert,get,history,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,apply,diff,revert,get,history,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -395,6 +395,7 @@ positional arguments:
     list                list instances
     add                 add a graph instance
     publish             publish a graph version
+    batch               publish a graph batch
     apply               apply and publish a patch
     diff                write an exact patch between versions
     revert              republish a retained version
@@ -607,6 +608,33 @@ options:
 
 Examples:
   $ tiergraph tgdb publish corpus.tgdb sample revised.json --expected 1
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb batch`
+
+```text
+usage: tiergraph tgdb batch [-h] STORE MANIFEST
+
+Publish every graph named by a JSON manifest in one atomic commit. All graph and patch paths are relative to the manifest file.
+
+positional arguments:
+  STORE       store directory
+  MANIFEST    JSON batch manifest
+
+options:
+  -h, --help  show this help message and exit
+
+Manifest shape:
+  {"annotations": {...}, "publishes": [{"instance": NAME, "graph": FILE, "expected": N, "collection": NAME?, "patch": FILE?, "annotations": {...}?}]}
+
+Examples:
+  $ tiergraph tgdb batch corpus.tgdb pass.json
 
 Exit codes:
   0  success
