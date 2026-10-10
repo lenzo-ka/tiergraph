@@ -380,18 +380,27 @@ Exit codes:
 ### `tiergraph tgdb`
 
 ```text
-usage: tiergraph tgdb [-h] {init,info,check} ...
+usage: tiergraph tgdb [-h]
+                      {init,info,check,collection,list,rename,move,retire,restore,undo}
+                      ...
 
-Create, inspect, or check a local versioned tiergraph store.
+Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check}
-    init             initialize a store
-    info             inspect store metadata
-    check            check store integrity
+  {init,info,check,collection,list,rename,move,retire,restore,undo}
+    init                initialize a store
+    info                inspect store metadata
+    check               check store integrity
+    collection          manage ordered collections
+    list                list instances
+    rename              rename an instance
+    move                move an instance
+    retire              retire an instance
+    restore             restore an instance
+    undo                undo a catalog commit
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help            show this help message and exit
 
 Examples:
   $ tiergraph tgdb info corpus.tgdb
@@ -471,6 +480,188 @@ options:
 Examples:
   $ tiergraph tgdb check corpus.tgdb
   $ tiergraph tgdb check corpus.tgdb --full
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb collection`
+
+```text
+usage: tiergraph tgdb collection [-h]
+                                 {create,list,rename,move,retire,restore} ...
+
+Create, list, rename, move, retire, or restore collections.
+
+positional arguments:
+  {create,list,rename,move,retire,restore}
+    create              create a collection
+    list                list collections
+    rename              rename a collection
+    move                move a collection
+    retire              retire a collection
+    restore             restore a collection
+
+options:
+  -h, --help            show this help message and exit
+
+Examples:
+  $ tiergraph tgdb collection list corpus.tgdb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb list`
+
+```text
+usage: tiergraph tgdb list [-h] [--collection NAME] [--retired] [--json] STORE
+
+List instances in declared collection and instance order.
+
+positional arguments:
+  STORE              store directory
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  limit to one collection
+  --retired          include retired instances and collections
+  --json             emit structured JSON
+
+Examples:
+  $ tiergraph tgdb list corpus.tgdb --collection recordings
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb rename`
+
+```text
+usage: tiergraph tgdb rename [-h] [--collection NAME] STORE INSTANCE NAME
+
+Rename an instance without changing its stable id.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+  NAME               new unique name
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb rename corpus.tgdb INSTANCE RENAMED
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb move`
+
+```text
+usage: tiergraph tgdb move [-h] [--collection NAME] STORE INSTANCE POSITION
+
+Move an instance without changing its stable id.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+  POSITION           new position
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb move corpus.tgdb INSTANCE 1
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb retire`
+
+```text
+usage: tiergraph tgdb retire [-h] [--collection NAME] STORE INSTANCE
+
+Retire an instance without deleting it.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb retire corpus.tgdb INSTANCE
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb restore`
+
+```text
+usage: tiergraph tgdb restore [-h] [--collection NAME] STORE INSTANCE
+
+Restore an instance without deleting it.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb restore corpus.tgdb INSTANCE
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb undo`
+
+```text
+usage: tiergraph tgdb undo [-h] STORE COMMIT
+
+Apply a commit's recorded inverse when its catalog rows are current.
+
+positional arguments:
+  STORE       store directory
+  COMMIT      commit sequence to undo
+
+options:
+  -h, --help  show this help message and exit
+
+Examples:
+  $ tiergraph tgdb undo corpus.tgdb 1
 
 Exit codes:
   0  success

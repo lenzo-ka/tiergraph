@@ -13,12 +13,12 @@ import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
 import tiergraph.tgdb as tgdb
-from tiergraph import Refusal, RefusalStage
+from tiergraph import EditAnnotations, Refusal, RefusalStage
 
 
 def _created(tmp_path: Path, *, limits: tgdb.TgdbLimits | None = None) -> Path:
@@ -53,6 +53,27 @@ def _object_path(path: Path, digest: str) -> Path:
     return path / "objects" / "sha256" / digest[:2] / digest[2:4] / digest
 
 
+def _seed_instance(
+    store: tgdb.TgdbStore,
+    collection_uid: bytes,
+    name: str,
+    position: int,
+    *,
+    uid: bytes | None = None,
+) -> bytes:
+    """Insert a versionless catalog row until the version slice owns creation."""
+    instance_uid = secrets.token_bytes(16) if uid is None else uid
+    collection_id = store._connection.execute(
+        "SELECT id FROM collections WHERE uid = ?", (collection_uid,)
+    ).fetchone()[0]
+    store._connection.execute(
+        "INSERT INTO instances(uid, collection_id, name, position, head_version, "
+        "generation, retired_commit) VALUES (?, ?, ?, ?, NULL, 0, NULL)",
+        (instance_uid, collection_id, name, position),
+    )
+    return instance_uid
+
+
 def test_importing_tiergraph_keeps_tgdb_and_sqlite_lazy() -> None:
     """The standard package import pays for neither the store nor SQLite."""
     source = (
@@ -78,7 +99,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 2,
+        "schema_version": 3,
         "layout_version": 1,
         "index_version": 1,
         "inline_threshold": 1234,
@@ -88,7 +109,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (3,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -264,12 +285,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 3)
+    _set_pragma(path, "user_version", 4)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 3
-    assert caught.value.supported == 2
-    assert "3" in str(caught.value) and "2" in str(caught.value)
+    assert caught.value.found == 4
+    assert caught.value.supported == 3
+    assert "4" in str(caught.value) and "3" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -283,10 +304,10 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     ) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone() == ("delete",)
 
-    _set_pragma(path, "user_version", 1)
+    _set_pragma(path, "user_version", 2)
     with tgdb.TgdbStore.open(path) as store:
-        assert store.info().schema_version == 1
-        with pytest.raises(tgdb.TgdbError, match="migration to version 2"):
+        assert store.info().schema_version == 2
+        with pytest.raises(tgdb.TgdbError, match="migration to version 3"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -846,6 +867,652 @@ def test_wal_refusal_closes_the_connection() -> None:
     assert connection.closed is True
 
 
+def test_catalog_collections_keep_id_name_and_declared_order_separate(
+    tmp_path: Path,
+) -> None:
+    """Collection insertion, movement, naming, and metadata remain independent."""
+    path = tmp_path / "store"
+    fixed_uid = bytes.fromhex("00" * 15 + "01")
+    annotations = EditAnnotations(stage="catalog", fields={"pass": 1})
+    with tgdb.TgdbStore.create(path) as store:
+        with store.write(annotations=annotations) as transaction:
+            assert transaction.commit_seq == 1
+            last = transaction.create_collection("last", uid=fixed_uid)
+            first = transaction.create_collection("first", position=0)
+            transaction.create_collection("middle", position=1)
+            receipt = transaction.commit()
+        assert last == fixed_uid
+        assert receipt.to_data() == {
+            "commit_seq": 1,
+            "kind": "catalog",
+            "operations": [
+                "create_collection",
+                "create_collection",
+                "create_collection",
+            ],
+        }
+        assert [entry.name for entry in store.collections()] == [
+            "first",
+            "middle",
+            "last",
+        ]
+        assert [entry.position for entry in store.collections()] == [0, 1, 2]
+        assert store.collections()[2].uid == fixed_uid
+        encoded = store._connection.execute(
+            "SELECT annotations FROM commits WHERE seq = 1"
+        ).fetchone()[0]
+        assert json.loads(encoded) == annotations.to_data()
+
+        with store.write() as transaction:
+            transaction.rename_collection(first, "first")
+            transaction.move_collection(first, 0)
+            with pytest.raises(tgdb.TgdbError, match="already exists"):
+                transaction.rename_collection(first, "middle")
+            transaction.rename_collection(first, "renamed")
+            transaction.move_collection(last, 0)
+            receipt = transaction.commit()
+        assert receipt.operations == (
+            "rename_collection",
+            "set_collection_positions",
+        )
+        assert [entry.name for entry in store.collections()] == [
+            "last",
+            "renamed",
+            "middle",
+        ]
+        assert store.collections()[0].to_data() == {
+            "uid": fixed_uid.hex(),
+            "name": "last",
+            "position": 0,
+            "retired": False,
+            "retired_commit": None,
+        }
+
+        with store.write() as transaction:
+            transaction.retire_collection("middle")
+            with pytest.raises(tgdb.TgdbError, match="already retired"):
+                transaction.retire_collection("middle")
+            retire = transaction.commit()
+        assert [entry.name for entry in store.collections()] == ["last", "renamed"]
+        retired = store.collections(include_retired=True)[2]
+        assert retired.retired is True
+        assert retired.retired_commit == retire.commit_seq
+        with store.write() as transaction:
+            transaction.restore_collection("middle")
+            with pytest.raises(tgdb.TgdbError, match="already active"):
+                transaction.restore_collection("middle")
+            transaction.commit()
+        assert [entry.name for entry in store.collections()] == [
+            "last",
+            "renamed",
+            "middle",
+        ]
+
+
+def test_catalog_transactions_discard_explicitly_and_on_every_exit(
+    tmp_path: Path,
+) -> None:
+    """Leaving a writer never publishes implicitly, including store close."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    transaction = store.write()
+    transaction.create_collection("discarded")
+    with pytest.raises(tgdb.TgdbError, match="already active"):
+        store.write()
+    transaction.discard()
+    transaction.discard()
+    assert store.collections() == ()
+    with pytest.raises(tgdb.TgdbError, match="closed"):
+        transaction.commit()
+
+    with store.write() as empty:
+        with pytest.raises(tgdb.TgdbError, match="no changes"):
+            empty.commit()
+    with store.write() as implicit:
+        implicit.create_collection("implicit")
+    assert store.collections() == ()
+
+    active = store.write()
+    active.create_collection("close-discard")
+    store.close()
+    assert active._active is False
+    with pytest.raises(tgdb.TgdbError, match="closed"):
+        active.__enter__()
+    with tgdb.TgdbStore.open(store.path) as reopened:
+        assert reopened.collections() == ()
+
+
+def test_collection_undo_is_additive_reversible_and_stale_safe(tmp_path: Path) -> None:
+    """Undo records another commit and refuses identities changed afterward."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            first = transaction.create_collection("first")
+            create_receipt = transaction.commit()
+        undo_create = store.undo(create_receipt.commit_seq)
+        assert undo_create.kind == "undo"
+        assert store.collections() == ()
+        assert store.collections(include_retired=True)[0].uid == first
+        redo_create = store.undo(undo_create.commit_seq)
+        assert redo_create.operations == ("restore_collection",)
+        assert store.collections()[0].uid == first
+
+        with store.write() as transaction:
+            transaction.rename_collection(first, "second")
+            rename_receipt = transaction.commit()
+        with store.write() as transaction:
+            other = transaction.create_collection("other")
+            transaction.commit()
+        undo_rename = store.undo(rename_receipt.commit_seq)
+        assert undo_rename.operations == ("rename_collection",)
+        assert store.collections()[0].name == "first"
+        with store.write() as transaction:
+            transaction.rename_collection(first, "latest")
+            transaction.commit()
+        with pytest.raises(tgdb.StaleVersion, match="touched the same"):
+            store.undo(undo_rename.commit_seq)
+        assert any(entry.uid == other for entry in store.collections())
+
+        with pytest.raises(TypeError, match="integer"):
+            store.undo(True)
+        with pytest.raises(ValueError, match="positive"):
+            store.undo(0)
+        with pytest.raises(tgdb.TgdbError, match="does not exist"):
+            store.undo(999)
+        store._connection.execute(
+            "INSERT INTO commits(kind, annotations) VALUES ('empty', NULL)"
+        )
+        empty_seq = store._connection.execute(
+            "SELECT max(seq) FROM commits"
+        ).fetchone()[0]
+        with pytest.raises(tgdb.TgdbError, match="no undoable"):
+            store.undo(empty_seq)
+
+
+def test_undo_rename_refuses_when_the_original_name_was_reassigned(
+    tmp_path: Path,
+) -> None:
+    """Rename inverses refuse cleanly when another identity now owns the name."""
+    with tgdb.TgdbStore.create(tmp_path / "collections") as store:
+        with store.write() as transaction:
+            first = transaction.create_collection("first")
+            second = transaction.create_collection("second")
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.rename_collection(first, "renamed")
+            renamed = transaction.commit()
+        with store.write() as transaction:
+            transaction.rename_collection(second, "first")
+            transaction.commit()
+        with pytest.raises(tgdb.StaleVersion, match="no longer available"):
+            store.undo(renamed.commit_seq)
+        assert [entry.name for entry in store.collections()] == ["renamed", "first"]
+        assert store._connection.execute("SELECT count(*) FROM commits").fetchone() == (
+            3,
+        )
+
+    with tgdb.TgdbStore.create(tmp_path / "instances") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        first = _seed_instance(store, collection, "first", 0)
+        second = _seed_instance(store, collection, "second", 1)
+        with store.write() as transaction:
+            transaction.rename(first, "renamed")
+            renamed = transaction.commit()
+        with store.write() as transaction:
+            transaction.rename(second, "first")
+            transaction.commit()
+        with pytest.raises(tgdb.StaleVersion, match="no longer available"):
+            store.undo(renamed.commit_seq)
+        assert [entry.name for entry in store.instances()] == ["renamed", "first"]
+        assert store._connection.execute("SELECT count(*) FROM commits").fetchone() == (
+            3,
+        )
+
+
+def test_instance_catalog_operations_are_ordered_scoped_and_undoable(
+    tmp_path: Path,
+) -> None:
+    """Instance lifecycle operations preserve ids and use collection-scoped names."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            first_collection = transaction.create_collection("first")
+            second_collection = transaction.create_collection("second")
+            transaction.commit()
+        first = _seed_instance(store, first_collection, "shared", 0)
+        second = _seed_instance(store, first_collection, "second", 1)
+        other = _seed_instance(store, second_collection, "shared", 0)
+
+        assert [entry.uid for entry in store.instances()] == [first, second, other]
+        scoped = store.instances(first_collection)
+        assert [entry.name for entry in scoped] == ["shared", "second"]
+        assert scoped[0].to_data() == {
+            "uid": first.hex(),
+            "collection_uid": first_collection.hex(),
+            "collection": "first",
+            "name": "shared",
+            "position": 0,
+            "generation": 0,
+            "retired": False,
+            "retired_commit": None,
+        }
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="ambiguous"):
+                transaction.rename("shared", "ambiguous")
+            transaction.rename(first, "shared")
+            transaction.move(first, 0)
+            with pytest.raises(tgdb.TgdbError, match="already exists"):
+                transaction.rename(first, "second")
+            transaction.rename(first, "renamed")
+            transaction.move(first, 1)
+            receipt = transaction.commit()
+        assert receipt.operations == ("rename_instance", "set_instance_positions")
+        assert [entry.uid for entry in store.instances("first")] == [second, first]
+        assert [entry.generation for entry in store.instances("first")] == [1, 2]
+
+        with store.write() as transaction:
+            transaction.retire(first)
+            with pytest.raises(tgdb.TgdbError, match="already retired"):
+                transaction.retire(first)
+            retired_receipt = transaction.commit()
+        assert [entry.uid for entry in store.instances("first")] == [second]
+        retired = store.instances("first", include_retired=True)[1]
+        assert retired.retired is True
+        assert retired.retired_commit == retired_receipt.commit_seq
+        undo_retire = store.undo(retired_receipt.commit_seq)
+        assert undo_retire.operations == ("restore_instance",)
+        assert store.instances("first", include_retired=True)[1].retired is False
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="already active"):
+                transaction.restore(first)
+            transaction.retire(first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.restore(first, collection="first")
+            transaction.commit()
+
+        with store.write() as transaction:
+            transaction.retire_collection(second_collection)
+            transaction.commit()
+        assert other not in {entry.uid for entry in store.instances()}
+        assert other in {entry.uid for entry in store.instances(include_retired=True)}
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        (b"short", ValueError, "exactly 16 bytes"),
+        (123, TypeError, "must be a string"),
+        ("", ValueError, "must not be empty"),
+        ("x" * 4097, ValueError, "exceeds 4096"),
+    ],
+)
+def test_catalog_identity_and_name_validation(
+    tmp_path: Path, value: object, error: type[Exception], message: str
+) -> None:
+    """Catalog operands have bounded, typed public spellings."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            if isinstance(value, bytes):
+                with pytest.raises(error, match=message):
+                    transaction.create_collection("valid", uid=value)
+            else:
+                with pytest.raises(error, match=message):
+                    transaction.create_collection(value)  # type: ignore[arg-type]
+
+
+def test_catalog_positions_and_resolvers_refuse_invalid_operands(
+    tmp_path: Path,
+) -> None:
+    """Positions, selectors, missing rows, and retired scopes refuse explicitly."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        instance = _seed_instance(store, collection, "instance", 0)
+        with store.write() as transaction:
+            for position in (True, "0"):
+                with pytest.raises(TypeError, match="integer"):
+                    transaction.move_collection(collection, position)  # type: ignore[arg-type]
+            with pytest.raises(ValueError, match="between"):
+                transaction.move_collection(collection, 1)
+            with pytest.raises(ValueError, match="between"):
+                transaction.move(instance, -1)
+            with pytest.raises(TypeError, match="collection must"):
+                transaction.rename_collection(3, "new")  # type: ignore[arg-type]
+            with pytest.raises(tgdb.TgdbError, match="does not exist"):
+                transaction.rename_collection("missing", "new")
+            with pytest.raises(ValueError, match="exactly 16 bytes"):
+                transaction.rename_collection(b"bad", "new")
+            with pytest.raises(TypeError, match="instance must"):
+                transaction.rename(3, "new")  # type: ignore[arg-type]
+            with pytest.raises(tgdb.TgdbError, match="does not exist"):
+                transaction.rename("missing", "new")
+            with pytest.raises(ValueError, match="exactly 16 bytes"):
+                transaction.rename(b"bad", "new")
+        with store.write() as transaction:
+            transaction.retire_collection(collection)
+            transaction.commit()
+        with pytest.raises(tgdb.TgdbError, match="retired"):
+            tgdb._resolve_collection(
+                store._connection, collection, include_retired=False
+            )
+
+
+def test_catalog_duplicate_creation_and_annotation_types_are_refused(
+    tmp_path: Path,
+) -> None:
+    """Collection constraints and commit metadata refuse before publication."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with pytest.raises(TypeError, match="EditAnnotations"):
+            store.write(annotations="metadata")  # type: ignore[arg-type]
+        uid = bytes.fromhex("11" * 16)
+        with store.write() as transaction:
+            transaction.create_collection("one", uid=uid)
+            with pytest.raises(tgdb.TgdbError, match="uid .* already exists"):
+                transaction.create_collection("two", uid=uid)
+            with pytest.raises(tgdb.TgdbError, match="name 'one' already exists"):
+                transaction.create_collection("one")
+            transaction.commit()
+        store.check()
+
+
+def test_catalog_action_decoding_and_replay_corruption_guards(tmp_path: Path) -> None:
+    """Malformed recorded operands never become executable SQL."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        instance = _seed_instance(store, collection, "instance", 0)
+        missing = bytes.fromhex("ff" * 16)
+        touch = [f"collection:{missing.hex()}"]
+        with store.write() as transaction:
+            malformed_actions: tuple[dict[str, object], ...] = (
+                {"action": "set_collection_positions", "positions": {}, "touches": []},
+                {
+                    "action": "set_collection_positions",
+                    "positions": {1: 0},
+                    "touches": [],
+                },
+                {
+                    "action": "set_collection_positions",
+                    "positions": {missing.hex(): True},
+                    "touches": touch,
+                },
+                {
+                    "action": "set_collection_positions",
+                    "positions": {missing.hex(): 0},
+                    "touches": touch,
+                },
+                {"action": "unknown", "touches": []},
+            )
+            for action in malformed_actions:
+                with pytest.raises(tgdb.StoreCorrupt):
+                    transaction._apply_action(action)
+            missing_actions: tuple[dict[str, object], ...] = (
+                tgdb._name_action("collection", missing, "name"),
+                {
+                    "action": "retire_collection",
+                    "touches": touch,
+                    "uid": missing.hex(),
+                },
+                {
+                    "action": "retire_instance",
+                    "touches": [f"instance:{missing.hex()}"],
+                    "uid": missing.hex(),
+                },
+            )
+            for missing_action in missing_actions:
+                with pytest.raises(tgdb.StoreCorrupt, match="identity is missing"):
+                    transaction._apply_action(missing_action)
+            with pytest.raises(tgdb.StaleVersion, match="lifecycle"):
+                transaction._apply_action(
+                    {
+                        "action": "restore_collection",
+                        "touches": [f"collection:{collection.hex()}"],
+                        "uid": collection.hex(),
+                    }
+                )
+            with pytest.raises(tgdb.StaleVersion, match="lifecycle"):
+                transaction._apply_action(
+                    {
+                        "action": "restore_instance",
+                        "touches": [f"instance:{instance.hex()}"],
+                        "uid": instance.hex(),
+                    }
+                )
+            with pytest.raises(tgdb.StoreCorrupt, match="no action"):
+                transaction._record({}, {})
+            store._writer = None
+            transaction.discard()
+
+        assert tgdb._sqlite_busy(sqlite3.OperationalError("ordinary")) is False
+        tgdb._set_positions(store._connection, "collections", {})
+        for value in ("bad", "G" * 32):
+            with pytest.raises(tgdb.StoreCorrupt, match="identity"):
+                tgdb._uid_from_hex(value)
+        with pytest.raises(tgdb.StoreCorrupt, match="identity"):
+            tgdb._action_uid({})
+        touch_actions: tuple[dict[str, object], ...] = ({}, {"touches": [1]})
+        for touch_action in touch_actions:
+            with pytest.raises(tgdb.StoreCorrupt, match="touches"):
+                tgdb._action_touches(touch_action)
+        for decode_value in (None, "{", "[]"):
+            with pytest.raises(tgdb.StoreCorrupt, match="operation"):
+                tgdb._decode_action(cast(object, decode_value))
+
+
+def test_catalog_check_finds_foreign_keys_and_malformed_operations(
+    tmp_path: Path,
+) -> None:
+    """Structural checks include catalog references and recorded JSON operands."""
+    path = _created(tmp_path)
+    with closing(sqlite3.connect(path / "catalog.sqlite3", autocommit=True)) as raw:
+        raw.execute("PRAGMA foreign_keys = OFF")
+        raw.execute(
+            "INSERT INTO collections(uid, name, position, retired_commit) "
+            "VALUES (?, 'broken', 0, 999)",
+            (bytes.fromhex("22" * 16),),
+        )
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.StoreCorrupt, match="foreign-key"):
+            store.check()
+
+    path = tmp_path / "operations"
+    with tgdb.TgdbStore.create(path) as store:
+        with store.write() as transaction:
+            transaction.create_collection("collection")
+            transaction.commit()
+        store._connection.execute(
+            "UPDATE commit_ops SET inverse = '{' WHERE commit_seq = 1"
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="operation is malformed"):
+            store.check()
+
+    path = tmp_path / "touches"
+    with tgdb.TgdbStore.create(path) as store:
+        with store.write() as transaction:
+            transaction.create_collection("collection")
+            transaction.commit()
+        forward = json.loads(
+            store._connection.execute(
+                "SELECT forward FROM commit_ops WHERE commit_seq = 1"
+            ).fetchone()[0]
+        )
+        forward["touches"] = ["bogus"]
+        store._connection.execute(
+            "UPDATE commit_ops SET forward = ? WHERE commit_seq = 1",
+            (json.dumps(forward),),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="touches do not match"):
+            store.check()
+
+
+class _FailingConnection:
+    """Delegate SQLite except for one selected statement used by failure tests."""
+
+    def __init__(
+        self,
+        wrapped: sqlite3.Connection,
+        statement: str,
+        error: sqlite3.DatabaseError,
+        *,
+        transaction_state: bool | None = None,
+    ) -> None:
+        self.wrapped = wrapped
+        self.statement = statement
+        self.error = error
+        self.transaction_state = transaction_state
+
+    @property
+    def in_transaction(self) -> bool:
+        """Expose the delegated transaction state."""
+        return (
+            self.wrapped.in_transaction
+            if self.transaction_state is None
+            else self.transaction_state
+        )
+
+    def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+        """Raise for the selected statement and delegate every other statement."""
+        if sql.startswith(self.statement):
+            raise self.error
+        return self.wrapped.execute(sql, parameters)  # type: ignore[arg-type]
+
+    def __getattr__(self, name: str) -> object:
+        """Delegate methods not involved in the selected failure."""
+        return getattr(self.wrapped, name)
+
+
+@pytest.mark.parametrize(
+    ("statement", "error", "expected"),
+    [
+        ("BEGIN", sqlite3.OperationalError("begin failed"), tgdb.StoreCorrupt),
+        (
+            "INSERT INTO commits",
+            sqlite3.OperationalError("insert failed"),
+            tgdb.StoreCorrupt,
+        ),
+        ("BEGIN", sqlite3.DatabaseError("begin failed"), tgdb.StoreCorrupt),
+        (
+            "INSERT INTO commits",
+            sqlite3.DatabaseError("insert failed"),
+            tgdb.StoreCorrupt,
+        ),
+    ],
+)
+def test_catalog_begin_failures_leave_no_transaction(
+    tmp_path: Path,
+    statement: str,
+    error: sqlite3.DatabaseError,
+    expected: type[Exception],
+) -> None:
+    """Writer setup failures roll back and remain typed store refusals."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = store._connection
+    store._connection = _FailingConnection(wrapped, statement, error)  # type: ignore[assignment]
+    with pytest.raises(expected, match="cannot begin"):
+        store.write()
+    assert wrapped.in_transaction is False
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (sqlite3.OperationalError("commit failed"), tgdb.StoreCorrupt),
+        (sqlite3.DatabaseError("commit failed"), tgdb.StoreCorrupt),
+    ],
+)
+def test_catalog_commit_failures_roll_back_and_close_writer(
+    tmp_path: Path,
+    error: sqlite3.DatabaseError,
+    expected: type[Exception],
+) -> None:
+    """Commit failures publish nothing and release the store's writer slot."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = store._connection
+    proxy = _FailingConnection(wrapped, "COMMIT", error)
+    store._connection = proxy  # type: ignore[assignment]
+    transaction = store.write()
+    transaction.create_collection("collection")
+    with pytest.raises(expected, match="cannot commit"):
+        transaction.commit()
+    assert wrapped.in_transaction is False
+    assert store._writer is None
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    (sqlite3.OperationalError("commit failed"), sqlite3.DatabaseError("commit failed")),
+)
+def test_catalog_commit_failure_handles_an_already_ended_transaction(
+    tmp_path: Path, error: sqlite3.DatabaseError
+) -> None:
+    """A commit error remains typed when SQLite already ended the transaction."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = store._connection
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped, "COMMIT", error, transaction_state=False
+    )
+    transaction = store.write()
+    transaction.create_collection("collection")
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot commit"):
+        transaction.commit()
+    wrapped.rollback()
+    store.close()
+
+
+def test_catalog_discard_handles_an_already_ended_transaction(tmp_path: Path) -> None:
+    """Discard closes its handle even when SQLite has no transaction to roll back."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    transaction = store.write()
+    store._connection.execute("ROLLBACK")
+    transaction.discard()
+    assert transaction._active is False
+    store.close()
+
+
+def test_catalog_listing_wraps_database_errors(tmp_path: Path) -> None:
+    """Collection and instance listing keep SQLite details in the store taxonomy."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = store._connection
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped, "SELECT uid, name", sqlite3.DatabaseError("list failed")
+    )
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot list collections"):
+        store.collections()
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped, "SELECT i.uid", sqlite3.DatabaseError("list failed")
+    )
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot list instances"):
+        store.instances()
+    store.close()
+
+
+@pytest.mark.parametrize("statement", ("BEGIN", "COMMIT"))
+def test_catalog_busy_errors_use_the_specific_refusal(
+    tmp_path: Path, statement: str
+) -> None:
+    """SQLite lock exhaustion is distinguishable from catalog corruption."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    wrapped = store._connection
+    error = sqlite3.OperationalError("busy")
+    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped, statement, error
+    )
+    if statement == "BEGIN":
+        with pytest.raises(tgdb.StoreBusy, match="remained busy"):
+            store.write()
+    else:
+        transaction = store.write()
+        transaction.create_collection("collection")
+        with pytest.raises(tgdb.StoreBusy, match="remained busy"):
+            transaction.commit()
+    store.close()
+
+
 def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
     """Every planned store refusal is catchable through one staged base."""
     for error_type in (
@@ -859,6 +1526,9 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         assert error.stage is RefusalStage.SEMANTICS
     assert tgdb.__all__ == [
         "CheckReport",
+        "CollectionInfo",
+        "CommitReceipt",
+        "InstanceInfo",
         "SqliteTooOld",
         "StaleJournalBase",
         "StaleVersion",
@@ -869,6 +1539,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "TgdbError",
         "TgdbLimits",
         "TgdbStore",
+        "WriteTransaction",
     ]
 
 

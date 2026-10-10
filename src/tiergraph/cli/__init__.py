@@ -49,6 +49,7 @@ _MEDIA_TYPE_TEXT = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}/"
     r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}"
 )
+_TGDB_UID_HEX_LENGTH = 32
 _BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 
 _EXIT_STATUS_HELP = """Exit codes:
@@ -101,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         subparsers,
         "tgdb",
         summary="manage a versioned tiergraph store",
-        description="Create, inspect, or check a local versioned tiergraph store.",
+        description="Create, inspect, check, or edit a local versioned tiergraph store.",
         examples=("tiergraph tgdb info corpus.tgdb",),
     )
     tgdb_subparsers = tgdb.add_subparsers(dest="tgdb_command", required=True)
@@ -153,6 +154,177 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_check.add_argument("store", metavar="STORE", help="store directory")
     tgdb_check.add_argument(
         "--full", action="store_true", help="hash every stored object"
+    )
+    tgdb_collection = _subcommand(
+        tgdb_subparsers,
+        "collection",
+        summary="manage ordered collections",
+        description="Create, list, rename, move, retire, or restore collections.",
+        examples=("tiergraph tgdb collection list corpus.tgdb",),
+    )
+    collection_commands = tgdb_collection.add_subparsers(
+        dest="tgdb_collection_command", required=True
+    )
+    collection_create = _subcommand(
+        collection_commands,
+        "create",
+        summary="create a collection",
+        description="Create a named collection with a stable id and declared position.",
+        examples=("tiergraph tgdb collection create corpus.tgdb recordings",),
+    )
+    collection_create.set_defaults(handler=_handle_tgdb)
+    collection_create.add_argument("store", metavar="STORE", help="store directory")
+    collection_create.add_argument(
+        "name", metavar="NAME", help="unique collection name"
+    )
+    collection_create.add_argument(
+        "--uid", type=_tgdb_uid, metavar="HEX", help="caller-supplied 128-bit id"
+    )
+    collection_create.add_argument(
+        "--position",
+        type=_nonnegative_integer,
+        metavar="N",
+        help="declared insertion position (default: append)",
+    )
+    collection_list = _subcommand(
+        collection_commands,
+        "list",
+        summary="list collections",
+        description="List collections in declared order.",
+        examples=(
+            "tiergraph tgdb collection list corpus.tgdb",
+            "tiergraph tgdb collection list corpus.tgdb --retired --json",
+        ),
+    )
+    collection_list.set_defaults(handler=_handle_tgdb)
+    collection_list.add_argument("store", metavar="STORE", help="store directory")
+    collection_list.add_argument(
+        "--retired", action="store_true", help="include retired collections"
+    )
+    collection_list.add_argument(
+        "--json", action="store_true", help="emit structured JSON"
+    )
+    for command, summary, description in (
+        ("rename", "rename a collection", "Change a collection name."),
+        (
+            "move",
+            "move a collection",
+            "Change a collection's declared position.",
+        ),
+    ):
+        subcommand = _subcommand(
+            collection_commands,
+            command,
+            summary=summary,
+            description=description,
+            examples=(
+                f"tiergraph tgdb collection {command} corpus.tgdb recordings "
+                f"{'renamed' if command == 'rename' else '1'}",
+            ),
+        )
+        subcommand.set_defaults(handler=_handle_tgdb)
+        subcommand.add_argument("store", metavar="STORE", help="store directory")
+        subcommand.add_argument(
+            "collection", metavar="COLLECTION", help="collection name"
+        )
+        if command == "rename":
+            subcommand.add_argument("name", metavar="NAME", help="new unique name")
+        else:
+            subcommand.add_argument(
+                "position",
+                type=_nonnegative_integer,
+                metavar="POSITION",
+                help="new position",
+            )
+    for command in ("retire", "restore"):
+        subcommand = _subcommand(
+            collection_commands,
+            command,
+            summary=f"{command} a collection",
+            description=f"{command.capitalize()} a collection without deleting it.",
+            examples=(f"tiergraph tgdb collection {command} corpus.tgdb recordings",),
+        )
+        subcommand.set_defaults(handler=_handle_tgdb)
+        subcommand.add_argument("store", metavar="STORE", help="store directory")
+        subcommand.add_argument(
+            "collection", metavar="COLLECTION", help="collection name"
+        )
+    tgdb_list = _subcommand(
+        tgdb_subparsers,
+        "list",
+        summary="list instances",
+        description="List instances in declared collection and instance order.",
+        examples=("tiergraph tgdb list corpus.tgdb --collection recordings",),
+    )
+    tgdb_list.set_defaults(handler=_handle_tgdb)
+    tgdb_list.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_list.add_argument(
+        "--collection", metavar="NAME", help="limit to one collection"
+    )
+    tgdb_list.add_argument(
+        "--retired",
+        action="store_true",
+        help="include retired instances and collections",
+    )
+    tgdb_list.add_argument("--json", action="store_true", help="emit structured JSON")
+    for command in ("rename", "move"):
+        subcommand = _subcommand(
+            tgdb_subparsers,
+            command,
+            summary=f"{command} an instance",
+            description=f"{command.capitalize()} an instance without changing its stable id.",
+            examples=(
+                f"tiergraph tgdb {command} corpus.tgdb INSTANCE "
+                f"{'RENAMED' if command == 'rename' else '1'}",
+            ),
+        )
+        subcommand.set_defaults(handler=_handle_tgdb)
+        subcommand.add_argument("store", metavar="STORE", help="store directory")
+        subcommand.add_argument(
+            "instance", metavar="INSTANCE", help="instance name or id"
+        )
+        subcommand.add_argument(
+            "--collection", metavar="NAME", help="instance collection"
+        )
+        if command == "rename":
+            subcommand.add_argument("name", metavar="NAME", help="new unique name")
+        else:
+            subcommand.add_argument(
+                "position",
+                type=_nonnegative_integer,
+                metavar="POSITION",
+                help="new position",
+            )
+    for command in ("retire", "restore"):
+        subcommand = _subcommand(
+            tgdb_subparsers,
+            command,
+            summary=f"{command} an instance",
+            description=f"{command.capitalize()} an instance without deleting it.",
+            examples=(f"tiergraph tgdb {command} corpus.tgdb INSTANCE",),
+        )
+        subcommand.set_defaults(handler=_handle_tgdb)
+        subcommand.add_argument("store", metavar="STORE", help="store directory")
+        subcommand.add_argument(
+            "instance", metavar="INSTANCE", help="instance name or id"
+        )
+        subcommand.add_argument(
+            "--collection", metavar="NAME", help="instance collection"
+        )
+    tgdb_undo = _subcommand(
+        tgdb_subparsers,
+        "undo",
+        summary="undo a catalog commit",
+        description="Apply a commit's recorded inverse when its catalog rows are current.",
+        examples=("tiergraph tgdb undo corpus.tgdb 1",),
+    )
+    tgdb_undo.set_defaults(handler=_handle_tgdb)
+    tgdb_undo.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_undo.add_argument(
+        "commit",
+        type=_positive_integer,
+        metavar="COMMIT",
+        help="commit sequence to undo",
     )
 
     validate = _subcommand(
@@ -1443,6 +1615,37 @@ def _nonnegative_byte_count(value: str) -> int:
     return parsed
 
 
+def _nonnegative_integer(value: str) -> int:
+    """Parse a nonnegative decimal integer for a declared position."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return parsed
+
+
+def _positive_integer(value: str) -> int:
+    """Parse a positive decimal integer for a commit sequence."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _tgdb_uid(value: str) -> bytes:
+    """Parse one canonical 128-bit tgdb id."""
+    if len(value) != _TGDB_UID_HEX_LENGTH or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise argparse.ArgumentTypeError("must be 32 lowercase hexadecimal digits")
+    return bytes.fromhex(value)
+
+
 def _media_type_argument(value: str) -> str:
     """Require the canonical media-type spelling accepted by the blob profile."""
     if _MEDIA_TYPE_TEXT.fullmatch(value) is None:
@@ -1564,8 +1767,8 @@ def _handle_validate(args: argparse.Namespace) -> None:
     _stdout_text("ok\n")
 
 
-def _handle_tgdb(args: argparse.Namespace) -> int:
-    """Create, inspect, or check a store while keeping tgdb imports lazy."""
+def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
+    """Operate on a store while keeping tgdb and SQLite imports lazy."""
     from tiergraph import tgdb  # noqa: PLC0415 -- tgdb and sqlite3 stay lazy
 
     try:
@@ -1579,7 +1782,17 @@ def _handle_tgdb(args: argparse.Namespace) -> int:
                 pass
             _stdout_text(f"initialized {args.store}\n")
             return 0
-        with tgdb.TgdbStore.open(args.store) as store:
+        writable = args.tgdb_command in {
+            "collection",
+            "move",
+            "rename",
+            "restore",
+            "retire",
+            "undo",
+        } and not (
+            args.tgdb_command == "collection" and args.tgdb_collection_command == "list"
+        )
+        with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
             if args.tgdb_command == "check":
                 report = store.check(full=args.full)
                 detail = "full" if report.full else "structural"
@@ -1587,6 +1800,109 @@ def _handle_tgdb(args: argparse.Namespace) -> int:
                     f"ok: {detail} check, {report.objects} objects, "
                     f"{report.object_bytes} bytes\n"
                 )
+                return 0
+            if args.tgdb_command == "collection":
+                command = args.tgdb_collection_command
+                if command == "list":
+                    collections = store.collections(include_retired=args.retired)
+                    if args.json:
+                        _stdout_text(
+                            _json_bytes(
+                                [collection.to_data() for collection in collections]
+                            ).decode("utf-8")
+                        )
+                    else:
+                        for collection in collections:
+                            state = "retired" if collection.retired else "active"
+                            _stdout_text(
+                                "\t".join(
+                                    _text_report_field(value)
+                                    for value in (
+                                        collection.position,
+                                        collection.uid.hex(),
+                                        collection.name,
+                                        state,
+                                    )
+                                )
+                                + "\n"
+                            )
+                    return 0
+                with store.write() as transaction:
+                    if command == "create":
+                        uid = transaction.create_collection(
+                            args.name, uid=args.uid, position=args.position
+                        )
+                    elif command == "rename":
+                        transaction.rename_collection(args.collection, args.name)
+                    elif command == "move":
+                        transaction.move_collection(args.collection, args.position)
+                    elif command == "retire":
+                        transaction.retire_collection(args.collection)
+                    else:
+                        transaction.restore_collection(args.collection)
+                    receipt = transaction.commit()
+                if command == "create":
+                    _stdout_text(
+                        f"created collection {args.name!r} {uid.hex()} in commit "
+                        f"{receipt.commit_seq}\n"
+                    )
+                else:
+                    _stdout_text(f"committed {receipt.commit_seq}: {command}\n")
+                return 0
+            if args.tgdb_command == "list":
+                instances = store.instances(
+                    args.collection, include_retired=args.retired
+                )
+                if args.json:
+                    _stdout_text(
+                        _json_bytes(
+                            [instance.to_data() for instance in instances]
+                        ).decode("utf-8")
+                    )
+                else:
+                    for instance in instances:
+                        state = "retired" if instance.retired else "active"
+                        _stdout_text(
+                            "\t".join(
+                                _text_report_field(value)
+                                for value in (
+                                    instance.collection,
+                                    instance.position,
+                                    instance.uid.hex(),
+                                    instance.name,
+                                    state,
+                                )
+                            )
+                            + "\n"
+                        )
+                return 0
+            if args.tgdb_command == "undo":
+                receipt = store.undo(args.commit)
+                _stdout_text(f"committed {receipt.commit_seq}: undo {args.commit}\n")
+                return 0
+            if args.tgdb_command in {"rename", "move", "retire", "restore"}:
+                names = {
+                    instance.name
+                    for instance in store.instances(
+                        args.collection, include_retired=True
+                    )
+                }
+                selector = _tgdb_selector(args.instance, names=names)
+                with store.write() as transaction:
+                    if args.tgdb_command == "rename":
+                        transaction.rename(
+                            selector, args.name, collection=args.collection
+                        )
+                    elif args.tgdb_command == "move":
+                        transaction.move(
+                            selector, args.position, collection=args.collection
+                        )
+                    elif args.tgdb_command == "retire":
+                        transaction.retire(selector, collection=args.collection)
+                    else:
+                        transaction.restore(selector, collection=args.collection)
+                    receipt = transaction.commit()
+                _stdout_text(f"committed {receipt.commit_seq}: {args.tgdb_command}\n")
                 return 0
             info = store.info()
             if args.json:
@@ -1598,6 +1914,17 @@ def _handle_tgdb(args: argparse.Namespace) -> int:
         _refusal_diagnostic(args.command, error)
         return 1
     return 0
+
+
+def _tgdb_selector(value: str, *, names: set[str]) -> bytes | str:
+    """Prefer an exact catalog name, then interpret a canonical 128-bit id."""
+    if (
+        value not in names
+        and len(value) == _TGDB_UID_HEX_LENGTH
+        and all(character in "0123456789abcdef" for character in value)
+    ):
+        return bytes.fromhex(value)
+    return value
 
 
 class _DirectoryResolver:
