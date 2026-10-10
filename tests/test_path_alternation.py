@@ -81,7 +81,7 @@ def application_key(
     profile: GrammarChartProfile, application: ItemRef
 ) -> tuple[int, tuple[tuple[int, int], ...]]:
     """Recover the asserted stable key independently from public graph data."""
-    graph = profile.forest.graph
+    graph = profile.graph
     item = next(
         tier.items[application.index]
         for tier in graph.tiers
@@ -118,11 +118,38 @@ def application_key(
 
 def addressed_value(profile: GrammarChartProfile, text: str) -> object:
     """Resolve and narrow one profile alternative for strict type checking."""
-    result = resolve_path(
-        profile.forest.graph, profile, text, require=PathKind.ALTERNATIVE
-    )
+    result = resolve_path(profile.graph, profile, text, require=PathKind.ALTERNATIVE)
     assert isinstance(result, ResolvedAlternative)
     return result.value
+
+
+def test_chart_profile_fields_and_operations_round_trip_without_copying() -> None:
+    """Live and decoded profiles expose and operate on the same graph and root."""
+    forest = recognize(lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x"))
+    live = GrammarChartProfile(forest.graph, forest.root)
+    encoded = live.to_data()
+    loaded = GrammarChartProfile.from_data(forest.graph, encoded)
+    path = CanonicalPath.parse(f"/chart/{S}/0/3/alternatives/0")
+    relation = QualifiedName(forest.root.tier.namespace, "alternatives")
+
+    for profile in (live, loaded):
+        assert profile.graph is forest.graph
+        assert profile.root == forest.root
+        assert profile.to_data() == encoded
+        binding = profile.bind(path, profile.graph)
+        assert profile.spell(binding, profile.graph) == path
+        assert profile.alternatives(profile.root, relation, profile.graph)[0] == (
+            addressed_value(profile, str(path))
+        )
+
+    round_tripped = GrammarChartProfile.from_data(loaded.graph, loaded.to_data())
+    assert round_tripped.graph is loaded.graph
+    assert round_tripped.root == loaded.root
+
+    with pytest.raises(ValueError, match="outside tier"):
+        GrammarChartProfile(
+            forest.graph, ItemRef(forest.root.tier, len(forest.graph.canonical_items()))
+        )
 
 
 def test_real_forest_alternatives_use_stable_key_not_discovery_or_weight() -> None:
@@ -142,8 +169,8 @@ def test_real_forest_alternatives_use_stable_key_not_discovery_or_weight() -> No
     )
 
     path = f"/chart/{S}/0/3/alternatives/"
-    first_profile = GrammarChartProfile(low_rule_zero)
-    second_profile = GrammarChartProfile(low_rule_one)
+    first_profile = GrammarChartProfile(low_rule_zero.graph, low_rule_zero.root)
+    second_profile = GrammarChartProfile(low_rule_one.graph, low_rule_one.root)
     first = tuple(
         addressed_value(first_profile, path + str(index)) for index in range(3)
     )
@@ -177,7 +204,7 @@ def test_real_forest_alternatives_use_stable_key_not_discovery_or_weight() -> No
         low_rule_zero.graph, relations=tuple(reversed(low_rule_zero.graph.relations))
     )
     reversed_forest = replace(low_rule_zero, graph=reversed_graph)
-    reversed_profile = GrammarChartProfile(reversed_forest)
+    reversed_profile = GrammarChartProfile(reversed_forest.graph, reversed_forest.root)
     raw = tuple(
         edge.right
         for edge in reversed_graph.relations
@@ -201,7 +228,7 @@ def test_real_forest_alternatives_use_stable_key_not_discovery_or_weight() -> No
 def test_alternative_slot_legality_bounds_and_spelling() -> None:
     """Alternative slots neither coerce to items nor select beyond a snapshot."""
     forest = recognize(lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x"))
-    profile = GrammarChartProfile(forest)
+    profile = GrammarChartProfile(forest.graph, forest.root)
     text = f"/chart/{S}/0/3/alternatives/0"
     resolved = resolve_path(forest.graph, profile, text, require=PathKind.ALTERNATIVE)
     assert isinstance(resolved, ResolvedAlternative)
@@ -224,7 +251,7 @@ def test_alternative_slot_legality_bounds_and_spelling() -> None:
 def test_chart_profile_refuses_outside_its_declared_snapshot_and_vocabulary() -> None:
     """The chart literal, lexical domains, snapshot, and relation are explicit."""
     forest = recognize(lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x"))
-    profile = GrammarChartProfile(forest)
+    profile = GrammarChartProfile(forest.graph, forest.root)
     base = f"/chart/{S}/0/3/alternatives/0"
     cases = (
         ("/other", PathRefusalCode.UNKNOWN_FORM),
@@ -244,7 +271,7 @@ def test_chart_profile_refuses_outside_its_declared_snapshot_and_vocabulary() ->
             ),
             other_graph,
         )
-    assert snapshot.value.offender.profile_reason == "different_forest_snapshot"
+    assert snapshot.value.offender.profile_reason == "different_graph_snapshot"
 
     binding = profile.bind(CanonicalPath.parse(base), forest.graph)
     assert isinstance(binding, AlternativeRef)
@@ -334,7 +361,7 @@ def test_colliding_stable_keys_order_canonically_not_by_incidence() -> None:
     incidence-independent order — the application tier index tiebreak — instead of
     falling back to graph.relations discovery order."""
     forest = recognize(lower_grammar(_nullable_collision_grammar()), ("a", "b"))
-    profile = GrammarChartProfile(forest)
+    profile = GrammarChartProfile(forest.graph, forest.root)
     relation = QualifiedName(forest.root.tier.namespace, "alternatives")
     ordered = profile.alternatives(forest.root, relation, forest.graph)
     apps = []
@@ -352,9 +379,9 @@ def test_colliding_stable_keys_order_canonically_not_by_incidence() -> None:
     reversed_relation = QualifiedName(
         reversed_forest.root.tier.namespace, "alternatives"
     )
-    reversed_ordered = GrammarChartProfile(reversed_forest).alternatives(
-        reversed_forest.root, reversed_relation, reversed_graph
-    )
+    reversed_ordered = GrammarChartProfile(
+        reversed_forest.graph, reversed_forest.root
+    ).alternatives(reversed_forest.root, reversed_relation, reversed_graph)
     assert reversed_ordered == ordered
     # spell is index-faithful, not hard-coded to 0
     assert (
@@ -369,7 +396,7 @@ def test_grammar_profile_refuses_a_non_chart_item_owner() -> None:
     """An application item (wrong tier) as owner is refused, not silently ()'d or
     leaked as StopIteration."""
     forest = recognize(lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x"))
-    profile = GrammarChartProfile(forest)
+    profile = GrammarChartProfile(forest.graph, forest.root)
     relation = QualifiedName(forest.root.tier.namespace, "alternatives")
     first = profile.alternatives(forest.root, relation, forest.graph)[0]
     assert isinstance(first, ItemRef)  # an application item, not a chart item

@@ -4673,15 +4673,16 @@ Decode one strict versioned experimental generation-result envelope.
 ### `GrammarChartProfile`
 
 ```text
-GrammarChartProfile(forest: 'ParseForest') -> None
+GrammarChartProfile(graph: 'Graph', root: 'ItemRef') -> None
 ```
 
-Address chart alternatives in a stable order within one forest snapshot.
+Address chart alternatives in a stable order within one graph snapshot.
 
 The profile vocabulary is
 ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
-independent of rule weights, but intentionally are not stable across forest
-snapshots whose sets of alternatives differ.
+independent of rule weights, but intentionally are not stable across graph
+snapshots whose sets of alternatives differ. The root is the serialized chart
+anchor and supplies the vocabulary namespace; it must belong to the graph.
 
 #### `GrammarChartProfile.to_data`
 
