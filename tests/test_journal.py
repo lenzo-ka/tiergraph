@@ -1754,7 +1754,7 @@ def test_private_clock_layer_remap_branches_preserve_or_refuse_facts() -> None:
     )
     native = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
     records = native._binding_records(SEGMENT)
-    unbound, detached = clock_module._unbind_relations(graph, (records[0],))
+    unbound, detached, _ = clock_module._unbind_relations(graph, (records[0],))
     assert detached == ()
     assert unbound.layers[0].facts[0].subject == RelationInstanceRef(1)
 
@@ -1768,7 +1768,7 @@ def test_private_clock_layer_remap_branches_preserve_or_refuse_facts() -> None:
     )
     native = ClockProfile(promoted, CLOCK, BINDING, RATE, UNIT).edit("keep-earlier")
     record = native._binding_records(SEGMENT)[0]
-    unbound, detached = clock_module._unbind_relations(promoted, (record,))
+    unbound, detached, _ = clock_module._unbind_relations(promoted, (record,))
     rebuilt = clock_module._rebuilt_layers(
         unbound.layers,
         {0: 1, 1: 2},

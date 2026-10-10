@@ -229,6 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Included withdrawn clock-binding facts in public replacement detachment reports.
 - Made container regrouping preserve cross-tier targets, refuse endpoint
   collapse, enforce contiguous clock-consistent seams, and remain one semantic
   diff operation without searching unrelated item pairs.

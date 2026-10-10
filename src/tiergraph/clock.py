@@ -783,7 +783,7 @@ class _DetachedRelationFact:
 
 def _unbind_relations(
     graph: Graph, records: tuple[_BindingRecord, ...]
-) -> tuple[Graph, tuple[_DetachedRelationFact, ...]]:
+) -> tuple[Graph, tuple[_DetachedRelationFact, ...], Displacement]:
     """Remove selected relations while remapping or temporarily holding facts."""
     positions = {record.position for record in records}
     mapping: dict[int, int] = {}
@@ -818,6 +818,11 @@ def _unbind_relations(
                     _DetachedRelationFact(layer.name, fact, position, fact_index)
                 )
         layers.append(Layer(layer.name, tuple(facts)))
+    displacement = replace(
+        Displacement.stationary(graph),
+        relations=mapping,
+        departed_relations=frozenset(positions),
+    )
     return (
         replace(
             graph,
@@ -829,6 +834,7 @@ def _unbind_relations(
             layers=tuple(layers),
         ),
         tuple(detached),
+        displacement,
     )
 
 
@@ -862,6 +868,63 @@ def _rebuilt_layers(
             subject = RelationInstanceRef(position)
         by_name[held.layer].append(LayerFact(subject, held.fact.value))
     return tuple(Layer(layer.name, tuple(by_name[layer.name])) for layer in layers)
+
+
+def _complete_replacement_report(
+    source: Graph,
+    unbound: Graph,
+    unbinding: Displacement,
+    report: DetachmentReport,
+    dropped: tuple[_DetachedRelationFact, ...],
+) -> tuple[DetachmentReport, tuple[DetachedDependency, ...]]:
+    """Restore source coordinates and add withdrawn clock-binding facts."""
+    from tiergraph.replacement import (  # noqa: PLC0415
+        DetachedDependency,
+        _detachment_report,
+        _ordered_detached,
+        _source_dependencies,
+    )
+
+    source_dependencies = _source_dependencies(
+        source, unbound, unbinding, report.dependencies
+    )
+    dependencies = _ordered_detached(
+        (
+            *source_dependencies,
+            *(
+                DetachedDependency(
+                    "layer",
+                    held.fact_index,
+                    layer=held.layer,
+                    subject=held.fact.subject,
+                )
+                for held in dropped
+            ),
+        )
+    )
+    source_relations = {
+        unbound_index: source_index
+        for source_index, unbound_index in unbinding.relations.items()
+    }
+    completed = _detachment_report(
+        source,
+        items=(reference for reference, _ in report.items),
+        binary=(
+            source_relations[reference.index]
+            for reference, _ in report.relations
+            if isinstance(reference, RelationInstanceRef)
+        ),
+        polyadic=(
+            reference.index
+            for reference, _ in report.relations
+            if not isinstance(reference, RelationInstanceRef)
+        ),
+        dependencies=dependencies,
+        boundary_values=report.boundary_values,
+        donor_relations=report.donor_relations,
+        donor_facts=report.donor_facts,
+    )
+    return completed, dependencies
 
 
 _CLOCK_EDIT_NAMESPACE = "urn:tiergraph:clock-edit"
@@ -1755,7 +1818,7 @@ class ClockEditor:
                 count = self._item_count(tier, ClockEditOperation.REPARENT)
                 templates = tuple(range(count + 1))
                 records = self._binding_records(tier)
-                candidate, detached = _unbind_relations(candidate, records)
+                candidate, detached, _ = _unbind_relations(candidate, records)
                 candidate, changes = self._rebuild_bindings(
                     candidate,
                     tier,
@@ -1826,27 +1889,39 @@ class ClockEditor:
                 key=lambda record: record.position,
             )
         )
-        unbound, detached = _unbind_relations(self._graph, records)
+        unbound, detached, unbinding = _unbind_relations(self._graph, records)
         outcome = _replace_subtree(
             unbound, root, names, new, policies, capture_report=True
         )
         candidate = outcome.graph
         new_by_tier = _descendant_indexes(frozenset(outcome.new_items.values()))
-        candidate, reports, detached_dependencies = self._replacement_bindings(
-            candidate,
-            timed,
-            old_by_tier,
-            new_by_tier,
-            outcome.correspondence.items,
-            records,
-            detached,
-            outcome.detached,
+        candidate, reports, detached_dependencies, dropped_detached = (
+            self._replacement_bindings(
+                candidate,
+                timed,
+                old_by_tier,
+                new_by_tier,
+                outcome.correspondence.items,
+                records,
+                detached,
+                outcome.detached,
+            )
         )
+        if outcome.report is None or not dropped_detached:
+            detached_content = outcome.report
+        else:
+            detached_content, detached_dependencies = _complete_replacement_report(
+                self._graph,
+                unbound,
+                unbinding,
+                outcome.report,
+                dropped_detached,
+            )
         next_profile = self._profile_for(candidate)
         self._graph = candidate
         self._profile = next_profile
         self._detached_dependencies = detached_dependencies
-        self._detached_content = outcome.report
+        self._detached_content = detached_content
         self._link_correspondence = outcome.correspondence
         self._reports.extend(reports)
         return self
@@ -1861,7 +1936,12 @@ class ClockEditor:
         records: tuple[_BindingRecord, ...],
         detached: tuple[_DetachedRelationFact, ...],
         detached_dependencies: tuple[DetachedDependency, ...],
-    ) -> tuple[Graph, tuple[ClockEditReport, ...], tuple[DetachedDependency, ...]]:
+    ) -> tuple[
+        Graph,
+        tuple[ClockEditReport, ...],
+        tuple[DetachedDependency, ...],
+        tuple[_DetachedRelationFact, ...],
+    ]:
         """Rebuild all affected binding sets after one multi-tier replacement."""
         by_tier: dict[QualifiedName, dict[int, _BindingRecord]] = {
             tier: {
@@ -2014,7 +2094,7 @@ class ClockEditor:
         for report in reports:
             if report.needs_realignment:
                 result = _record_needs_realignment(result, report.tier)
-        return result, tuple(reports), detached_dependencies
+        return result, tuple(reports), detached_dependencies, dropped_detached
 
     def undeclare_with_contents(
         self, target: str | QualifiedName | EditDeclaration
@@ -2189,7 +2269,7 @@ class ClockEditor:
             self._missing_policy(operation, tier)
         policy = cast(ClockRebindingPolicy, self._policy)
         records = self._binding_records(tier)
-        unbound, detached = _unbind_relations(self._graph, records)
+        unbound, detached, _ = _unbind_relations(self._graph, records)
         editor = unbound.edit()
         edit(editor)
         if getattr(self, "_capture_journal_displacement", False):
