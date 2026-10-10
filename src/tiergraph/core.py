@@ -2543,10 +2543,11 @@ class Graph:
         policies: RegroupPolicies | None = None,
         restoration: RegroupRestoration | None = None,
     ) -> Graph:
-        """Return a graph with one container split at an interior child seam.
+        """Return a graph split within one contiguous child-tier span.
 
         Use :meth:`Graph.edit` and inspect the editor's correspondence when the
-        structural mapping is needed.
+        structural mapping is needed. A complete boundary binding on the
+        container tier requires an explicit ``keep-earlier`` clock policy.
         """
         return (
             self.edit()
@@ -2573,7 +2574,8 @@ class Graph:
         """Return a graph with two adjacent sister containers merged.
 
         Use :meth:`Graph.edit` and inspect :attr:`GraphEditor.last_detachment`
-        when withdrawn content must be retained.
+        when withdrawn content must be retained. A timed parent seam requires
+        an explicit clock policy and must agree with the shared child seam.
         """
         return (
             self.edit()
@@ -4247,7 +4249,7 @@ class GraphEditor:
         policies: RegroupPolicies | None = None,
         restoration: RegroupRestoration | None = None,
     ) -> GraphEditor:
-        """Split one ordered-containment membership into adjacent sisters."""
+        """Split one contiguous containment membership into adjacent sisters."""
         from tiergraph.container_edit import (  # noqa: PLC0415
             RegroupPolicies,
             RegroupRestoration,

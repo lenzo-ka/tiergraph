@@ -562,9 +562,26 @@ def test_general_atom_bound_is_capped_by_container_regrouping() -> None:
     """A multi-atom difference cannot exceed the cheapest regroup shortcut."""
     before = graph("a0", "a1", "a2", "a3", "a4", "a5", relation=(0, 1))
     after = graph("b0", "b1", "b2", "b3", "b4", "b5", relation=(0, 2))
-    assert _atom_multiset_lower_bound(
+    bound = _atom_multiset_lower_bound(
         before, after, UNIT_COSTS, EquivalenceView.IDENTIFIED
-    ) == Decimal(3)
+    )
+    assert bound == UNIT_COSTS.operation("split_container")
+    assert bound == UNIT_COSTS.operation("merge_containers")
+
+
+def test_container_regroup_diff_gives_distance_a_one_edit_upper_bound() -> None:
+    """Recognized split and merge targets are priced as one regroup operation."""
+    source = regroup_hierarchy()
+    split = source.split_container(
+        DurableItemRef("p0"),
+        1,
+        REGROUP_PHRASE_WORDS,
+        Item("distance-regroup"),
+    )
+    forward = distance(source, split, view=EquivalenceView.EXACT)
+    reverse = distance(split, source, view=EquivalenceView.EXACT)
+    assert forward.upper == UNIT_COSTS.operation("split_container", REGROUP_PHRASE)
+    assert reverse.upper == UNIT_COSTS.operation("merge_containers", REGROUP_PHRASE)
 
 
 @pytest.mark.parametrize("case", PRIMITIVE_CASES, ids=lambda case: case.kind)

@@ -2167,7 +2167,7 @@ Method.
 GraphEditor.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'GraphEditor'
 ```
 
-Split one ordered-containment membership into adjacent sisters.
+Split one contiguous containment membership into adjacent sisters.
 
 #### `GraphEditor.merge_containers`
 
@@ -3377,8 +3377,8 @@ Relations and layer facts follow the operation's functional
 correspondence unless their declaration or layer is explicitly ``drop``.
 Attribute actions address values on the container removed by a merge.
 ``seam_content=DROP`` authorizes withdrawal of independent values and facts
-at the retired container seam. Timing changes additionally require the
-named clock rebinding policy.
+at the retired container seam. Split and timed merge each admit only their
+operation-specific clock policy.
 
 ### `RegroupRestoration`
 
@@ -3561,14 +3561,15 @@ diff(source: 'Graph', target: 'Graph', view: 'EquivalenceView | str' = <Equivale
 
 Return a deterministic executable patch from ``source`` toward ``target``.
 
-Compatible schemas use a per-tier unit-cost alignment. Reused equal items
-become moves, unmatched items become replacements, insertions, or removals,
-and references are torn down and rebuilt in dependency order. Incompatible
-declarations use one guarded rebuild delta. Applying the result always
-produces a graph equivalent to ``target`` under ``view``; an already
-equivalent pair produces an empty patch guarded to ``source``. When such a
-pair differs under the identified view, that no-op patch is not an exact
-transition to ``target`` and does not compose as one.
+One exact containment shift, split, or merge remains its semantic
+operation. Other compatible schemas use a per-tier unit-cost alignment.
+Reused equal items become moves, unmatched items become replacements,
+insertions, or removals, and references are torn down and rebuilt in
+dependency order. Incompatible declarations use one guarded rebuild delta.
+Applying the result always produces a graph equivalent to ``target`` under
+``view``; an already equivalent pair produces an empty patch guarded to
+``source``. When such a pair differs under the identified view, that no-op
+patch is not an exact transition to ``target`` and does not compose as one.
 
 This graph-level operation validates graph structure only. It does not
 preserve or report a clock profile's rebinding policy; construct edits
@@ -3589,7 +3590,7 @@ Reverse operation order and exchange every recorded transition.
 merge_containers(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'EditResult'
 ```
 
-Merge adjacent sister containers and report every withdrawn link.
+Merge adjacent sisters, refusing endpoint collapse, and report withdrawals.
 
 ### `replace_subtree`
 
@@ -3638,7 +3639,7 @@ changes as ordinary expanded primitives.
 split_container(graph: 'Graph', container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item' = Item(durable_id=None, attributes=()), side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'EditResult'
 ```
 
-Split one container at an interior child seam and report withdrawals.
+Split one contiguous container at an interior seam and report withdrawals.
 
 ### `swap_subtrees`
 
@@ -6057,10 +6058,11 @@ Method.
 Graph.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'Graph'
 ```
 
-Return a graph with one container split at an interior child seam.
+Return a graph split within one contiguous child-tier span.
 
 Use :meth:`Graph.edit` and inspect the editor's correspondence when the
-structural mapping is needed.
+structural mapping is needed. A complete boundary binding on the
+container tier requires an explicit ``keep-earlier`` clock policy.
 
 #### `Graph.merge_containers`
 
@@ -6073,7 +6075,8 @@ Graph.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef
 Return a graph with two adjacent sister containers merged.
 
 Use :meth:`Graph.edit` and inspect :attr:`GraphEditor.last_detachment`
-when withdrawn content must be retained.
+when withdrawn content must be retained. A timed parent seam requires
+an explicit clock policy and must agree with the shared child seam.
 
 #### `Graph.add_relation`
 

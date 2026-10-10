@@ -216,13 +216,13 @@ containment while leaving the child tier and every other tier in place. The
 module functions return an `EditResult`; the matching `Graph` methods return a
 graph, and graph, journal, and clock editors expose the same operations.
 
-A split accepts only an interior child boundary. With `side="after"`, the
-original container keeps the prefix and the new sister receives the suffix;
-`side="before"` gives the prefix to the new sister. The new sister is inserted
-beside the original in every shared ordered-containment parent. Declared order
-is content and is never sorted. Functional correspondence maps the original
-container to both results. Identified correspondence maps it only to the half
-that retains its durable identity.
+A split accepts only an interior boundary in one contiguous child-tier span.
+With `side="after"`, the original container keeps the prefix and the new sister
+receives the suffix; `side="before"` gives the prefix to the new sister. The new
+sister is inserted beside the original in every shared ordered-containment
+parent. Declared order is content and is never sorted. Functional
+correspondence maps the original container to both results. Identified
+correspondence maps it only to the half that retains its durable identity.
 
 ```text
 split = utterance.split_container(
@@ -245,12 +245,15 @@ named with `ReplacementAction.DROP`, or make the operation refuse.
 plus `container_values`, `seam_content`, and `clock`. Only `FOLLOW` and `DROP`
 are admitted. Disjoint removed-container attributes are carried to the
 survivor; equal values coalesce; unequal values require an exact drop action.
+Re-pointing refuses a relation that would duplicate or collapse distinct
+container endpoints unless that relation is explicitly dropped.
 Independent content or links on the retired seam require `seam_content=DROP`
 or a declaration-specific drop action. The detachment report lists every
 withdrawn item, relation, fact, and boundary value.
 
 Dependency and content actions apply only to merge. Split refuses those fields
-when they are nondefault; its only applicable regroup policy is `clock`.
+when they are nondefault; its only applicable regroup policy is
+`clock=keep-earlier`.
 
 Journaled regrouping records one semantic operation and its semantic inverse.
 `RegroupRestoration` is the validated, change-sized inverse payload for a
@@ -263,12 +266,14 @@ including when membership instances are interleaved in document order.
 one membership instance to another during a split or whose membership is
 retired during a merge.
 
-Timing changes occur only in a clock-aware editor under the operation-specific
-policy. Split requires `keep-earlier`, binds the new container seam to the
-selected child seam, and reports the insertion as `container split`. Merge
-requires `drop-to-provisional`, withdraws only the internal seam binding, and
-reports `container merge`. A missing child time, a common-clock disagreement,
-clock-tier regrouping, or an invalid final clock profile refuses the edit.
+Timing changes require an explicit operation-specific policy. A plain regroup
+detects complete boundary bindings and refuses an unnamed policy. Split
+requires `keep-earlier` in a clock-aware editor and binds the new container seam
+to the selected child seam. Merge requires `drop-to-provisional` and withdraws
+only an internal seam whose clock index agrees with the contiguous child seam.
+The clock-aware forms report `container split` or `container merge`. A missing
+child time, containment-seam disagreement, clock-tier regrouping, or an invalid
+final clock profile refuses the edit.
 
 The default cost table prices split and merge at 3. A partial cost table may
 price a realized patch without naming both operations, but the general atom
@@ -885,7 +890,9 @@ delete-then-insert paths. Large unmatched sets avoid cubic assignment and use
 their unavoidable atom count at the least declared transition cost. Realized
 primitive edits and generated graph cases exercise the resulting lower bound,
 which is deliberately weak for rewiring and reordering:
-`set_endpoints`, moves, and swaps can project to zero. A partial cost table also
+`set_endpoints`, moves, and swaps can project to zero. Exact one-edit shifts,
+container splits, and container merges remain semantic operations in `diff()`.
+A partial cost table also
 uses zero for the general lower bound rather than requiring costs unrelated to
 the realized upper-bound script. Because one container split or merge can
 change several retained atoms, a complete table caps the general atom bound at
