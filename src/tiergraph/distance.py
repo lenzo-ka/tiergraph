@@ -58,6 +58,7 @@ _INVERSE_KINDS = {
     "add_relation": "remove_relation",
     "declare": "undeclare",
     "insert_item": "remove_item",
+    "split_container": "merge_containers",
     "promote_boundary": "demote_boundary",
     "promote_item": "demote_item",
     "promote_relation": "demote_relation",
@@ -134,6 +135,8 @@ def _default_operation_costs() -> dict[str, Decimal]:
     result = {kind: Decimal(1) for kind in sorted(PRIMITIVE_KINDS)}
     result["move_item"] = Decimal(2)
     result["swap_items"] = Decimal(2)
+    result["split_container"] = Decimal(3)
+    result["merge_containers"] = Decimal(3)
     return result
 
 
@@ -1160,10 +1163,12 @@ def _atom_multiset_lower_bound(
     The projection retains complete declaration and item payloads, relation
     payloads without endpoints, boundary values without addresses, facts
     without subjects, and layer, seal, and other carrier-value atoms. It omits
-    item order, relation incidence, and fact attachment. Every primitive changes
-    at most one retained atom. Small unmatched sets use the minimum of direct
-    one-atom transitions and delete-then-insert paths. Large sets use their
-    unavoidable atom count at the least declared transition cost.
+    item order, relation incidence, and fact attachment. Primitives other than
+    container regrouping change at most one retained atom. Small unmatched sets
+    use the minimum of direct one-atom transitions and delete-then-insert paths.
+    Large sets use their unavoidable atom count at the least declared transition
+    cost. A final regroup-cost cap accounts for one split or merge changing
+    several retained atoms at once.
     """
     if PRIMITIVE_KINDS - costs.operations.keys():
         # A partial table can price a realized script without defining every
@@ -1173,7 +1178,7 @@ def _atom_multiset_lower_bound(
     left = _graph_atoms(source, view)
     right = _graph_atoms(target, view)
     kinds = {atom.kind for atom in left} | {atom.kind for atom in right}
-    return sum(
+    bound = sum(
         (
             _atom_kind_distance(
                 *_uncancelled_atoms(left, right, kind),
@@ -1182,6 +1187,14 @@ def _atom_multiset_lower_bound(
             for kind in kinds
         ),
         start=Decimal(0),
+    )
+    # Regrouping can insert or retire a container, its membership, and any
+    # explicitly routed payload in one operation. The additive atom relaxation
+    # therefore cannot claim more than the cheapest such atomic shortcut.
+    return min(
+        bound,
+        costs.minimum_operation("split_container"),
+        costs.minimum_operation("merge_containers"),
     )
 
 

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added exact replay-checked tgdb patches, patch application and version diffs,
   explicit snapshot fallback, retained-version reverts, and additive publish undo.
+- Added exact split and merge operations for nested ordered-containment
+  containers, including document-order-preserving semantic inverses and
+  operation-specific split and clock policy validation.
 - Added tgdb graph versions with canonical document storage, functional and
   identified fingerprints, optimistic publication, unchanged no-ops, history,
   and verified lazy loading.
@@ -180,6 +183,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `GrammarChartProfile` now exposes its graph and root directly.
+- Capped the general atom-multiset distance lower bound at the cheapest
+  container regrouping operation because one split or merge can change several
+  retained atoms.
 - Reduced span-matching work for large bounded repeats. Budgeted span matching
   may return a longer `cut-at-budget` prefix, while the public pattern automaton
   and lattice matching behavior remain unchanged.

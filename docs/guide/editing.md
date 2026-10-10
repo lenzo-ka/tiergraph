@@ -209,6 +209,74 @@ costs sum to more than the swap cost. `diff()` recognizes a single retained-ID
 containment shift, including explicit cross-parent and boundary-policy forms,
 and emits the shift operation.
 
+## Splitting and merging nested containers
+
+`split_container()` and `merge_containers()` change one named ordered
+containment while leaving the child tier and every other tier in place. The
+module functions return an `EditResult`; the matching `Graph` methods return a
+graph, and graph, journal, and clock editors expose the same operations.
+
+A split accepts only an interior child boundary. With `side="after"`, the
+original container keeps the prefix and the new sister receives the suffix;
+`side="before"` gives the prefix to the new sister. The new sister is inserted
+beside the original in every shared ordered-containment parent. Declared order
+is content and is never sorted. Functional correspondence maps the original
+container to both results. Identified correspondence maps it only to the half
+that retains its durable identity.
+
+```text
+split = utterance.split_container(
+    ItemRef(phrase_tier, 0),
+    2,
+    phrase_words,
+    Item("new-phrase"),
+)
+```
+
+A merge requires adjacent same-tier sisters whose child sequences meet at one
+contiguous seam. Both must have the same ordered-containment parents in the
+same left-to-right order, or both must be roots. Either sister may survive;
+child content is always `left.children + right.children`. The survivor keeps
+its durable identity and membership identity. The other membership is retired.
+
+Every dependency must follow the single-valued functional correspondence, be
+named with `ReplacementAction.DROP`, or make the operation refuse.
+`RegroupPolicies` provides per-relation, per-layer, and per-attribute actions,
+plus `container_values`, `seam_content`, and `clock`. Only `FOLLOW` and `DROP`
+are admitted. Disjoint removed-container attributes are carried to the
+survivor; equal values coalesce; unequal values require an exact drop action.
+Independent content or links on the retired seam require `seam_content=DROP`
+or a declaration-specific drop action. The detachment report lists every
+withdrawn item, relation, fact, and boundary value.
+
+Dependency and content actions apply only to merge. Split refuses those fields
+when they are nondefault; its only applicable regroup policy is `clock`.
+
+Journaled regrouping records one semantic operation and its semantic inverse.
+`RegroupRestoration` is the validated, change-sized inverse payload for a
+merge. It retains the removed membership position and payload, routed link and
+layer state, seam content, original relation counts, and removed relation
+positions. The original survivor item restores its pre-merge attributes.
+Patches therefore replay split and merge with no residual document delta,
+including when membership instances are interleaved in document order.
+`check_links=True` also audits child endpoints that cross from
+one membership instance to another during a split or whose membership is
+retired during a merge.
+
+Timing changes occur only in a clock-aware editor under the operation-specific
+policy. Split requires `keep-earlier`, binds the new container seam to the
+selected child seam, and reports the insertion as `container split`. Merge
+requires `drop-to-provisional`, withdraws only the internal seam binding, and
+reports `container merge`. A missing child time, a common-clock disagreement,
+clock-tier regrouping, or an invalid final clock profile refuses the edit.
+
+The default cost table prices split and merge at 3. A partial cost table may
+price a realized patch without naming both operations, but the general atom
+lower bound is then zero because the omitted operation could undercut an atom
+transition. Machine format version 2 is unchanged. A version 2 reader that
+does not know these opcode names refuses them rather than interpreting them as
+another operation; there is no compatibility alias.
+
 ## References, displacement, and local refusal
 
 An `ItemRef` or `BoundaryRef` is a structural coordinate. Its index can change.
@@ -819,7 +887,10 @@ primitive edits and generated graph cases exercise the resulting lower bound,
 which is deliberately weak for rewiring and reordering:
 `set_endpoints`, moves, and swaps can project to zero. A partial cost table also
 uses zero for the general lower bound rather than requiring costs unrelated to
-the realized upper-bound script.
+the realized upper-bound script. Because one container split or merge can
+change several retained atoms, a complete table caps the general atom bound at
+the cheaper regroup operation. This global cap is conservative even for graph
+pairs not produced directly by regrouping.
 An opaque `value_substitution` callback does not expose the global triangle
 information needed for this comparison, so general-graph value substitutions
 relax to zero when a custom callback is active. Exact ordered-tier distance

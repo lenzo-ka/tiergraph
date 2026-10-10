@@ -251,6 +251,12 @@ if TYPE_CHECKING:
         Unambiguous,
         match_lattice,
     )
+from tiergraph.container_edit import (
+    RegroupPolicies,
+    RegroupRestoration,
+    merge_containers,
+    split_container,
+)
 from tiergraph.profile import (
     PROFILES,
     GraphProfile,
@@ -572,6 +578,8 @@ __all__ = [
     "Realization",
     "Refusal",
     "RefusalStage",
+    "RegroupPolicies",
+    "RegroupRestoration",
     "Relate",
     "RelationDeclarationRef",
     "RelationEndpointKind",
@@ -672,6 +680,7 @@ __all__ = [
     "loads",
     "lower_grammar",
     "match_lattice",
+    "merge_containers",
     "open_bundle",
     "ordered_tree_distance",
     "patch_dumps",
@@ -686,6 +695,7 @@ __all__ = [
     "retime",
     "selection_loads",
     "span_view",
+    "split_container",
     "steps",
     "swap_subtrees",
     "target_lattice",
