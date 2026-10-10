@@ -2606,6 +2606,169 @@ def test_checked_clock_replacement_reports_donor_crossing(
     assert report.donor_facts == ((layer, donor_fact),)
 
 
+def _clock_crossing_replacement() -> tuple[
+    ClockProfile,
+    QualifiedName,
+    Subtree,
+    ReplacementPolicies,
+    RelationInstance,
+    LayerName,
+    LayerFact,
+]:
+    """Build one timed replacement with a source-side crossing relation."""
+    graph = test_clock.fixture()
+    namespace = test_clock.SEGMENT.namespace
+    containment = QualifiedName(namespace, "clock-crossing-contains")
+    link = QualifiedName(namespace, "clock-crossing-link")
+    note = QualifiedName(namespace, "clock-crossing-note")
+    layer = LayerName(namespace, "clock-crossing-source")
+    crossing = RelationInstance(
+        link,
+        ItemRef(test_clock.SEGMENT, 0),
+        ItemRef(test_clock.SEGMENT, 1),
+        "clock-crossing-link",
+    )
+    fact = LayerFact(
+        DurableRelationRef("clock-crossing-link"),
+        AttributeValue(note, XsdType.STRING, "source offset 8"),
+    )
+    graph = replace(
+        graph,
+        relation_declarations=(
+            *graph.relation_declarations,
+            BipartiteRelationDeclaration(
+                containment,
+                test_clock.SEGMENT_TYPE,
+                test_clock.SEGMENT_TYPE,
+                single_parent=True,
+                acyclic=True,
+            ),
+            BipartiteRelationDeclaration(
+                link, test_clock.SEGMENT_TYPE, test_clock.SEGMENT_TYPE
+            ),
+        ),
+        relations=(
+            *graph.relations,
+            RelationInstance(
+                containment,
+                ItemRef(test_clock.SEGMENT, 0),
+                ItemRef(test_clock.SEGMENT, 1),
+            ),
+            crossing,
+        ),
+        attribute_declarations=(
+            *graph.attribute_declarations,
+            AttributeDeclaration(
+                note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        layers=(Layer(layer, (fact,)),),
+    )
+    donor = replace(
+        graph,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(Item("replacement-root"), Item()),
+            )
+            if tier.declaration.name == test_clock.SEGMENT
+            else tier
+            for tier in graph.tiers
+        ),
+        relations=(
+            RelationInstance(
+                containment,
+                ItemRef(test_clock.SEGMENT, 0),
+                ItemRef(test_clock.SEGMENT, 1),
+            ),
+        ),
+        layers=(),
+    )
+    correspondence = SubtreeCorrespondence(
+        {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
+        {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
+    )
+    return (
+        ClockProfile(
+            graph,
+            test_clock.CLOCK,
+            test_clock.BINDING,
+            test_clock.RATE,
+            test_clock.UNIT,
+        ),
+        containment,
+        Subtree(donor, ItemRef(test_clock.SEGMENT, 0)),
+        ReplacementPolicies(correspondence=correspondence),
+        crossing,
+        layer,
+        fact,
+    )
+
+
+@pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+def test_checked_clock_replacement_carries_a_crossing(
+    journaled: bool,
+) -> None:
+    """Checked clock replacement carries a corresponding link and its fact."""
+    profile, containment, subtree, policies, crossing, layer, fact = (
+        _clock_crossing_replacement()
+    )
+    journal = Journal()
+    if journaled:
+        journaled_editor = profile.edit(
+            "keep-earlier", journal=journal, check_links=True
+        )
+        journaled_editor.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        result = journaled_editor.freeze()
+        report = journal.records[0].report.detached_content
+    else:
+        plain_editor = profile.edit("keep-earlier", check_links=True)
+        plain_editor.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        result = plain_editor.freeze()
+        report = plain_editor.last_detachment
+    assert crossing in result.relations
+    assert Layer(layer, (fact,)) in result.layers
+    assert report is not None
+    assert all(relation != crossing for _, relation in report.relations)
+
+
+@pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+def test_checked_clock_replacement_refuses_an_unmatched_crossing(
+    journaled: bool,
+) -> None:
+    """Checked clock replacement refuses a crossing without correspondence."""
+    profile, containment, subtree, _, _, _, _ = _clock_crossing_replacement()
+    journal = Journal()
+    if journaled:
+        journaled_editor = profile.edit(
+            "keep-earlier", journal=journal, check_links=True
+        )
+        with pytest.raises(GraphValidationError, match="has no correspondence"):
+            journaled_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0),
+                containment,
+                subtree,
+                ReplacementPolicies(),
+            )
+        assert journaled_editor.freeze() == profile.graph
+        assert not journal.records
+    else:
+        plain_editor = profile.edit("keep-earlier", check_links=True)
+        with pytest.raises(GraphValidationError, match="has no correspondence"):
+            plain_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0),
+                containment,
+                subtree,
+                ReplacementPolicies(),
+            )
+        assert plain_editor.freeze() == profile.graph
+        assert plain_editor.last_detachment is None
+
+
 def test_clock_correspondence_retains_matching_internal_timing() -> None:
     """A named keep policy carries the timing of a matched internal boundary."""
     contains = QualifiedName(test_clock.SEGMENT.namespace, "timed-contains")
@@ -2882,8 +3045,11 @@ def test_clock_replacement_refuses_clock_spine_descendants() -> None:
         )
 
 
-def test_clock_replacement_reports_a_fact_on_a_withdrawn_binding() -> None:
-    """A binding fact is detached when its old interior boundary disappears."""
+@pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+def test_clock_replacement_reports_facts_in_source_coordinates(
+    journaled: bool,
+) -> None:
+    """Clock replacement reports binding and subtree facts at source sites."""
     base_profile = ClockProfile(
         test_clock.fixture(),
         test_clock.CLOCK,
@@ -2905,6 +3071,15 @@ def test_clock_replacement_reports_a_fact_on_a_withdrawn_binding() -> None:
         if relation.declaration == test_clock.BINDING
         and isinstance(relation.left, DurableBoundaryRef)
         and base.resolve_boundary(relation.left) == BoundaryRef(test_clock.SEGMENT, 2)
+    )
+    binding_fact = LayerFact(
+        RelationInstanceRef(binding_index),
+        AttributeValue(note, XsdType.STRING, "keep with binding"),
+    )
+    containment_index = len(base.relations)
+    containment_fact = LayerFact(
+        RelationInstanceRef(containment_index),
+        AttributeValue(note, XsdType.STRING, "keep with containment"),
     )
     graph = replace(
         base,
@@ -2940,12 +3115,7 @@ def test_clock_replacement_reports_a_fact_on_a_withdrawn_binding() -> None:
         layers=(
             Layer(
                 layer,
-                (
-                    LayerFact(
-                        RelationInstanceRef(binding_index),
-                        AttributeValue(note, XsdType.STRING, "keep with binding"),
-                    ),
-                ),
+                (binding_fact, containment_fact),
             ),
         ),
     )
@@ -2976,18 +3146,41 @@ def test_clock_replacement_reports_a_fact_on_a_withdrawn_binding() -> None:
         test_clock.UNIT,
     )
     journal = Journal()
-    editor = profile.edit("keep-earlier", journal=journal)
-    editor.replace_subtree(
-        ItemRef(test_clock.SEGMENT, 0),
-        contains,
-        Subtree(source, ItemRef(test_clock.SEGMENT, 0)),
+    if journaled:
+        journaled_editor = profile.edit("keep-earlier", journal=journal)
+        journaled_editor.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0),
+            contains,
+            Subtree(source, ItemRef(test_clock.SEGMENT, 0)),
+        )
+        report = journal.records[0].report.detached_content
+    else:
+        plain_editor = profile.edit("keep-earlier")
+        plain_editor.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0),
+            contains,
+            Subtree(source, ItemRef(test_clock.SEGMENT, 0)),
+        )
+        report = plain_editor.last_detachment
+    assert report is not None
+    assert tuple(reference for reference, _ in report.relations) == (
+        RelationInstanceRef(containment_index),
+        RelationInstanceRef(containment_index + 1),
     )
-    dependency = next(
-        dependency
-        for dependency in journal.records[0].report.detached_dependencies
+    assert tuple(
+        (dependency.index, dependency.subject)
+        for dependency in report.dependencies
         if dependency.layer == layer
+    ) == (
+        (0, binding_fact.subject),
+        (1, containment_fact.subject),
     )
-    assert dependency.index == 0
+    assert report.facts == (
+        (layer, binding_fact),
+        (layer, containment_fact),
+    )
+    if journaled:
+        assert journal.records[0].report.detached_dependencies == report.dependencies
 
 
 def test_corresponding_boundary_origins_join_adjacent_matches() -> None:
