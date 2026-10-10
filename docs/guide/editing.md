@@ -150,18 +150,21 @@ shifted = utterance.shift(
 The result is `P0[w0 w1] P1[w2 w3 w4]`. A left shift takes the first children
 of the right container and appends them to the left container. The containers
 must be adjacent items on one tier and meet at one contiguous child-tier seam.
-They must either share a parent under ordered containment or both be root
-containers. The named ordered polyadic containment must give both containers
-their child sequences. A shift accepts only a nonempty edge run smaller than
-the source membership. It never wraps at a tier seam.
+They must have the same parent in every ordered-containment relation that
+contains either container, or both be root containers. The named ordered
+polyadic containment must give both containers their child sequences. A shift
+accepts only a nonempty edge run smaller than the source membership. It never
+wraps at a tier seam.
 
 Cross-parent resyllabification is explicit:
 `utterance.shift(ItemRef(syllable_tier, 0), 1, "right",
 syllable_segments, across_parent=True)`.
 
-This form requires each container to have exactly one parent and those parents
-to be adjacent in the shift direction. The same requirement continues up the
-ancestor chain until the two sides share a parent or both reach roots.
+This form requires exactly one differing parent for each container and those
+parents must belong to the same ordered-containment relation and be adjacent in
+the shift direction. Parent assignments that already agree do not make the
+path ambiguous. The same requirement continues up the ancestor chain until all
+parent assignments agree or both sides reach roots.
 `GraphEditor.last_yield_changes` and the journal report name every ancestor-tier
 boundary whose descendant yield changed, with its previous and new child seam.
 The default form refuses the same edit and names each container's parent.
@@ -176,20 +179,23 @@ functional correspondence. The two views produce the same graph and do not
 invoke the grammar engine.
 
 Shift does not reorder or retime the child tier, or any aligned tier. It changes
-only the two containment instances. A clock-bound container boundary therefore
-needs no rebinding policy when it stores no independent boundary value. A
-stored container-boundary value, or a durable boundary shared with another
-tier, requires `keep-earlier` or `drop-to-provisional` on the plain editor; the
-other tier is never dragged. A clock-aware editor verifies that every affected
-container or ancestor boundary meets the old child seam on the common clock,
-then places those boundaries on the new seam's existing child time and
-revalidates the complete profile. It creates no new clock times. If any
-affected container or ancestor tier is timed but the child tier is untimed, the
-clock-aware editor refuses because the new child seam has no clock position.
-`drop-to-provisional` removes the independently stored boundary value, reports
-the removed value in the detachment report, and leaves it for later
-realignment. Container-emptying merge is intentionally not part of this
-operation because it needs a separate merge policy and inverse.
+only the two containment instances. A clock-bound moved boundary therefore
+needs no rebinding policy when it stores no independent boundary content. A
+stored value, layer fact, or durable boundary shared with another tier at any
+moved container or ancestor boundary requires `keep-earlier` or
+`drop-to-provisional` on the plain editor; the other tier is never dragged. A
+clock-aware editor verifies that every affected container or ancestor boundary
+meets the old child seam on the common clock, then places those boundaries on
+the new seam's existing child time and revalidates the complete profile. It
+creates no new clock times. If any affected container or ancestor tier is timed
+but the child tier is untimed, the clock-aware editor refuses because the new
+child seam has no clock position. `drop-to-provisional` removes independently
+stored boundary values and layer facts, reports them in the detachment report,
+and leaves them for later realignment. Durable relations remain attached to the
+moved boundary under either named policy; the policy acknowledges the endpoint's
+new interpretation and never drags the other tier. Container-emptying merge is
+intentionally not part of this operation because it needs a separate merge
+policy and inverse.
 
 Deleting two containers and inserting new containers with the shifted
 memberships is the alternative construction. It is functionally equal to the

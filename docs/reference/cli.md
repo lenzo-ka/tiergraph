@@ -1972,8 +1972,8 @@ options:
                         ordered containment relation
   --policy {keep-earlier,drop-to-provisional}
                         stored or shared boundary policy
-  --across-parent       require different adjacent parents and report changed
-                        ancestor yields
+  --across-parent       require an adjacent differing parent pair and report
+                        changed ancestor yields
 
 Examples:
   $ tiergraph edit shift-graph.json shift /items/durable/alpha --count 1 --direction right --containment urn:path shift-contains -o out.json

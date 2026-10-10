@@ -2511,9 +2511,9 @@ class Graph:
     ) -> Graph:
         """Move edge children to an adjacent sister while retaining identity.
 
-        Set ``across_parent`` only when the adjacent containers have different,
-        adjacent containment parents and that parent-yield change is intended.
-        Use :meth:`Graph.edit` and inspect
+        Set ``across_parent`` only when the adjacent containers have an
+        adjacent pair of differing containment parents and that parent-yield
+        change is intended. Use :meth:`Graph.edit` and inspect
         :attr:`GraphEditor.last_yield_changes` or
         :attr:`GraphEditor.last_detachment` when the corresponding report is
         needed.
@@ -3781,7 +3781,12 @@ class GraphEditor:
     @staticmethod
     def _parent_list(parents: tuple[tuple[QualifiedName, ItemRef], ...]) -> str:
         """Format direct parents for a stable default-shift refusal."""
-        return ", ".join(str(parent) for _, parent in parents) or "none"
+        return (
+            ", ".join(
+                f"{str(declaration)}: {str(parent)}" for declaration, parent in parents
+            )
+            or "none"
+        )
 
     def _resolved_containment_targets(self, index: int) -> tuple[ItemRef, ...]:
         """Resolve one containment instance's ordered child sequence."""
@@ -3804,25 +3809,26 @@ class GraphEditor:
         sister_parents = self._containment_parents(sister)
         common = set(container_parents).intersection(sister_parents)
         if not across_parent:
-            if common or (not container_parents and not sister_parents):
+            if set(container_parents) == set(sister_parents):
                 return ()
             raise GraphValidationError(
                 f"containers {str(coordinate)!r} and {str(sister)!r} do not share "
-                f"a containment parent; {str(coordinate)!r} parents: "
+                f"every containment parent; {str(coordinate)!r} parents: "
                 f"{self._parent_list(container_parents)}; {str(sister)!r} parents: "
                 f"{self._parent_list(sister_parents)}; use across_parent=True for "
                 "an explicit cross-parent shift"
             )
-        if common:
-            parent = min(common, key=lambda value: (str(value[0]), str(value[1])))[1]
+        if set(container_parents) == set(sister_parents):
+            if not container_parents:
+                raise GraphValidationError(
+                    f"containers {str(coordinate)!r} and {str(sister)!r} are both "
+                    "root containers; use the default shift"
+                )
+            parent = container_parents[0][1]
             raise GraphValidationError(
                 f"containers {str(coordinate)!r} and {str(sister)!r} already "
-                f"share parent {str(parent)!r}; use the default shift"
-            )
-        if not container_parents and not sister_parents:
-            raise GraphValidationError(
-                f"containers {str(coordinate)!r} and {str(sister)!r} are both "
-                "root containers; use the default shift"
+                f"share parent {str(parent)!r} in every containment relation; "
+                "use the default shift"
             )
         parent_step = 1 if selected is ShiftDirection.RIGHT else -1
         source_child = coordinate
@@ -3836,17 +3842,30 @@ class GraphEditor:
                     "cross-parent shift found a cycle in the containment ancestry"
                 )
             visited.add(pair)
-            if len(container_parents) != 1 or len(sister_parents) != 1:
+            source_steps = tuple(
+                parent for parent in container_parents if parent not in common
+            )
+            sister_steps = tuple(
+                parent for parent in sister_parents if parent not in common
+            )
+            if len(source_steps) != 1 or len(sister_steps) != 1:
                 raise GraphValidationError(
-                    "cross-parent shift requires one unambiguous parent for each "
-                    f"container in the changed ancestor chain; "
+                    "cross-parent shift requires one unambiguous differing parent "
+                    f"for each container in the changed ancestor chain; "
                     f"{str(source_child)!r} parents: "
                     f"{self._parent_list(container_parents)}; "
                     f"{str(sister_child)!r} parents: "
                     f"{self._parent_list(sister_parents)}"
                 )
-            source_parent = container_parents[0][1]
-            sister_parent = sister_parents[0][1]
+            source_relation, source_parent = source_steps[0]
+            sister_relation, sister_parent = sister_steps[0]
+            if source_relation != sister_relation:
+                raise GraphValidationError(
+                    "cross-parent shift requires the differing parents to belong "
+                    "to the same ordered-containment relation; parents are "
+                    f"{self._parent_list(source_steps)} and "
+                    f"{self._parent_list(sister_steps)}"
+                )
             if (
                 source_parent.tier != sister_parent.tier
                 or sister_parent.index != source_parent.index + parent_step
@@ -3871,7 +3890,7 @@ class GraphEditor:
             container_parents = self._containment_parents(source_child)
             sister_parents = self._containment_parents(sister_child)
             common = set(container_parents).intersection(sister_parents)
-            if common or (not container_parents and not sister_parents):
+            if set(container_parents) == set(sister_parents):
                 return tuple(changes)
 
     def _shift_plan(
@@ -3972,11 +3991,33 @@ class GraphEditor:
             yield_changes,
         )
 
-    def _shared_boundary_is_bound(self, boundary: BoundaryRef) -> bool:
-        """Report whether another relation durably names this tier boundary."""
+    def _shift_boundary_content(
+        self,
+        boundaries: tuple[BoundaryRef, ...],
+        ignored_relation: QualifiedName | None = None,
+    ) -> tuple[
+        tuple[tuple[int, Boundary], ...],
+        tuple[tuple[LayerName, LayerFact], ...],
+        tuple[BoundaryRef, ...],
+    ]:
+        """Find stored content and durable links at moved shift boundaries."""
+        affected = frozenset(boundaries)
+        stored = tuple(
+            (index, boundary)
+            for index, boundary in enumerate(self._boundary_values)
+            if self._resolve_boundary(boundary.reference) in affected
+        )
+        facts = tuple(
+            (layer.name, fact)
+            for layer in self._layers
+            for fact in layer.facts
+            if isinstance(fact.subject, BoundaryRef | DurableBoundaryRef)
+            and self._resolve_boundary(fact.subject) in affected
+        )
         endpoints: Iterable[RelationEndpointRef] = (
             endpoint
             for relation in self._relations
+            if relation.declaration != ignored_relation
             for endpoint in (relation.left, relation.right)
         )
         polyadic_endpoints = (
@@ -3984,13 +4025,49 @@ class GraphEditor:
             for relation in self._polyadic_relations
             for endpoint in (*relation.sources, *relation.targets)
         )
+        referenced: set[BoundaryRef] = set()
         for endpoint in (*endpoints, *polyadic_endpoints):
-            if (
-                isinstance(endpoint, DurableBoundaryRef)
-                and self._resolve_boundary(endpoint) == boundary
-            ):
-                return True
-        return False
+            if isinstance(endpoint, DurableBoundaryRef):
+                resolved = self._resolve_boundary(endpoint)
+                if resolved in affected:
+                    referenced.add(resolved)
+        return (
+            stored,
+            facts,
+            tuple(boundary for boundary in boundaries if boundary in referenced),
+        )
+
+    def _require_shift_boundary_policy(
+        self,
+        shared: BoundaryRef,
+        stored: tuple[tuple[int, Boundary], ...],
+        facts: tuple[tuple[LayerName, LayerFact], ...],
+        referenced: tuple[BoundaryRef, ...] = (),
+    ) -> None:
+        """Refuse unnamed reinterpretation of content at a moved boundary."""
+        stored_boundaries = {
+            self._resolve_boundary(boundary.reference) for _, boundary in stored
+        }
+        if stored:
+            kind = "container" if shared in stored_boundaries else "ancestor"
+            raise GraphValidationError(
+                f"shift relocates a stored {kind} boundary; name a clock policy"
+            )
+        if referenced:
+            raise GraphValidationError(
+                "shift relocates a durable moved boundary shared with another tier; "
+                "name a clock policy"
+            )
+        if facts:
+            fact_boundaries = {
+                self._resolve_boundary(fact.subject)
+                for _, fact in facts
+                if isinstance(fact.subject, BoundaryRef | DurableBoundaryRef)
+            }
+            kind = "container" if shared in fact_boundaries else "ancestor"
+            raise GraphValidationError(
+                f"shift relocates a {kind} boundary fact; name a clock policy"
+            )
 
     def _swap_containment_boundary(
         self,
@@ -4030,12 +4107,18 @@ class GraphEditor:
 
         Right moves the last ``k`` children to the beginning of the right
         sister. Left moves the first ``k`` children to the end of the left
-        sister. By default the containers must have a common containment
-        parent, or both must be root containers. Set ``across_parent`` to
-        require different adjacent parents; :attr:`last_yield_changes` then
-        reports every ancestor boundary whose descendant yield moved. The
-        operation changes containment incidence only; child tiers and all
-        their timing remain untouched.
+        sister. By default the containers must have the same parent in every
+        ordered-containment relation that contains either one, or both must be
+        root containers. Set ``across_parent`` to require one pair of different
+        adjacent parents at each changed ancestor level;
+        :attr:`last_yield_changes` then reports every ancestor boundary whose
+        descendant yield moved. The operation changes containment incidence
+        only; child tiers and all their timing remain untouched. Every stored
+        value, layer fact, or durable relation at a moved container or ancestor
+        boundary requires a named policy. The dropping policy withdraws stored
+        values and facts at all such boundaries and reports them through
+        :attr:`last_detachment`. Durable relations remain attached to their
+        moved boundaries under either named policy.
         """
         if policy not in {None, "keep-earlier", "drop-to-provisional"}:
             raise GraphValidationError(
@@ -4046,32 +4129,51 @@ class GraphEditor:
         shared = BoundaryRef(
             plan.container.tier, max(plan.container.index, plan.sister.index)
         )
-        stored_index = self._boundary_index(shared)
-        bound = self._shared_boundary_is_bound(shared)
-        if policy is None and stored_index is not None:
-            raise GraphValidationError(
-                "shift relocates a stored container boundary; name a clock policy"
-            )
-        if policy is None and bound:
-            raise GraphValidationError(
-                "shift relocates a durable boundary shared with another tier; "
-                "name a clock policy"
-            )
+        affected = (shared, *(change.boundary for change in plan.yield_changes))
+        stored, facts, referenced = self._shift_boundary_content(affected)
+        if policy is None:
+            self._require_shift_boundary_policy(shared, stored, facts, referenced)
         detached = None
-        if policy == "drop-to-provisional" and stored_index is not None:
+        if policy == "drop-to-provisional" and (stored or facts):
             from tiergraph.replacement import DetachmentReport  # noqa: PLC0415
 
-            boundary = self._boundary_values[stored_index]
             detached = DetachmentReport(
+                facts=facts,
                 boundary_values=tuple(
-                    (boundary.reference, value) for value in boundary.attributes
-                )
+                    (boundary.reference, value)
+                    for _, boundary in stored
+                    for value in boundary.attributes
+                ),
             )
         self._swap_containment_boundary(
             plan.source_index, plan.sister_index, k, selected
         )
-        if policy == "drop-to-provisional" and stored_index is not None:
-            del self._boundary_values[stored_index]
+        if policy == "drop-to-provisional":
+            stored_indexes = {index for index, _ in stored}
+            if stored_indexes:
+                self._boundary_values = [
+                    boundary
+                    for index, boundary in enumerate(self._boundary_values)
+                    if index not in stored_indexes
+                ]
+            if facts:
+                affected_set = frozenset(affected)
+                self._layers = [
+                    Layer(
+                        layer.name,
+                        tuple(
+                            fact
+                            for fact in layer.facts
+                            if not (
+                                isinstance(
+                                    fact.subject, BoundaryRef | DurableBoundaryRef
+                                )
+                                and self._resolve_boundary(fact.subject) in affected_set
+                            )
+                        ),
+                    )
+                    for layer in self._layers
+                ]
         self._last_detachment = detached
         self._last_yield_changes = plan.yield_changes
         return self

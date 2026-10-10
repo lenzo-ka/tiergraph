@@ -1299,16 +1299,12 @@ class ClockEditor:
         probe = self._graph.edit()
         plan = probe._shift_plan(container, k, selected, containment, across_parent)
         shared = BoundaryRef(coordinate.tier, max(coordinate.index, plan.sister.index))
-        if shared in self._graph._boundaries_by_ref and named is None:
-            self._graph.edit().shift(
-                container,
-                k,
-                selected,
-                containment,
-                None,
-                across_parent,
-            )
         affected = (shared, *(change.boundary for change in plan.yield_changes))
+        stored, facts, referenced = probe._shift_boundary_content(
+            affected, self._profile.binding_relation
+        )
+        if named is None:
+            probe._require_shift_boundary_policy(shared, stored, facts, referenced)
         timed = tuple(
             boundary for boundary in affected if self._profile.is_timed(boundary.tier)
         )

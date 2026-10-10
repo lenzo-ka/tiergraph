@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import heapq
 import json
 from collections import deque
@@ -573,18 +572,26 @@ def test_generated_graphs_exercise_primitive_and_path_atom_bounds(
             min_size=3,
             max_size=len(operations),
             unique=True,
-        ),
+        ).filter(lambda path: 1 in path),
         label="path",
     )
     journal = Journal()
     editor = case.graph.edit(journal=journal)
+    applied_shift = False
+    lost_shift_seam = False
     for index in selected:
         if index == 1:
-            # Earlier edits can remove a later shift's required child seam.
-            with contextlib.suppress(GraphValidationError):
+            try:
                 operations[index](editor)
+            except GraphValidationError as error:
+                if "do not meet at a contiguous child-tier seam" not in str(error):
+                    raise
+                lost_shift_seam = True
+            else:
+                applied_shift = True
         else:
             operations[index](editor)
+    assert applied_shift or lost_shift_seam
     target = editor.freeze()
     patch = journal.to_patch()
     assert len(patch.operations) >= 2

@@ -2095,12 +2095,18 @@ Move edge children across the shared boundary of adjacent sisters.
 
 Right moves the last ``k`` children to the beginning of the right
 sister. Left moves the first ``k`` children to the end of the left
-sister. By default the containers must have a common containment
-parent, or both must be root containers. Set ``across_parent`` to
-require different adjacent parents; :attr:`last_yield_changes` then
-reports every ancestor boundary whose descendant yield moved. The
-operation changes containment incidence only; child tiers and all
-their timing remain untouched.
+sister. By default the containers must have the same parent in every
+ordered-containment relation that contains either one, or both must be
+root containers. Set ``across_parent`` to require one pair of different
+adjacent parents at each changed ancestor level;
+:attr:`last_yield_changes` then reports every ancestor boundary whose
+descendant yield moved. The operation changes containment incidence
+only; child tiers and all their timing remain untouched. Every stored
+value, layer fact, or durable relation at a moved container or ancestor
+boundary requires a named policy. The dropping policy withdraws stored
+values and facts at all such boundaries and reports them through
+:attr:`last_detachment`. Durable relations remain attached to their
+moved boundaries under either named policy.
 
 #### `GraphEditor.add_relation`
 
@@ -5879,9 +5885,9 @@ Graph.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'S
 
 Move edge children to an adjacent sister while retaining identity.
 
-Set ``across_parent`` only when the adjacent containers have different,
-adjacent containment parents and that parent-yield change is intended.
-Use :meth:`Graph.edit` and inspect
+Set ``across_parent`` only when the adjacent containers have an
+adjacent pair of differing containment parents and that parent-yield
+change is intended. Use :meth:`Graph.edit` and inspect
 :attr:`GraphEditor.last_yield_changes` or
 :attr:`GraphEditor.last_detachment` when the corresponding report is
 needed.
