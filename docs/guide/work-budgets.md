@@ -102,13 +102,16 @@ Steps count logical work, not time.
 | `recognize`, `count`, `best`, `generate`, and the `ParseForest` and `TargetLattice` methods | each chart key, rule probe, and candidate state, then the folds and target materialization over the forest |
 
 Some details follow from the table. A pattern alternation large enough to use
-bounded lookahead charges one step per successor it looks up, so pruning never
-charges more than the full automaton would. Budgeted lattice calls and budgeted
-`OutputPlan.conditioned` bypass their caches, so the steps a call spends do not
-depend on what ran before it. A carrier operation is indivisible: a budget
-cannot interrupt arbitrary code in a user-supplied semiring, and the charge
-lands at the surrounding checkpoint. Passing one `WorkMeter` to several entry
-points records their combined work.
+bounded lookahead indexes sparse exact-equality splits and charges one step per
+distinct successor candidate it touches or emits. Unsupported and dense splits
+retain the successor scan. Either route charges no more than the full automaton
+would, so indexed lookup can lower `spent` and let a `cut-at-budget` span prefix
+extend farther. Budgeted lattice calls and budgeted `OutputPlan.conditioned`
+bypass their caches, so the steps a call spends do not depend on what ran before
+it. A carrier operation is indivisible: a budget cannot interrupt arbitrary
+code in a user-supplied semiring, and the charge lands at the surrounding
+checkpoint. Passing one `WorkMeter` to several entry points records their
+combined work.
 
 ## What is bounded without a budget
 

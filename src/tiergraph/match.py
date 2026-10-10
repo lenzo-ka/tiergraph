@@ -33,6 +33,8 @@ from tiergraph.core import (
 from tiergraph.machine import MAX_REPEAT_COUNT, _decode_item_ref, _decode_qname
 from tiergraph.predicate import (
     BoundPredicate,
+    Cell,
+    Equals,
     IntervalRelation,
     OffsetProfile,
     Predicate,
@@ -246,7 +248,21 @@ class DeclaredOrder:
 
 
 type Ordering = TierOrder | ContainerOrder | AdjacentRuns | DeclaredOrder
-type _TruthTable = tuple[Mapping[Node, bool], ...]
+type _TruthRows = tuple[Mapping[Node, bool], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _IndexedTruth:
+    """Carry ordinary atom truth plus true indexed atoms by node."""
+
+    rows: _TruthRows
+    true_atoms: Mapping[Node, tuple[int, ...]]
+
+    def __getitem__(self, atom: int) -> Mapping[Node, bool]:
+        return self.rows[atom]
+
+
+type _TruthTable = _TruthRows | _IndexedTruth
 
 
 class _PatternOperation(StrEnum):
@@ -423,6 +439,17 @@ class _AtomEdge:
 
 type _GateAtoms = int | tuple[int, ...] | None
 type _GateLookahead = tuple[_GateAtoms, ...]
+_GATE_PROBE_ATOMS = 0
+_GATE_PROBE_EXIT = 1
+_GATE_PROBE_UNKNOWN = 2
+
+
+@dataclass(frozen=True, slots=True)
+class _GateProbe:
+    """Describe one analyzed successor at one lookahead depth."""
+
+    atoms: _GateAtoms
+    terminal: int = _GATE_PROBE_ATOMS
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,13 +460,37 @@ class _Gate:
     first: tuple[_GateLookahead, ...]
 
 
+type _GatePosting = int | tuple[int, ...] | None
+
+
 @dataclass(frozen=True, slots=True)
-class _Gates(Mapping[int, _Gate]):
+class _GateDepth:
+    """Index successor ordinals by atom, with conservative terminals."""
+
+    exits: int
+    unknown: int
+    postings: tuple[_GatePosting, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _GateIndex:
+    """Replace a fully indexable successor scan with depth postings."""
+
+    depths: tuple[_GateDepth, ...]
+    successor_ordinals: tuple[int, ...] | None
+    passthrough_ordinals: tuple[int, ...]
+
+
+type _GateMetadata = _Gate | _GateIndex
+
+
+@dataclass(frozen=True, slots=True)
+class _Gates(Mapping[int, _GateMetadata]):
     """Store gates as sorted immutable, copyable and picklable pairs."""
 
-    entries: tuple[tuple[int, _Gate], ...]
+    entries: tuple[tuple[int, _GateMetadata], ...]
 
-    def __getitem__(self, key: int) -> _Gate:
+    def __getitem__(self, key: int) -> _GateMetadata:
         lower = 0
         upper = len(self.entries)
         while lower < upper:
@@ -484,16 +535,16 @@ def _gate_successor(
     epsilon: tuple[tuple[int, ...], ...],
     atom_edges: tuple[tuple[int, ...], ...],
     atom_sets: dict[tuple[int, ...], tuple[int, ...]],
-) -> _GateLookahead:
+) -> tuple[_GateProbe, ...]:
     """Analyze one successor without using guards or predicate truth."""
     reachable = _gate_closure(epsilon, {_epsilon_target(edge)})
     if reachable is None:
-        return (None,) * _GATE_DEPTH
+        return tuple(_GateProbe(None, _GATE_PROBE_UNKNOWN) for _ in range(_GATE_DEPTH))
     accepted = accept in reachable
-    first: list[_GateAtoms] = []
+    first: list[_GateProbe] = []
     for depth in range(_GATE_DEPTH):
         if accepted:
-            first.append(None)
+            first.append(_GateProbe(None, _GATE_PROBE_EXIT))
         else:
             atoms = tuple(
                 sorted(
@@ -505,9 +556,9 @@ def _gate_successor(
                 )
             )
             if len(atoms) == 1:
-                first.append(atoms[0])
+                first.append(_GateProbe(atoms[0]))
             else:
-                first.append(atom_sets.setdefault(atoms, atoms))
+                first.append(_GateProbe(atom_sets.setdefault(atoms, atoms)))
         targets = {
             _atom_target(atom_edge)
             for state in reachable
@@ -515,17 +566,92 @@ def _gate_successor(
         }
         reachable = _gate_closure(epsilon, targets)
         if reachable is None:
-            first.extend([None] * (_GATE_DEPTH - depth - 1))
+            first.extend(
+                _GateProbe(None, _GATE_PROBE_UNKNOWN)
+                for _ in range(_GATE_DEPTH - depth - 1)
+            )
             break
         if not accepted and accept in reachable:
             accepted = True
     return tuple(first)
 
 
+def _indexed_gate(
+    successors: tuple[int, ...],
+    accept: int,
+    epsilon: tuple[tuple[int, ...], ...],
+    atom_edges: tuple[tuple[int, ...], ...],
+    atom_sets: dict[tuple[int, ...], tuple[int, ...]],
+    predicates: tuple[Predicate, ...],
+    successor_ordinals: tuple[int, ...],
+    edge_count: int,
+) -> _GateIndex | None:
+    """Return replacement postings for a sparse exact-equality split."""
+
+    def indexable(predicate: Predicate) -> bool:
+        """Return whether one atom has an exact cell-equality key."""
+        return isinstance(predicate, Equals) and isinstance(predicate.operand, Cell)
+
+    exits = [0] * _GATE_DEPTH
+    unknown = [0] * _GATE_DEPTH
+    postings: list[list[_GatePosting]] = [
+        [None] * len(predicates) for _ in range(_GATE_DEPTH)
+    ]
+    posting_count = 0
+    for ordinal, edge in enumerate(successors):
+        analysis = _gate_successor(edge, accept, epsilon, atom_edges, atom_sets)
+        for depth in range(_GATE_DEPTH):
+            probe = analysis[depth]
+            if probe.terminal == _GATE_PROBE_EXIT:
+                exits[depth] |= 1 << ordinal
+                continue
+            if probe.terminal == _GATE_PROBE_UNKNOWN:
+                unknown[depth] |= 1 << ordinal
+                continue
+            atoms = (
+                (probe.atoms,)
+                if isinstance(probe.atoms, int)
+                else (() if probe.atoms is None else probe.atoms)
+            )
+            for atom in atoms:
+                if not indexable(predicates[atom]):
+                    return None
+                posting_count += 1
+                if posting_count > len(successors) * _GATE_DEPTH:
+                    return None
+                previous = postings[depth][atom]
+                if previous is None:
+                    postings[depth][atom] = ordinal
+                elif isinstance(previous, int):
+                    postings[depth][atom] = (previous, ordinal)
+                else:
+                    postings[depth][atom] = (*previous, ordinal)
+    depths = tuple(
+        _GateDepth(exits[depth], unknown[depth], tuple(postings[depth]))
+        for depth in range(_GATE_DEPTH)
+    )
+    all_successors = len(successor_ordinals) == edge_count and all(
+        ordinal == successor for ordinal, successor in enumerate(successor_ordinals)
+    )
+    successor_positions = None if all_successors else successor_ordinals
+    passthrough: tuple[int, ...] = ()
+    if not all_successors:
+        successor_set = set(successor_ordinals)
+        passthrough = tuple(
+            index for index in range(edge_count) if index not in successor_set
+        )
+    return _GateIndex(
+        depths,
+        successor_positions,
+        passthrough,
+    )
+
+
 def _build_gates(
     accept: int,
     epsilon: tuple[tuple[int, ...], ...],
     atom_edges: tuple[tuple[int, ...], ...],
+    predicates: tuple[Predicate, ...],
     states: tuple[int, ...] | None = None,
 ) -> _Gates | None:
     """Build safe gates only for known or discovered large NFA splits."""
@@ -541,21 +667,36 @@ def _build_gates(
     )
     if not candidates:
         return None
-    gates: dict[int, _Gate] = {}
+    gates: dict[int, _GateMetadata] = {}
     atom_sets: dict[tuple[int, ...], tuple[int, ...]] = {}
     for state in candidates:
-        successors = tuple(
-            edge for edge in epsilon[state] if _epsilon_guard(edge) == _GUARD_ALWAYS
+        successor_ordinals = tuple(
+            ordinal
+            for ordinal, edge in enumerate(epsilon[state])
+            if _epsilon_guard(edge) == _GUARD_ALWAYS
         )
+        successors = tuple(epsilon[state][ordinal] for ordinal in successor_ordinals)
+        indexed = _indexed_gate(
+            successors,
+            accept,
+            epsilon,
+            atom_edges,
+            atom_sets,
+            predicates,
+            successor_ordinals,
+            len(epsilon[state]),
+        )
+        if indexed is not None:
+            gates[state] = indexed
+            continue
         gates[state] = _Gate(
             tuple(_epsilon_target(edge) for edge in successors),
             tuple(
-                _gate_successor(
-                    edge,
-                    accept,
-                    epsilon,
-                    atom_edges,
-                    atom_sets,
+                tuple(
+                    None if probe.terminal else probe.atoms
+                    for probe in _gate_successor(
+                        edge, accept, epsilon, atom_edges, atom_sets
+                    )
                 )
                 for edge in successors
             ),
@@ -802,7 +943,9 @@ def _read_scopes(graph: Graph, ordering: Ordering) -> tuple[_Scope, ...]:
 
 
 def _truth_table(
-    bound: tuple[BoundPredicate, ...], scopes: tuple[_Scope, ...]
+    bound: tuple[BoundPredicate, ...],
+    scopes: tuple[_Scope, ...],
+    indexed_atoms: tuple[int, ...] = (),
 ) -> _TruthTable:
     nodes: list[Node] = []
     seen: set[Node] = set()
@@ -813,14 +956,121 @@ def _truth_table(
                 nodes.append(node)
     meter = _active_meter()
     tables: list[Mapping[Node, bool]] = []
-    for predicate in bound:
+    indexed = set(indexed_atoms)
+    true_atoms: dict[Node, list[int]] | None = (
+        {node: [] for node in nodes} if indexed else None
+    )
+    candidates = NodeSet(bound[0].graph, tuple(nodes)) if indexed and bound else None
+    for atom, predicate in enumerate(bound):
         decisions: dict[Node, bool] = {}
+        selected = (
+            set(predicate.select(candidates).nodes)
+            if atom in indexed and candidates is not None
+            else None
+        )
         for node in nodes:
             if meter is not None:
                 meter.charge(1)
-            decisions[node] = predicate.holds(node)
+            decision = (
+                node in selected if selected is not None else predicate.holds(node)
+            )
+            decisions[node] = decision
+            if decision and atom in indexed:
+                assert true_atoms is not None
+                true_atoms[node].append(atom)
         tables.append(MappingProxyType(decisions))
-    return tuple(tables)
+    rows = tuple(tables)
+    if true_atoms is None:
+        return rows
+    return _IndexedTruth(
+        rows,
+        MappingProxyType({node: tuple(atoms) for node, atoms in true_atoms.items()}),
+    )
+
+
+def _indexed_atoms(gates: _Gates | None) -> tuple[int, ...]:
+    """Return the atom IDs used by any replacement index."""
+    if gates is None:
+        return ()
+    return tuple(
+        atom
+        for atom in range(
+            max(
+                (
+                    len(depth.postings)
+                    for _state, gate in gates.entries
+                    if isinstance(gate, _GateIndex)
+                    for depth in gate.depths
+                ),
+                default=0,
+            )
+        )
+        if any(
+            depth.postings[atom] is not None
+            for _state, gate in gates.entries
+            if isinstance(gate, _GateIndex)
+            for depth in gate.depths
+        )
+    )
+
+
+def _indexed_gate_edges(
+    edges: tuple[int, ...],
+    gate: _GateIndex,
+    nodes: tuple[Node, ...],
+    truth: _IndexedTruth,
+    position: int,
+    length: int,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Return indexed successors and the distinct candidates consulted."""
+    candidates: set[int] | None = None
+    touched: set[int] = set()
+    stop = min(_GATE_DEPTH, length - position)
+    for depth in range(stop):
+        indexed = gate.depths[depth]
+        terminals = indexed.exits | indexed.unknown
+        if candidates is None:
+            admitted: set[int] = set()
+            while terminals:
+                bit = terminals & -terminals
+                admitted.add(bit.bit_length() - 1)
+                terminals ^= bit
+        else:
+            admitted = {
+                candidate for candidate in candidates if terminals & (1 << candidate)
+            }
+        for atom in truth.true_atoms[nodes[position + depth]]:
+            posting = indexed.postings[atom]
+            if isinstance(posting, int):
+                if candidates is None or posting in candidates:
+                    admitted.add(posting)
+            elif posting is not None:
+                admitted.update(
+                    posting
+                    if candidates is None
+                    else (value for value in posting if value in candidates)
+                )
+        touched.update(admitted)
+        if candidates is None:
+            candidates = admitted
+        else:
+            candidates.intersection_update(admitted)
+        if not candidates:
+            break
+    assert candidates is not None
+
+    def edge_ordinal(successor: int) -> int:
+        """Map one indexed successor back to its original edge ordinal."""
+        ordinals = gate.successor_ordinals
+        return successor if ordinals is None else ordinals[successor]
+
+    selected = sorted(
+        (*gate.passthrough_ordinals, *(edge_ordinal(i) for i in candidates))
+    )
+    tested = tuple(
+        _epsilon_target(edges[edge_ordinal(successor)]) for successor in sorted(touched)
+    )
+    return tuple(edges[ordinal] for ordinal in selected), tested
 
 
 def _unchecked_step_meter(
@@ -1159,7 +1409,7 @@ class CompiledPattern:
         object.__setattr__(
             self,
             "_gates",
-            _build_gates(self.accept, epsilon, atom_edges),
+            _build_gates(self.accept, epsilon, atom_edges, self.predicates),
         )
 
     @classmethod
@@ -1281,6 +1531,14 @@ class CompiledPattern:
         gate = None if self._gates is None else self._gates.get(state)
         if gate is None or position >= length:
             return edges, ()
+        if isinstance(gate, _GateIndex):
+            if not isinstance(truth, _IndexedTruth):
+                return edges, tuple(
+                    _epsilon_target(edge)
+                    for edge in edges
+                    if _epsilon_guard(edge) == _GUARD_ALWAYS
+                )
+            return _indexed_gate_edges(edges, gate, nodes, truth, position, length)
         skipped: set[int] = set()
         stop = min(_GATE_DEPTH, length - position)
         for target, first_by_depth in zip(gate.targets, gate.first, strict=True):
@@ -1453,7 +1711,7 @@ class CompiledPattern:
         )
         self._check(operation, limit)
         scopes = self._scopes(graph, ordering)
-        return scopes, _truth_table(bound, scopes)
+        return scopes, _truth_table(bound, scopes, _indexed_atoms(self._gates))
 
     def bind(
         self,
@@ -2123,7 +2381,15 @@ class BoundPattern:
         object.__setattr__(self, "compiled", compiled)
         object.__setattr__(self, "graph", graph)
         object.__setattr__(self, "ordering", prepared)
-        object.__setattr__(self, "_truth", _truth_table(bound, prepared._scopes))
+        object.__setattr__(
+            self,
+            "_truth",
+            _truth_table(
+                bound,
+                prepared._scopes,
+                _indexed_atoms(compiled._gates),
+            ),
+        )
 
     @overload
     def exists(
@@ -2331,6 +2597,7 @@ def compile_pattern(pattern: Pattern) -> CompiledPattern:
             accept,
             epsilon,
             atom_edges,
+            tuple(builder.predicates),
             () if builder.gate_splits is None else tuple(builder.gate_splits),
         ),
     )

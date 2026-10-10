@@ -163,6 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Indexed sparse exact-equality branches in large pattern alternations while
+  preserving scan fallback for unsupported and dense branches. Span matching
+  charges each distinct indexed candidate and may return a longer
+  `cut-at-budget` prefix without changing completed results.
 - Shifts now require containers to be true sisters under a common ordered
   containment parent, or adjacent root containers, and to meet at a contiguous
   child-tier seam. The explicit `across_parent=True` form permits a shift
