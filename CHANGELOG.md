@@ -224,6 +224,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Captured complete clock-replacement detachments and reported exact durable clock-target changes.
 - Strengthened generated distance-path coverage to require an applied shift and
   covered typed ancestor-boundary content through plain and journaled editors.
 - Required every ordered-containment parent to agree for default shifts and applied boundary policy reporting to all moved ancestor seams.

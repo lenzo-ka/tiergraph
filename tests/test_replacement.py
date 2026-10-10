@@ -2495,6 +2495,117 @@ def test_clock_replacement_requires_policy_and_marks_provisional_bindings() -> N
     assert equivalent(editor.freeze(), graph, EquivalenceView.EXACT)
 
 
+@pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+def test_checked_clock_replacement_reports_donor_crossing(
+    journaled: bool,
+) -> None:
+    """Checked clock replacement retains a rejected donor link and its fact."""
+    graph = test_clock.fixture()
+    namespace = test_clock.SEGMENT.namespace
+    containment = QualifiedName(namespace, "clock-replacement-contains")
+    token = QualifiedName(namespace, "replacement-token")
+    token_type = QualifiedName(namespace, "ReplacementToken")
+    tokens = QualifiedName(namespace, "replacement-tokens")
+    token_to_segment = QualifiedName(namespace, "replacement-token-to-segment")
+    note = QualifiedName(namespace, "replacement-donor-note")
+    layer = LayerName(namespace, "replacement-donor-source")
+    containment_declaration = BipartiteRelationDeclaration(
+        containment,
+        test_clock.SEGMENT_TYPE,
+        test_clock.SEGMENT_TYPE,
+        single_parent=True,
+        acyclic=True,
+    )
+    graph = replace(
+        graph,
+        relation_declarations=(
+            *graph.relation_declarations,
+            containment_declaration,
+        ),
+        relations=(
+            *graph.relations,
+            RelationInstance(
+                containment,
+                ItemRef(test_clock.SEGMENT, 0),
+                ItemRef(test_clock.SEGMENT, 1),
+            ),
+        ),
+    )
+    donor_link = RelationInstance(
+        token_to_segment,
+        ItemRef(token, 0),
+        ItemRef(test_clock.SEGMENT, 1),
+        "replacement-donor-link",
+    )
+    donor_fact = LayerFact(
+        DurableRelationRef("replacement-donor-link"),
+        AttributeValue(note, XsdType.STRING, "source offset 4"),
+    )
+    donor = Graph(
+        graph.namespaces,
+        (
+            graph._tiers_by_name[test_clock.CLOCK],
+            Tier(
+                graph._tiers_by_name[test_clock.SEGMENT].declaration,
+                (Item("replacement-root"), Item()),
+            ),
+            Tier(TierDeclaration(token, "Replacement tokens"), (Item("token-0"),)),
+        ),
+        (
+            *graph.relation_declarations,
+            SimpleRelationDeclaration(tokens, token, token_type),
+            BipartiteRelationDeclaration(
+                token_to_segment, token_type, test_clock.SEGMENT_TYPE
+            ),
+        ),
+        (
+            RelationInstance(
+                containment,
+                ItemRef(test_clock.SEGMENT, 0),
+                ItemRef(test_clock.SEGMENT, 1),
+            ),
+            donor_link,
+        ),
+        (
+            *graph.attribute_declarations,
+            AttributeDeclaration(
+                note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
+        attributes=graph.attributes,
+        layers=(Layer(layer, (donor_fact,)),),
+    )
+    profile = ClockProfile(
+        graph,
+        test_clock.CLOCK,
+        test_clock.BINDING,
+        test_clock.RATE,
+        test_clock.UNIT,
+    )
+    journal = Journal()
+    subtree = Subtree(donor, ItemRef(test_clock.SEGMENT, 0))
+    correspondence = SubtreeCorrespondence(
+        {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
+        {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
+    )
+    policies = ReplacementPolicies(correspondence=correspondence)
+    if journaled:
+        editor = profile.edit("keep-earlier", journal=journal, check_links=True)
+        editor.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        report = journal.records[0].report.detached_content
+    else:
+        plain = profile.edit("keep-earlier", check_links=True)
+        plain.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        report = plain.last_detachment
+    assert report is not None
+    assert report.donor_relations == ((RelationInstanceRef(1), donor_link),)
+    assert report.donor_facts == ((layer, donor_fact),)
+
+
 def test_clock_correspondence_retains_matching_internal_timing() -> None:
     """A named keep policy carries the timing of a matched internal boundary."""
     contains = QualifiedName(test_clock.SEGMENT.namespace, "timed-contains")

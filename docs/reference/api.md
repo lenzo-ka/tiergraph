@@ -871,6 +871,16 @@ ClockEditor.reports(self) -> 'tuple[ClockEditReport, ...]'
 
 Return every successful timed-tier policy outcome in order.
 
+#### `ClockEditor.last_detachment`
+
+Property.
+
+```text
+ClockEditor.last_detachment(self) -> 'DetachmentReport | None'
+```
+
+Return the report from the most recent abandonment-capable edit.
+
 #### `ClockEditor.freeze`
 
 Method.
