@@ -156,6 +156,7 @@ _STDLIB_IMPORTS = {
     "tempfile",
     "time",
     "tomllib",
+    "tracemalloc",
     "types",
     "typing",
     "unicodedata",

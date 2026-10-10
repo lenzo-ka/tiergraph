@@ -380,17 +380,18 @@ Exit codes:
 ### `tiergraph tgdb`
 
 ```text
-usage: tiergraph tgdb [-h] {init,info} ...
+usage: tiergraph tgdb [-h] {init,info,check} ...
 
-Create or inspect a local versioned tiergraph store.
+Create, inspect, or check a local versioned tiergraph store.
 
 positional arguments:
-  {init,info}
-    init       initialize a store
-    info       inspect store metadata
+  {init,info,check}
+    init             initialize a store
+    info             inspect store metadata
+    check            check store integrity
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help         show this help message and exit
 
 Examples:
   $ tiergraph tgdb info corpus.tgdb
@@ -445,6 +446,31 @@ options:
 Examples:
   $ tiergraph tgdb info corpus.tgdb
   $ tiergraph tgdb info corpus.tgdb --json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb check`
+
+```text
+usage: tiergraph tgdb check [-h] [--full] STORE
+
+Validate the catalog and object pool without changing the store. Use --full to hash every object's bytes.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --full      hash every stored object
+
+Examples:
+  $ tiergraph tgdb check corpus.tgdb
+  $ tiergraph tgdb check corpus.tgdb --full
 
 Exit codes:
   0  success
