@@ -804,7 +804,7 @@ def _relation_atom(
 
 
 def _graph_atoms(graph: Graph, view: EquivalenceView) -> Counter[_Atom]:
-    """Project a graph to the proved location- and incidence-free atom multiset."""
+    """Project a graph to its location- and incidence-free atom multiset."""
     atoms: list[_Atom] = []
     atoms.extend(
         _Atom(
@@ -1191,10 +1191,11 @@ def _general_graph_lower_bound(
     costs: CostTable,
     view: EquivalenceView,
 ) -> tuple[Decimal, str]:
-    """Return the strongest built-in general-graph relaxation proved here.
+    """Return the strongest built-in general-graph relaxation tested here.
 
-    A later relaxation can join this seam by taking the maximum only after it
-    has its own primitive-wise domination proof.
+    The atom relaxation is tested over generated primitive and multi-edit cases.
+    A later relaxation can join this seam by taking the maximum only after it has
+    comparable validation.
     """
     return _atom_multiset_lower_bound(source, target, costs, view), "atom-multiset"
 
@@ -1747,7 +1748,7 @@ def graph_distance(
     except ValueError:
         upper = _rebuild_upper_bound(source, target, active_costs)
         method = "realized-rebuild"
-    if lower > upper:  # pragma: no cover - primitive-wise proof makes this defensive
+    if lower > upper:  # pragma: no cover - generated tests make this defensive
         raise ValueError(
             "the atom-multiset lower bound exceeds the realized graph-edit upper bound"
         )

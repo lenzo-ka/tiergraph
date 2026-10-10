@@ -28,20 +28,21 @@ method returns.
 Pass `check_links=True` to `graph.edit()` to audit every edit against a complete
 before-and-after link ledger. The check covers relation endpoints, facts,
 layers, boundary values, attributes, blob attachments, and nested-graph
-references. It applies to plain and journaled editors:
+references. It applies to plain and journaled graph editors. Clock-aware
+editors do not currently expose this diagnostic:
 
 Use `base.edit(check_links=True)` for a plain checked session, or
 `base.edit(journal=Journal(), check_links=True)` when the journal record is also
 part of the account.
 
 Each link from the edited region must be carried unchanged, re-pointed through
-the edit correspondence, or dropped. When an operation provides a detachment
-report, every dropped link must be included there with its content. Other plain
-edits verify the complete partition internally, and journaled edits also verify
-their exact inverse. A refused edit must leave the editor unchanged. A mismatch
-raises an internal consistency error at the operation boundary. This is an
-opt-in diagnostic: the ordinary editor allocates no ledger state and performs
-no ledger work.
+the edit correspondence, or named with its content in a detachment report. A
+checked operation that withdraws a link without such a report is refused, even
+when the operation explicitly requests the content change. Plain edits verify
+the complete partition, and journaled edits also verify their exact inverse. A
+refused edit must leave the editor unchanged. A mismatch raises an internal
+consistency error at the operation boundary. This is an opt-in diagnostic: the
+ordinary editor allocates no ledger state and performs no ledger work.
 
 ## One change or a transaction
 

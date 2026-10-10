@@ -522,10 +522,10 @@ def test_atom_bound_is_dominated_by_every_primitive(
 
 @settings(max_examples=20, deadline=None)
 @given(case=GENERATED_HIERARCHIES, data=st.data())
-def test_generated_graphs_prove_primitive_and_path_atom_bounds(
+def test_generated_graphs_exercise_primitive_and_path_atom_bounds(
     case: GeneratedHierarchy, data: DataObject
 ) -> None:
-    """Generated shapes, scoped costs, and paths preserve both FR4 bounds."""
+    """Generated shapes, scoped costs, and paths exercise both FR4 bounds."""
     declarations = tuple(
         {
             *(tier.declaration.name for tier in case.graph.tiers),
@@ -541,6 +541,18 @@ def test_generated_graphs_prove_primitive_and_path_atom_bounds(
             primitive.before, primitive.after, costs, EquivalenceView.EXACT
         )
         assert bound <= costs.operation(primitive.kind, primitive.declaration)
+
+        witness = primitive.after.set_attribute(
+            DurableItemRef("segment-2"),
+            AttributeValue(case.label, XsdType.STRING, f"witness-{primitive.kind}"),
+        )
+        witness_bound = _atom_multiset_lower_bound(
+            primitive.before, witness, UNIT_COSTS, EquivalenceView.EXACT
+        )
+        assert witness_bound > 0
+        assert witness_bound <= UNIT_COSTS.operation(
+            primitive.kind, primitive.declaration
+        ) + UNIT_COSTS.operation("set_attribute", case.label)
 
     operations: tuple[Callable[[JournalEditor], object], ...] = (
         lambda editor: editor.move_run(ItemRun(case.word, 0, 1), 3),
@@ -558,7 +570,7 @@ def test_generated_graphs_prove_primitive_and_path_atom_bounds(
     selected = data.draw(
         st.lists(
             st.integers(min_value=0, max_value=len(operations) - 1),
-            min_size=1,
+            min_size=3,
             max_size=len(operations),
             unique=True,
         ),
@@ -575,6 +587,7 @@ def test_generated_graphs_prove_primitive_and_path_atom_bounds(
             operations[index](editor)
     target = editor.freeze()
     patch = journal.to_patch()
+    assert len(patch.operations) >= 2
     assert _atom_multiset_lower_bound(
         case.graph, target, costs, EquivalenceView.EXACT
     ) <= price_patch(patch, costs, case.graph)

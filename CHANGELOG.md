@@ -192,6 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed checked editors to refuse unreported link withdrawals while accepting
+  reported polyadic endpoint trims.
 - Required identity correspondence to be linear: every identified source names
   exactly one target, and two sources cannot claim the same target. Splits and
   merges remain available as functional correspondence.
