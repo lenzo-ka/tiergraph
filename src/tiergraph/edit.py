@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Set
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -3761,7 +3762,12 @@ def _reported_detachment(record: object) -> DetachmentReport | None:
 
 
 def _detachment_has_link(
-    link: _LinkSnapshot, before: Graph, after: Graph, report: DetachmentReport
+    link: _LinkSnapshot,
+    before: Graph,
+    after: Graph,
+    report: DetachmentReport,
+    displacement: Displacement | None = None,
+    correspondence: SubtreeCorrespondence | None = None,
 ) -> bool:
     """Check that one dropped link has complete content in a result report."""
     if link.carrier in {"relations", "polyadic_relations"}:
@@ -3791,15 +3797,57 @@ def _detachment_has_link(
         )
         if endpoint_reported or relation_reported:
             return True
-        if relation.durable_id is None:
-            return True
+        if any(
+            dependency.carrier == "polyadic_endpoints" and dependency.index == index
+            for dependency in report.dependencies
+        ):
+            return False
+        if displacement is None:
+            displacement = _displacement_between(before, after)
+        mapping = (
+            displacement.polyadic_relations
+            if carrier == "polyadic_relations"
+            else displacement.relations
+        )
+        if index in mapping:
+            return False
         surviving = (
             after.polyadic_relations
             if carrier == "polyadic_relations"
             else after.relations
         )
-        return all(
-            candidate.durable_id != relation.durable_id for candidate in surviving
+        if relation.durable_id is not None:
+            return all(
+                candidate.durable_id != relation.durable_id for candidate in surviving
+            )
+        if not isinstance(relation, PolyadicRelationInstance):
+            return True
+        used = set(mapping.values())
+
+        def endpoint_counts(
+            endpoints: tuple[RelationEndpointRef, ...],
+        ) -> Counter[RelationEndpointRef]:
+            """Count every surviving image of an endpoint sequence."""
+            return Counter(
+                image
+                for endpoint in endpoints
+                for image in cast(
+                    tuple[RelationEndpointRef, ...],
+                    _reference_images(endpoint, displacement, correspondence),
+                )
+            )
+
+        source_images = endpoint_counts(relation.sources)
+        target_images = endpoint_counts(relation.targets)
+        return not any(
+            position not in used
+            and isinstance(candidate, PolyadicRelationInstance)
+            and candidate.declaration == relation.declaration
+            and candidate.durable_id is None
+            and candidate.attributes == relation.attributes
+            and Counter(candidate.sources) <= source_images
+            and Counter(candidate.targets) <= target_images
+            for position, candidate in enumerate(surviving)
         )
     if link.kind == "fact":
         layer, subject = cast(tuple[LayerName, LayerSubject], link.owner)
@@ -3847,13 +3895,25 @@ def _ledger_context(
     return _displacement_between(before, after), None, _reported_detachment(record)
 
 
+def _link_positions_match(
+    link: _LinkSnapshot,
+    candidate: _LinkSnapshot,
+    endpoint_positions: Mapping[tuple[object, object, str | None], int],
+) -> bool:
+    """Preserve polyadic endpoint order while allowing reported trims."""
+    if link.kind != "endpoint" or link.carrier != "polyadic_relations":
+        return candidate.position == link.position
+    key = (link.owner, candidate.owner, link.side)
+    previous = endpoint_positions.get(key, -1)
+    return candidate.position is not None and candidate.position > previous
+
+
 def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedger:
     """Balance the complete before/after link diff against one edit account.
 
-    A journal record accounts through its exact inverse. A derived result report
-    accounts through complete detached-content snapshots. With no external
-    record, the returned ledger itself is the drop report used by the checked
-    plain editor.
+    A journal record verifies its exact inverse and accounts withdrawals through
+    its detached-content snapshot. A derived result report accounts through the
+    same snapshot. An unmatched source link without such an account is refused.
     """
     if not isinstance(before, Graph) or not isinstance(after, Graph):
         raise TypeError("link ledger requires before and after Graph values")
@@ -3862,6 +3922,7 @@ def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedg
     source = _graph_links(before)
     target = _graph_links(after)
     used: set[int] = set()
+    endpoint_positions: dict[tuple[object, object, str | None], int] = {}
     carried: list[_LinkSnapshot] = []
     repointed: list[_LinkSnapshot] = []
     dropped: list[_LinkSnapshot] = []
@@ -3873,7 +3934,14 @@ def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedg
             and link.carrier in {"relations", "polyadic_relations"}
             and (
                 detachment is None
-                or not _detachment_has_link(link, before, after, detachment)
+                or not _detachment_has_link(
+                    link,
+                    before,
+                    after,
+                    detachment,
+                    displacement,
+                    correspondence,
+                )
             )
         ):
             owners = (link.owner,)
@@ -3881,30 +3949,47 @@ def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedg
         values = _value_images(link, displacement, correspondence)
         if structural_fallback and link.value not in values:
             values = (*values, link.value)
-        match = next(
-            (
-                (index, candidate)
-                for index, candidate in enumerate(target)
-                if index not in used
-                and candidate.kind == link.kind
-                and candidate.carrier == link.carrier
-                and candidate.owner in owners
-                and candidate.value in values
-                and candidate.side == link.side
-            ),
-            None,
+        reported_drop = detachment is not None and _detachment_has_link(
+            link,
+            before,
+            after,
+            detachment,
+            displacement,
+            correspondence,
+        )
+
+        match = (
+            None
+            if reported_drop
+            else next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(target)
+                    if index not in used
+                    and candidate.kind == link.kind
+                    and candidate.carrier == link.carrier
+                    and candidate.owner in owners
+                    and candidate.value in values
+                    and candidate.side == link.side
+                    and _link_positions_match(link, candidate, endpoint_positions)
+                ),
+                None,
+            )
         )
         if match is None:
             dropped.append(link)
-            if detachment is not None and not _detachment_has_link(
-                link, before, after, detachment
-            ):
+            if not reported_drop:
                 raise GraphValidationError(
                     f"link ledger found an unreported dropped {link.kind} link"
                 )
             continue
         index, candidate = match
         used.add(index)
+        if link.kind == "endpoint" and link.carrier == "polyadic_relations":
+            assert candidate.position is not None
+            endpoint_positions[(link.owner, candidate.owner, link.side)] = (
+                candidate.position
+            )
         if candidate == link:
             carried.append(link)
         else:
