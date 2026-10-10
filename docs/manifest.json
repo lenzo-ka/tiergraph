@@ -768,6 +768,9 @@
     ],
     "tiergraph.tgdb": [
       "CheckReport",
+      "CollectionInfo",
+      "CommitReceipt",
+      "InstanceInfo",
       "SqliteTooOld",
       "StaleJournalBase",
       "StaleVersion",
@@ -777,7 +780,8 @@
       "StoreSchemaTooNew",
       "TgdbError",
       "TgdbLimits",
-      "TgdbStore"
+      "TgdbStore",
+      "WriteTransaction"
     ]
   }
 }

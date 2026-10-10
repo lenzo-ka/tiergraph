@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added ordered tgdb collections and instances with stable ids, explicit
+  lifecycle commits, recorded inverses, collision-safe catalog undo, escaped
+  text listings, and strict commit-operation integrity checks.
 - Added the tgdb content-addressed object pool with threshold-based inline or
   file residency, durable staging, verified reads, deduplication, and checks.
 - Added the lazy `tiergraph.tgdb` storage skeleton with versioned SQLite catalog

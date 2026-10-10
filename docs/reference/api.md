@@ -11548,6 +11548,80 @@ CheckReport.to_data(self) -> 'dict[str, bool | int]'
 
 Return a JSON-compatible report in stable field order.
 
+### `CollectionInfo`
+
+```text
+CollectionInfo(uid: 'bytes', name: 'str', position: 'int', retired_commit: 'int | None') -> None
+```
+
+Describe one named collection in its declared catalog order.
+
+#### `CollectionInfo.retired`
+
+Property.
+
+```text
+CollectionInfo.retired(self) -> 'bool'
+```
+
+Return whether the collection is retired.
+
+#### `CollectionInfo.to_data`
+
+Method.
+
+```text
+CollectionInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
+```
+
+Return a JSON-compatible description in stable field order.
+
+### `CommitReceipt`
+
+```text
+CommitReceipt(commit_seq: 'int', kind: 'str', operations: 'tuple[str, ...]') -> None
+```
+
+Identify one durable catalog commit and its ordered operation kinds.
+
+#### `CommitReceipt.to_data`
+
+Method.
+
+```text
+CommitReceipt.to_data(self) -> 'dict[str, int | str | list[str]]'
+```
+
+Return a JSON-compatible receipt in stable field order.
+
+### `InstanceInfo`
+
+```text
+InstanceInfo(uid: 'bytes', collection_uid: 'bytes', collection: 'str', name: 'str', position: 'int', generation: 'int', retired_commit: 'int | None') -> None
+```
+
+Describe one stable instance identity without loading graph content.
+
+#### `InstanceInfo.retired`
+
+Property.
+
+```text
+InstanceInfo.retired(self) -> 'bool'
+```
+
+Return whether the instance is retired.
+
+#### `InstanceInfo.to_data`
+
+Method.
+
+```text
+InstanceInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
+```
+
+Return a JSON-compatible description in stable field order.
+
 ### `SqliteTooOld`
 
 ```text
@@ -11609,7 +11683,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 2) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 3) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -11701,6 +11775,46 @@ TgdbStore.close(self) -> 'None'
 
 Close this store connection; repeated calls have no effect.
 
+#### `TgdbStore.collections`
+
+Method.
+
+```text
+TgdbStore.collections(self, *, include_retired: 'bool' = False) -> 'tuple[CollectionInfo, ...]'
+```
+
+Return collections in declared order, excluding retired rows by default.
+
+#### `TgdbStore.instances`
+
+Method.
+
+```text
+TgdbStore.instances(self, collection: 'bytes | str | None' = None, *, include_retired: 'bool' = False) -> 'tuple[InstanceInfo, ...]'
+```
+
+Return instances in collection and instance declared order.
+
+#### `TgdbStore.write`
+
+Method.
+
+```text
+TgdbStore.write(self, *, annotations: 'EditAnnotations | None' = None) -> 'WriteTransaction'
+```
+
+Open an explicit catalog transaction that commits only on request.
+
+#### `TgdbStore.undo`
+
+Method.
+
+```text
+TgdbStore.undo(self, commit_seq: 'int', *, annotations: 'EditAnnotations | None' = None) -> 'CommitReceipt'
+```
+
+Apply a commit's recorded inverses unless a later commit touched its rows.
+
 #### `TgdbStore.check`
 
 Method.
@@ -11714,6 +11828,134 @@ Check the catalog and every recorded object without changing the store.
 A normal check validates SQLite, object records, file placement, residency,
 and byte counts.  A full check additionally hashes every inline and file
 object and compares it with its content address.
+
+### `WriteTransaction`
+
+```text
+WriteTransaction(store: 'TgdbStore', annotations: 'EditAnnotations | None') -> 'None'
+```
+
+Apply ordered catalog changes in one explicit SQLite commit.
+
+#### `WriteTransaction.commit_seq`
+
+Property.
+
+```text
+WriteTransaction.commit_seq(self) -> 'int'
+```
+
+Return the sequence assigned to this transaction.
+
+#### `WriteTransaction.create_collection`
+
+Method.
+
+```text
+WriteTransaction.create_collection(self, name: 'str', *, uid: 'bytes | None' = None, position: 'int | None' = None) -> 'bytes'
+```
+
+Create a collection with stable identity and declared position.
+
+#### `WriteTransaction.rename_collection`
+
+Method.
+
+```text
+WriteTransaction.rename_collection(self, collection: 'bytes | str', name: 'str') -> 'None'
+```
+
+Change a collection name without changing its identity or position.
+
+#### `WriteTransaction.move_collection`
+
+Method.
+
+```text
+WriteTransaction.move_collection(self, collection: 'bytes | str', position: 'int') -> 'None'
+```
+
+Move a collection explicitly while preserving every collection id.
+
+#### `WriteTransaction.retire_collection`
+
+Method.
+
+```text
+WriteTransaction.retire_collection(self, collection: 'bytes | str') -> 'None'
+```
+
+Retire a collection without deleting it or changing its position.
+
+#### `WriteTransaction.restore_collection`
+
+Method.
+
+```text
+WriteTransaction.restore_collection(self, collection: 'bytes | str') -> 'None'
+```
+
+Restore a retired collection at its existing declared position.
+
+#### `WriteTransaction.rename`
+
+Method.
+
+```text
+WriteTransaction.rename(self, instance: 'bytes | str', name: 'str', *, collection: 'bytes | str | None' = None) -> 'None'
+```
+
+Change an instance name without changing identity, position, or head.
+
+#### `WriteTransaction.move`
+
+Method.
+
+```text
+WriteTransaction.move(self, instance: 'bytes | str', position: 'int', *, collection: 'bytes | str | None' = None) -> 'None'
+```
+
+Move an instance explicitly within its collection.
+
+#### `WriteTransaction.retire`
+
+Method.
+
+```text
+WriteTransaction.retire(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None) -> 'None'
+```
+
+Retire an instance without deleting its identity or position.
+
+#### `WriteTransaction.restore`
+
+Method.
+
+```text
+WriteTransaction.restore(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None) -> 'None'
+```
+
+Restore a retired instance at its existing declared position.
+
+#### `WriteTransaction.commit`
+
+Method.
+
+```text
+WriteTransaction.commit(self) -> 'CommitReceipt'
+```
+
+Commit all staged catalog changes and return their durable sequence.
+
+#### `WriteTransaction.discard`
+
+Method.
+
+```text
+WriteTransaction.discard(self) -> 'None'
+```
+
+Roll back every change; repeated calls have no effect.
 
 
 ## Companion package

@@ -1927,10 +1927,58 @@ def _documented_help_examples() -> list[tuple[str, str]]:
 
 def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
     """Write the public input documents named by one help example."""
-    if arguments[:2] in (["tgdb", "info"], ["tgdb", "check"]):
+    if arguments and arguments[0] == "tgdb" and arguments[1] != "init":
         from tiergraph.tgdb import TgdbStore  # noqa: PLC0415 -- help fixture only
 
-        TgdbStore.create(directory / "corpus.tgdb").close()
+        with TgdbStore.create(directory / "corpus.tgdb") as store:
+            command = arguments[1]
+            collection_command = arguments[2] if command == "collection" else None
+            needs_collection = (
+                command
+                in {
+                    "collection",
+                    "list",
+                    "move",
+                    "rename",
+                    "restore",
+                    "retire",
+                    "undo",
+                }
+                and collection_command != "create"
+            )
+            collection_uid: bytes | None = None
+            if needs_collection:
+                with store.write() as transaction:
+                    collection_uid = transaction.create_collection("recordings")
+                    if command == "collection" and collection_command == "move":
+                        transaction.create_collection("other")
+                    transaction.commit()
+            if command in {"move", "rename", "restore", "retire"}:
+                assert collection_uid is not None
+                collection_id = store._connection.execute(
+                    "SELECT id FROM collections WHERE uid = ?", (collection_uid,)
+                ).fetchone()[0]
+                store._connection.execute(
+                    "INSERT INTO instances(uid, collection_id, name, position, "
+                    "head_version, generation, retired_commit) "
+                    "VALUES (?, ?, 'INSTANCE', 0, NULL, 0, NULL)",
+                    (b"i" * 16, collection_id),
+                )
+                if command == "move":
+                    store._connection.execute(
+                        "INSERT INTO instances(uid, collection_id, name, position, "
+                        "head_version, generation, retired_commit) "
+                        "VALUES (?, ?, 'OTHER', 1, NULL, 0, NULL)",
+                        (b"o" * 16, collection_id),
+                    )
+                if command == "restore":
+                    with store.write() as transaction:
+                        transaction.retire(b"i" * 16)
+                        transaction.commit()
+            if command == "collection" and collection_command == "restore":
+                with store.write() as transaction:
+                    transaction.retire_collection("recordings")
+                    transaction.commit()
     source_graph = _path_graph(directory / "graph.json")
     tier_name = QualifiedName("urn:path", "tokens")
     item_type = QualifiedName("urn:path", "Token")
@@ -2124,7 +2172,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 83
+    assert len(examples) == 97
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
