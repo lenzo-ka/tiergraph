@@ -13,6 +13,7 @@ import subprocess
 import sys
 from contextlib import closing
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
@@ -28,6 +29,7 @@ from tiergraph import (
     Graph,
     Item,
     Journal,
+    JsonAttributeValue,
     NamespaceDeclaration,
     Patch,
     QualifiedName,
@@ -133,6 +135,32 @@ def _indexed_graph(
     )
 
 
+def _value_graph(values: tuple[str, ...], *, attribute_name: str = "score") -> Graph:
+    """Return one item tier carrying decimal values for declared-index tests."""
+    namespace = "urn:tgdb:index"
+    tier = QualifiedName(namespace, "tokens")
+    attribute = QualifiedName(namespace, attribute_name)
+    return Graph(
+        (NamespaceDeclaration("index", namespace),),
+        (
+            Tier(
+                TierDeclaration(tier, "tokens"),
+                tuple(
+                    Item(
+                        str(index),
+                        (AttributeValue(attribute, XsdType.DECIMAL, value),),
+                    )
+                    for index, value in enumerate(values)
+                ),
+            ),
+        ),
+        (),
+        attribute_declarations=(
+            AttributeDeclaration(attribute, AttributeDomain.ITEM, XsdType.DECIMAL),
+        ),
+    )
+
+
 def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
     """Return the durable sequence from a receipt known to record a commit."""
     assert receipt.commit_seq is not None
@@ -164,9 +192,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 5,
+        "schema_version": 6,
         "layout_version": 1,
-        "index_version": 2,
+        "index_version": 3,
         "inline_threshold": 1234,
         "fingerprint_domain": "tiergraph-equivalence/1",
         "mode": "rw",
@@ -174,7 +202,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (5,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (6,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -195,6 +223,12 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     ).fetchone() == (1,)
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'graph_tiers'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'declared_indexes'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'item_index'"
     ).fetchone() == (1,)
     assert (store.path / "objects" / "sha256").is_dir()
     assert (store.path / "staging").is_dir()
@@ -359,12 +393,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 6)
+    _set_pragma(path, "user_version", 7)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 6
-    assert caught.value.supported == 5
-    assert "6" in str(caught.value) and "5" in str(caught.value)
+    assert caught.value.found == 7
+    assert caught.value.supported == 6
+    assert "7" in str(caught.value) and "6" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -381,7 +415,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 5"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 6"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -1316,11 +1350,534 @@ def test_reindex_detects_repairs_and_versions_derived_rows(tmp_path: Path) -> No
         with pytest.raises(tgdb.StoreCorrupt, match="index version is stale"):
             store.reindex()
         store.reindex(rebuild=True)
-        assert store.info().index_version == 2
+        assert store.info().index_version == 3
 
     with tgdb.TgdbStore.open(tmp_path / "store") as readonly:
         with pytest.raises(tgdb.TgdbError, match="read-only"):
             readonly.reindex(rebuild=True)
+
+
+def test_declared_item_indexes_are_typed_lazy_ordered_and_collision_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declared rows answer exact equality and numeric ranges without graph reads."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            matching = transaction.create_instance(
+                collection, "matching", _value_graph(("-2.0", "2.5", "20.0"))
+            )
+            other = transaction.create_instance(
+                collection, "other", _value_graph(("-2.0",))
+            )
+            transaction.create_instance(collection, "empty", _indexed_graph("words", 1))
+            transaction.commit()
+        assert store._connection.execute(
+            "SELECT count(*) FROM item_index"
+        ).fetchone() == (0,)
+
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            receipt = transaction.commit()
+        assert receipt.operations == ("declare_index",)
+        assert store.indexes() == (tgdb.IndexInfo("score", 0, tier, attribute, False),)
+        assert store.indexes()[0].to_data() == {
+            "name": "score",
+            "position": 0,
+            "tier": "urn:tgdb:index|tokens",
+            "attribute": "urn:tgdb:index|score",
+            "history": False,
+        }
+        matching_handle = store.get(matching)
+        assert store._connection.execute(
+            "SELECT value_text FROM item_index WHERE graph_digest = ? "
+            "ORDER BY value_num",
+            (matching_handle.graph_digest,),
+        ).fetchall() == [("-2.0",), ("2.5",), ("20.0",)]
+
+        expected = AttributeValue(attribute, XsdType.DECIMAL, "2.50")
+        wrong_type = AttributeValue(attribute, XsdType.INTEGER, "20")
+        wrong_name = AttributeValue(
+            QualifiedName("urn:tgdb:index", "other"), XsdType.DECIMAL, "2.5"
+        )
+
+        def opened(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("declared-index query opened a graph document")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(tgdb.TgdbStore, "_open_object", opened)
+            assert [
+                handle.name for handle in store.query(tgdb.Query.all().indexed("score"))
+            ] == ["matching", "other"]
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all().indexed("score", present=False)
+                )
+            ] == ["empty"]
+            assert store.query(tgdb.Query.all().indexed("score", expected)) == [
+                matching_handle
+            ]
+            assert store.query(tgdb.Query.all().indexed("score", wrong_type)) == []
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all().indexed(
+                        "score", minimum=Decimal("-2"), maximum=Decimal("3")
+                    )
+                )
+            ] == ["matching", "other"]
+            assert (
+                store.query(tgdb.Query.all().indexed("score", minimum=Decimal("21")))
+                == []
+            )
+
+        with pytest.raises(tgdb.TgdbError, match="another attribute"):
+            store.query(tgdb.Query.all().indexed("score", wrong_name))
+        with pytest.raises(tgdb.TgdbError, match="not declared"):
+            store.query(tgdb.Query.all().indexed("missing"))
+
+        matching_digest = tgdb._index_value(expected)[3]
+        store._connection.execute(
+            "UPDATE item_index SET value_digest = ? "
+            "WHERE graph_digest = ? AND value_text = '-2.0'",
+            (matching_digest, store.get(other).graph_digest),
+        )
+        assert store.query(tgdb.Query.all().indexed("score", expected)) == [
+            matching_handle
+        ]
+
+
+def test_declared_index_lazy_and_eager_answers_agree(tmp_path: Path) -> None:
+    """Lazy presence, equality, and range answers match loaded graph values."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(
+                collection, "mixed", _value_graph(("-2.0", "0", "2.5"))
+            )
+            transaction.create_instance(collection, "high", _value_graph(("20.0",)))
+            transaction.create_instance(
+                collection, "absent", _indexed_graph("words", 1)
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            transaction.commit()
+
+        def values(name: str) -> tuple[AttributeValue, ...]:
+            graph = store.get(name).load()
+            return tuple(
+                value
+                for member_tier in graph.tiers
+                if member_tier.declaration.name == tier
+                for item in member_tier.items
+                for value in item.attributes
+                if isinstance(value, AttributeValue) and value.name == attribute
+            )
+
+        eager = {name: values(name) for name in ("mixed", "high", "absent")}
+        equal = AttributeValue(attribute, XsdType.DECIMAL, "2.50")
+        cases = (
+            (
+                tgdb.Query.all().indexed("score"),
+                [name for name, found in eager.items() if found],
+            ),
+            (
+                tgdb.Query.all().indexed("score", present=False),
+                [name for name, found in eager.items() if not found],
+            ),
+            (
+                tgdb.Query.all().indexed("score", equal),
+                [name for name, found in eager.items() if equal in found],
+            ),
+            (
+                tgdb.Query.all().indexed("score", minimum=0),
+                [
+                    name
+                    for name, found in eager.items()
+                    if any(Decimal(value.lexical) >= 0 for value in found)
+                ],
+            ),
+            (
+                tgdb.Query.all().indexed("score", minimum=0, maximum=0),
+                [
+                    name
+                    for name, found in eager.items()
+                    if any(Decimal(value.lexical) == 0 for value in found)
+                ],
+            ),
+            (
+                tgdb.Query.all().indexed("score", maximum=Decimal("-1")),
+                [
+                    name
+                    for name, found in eager.items()
+                    if any(Decimal(value.lexical) <= -1 for value in found)
+                ],
+            ),
+        )
+        for query, expected in cases:
+            assert [handle.name for handle in store.query(query)] == expected
+
+
+def test_declared_index_scope_tracks_heads_history_and_undo(tmp_path: Path) -> None:
+    """Head declarations prune old rows while history declarations retain them."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    first = _value_graph(("1.0",))
+    second = _value_graph(("2.0", "3.0"))
+    third = _value_graph(("4.0",))
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        first_digest = store.get(uid).graph_digest
+        with store.write() as transaction:
+            transaction.publish(uid, second, expected=1)
+            transaction.commit()
+        second_digest = store.get(uid).graph_digest
+
+        with store.write() as transaction:
+            transaction.declare_index("heads", tier, attribute)
+            head_declaration = transaction.commit()
+        assert store._connection.execute(
+            "SELECT DISTINCT graph_digest FROM item_index WHERE index_name = 'heads'"
+        ).fetchall() == [(second_digest,)]
+
+        with store.write() as transaction:
+            transaction.declare_index("history", tier, attribute, history=True)
+            transaction.commit()
+        assert store.indexes() == (
+            tgdb.IndexInfo("heads", 0, tier, attribute, False),
+            tgdb.IndexInfo("history", 1, tier, attribute, True),
+        )
+        assert {
+            row[0]
+            for row in store._connection.execute(
+                "SELECT DISTINCT graph_digest FROM item_index "
+                "WHERE index_name = 'history'"
+            )
+        } == {first_digest, second_digest}
+
+        with store.write() as transaction:
+            transaction.publish(uid, third, expected=2)
+            transaction.commit()
+        third_digest = store.get(uid).graph_digest
+        assert store._connection.execute(
+            "SELECT DISTINCT graph_digest FROM item_index WHERE index_name = 'heads'"
+        ).fetchall() == [(third_digest,)]
+        assert {
+            row[0]
+            for row in store._connection.execute(
+                "SELECT DISTINCT graph_digest FROM item_index "
+                "WHERE index_name = 'history'"
+            )
+        } == {first_digest, second_digest, third_digest}
+
+        with store.write() as transaction:
+            transaction.drop_index("heads")
+            dropped = transaction.commit()
+        assert store.indexes() == (tgdb.IndexInfo("history", 1, tier, attribute, True),)
+        restored = store.undo(_commit_seq(dropped))
+        assert restored.operations == ("declare_index",)
+        assert store.indexes() == (
+            tgdb.IndexInfo("heads", 0, tier, attribute, False),
+            tgdb.IndexInfo("history", 1, tier, attribute, True),
+        )
+        assert store._connection.execute(
+            "SELECT DISTINCT graph_digest FROM item_index WHERE index_name = 'heads'"
+        ).fetchall() == [(third_digest,)]
+
+        with pytest.raises(tgdb.StaleVersion, match="touched the same"):
+            store.undo(_commit_seq(head_declaration))
+
+
+def test_declared_index_validation_reindex_and_recorded_actions(
+    tmp_path: Path,
+) -> None:
+    """Public refusals and reindex detect malformed declarations and value rows."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    query = tgdb.Query.all()
+    with pytest.raises(TypeError, match="AttributeValue"):
+        query.indexed("score", "2")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer, Decimal"):
+        query.indexed("score", minimum=2.0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite"):
+        query.indexed("score", minimum=Decimal("NaN"))
+    with pytest.raises(ValueError, match="supported numeric range"):
+        query.indexed("score", minimum=Decimal(f"1e{MAX_DOCUMENT_BYTES + 1}"))
+    with pytest.raises(ValueError, match="at least minimum"):
+        query.indexed("score", minimum=2, maximum=1)
+    with pytest.raises(ValueError, match="exclusive"):
+        query.indexed(
+            "score",
+            AttributeValue(attribute, XsdType.DECIMAL, "2.0"),
+            minimum=1,
+        )
+    with pytest.raises(ValueError, match="absent index"):
+        query.indexed("score", minimum=1, present=False)
+
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _value_graph(("2.0",)))
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="tier"):
+                transaction.declare_index("score", "tokens", attribute)  # type: ignore[arg-type]
+            with pytest.raises(TypeError, match="attribute"):
+                transaction.declare_index("score", tier, "score")  # type: ignore[arg-type]
+            with pytest.raises(TypeError, match="history"):
+                transaction.declare_index(
+                    "score",
+                    tier,
+                    attribute,
+                    history=1,  # type: ignore[arg-type]
+                )
+            transaction.discard()
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="already declared"):
+                transaction.declare_index("score", tier, attribute)
+            with pytest.raises(tgdb.TgdbError, match="not declared"):
+                transaction.drop_index("missing")
+            transaction.discard()
+
+        digest = store.get("sample").graph_digest
+        store._connection.execute(
+            "UPDATE item_index SET value_text = '9.0' WHERE graph_digest = ?",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index row .* differs"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute("DELETE FROM item_index")
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index rows .* incomplete"):
+            store.query(tgdb.Query.all().indexed("score"))
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index rows .* incomplete"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index row .* missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "INSERT INTO item_index VALUES (?, 'score', 0, 9, 'decimal', '9.0', ?, ?)",
+            (
+                digest,
+                tgdb._numeric_sort_key(Decimal("9")),
+                "0" * 64,
+            ),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index row .* unexpected"):
+            store.reindex()
+
+    with pytest.raises(ValueError, match="finite"):
+        tgdb._numeric_sort_key(Decimal("Infinity"))
+    with pytest.raises(ValueError, match="document bound"):
+        tgdb._numeric_sort_key(Decimal(f"1e{MAX_DOCUMENT_BYTES + 1}"))
+    with pytest.raises(ValueError, match="qualified name"):
+        tgdb._qname_from_text("{}")
+
+
+def test_declared_index_completeness_guards_cover_every_row_class(
+    tmp_path: Path,
+) -> None:
+    """Completeness checks name missing, drifted, and unexpected count rows."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    first = _value_graph(("1.0",))
+    second = _value_graph(("2.0",))
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        first_digest = store.get(uid).graph_digest
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            transaction.commit()
+        assert store.query(
+            tgdb.Query.all().indexed("score").indexed("score", minimum=0)
+        )
+        with pytest.raises(ValueError, match="require an index name"):
+            tgdb._require_complete_item_indexes(store._connection, heads_only=True)
+
+        with store.write() as transaction:
+            transaction.publish(uid, second, expected=1)
+            transaction.commit()
+        second_digest = store.get(uid).graph_digest
+        store._connection.execute(
+            "DELETE FROM item_index_counts WHERE graph_digest = ?",
+            (second_digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index_counts row .* missing"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index_counts row .* missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        store._connection.execute(
+            "UPDATE item_index_counts SET row_count = row_count + 1 "
+            "WHERE graph_digest = ?",
+            (second_digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="differs from its document"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        store._connection.execute(
+            "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
+            "VALUES (?, 'score', 0)",
+            (first_digest,),
+        )
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="item_index_counts row .* unexpected"
+        ):
+            store.check()
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="item_index_counts row .* unexpected"
+        ):
+            store.reindex()
+        store._connection.execute(
+            "DELETE FROM item_index_counts WHERE graph_digest = ?",
+            (first_digest,),
+        )
+
+        declaration = (("score", tgdb._qname_text(tier), tgdb._qname_text(attribute)),)
+        store._connection.executemany(
+            "INSERT INTO item_index("
+            "graph_digest, index_name, tier_position, item_position, value_type, "
+            "value_text, value_num, value_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            tgdb._item_index_rows(first, first_digest, declaration),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index rows .* unexpected"):
+            store.check()
+
+
+def test_declared_index_internal_edges_are_typed_and_atomic(tmp_path: Path) -> None:
+    """Malformed recorded actions and conflicting staged rows refuse atomically."""
+    tier = QualifiedName("urn:tgdb:index", "tokens")
+    attribute = QualifiedName("urn:tgdb:index", "score")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _value_graph(("0.0",)))
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            declared = transaction.commit()
+        undone = store.undo(_commit_seq(declared))
+        assert undone.operations == ("drop_index",)
+        assert store.indexes() == ()
+
+        with store.write() as transaction:
+            transaction.declare_index("score", tier, attribute)
+            with pytest.raises(tgdb.StaleVersion, match="already declared"):
+                transaction._declare_index("score", 1, tier, attribute, False)
+            with pytest.raises(tgdb.StaleVersion, match="position 0"):
+                transaction._declare_index("other", 0, tier, attribute, False)
+            transaction.commit()
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StaleVersion, match="no longer declared"):
+                transaction._apply_action(
+                    {
+                        "action": "drop_index",
+                        "name": "missing",
+                        "touches": ["index:missing"],
+                    }
+                )
+            transaction.discard()
+
+        with store.write() as transaction:
+            second = transaction.create_instance(
+                collection, "second", _value_graph(("1.0",))
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(second, _value_graph(("0.0",)), expected=1)
+            transaction.commit()
+        assert store.get(second).graph_digest == store.get("sample").graph_digest
+
+        digest = store.get("sample").graph_digest
+        transaction = store.write()
+        transaction.create_collection("other")
+        transaction._staged_graphs.add(digest)
+        transaction._connection.execute(
+            "UPDATE item_index SET value_text = 'changed' WHERE graph_digest = ?",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="item_index row .* conflicts"):
+            transaction.commit()
+        assert [collection.name for collection in store.collections()] == ["collection"]
+
+        transaction = store.write()
+        transaction.create_collection("count-conflict")
+        transaction._staged_graphs.add(digest)
+        transaction._connection.execute(
+            "UPDATE item_index_counts SET row_count = row_count + 1 "
+            "WHERE graph_digest = ?",
+            (digest,),
+        )
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="item_index_counts row .* conflicts"
+        ):
+            transaction.commit()
+        assert [collection.name for collection in store.collections()] == ["collection"]
+
+        wrapped = store._connection
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, "SELECT name, position", sqlite3.DatabaseError("broken")
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot list declared indexes"):
+            store.indexes()
+        store._connection = wrapped
+
+    assert tgdb._numeric_sort_key(Decimal("0")) == "1"
+    assert tgdb._index_value(
+        JsonAttributeValue(attribute, {"b": 2, "a": [True, None]})
+    )[0:3] == ("json", '{"a":[true,null],"b":2}', None)
+    graph_without_value = Graph(
+        (NamespaceDeclaration("index", "urn:tgdb:index"),),
+        (Tier(TierDeclaration(tier, "tokens"), (Item("empty"),)),),
+        (),
+    )
+    declaration = (
+        (
+            "score",
+            tgdb._qname_text(tier),
+            tgdb._qname_text(attribute),
+        ),
+    )
+    assert tgdb._item_index_rows(graph_without_value, "0" * 64, declaration) == ()
+
+    valid = {
+        "action": "declare_index",
+        "attribute": tgdb._qname_text(attribute),
+        "history": False,
+        "name": "score",
+        "position": 0,
+        "tier": tgdb._qname_text(tier),
+        "touches": ["index:score"],
+    }
+    corruptions = (
+        ({**valid, "position": True}, "position"),
+        ({**valid, "tier": 1}, "names"),
+        ({**valid, "history": 1}, "history"),
+        ({**valid, "tier": "{}"}, "names"),
+        ({**valid, "name": ""}, "name"),
+        ({**valid, "touches": ["index:other"]}, "touches"),
+    )
+    for action, message in corruptions:
+        with pytest.raises(tgdb.StoreCorrupt, match=message):
+            tgdb._action_touches(action)
 
 
 def test_query_validation_refuses_untyped_or_unbounded_requests(tmp_path: Path) -> None:
@@ -1409,9 +1966,11 @@ def test_query_and_reindex_internal_failures_keep_store_taxonomy(
     ) -> tuple[
         dict[str, tuple[str, str, str, str, str, int, int]],
         tuple[tuple[str, int, str, int], ...],
+        tuple[tgdb._ItemIndexCountRow, ...],
+        tuple[tgdb._ItemIndexRow, ...],
     ]:
-        facts, tiers = original_derive(selected)
-        return {"0" * 64: next(iter(facts.values()))}, tiers
+        facts, tiers, counts, items = original_derive(selected)
+        return {"0" * 64: next(iter(facts.values()))}, tiers, counts, items
 
     monkeypatch.setattr(tgdb, "_derive_indexes", changed)
     with pytest.raises(tgdb.StaleVersion, match="graph set changed"):
@@ -3212,7 +3771,7 @@ def test_staged_publication_internal_corruption_is_atomic(
         transaction = store.write()
         transaction.create_collection("collection")
 
-        def ended(*args: object) -> None:
+        def ended(*args: object, **kwargs: object) -> None:
             store._connection.execute("ROLLBACK")
             raise RuntimeError("ended publication")
 
@@ -3315,6 +3874,13 @@ def test_publication_fault_at_each_step_leaves_old_heads(
                 collection, "sample", _version_graph("first")
             )
             transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_index(
+                "values",
+                QualifiedName("urn:tgdb:fault", "tokens"),
+                QualifiedName("urn:tgdb:fault", "value"),
+            )
+            transaction.commit()
         baseline = store.get(uid)
         original = tgdb._publication_step
 
@@ -3329,6 +3895,40 @@ def test_publication_fault_at_each_step_leaves_old_heads(
             with pytest.raises(RuntimeError, match=f"fault at {step}"):
                 transaction.commit()
         assert store.get(uid).to_data() == baseline.to_data()
+        assert store._connection.execute("SELECT max(seq) FROM commits").fetchone() == (
+            2,
+        )
+
+
+def test_declared_index_publication_fault_keeps_prior_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declaration fault cannot expose its metadata or derived rows."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _version_graph("first"))
+            transaction.commit()
+        original = tgdb._publication_step
+
+        def fail(selected: str) -> None:
+            if selected == "derived-rows":
+                raise RuntimeError("fault at derived rows")
+            original(selected)
+
+        monkeypatch.setattr(tgdb, "_publication_step", fail)
+        with store.write() as transaction:
+            transaction.declare_index(
+                "values",
+                QualifiedName("urn:tgdb:fault", "tokens"),
+                QualifiedName("urn:tgdb:fault", "value"),
+            )
+            with pytest.raises(RuntimeError, match="fault at derived rows"):
+                transaction.commit()
+        assert store.indexes() == ()
+        assert store._connection.execute(
+            "SELECT count(*) FROM item_index_counts"
+        ).fetchone() == (0,)
         assert store._connection.execute("SELECT max(seq) FROM commits").fetchone() == (
             1,
         )
@@ -3349,6 +3949,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "CheckReport",
         "CollectionInfo",
         "CommitReceipt",
+        "IndexInfo",
         "InstanceInfo",
         "Query",
         "ReindexReport",

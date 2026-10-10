@@ -479,8 +479,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
             "matching graph documents, one at a time."
         ),
         details=(
-            "Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Predicate values "
-            "are inline strict predicate JSON.\n\n"
+            "Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Index filters use "
+            "NAME, NAME=JSON, or NAME=:MIN:MAX. Predicate values are inline "
+            "strict predicate JSON.\n\n"
         ),
         examples=(
             "tiergraph tgdb find corpus.tgdb --collection recordings",
@@ -516,6 +517,21 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         type=_qualified_spelling,
         metavar="Q",
         help="absent tier as NAMESPACE|LOCAL; repeatable",
+    )
+    tgdb_find.add_argument(
+        "--index",
+        action="append",
+        type=_tgdb_index_filter,
+        metavar="NAME[=VALUE|:MIN:MAX]",
+        help=(
+            "required declared index, equality, or integer/decimal range; repeatable"
+        ),
+    )
+    tgdb_find.add_argument(
+        "--lacks-index",
+        action="append",
+        metavar="NAME",
+        help="declared index with no value in the graph; repeatable",
     )
     tgdb_find.add_argument("--stage", metavar="NAME", help="version stage")
     tgdb_find.add_argument(
@@ -568,8 +584,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         "reindex",
         summary="check or rebuild derived indexes",
         description=(
-            "Recompute graph facts and tier summaries from stored documents. "
-            "The default compares without writing; --rebuild replaces derived rows."
+            "Recompute graph facts, tier summaries, and declared item values from "
+            "stored documents. The default compares without writing; --rebuild "
+            "replaces derived rows."
         ),
         examples=(
             "tiergraph tgdb reindex corpus.tgdb",
@@ -581,6 +598,74 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_reindex.add_argument(
         "--rebuild", action="store_true", help="replace every derived row"
     )
+    tgdb_index = _subcommand(
+        tgdb_subparsers,
+        "index",
+        summary="manage declared item indexes",
+        description=(
+            "Declare, list, or drop ordered per-item attribute indexes. "
+            "Declarations index current heads unless --history is explicit."
+        ),
+        examples=("tiergraph tgdb index list corpus.tgdb",),
+    )
+    index_commands = tgdb_index.add_subparsers(dest="tgdb_index_command", required=True)
+    index_declare = _subcommand(
+        index_commands,
+        "declare",
+        summary="declare an item index",
+        description=(
+            "Build an item attribute index in one commit. Tier and attribute "
+            "spellings use NAMESPACE|LOCAL. The names need not occur in a current "
+            "graph."
+        ),
+        examples=(
+            "tiergraph tgdb index declare corpus.tgdb score "
+            "urn:example|tokens urn:example|score",
+        ),
+    )
+    index_declare.set_defaults(handler=_handle_tgdb)
+    index_declare.add_argument("store", metavar="STORE", help="store directory")
+    index_declare.add_argument("name", metavar="NAME", help="unique index name")
+    index_declare.add_argument(
+        "tier",
+        type=_qualified_spelling,
+        metavar="TIER",
+        help="indexed tier as NAMESPACE|LOCAL",
+    )
+    index_declare.add_argument(
+        "attribute",
+        type=_qualified_spelling,
+        metavar="ATTRIBUTE",
+        help="indexed item attribute as NAMESPACE|LOCAL",
+    )
+    index_declare.add_argument(
+        "--history",
+        action="store_true",
+        help="index every retained version instead of current heads only",
+    )
+    index_drop = _subcommand(
+        index_commands,
+        "drop",
+        summary="drop an item index",
+        description="Drop one declaration and its rebuildable value rows.",
+        examples=("tiergraph tgdb index drop corpus.tgdb score",),
+    )
+    index_drop.set_defaults(handler=_handle_tgdb)
+    index_drop.add_argument("store", metavar="STORE", help="store directory")
+    index_drop.add_argument("name", metavar="NAME", help="declared index name")
+    index_list = _subcommand(
+        index_commands,
+        "list",
+        summary="list item indexes",
+        description="List item indexes in declared order without opening graphs.",
+        examples=(
+            "tiergraph tgdb index list corpus.tgdb",
+            "tiergraph tgdb index list corpus.tgdb --json",
+        ),
+    )
+    index_list.set_defaults(handler=_handle_tgdb)
+    index_list.add_argument("store", metavar="STORE", help="store directory")
+    index_list.add_argument("--json", action="store_true", help="emit structured JSON")
     for command in ("rename", "move"):
         subcommand = _subcommand(
             tgdb_subparsers,
@@ -2023,6 +2108,86 @@ def _tgdb_tier_filter(
     return tier, minimum, maximum
 
 
+type _TgdbIndexScalar = str | bool | int | Decimal
+type _TgdbIndexFilter = tuple[
+    str,
+    _TgdbIndexScalar | None,
+    Decimal | None,
+    Decimal | None,
+]
+
+
+def _tgdb_index_filter(value: str) -> _TgdbIndexFilter:
+    """Parse one declared-index presence, equality, or numeric-range filter."""
+    name, separator, encoded = value.partition("=")
+    if not name:
+        raise argparse.ArgumentTypeError("index filters require a name")
+    if not separator:
+        return name, None, None, None
+    if encoded.startswith(":"):
+        parts = encoded.split(":")
+        if len(parts) != _TGDB_TIER_RANGE_PARTS or (not parts[1] and not parts[2]):
+            raise argparse.ArgumentTypeError(
+                "index ranges use NAME=:MIN:MAX with at least one bound"
+            )
+        try:
+            minimum = None if not parts[1] else Decimal(parts[1])
+            maximum = None if not parts[2] else Decimal(parts[2])
+        except ArithmeticError as error:
+            raise argparse.ArgumentTypeError("index bounds must be decimals") from error
+        if any(
+            bound is not None and not bound.is_finite() for bound in (minimum, maximum)
+        ):
+            raise argparse.ArgumentTypeError("index bounds must be finite")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise argparse.ArgumentTypeError("index maximum must be at least minimum")
+        try:
+            from tiergraph import tgdb  # noqa: PLC0415 -- tgdb and sqlite3 stay lazy
+
+            tgdb.Query.all().indexed(name, minimum=minimum, maximum=maximum)
+        except (TypeError, ValueError) as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
+        return name, None, minimum, maximum
+
+    def _reject_constant(constant: str) -> object:
+        raise ValueError(f"non-finite JSON number {constant!r}")
+
+    try:
+        scalar = json.loads(
+            encoded,
+            parse_float=Decimal,
+            parse_constant=_reject_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "index equality must be strict JSON"
+        ) from error
+    if type(scalar) not in (str, bool, int, Decimal):
+        raise argparse.ArgumentTypeError(
+            "index equality must be a JSON string, boolean, or number"
+        )
+    return name, cast(_TgdbIndexScalar, scalar), None, None
+
+
+def _tgdb_index_value(
+    attribute: tiergraph.QualifiedName, value: _TgdbIndexScalar
+) -> tiergraph.AttributeValue:
+    """Turn one unambiguous CLI scalar into a typed canonical graph value."""
+    if type(value) is str:
+        value_type = tiergraph.XsdType.STRING
+        lexical = value
+    elif type(value) is bool:
+        value_type = tiergraph.XsdType.BOOLEAN
+        lexical = str(value).lower()
+    elif type(value) is int:
+        value_type = tiergraph.XsdType.INTEGER
+        lexical = str(value)
+    else:
+        value_type = tiergraph.XsdType.DECIMAL
+        lexical = format(cast(Decimal, value), "f")
+    return tiergraph.AttributeValue(attribute, value_type, lexical)
+
+
 def _tgdb_predicate(value: str) -> _predicate.Predicate:
     """Parse one inline strict predicate JSON document for a store query."""
     try:
@@ -2308,20 +2473,27 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 pass
             _stdout_text(f"initialized {args.store}\n")
             return 0
-        writable = args.tgdb_command in {
-            "add",
-            "apply",
-            "batch",
-            "collection",
-            "move",
-            "publish",
-            "rename",
-            "revert",
-            "restore",
-            "retire",
-            "undo",
-        } and not (
-            args.tgdb_command == "collection" and args.tgdb_collection_command == "list"
+        writable = (
+            args.tgdb_command
+            in {
+                "add",
+                "apply",
+                "batch",
+                "collection",
+                "index",
+                "move",
+                "publish",
+                "rename",
+                "revert",
+                "restore",
+                "retire",
+                "undo",
+            }
+            and not (
+                args.tgdb_command == "collection"
+                and args.tgdb_collection_command == "list"
+            )
+            and not (args.tgdb_command == "index" and args.tgdb_index_command == "list")
         )
         writable = writable or (args.tgdb_command == "reindex" and args.rebuild)
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
@@ -2340,6 +2512,48 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     f"{action} {index_report.graphs} graphs and "
                     f"{index_report.tiers} "
                     f"{'tier' if index_report.tiers == 1 else 'tiers'}\n"
+                )
+                return 0
+            if args.tgdb_command == "index":
+                command = args.tgdb_index_command
+                if command == "list":
+                    indexes = store.indexes()
+                    if args.json:
+                        _stdout_text(
+                            _json_bytes([index.to_data() for index in indexes]).decode(
+                                "utf-8"
+                            )
+                        )
+                    else:
+                        for index in indexes:
+                            _stdout_text(
+                                "\t".join(
+                                    _text_report_field(value)
+                                    for value in (
+                                        index.position,
+                                        index.name,
+                                        f"{index.tier.namespace}|{index.tier.local_name}",
+                                        f"{index.attribute.namespace}|"
+                                        f"{index.attribute.local_name}",
+                                        "history" if index.history else "heads",
+                                    )
+                                )
+                                + "\n"
+                            )
+                    return 0
+                with store.write() as transaction:
+                    if command == "declare":
+                        transaction.declare_index(
+                            args.name,
+                            args.tier,
+                            args.attribute,
+                            history=args.history,
+                        )
+                    else:
+                        transaction.drop_index(args.name)
+                    receipt = transaction.commit()
+                _stdout_text(
+                    f"committed {receipt.commit_seq}: {command} index {args.name!r}\n"
                 )
                 return 0
             if args.tgdb_command == "collection":
@@ -2653,6 +2867,22 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     query = query.has_tier(tier, minimum=minimum, maximum=maximum)
                 for tier in args.lacks_tier or ():
                     query = query.lacks_tier(tier)
+                index_info = {index.name: index for index in store.indexes()}
+                for name, scalar, minimum, maximum in args.index or ():
+                    index_value: tiergraph.AttributeValue | None = None
+                    if scalar is not None:
+                        declaration = index_info.get(name)
+                        if declaration is None:
+                            raise tgdb.TgdbError(f"item index {name!r} is not declared")
+                        index_value = _tgdb_index_value(declaration.attribute, scalar)
+                    query = query.indexed(
+                        name,
+                        index_value,
+                        minimum=minimum,
+                        maximum=maximum,
+                    )
+                for name in args.lacks_index or ():
+                    query = query.indexed(name, present=False)
                 if args.stage is not None:
                     query = query.stage(args.stage, iteration=args.iteration)
                 if args.changed_since is not None:

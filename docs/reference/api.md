@@ -11771,6 +11771,24 @@ CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[di
 
 Return a JSON-compatible receipt in stable field order.
 
+### `IndexInfo`
+
+```text
+IndexInfo(name: 'str', position: 'int', tier: 'QualifiedName', attribute: 'QualifiedName', history: 'bool') -> None
+```
+
+Describe one declared item index in its declared catalog order.
+
+#### `IndexInfo.to_data`
+
+Method.
+
+```text
+IndexInfo.to_data(self) -> 'dict[str, str | int | bool]'
+```
+
+Return a JSON-compatible description in stable field order.
+
 ### `InstanceInfo`
 
 ```text
@@ -11874,6 +11892,22 @@ Query.lacks_tier(self, tier: 'QualifiedName') -> 'Query'
 
 Restrict results to graphs that do not declare the requested tier.
 
+#### `Query.indexed`
+
+Method.
+
+```text
+Query.indexed(self, index: 'str', value: 'AttributeValue | None' = None, *, minimum: 'Decimal | int | None' = None, maximum: 'Decimal | int | None' = None, present: 'bool' = True) -> 'Query'
+```
+
+Restrict results by one declared per-item index.
+
+With no value or range, ``present=True`` requires at least one indexed
+item and ``present=False`` requires none. Equality keeps the scalar
+value's type distinct and verifies its canonical text after the digest
+lookup. Inclusive numeric bounds match only integer- and decimal-typed
+indexed values.
+
 #### `Query.stage`
 
 Method.
@@ -11923,7 +11957,7 @@ Include retired instances and collections in the result.
 ReindexReport(rebuilt: 'bool', graphs: 'int', tiers: 'int') -> None
 ```
 
-Summarize a checked or rebuilt set of per-graph derived indexes.
+Summarize checked or rebuilt graph, tier, and declared-item indexes.
 
 #### `ReindexReport.to_data`
 
@@ -12118,7 +12152,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 5) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 6) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12230,6 +12264,16 @@ TgdbStore.instances(self, collection: 'bytes | str | None' = None, *, include_re
 
 Return instances in collection and instance declared order.
 
+#### `TgdbStore.indexes`
+
+Method.
+
+```text
+TgdbStore.indexes(self) -> 'tuple[IndexInfo, ...]'
+```
+
+Return declared item indexes in their declared order.
+
 #### `TgdbStore.get`
 
 Method.
@@ -12326,7 +12370,7 @@ Method.
 TgdbStore.reindex(self, *, rebuild: 'bool' = False) -> 'ReindexReport'
 ```
 
-Check or rebuild deterministic per-graph facts and tier summaries.
+Check or rebuild deterministic graph, tier, and declared-item rows.
 
 The check form works through a read-only handle and changes nothing.
 Rebuilding requires a writable handle, replaces only derived rows, and
@@ -12542,6 +12586,30 @@ WriteTransaction.restore(self, instance: 'bytes | str', *, collection: 'bytes | 
 ```
 
 Restore a retired instance at its existing declared position.
+
+#### `WriteTransaction.declare_index`
+
+Method.
+
+```text
+WriteTransaction.declare_index(self, name: 'str', tier: 'QualifiedName', attribute: 'QualifiedName', *, history: 'bool' = False) -> 'None'
+```
+
+Declare and build one ordered per-item attribute index.
+
+By default only documents that are current instance heads retain rows.
+``history=True`` indexes every retained version instead. The declaration
+may name a tier or attribute that no stored graph currently uses.
+
+#### `WriteTransaction.drop_index`
+
+Method.
+
+```text
+WriteTransaction.drop_index(self, name: 'str') -> 'None'
+```
+
+Drop one declared item index and its rebuildable value rows.
 
 #### `WriteTransaction.commit`
 

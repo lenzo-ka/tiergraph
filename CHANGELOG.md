@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added ordered tgdb item-index declarations with typed equality, exact numeric
+  ranges, head-only or retained-history scope, derived-row integrity checks,
+  undo, rebuilding, and CLI queries.
 - Added tgdb per-graph tier indexes, typed head queries, bounded predicate
   filtering, fixpoint checks, and deterministic index checking and rebuilding.
 - Added atomic multi-instance tgdb batches with content staging, stable reader

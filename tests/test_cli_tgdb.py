@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValue,
     EquivalenceView,
     Graph,
     Item,
@@ -19,12 +22,13 @@ from tiergraph import (
     RefusalStage,
     Tier,
     TierDeclaration,
+    XsdType,
     diff,
     dump_bytes,
     patch_dumps,
     patch_loads,
 )
-from tiergraph.cli import build_parser, main
+from tiergraph.cli import _tgdb_index_value, build_parser, main
 
 
 def test_building_tgdb_help_does_not_import_tgdb_or_sqlite() -> None:
@@ -51,7 +55,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 5\n" in plain
+    assert "schema_version: 6\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -59,11 +63,11 @@ def test_tgdb_init_and_info_plain_and_json(
     report = json.loads(capsys.readouterr().out)
     assert report == {
         "fingerprint_domain": "tiergraph-equivalence/1",
-        "index_version": 2,
+        "index_version": 3,
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 5,
+        "schema_version": 6,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -220,6 +224,120 @@ def test_tgdb_find_and_reindex_expose_tg7_queries(
     assert json.loads(capsys.readouterr().out) == {"count": 1}
 
 
+def test_tgdb_index_commands_and_find_filters(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The TG8 shell declares, lists, queries, and drops typed item indexes."""
+    store = tmp_path / "corpus.tgdb"
+    graph_path = tmp_path / "graph.json"
+    namespace = "urn:tgdb:index"
+    tier = QualifiedName(namespace, "tokens")
+    attribute = QualifiedName(namespace, "score")
+    graph = Graph(
+        (NamespaceDeclaration("index", namespace),),
+        (
+            Tier(
+                TierDeclaration(tier, "Tokens"),
+                (
+                    Item(
+                        "low",
+                        (AttributeValue(attribute, XsdType.DECIMAL, "-2.0"),),
+                    ),
+                    Item(
+                        "high",
+                        (AttributeValue(attribute, XsdType.DECIMAL, "2.5"),),
+                    ),
+                ),
+            ),
+        ),
+        (),
+        attribute_declarations=(
+            AttributeDeclaration(attribute, AttributeDomain.ITEM, XsdType.DECIMAL),
+        ),
+    )
+    graph_path.write_bytes(dump_bytes(graph))
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(store), "corpus"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "add", str(store), "corpus", "sample", str(graph_path)]) == 0
+    capsys.readouterr()
+
+    assert main(["tgdb", "index", "list", str(store), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert (
+        main(
+            [
+                "tgdb",
+                "index",
+                "declare",
+                str(store),
+                "score",
+                "urn:tgdb:index|tokens",
+                "urn:tgdb:index|score",
+            ]
+        )
+        == 0
+    )
+    assert "declare index 'score'" in capsys.readouterr().out
+    assert main(["tgdb", "index", "list", str(store)]) == 0
+    assert capsys.readouterr().out.endswith(
+        "0\tscore\turn:tgdb:index|tokens\turn:tgdb:index|score\theads\n"
+    )
+    assert main(["tgdb", "index", "list", str(store), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "name": "score",
+            "position": 0,
+            "tier": "urn:tgdb:index|tokens",
+            "attribute": "urn:tgdb:index|score",
+            "history": False,
+        }
+    ]
+
+    for filter_value in ("score=2.5", "score=:-2:3", "score"):
+        assert (
+            main(
+                [
+                    "tgdb",
+                    "find",
+                    str(store),
+                    "--index",
+                    filter_value,
+                    "--count",
+                ]
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == "1\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "find",
+                str(store),
+                "--lacks-index",
+                "score",
+                "--count",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {"count": 0}
+
+    assert main(["tgdb", "index", "drop", str(store), "score"]) == 0
+    assert "drop index 'score'" in capsys.readouterr().out
+    assert main(["tgdb", "find", str(store), "--index", "score"]) == 1
+    assert "not declared" in capsys.readouterr().err
+    assert main(["tgdb", "find", str(store), "--index", "score=2.5"]) == 1
+    assert "not declared" in capsys.readouterr().err
+
+    assert _tgdb_index_value(attribute, "text").value_type is XsdType.STRING
+    assert _tgdb_index_value(attribute, True).value_type is XsdType.BOOLEAN
+    assert _tgdb_index_value(attribute, 2).value_type is XsdType.INTEGER
+
+
 @pytest.mark.parametrize(
     "option,value",
     (
@@ -229,6 +347,14 @@ def test_tgdb_find_and_reindex_expose_tg7_queries(
         ("--tier", "words"),
         ("--tier", "urn:test|words:2:1"),
         ("--tier", "|words"),
+        ("--index", "=1"),
+        ("--index", "score=:"),
+        ("--index", "score=:2:1"),
+        ("--index", "score=:not-a-number:"),
+        ("--index", "score=:NaN:"),
+        ("--index", "score=:1e99999999:"),
+        ("--index", "score=NaN"),
+        ("--index", "score=null"),
         ("--where", '{"test":"maybe"}'),
     ),
 )
@@ -1043,3 +1169,10 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
             parser.parse_args(["tgdb", command, "--help"])
         assert caught.value.code == 0
         assert "Exit codes:" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "index", "declare", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Build an item attribute index" in help_text
+    assert "--history" in help_text
+    assert "Exit codes:" in help_text

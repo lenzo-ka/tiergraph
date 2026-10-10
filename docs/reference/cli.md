@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,index,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,index,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -403,6 +403,7 @@ positional arguments:
     history             list stored graph versions
     find                find current graph versions
     reindex             check or rebuild derived indexes
+    index               manage declared item indexes
     rename              rename an instance
     move                move an instance
     retire              retire an instance
@@ -794,7 +795,8 @@ Exit codes:
 ```text
 usage: tiergraph tgdb find [-h] [--collection NAME] [--name NAME]
                            [--fingerprint VIEW:HEX] [--tier Q[:MIN[:MAX]]]
-                           [--lacks-tier Q] [--stage NAME] [--iteration N]
+                           [--lacks-tier Q] [--index NAME[=VALUE|:MIN:MAX]]
+                           [--lacks-index NAME] [--stage NAME] [--iteration N]
                            [--changed-since COMMIT] [--changed-view VIEW]
                            [--where PREDICATE] [--order-by COLUMN] [--retired]
                            [--count] [--json]
@@ -815,6 +817,10 @@ options:
   --tier Q[:MIN[:MAX]]  required tier and optional item-count range;
                         repeatable
   --lacks-tier Q        absent tier as NAMESPACE|LOCAL; repeatable
+  --index NAME[=VALUE|:MIN:MAX]
+                        required declared index, equality, or integer/decimal
+                        range; repeatable
+  --lacks-index NAME    declared index with no value in the graph; repeatable
   --stage NAME          version stage
   --iteration N         iteration within --stage
   --changed-since COMMIT
@@ -828,7 +834,7 @@ options:
   --count               print only a count
   --json                emit structured JSON
 
-Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Predicate values are inline strict predicate JSON.
+Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Index filters use NAME, NAME=JSON, or NAME=:MIN:MAX. Predicate values are inline strict predicate JSON.
 
 Examples:
   $ tiergraph tgdb find corpus.tgdb --collection recordings
@@ -847,7 +853,7 @@ Exit codes:
 ```text
 usage: tiergraph tgdb reindex [-h] [--rebuild] STORE
 
-Recompute graph facts and tier summaries from stored documents. The default compares without writing; --rebuild replaces derived rows.
+Recompute graph facts, tier summaries, and declared item values from stored documents. The default compares without writing; --rebuild replaces derived rows.
 
 positional arguments:
   STORE       store directory
@@ -859,6 +865,32 @@ options:
 Examples:
   $ tiergraph tgdb reindex corpus.tgdb
   $ tiergraph tgdb reindex corpus.tgdb --rebuild
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb index`
+
+```text
+usage: tiergraph tgdb index [-h] {declare,drop,list} ...
+
+Declare, list, or drop ordered per-item attribute indexes. Declarations index current heads unless --history is explicit.
+
+positional arguments:
+  {declare,drop,list}
+    declare            declare an item index
+    drop               drop an item index
+    list               list item indexes
+
+options:
+  -h, --help           show this help message and exit
+
+Examples:
+  $ tiergraph tgdb index list corpus.tgdb
 
 Exit codes:
   0  success
