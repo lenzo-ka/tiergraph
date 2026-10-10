@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
-from typing import Self, cast
+from typing import Any, Self, cast
 
 from tiergraph.core import (
     Attribute,
@@ -139,6 +139,8 @@ EDIT_OPCODE_NAMES = frozenset(
         "swap_items",
         "swap_runs",
         "shift",
+        "split_container",
+        "merge_containers",
         "undeclare",
         "undeclare_with_contents",
         "unseal",
@@ -176,6 +178,8 @@ EDIT_CALL_NAMES = frozenset(
         "swap_items",
         "swap_runs",
         "shift",
+        "split_container",
+        "merge_containers",
         "undeclare",
         "unseal",
     }
@@ -778,6 +782,65 @@ class _EditCall:
 
 def _argument_data(value: object) -> JsonValue:
     """Encode the closed set of values accepted by public graph edit calls."""
+    from tiergraph.container_edit import (  # noqa: PLC0415
+        RegroupPolicies,
+        RegroupRestoration,
+    )
+    from tiergraph.replacement import SubtreeCorrespondence  # noqa: PLC0415
+
+    if isinstance(value, SubtreeCorrespondence):
+        return {
+            "kind": "subtree-correspondence",
+            "value": {
+                "items": _argument_data(tuple(value.items.items())),
+                "identity_correspondence": _argument_data(
+                    tuple(value.identity_correspondence.items())
+                ),
+            },
+        }
+    if isinstance(value, RegroupPolicies):
+        return {
+            "kind": "regroup-policies",
+            "value": {
+                "relations": _argument_data(
+                    tuple(
+                        (name, action.value) for name, action in value.relations.items()
+                    )
+                ),
+                "layers": _argument_data(
+                    tuple((name, action.value) for name, action in value.layers.items())
+                ),
+                "attributes": _argument_data(
+                    tuple(
+                        (name, action.value)
+                        for name, action in value.attributes.items()
+                    )
+                ),
+                "container_values": value.container_values.value,
+                "seam_content": value.seam_content.value,
+                "clock": None if value.clock is None else value.clock.value,
+            },
+        }
+    if isinstance(value, RegroupRestoration):
+        return {
+            "kind": "regroup-restoration",
+            "value": {
+                "survivor_item": _argument_data(value.survivor_item),
+                "membership_index": value.membership_index,
+                "relation_count": value.relation_count,
+                "polyadic_relation_count": value.polyadic_relation_count,
+                "relations": _argument_data(value.relations),
+                "polyadic_relations": _argument_data(value.polyadic_relations),
+                "removed_relation_positions": _argument_data(
+                    value.removed_relation_positions
+                ),
+                "removed_polyadic_relation_positions": _argument_data(
+                    value.removed_polyadic_relation_positions
+                ),
+                "layers": _argument_data(value.layers),
+                "seam_values": _argument_data(value.seam_values),
+            },
+        }
     if isinstance(value, GraphCarrier):
         return {"kind": "graph-carrier", "value": value.value}
     if value is None or isinstance(value, bool | int | str):
@@ -890,7 +953,9 @@ def _decode_edit_calls(value: object, path: str) -> tuple[_EditCall, ...]:
     return tuple(calls)
 
 
-def _decode_edit_argument(value: object, path: str) -> object:
+def _decode_edit_argument(  # noqa: PLR0915 -- closed tagged argument vocabulary
+    value: object, path: str
+) -> object:
     if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
         raise Refusal(RefusalStage.CONSTRUCTION, f"{path} must be an argument object")
     kind = value["kind"]
@@ -914,6 +979,148 @@ def _decode_edit_argument(value: object, path: str) -> object:
             for index, item in enumerate(items)
         )
     item = obj["value"]
+    if kind == "subtree-correspondence":
+        from tiergraph.replacement import SubtreeCorrespondence  # noqa: PLC0415
+
+        fields = _decode_object(
+            item, f"{path}.value", {"items", "identity_correspondence"}
+        )
+        item_pairs = _decode_edit_argument(fields["items"], f"{path}.value.items")
+        identity_pairs = _decode_edit_argument(
+            fields["identity_correspondence"],
+            f"{path}.value.identity_correspondence",
+        )
+        if not isinstance(item_pairs, tuple) or not isinstance(identity_pairs, tuple):
+            raise Refusal(
+                RefusalStage.CONSTRUCTION,
+                f"{path}.value correspondence fields must be tuples",
+            )
+        try:
+            return SubtreeCorrespondence(dict(item_pairs), dict(identity_pairs))
+        except (TypeError, ValueError) as error:
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
+    if kind == "regroup-policies":
+        from tiergraph.clock import ClockRebindingPolicy  # noqa: PLC0415
+        from tiergraph.container_edit import RegroupPolicies  # noqa: PLC0415
+        from tiergraph.replacement import ReplacementAction  # noqa: PLC0415
+
+        fields = _decode_object(
+            item,
+            f"{path}.value",
+            {
+                "relations",
+                "layers",
+                "attributes",
+                "container_values",
+                "seam_content",
+                "clock",
+            },
+        )
+        relations = _decode_edit_argument(
+            fields["relations"], f"{path}.value.relations"
+        )
+        layers = _decode_edit_argument(fields["layers"], f"{path}.value.layers")
+        attributes = _decode_edit_argument(
+            fields["attributes"], f"{path}.value.attributes"
+        )
+        if not all(
+            isinstance(entries, tuple) for entries in (relations, layers, attributes)
+        ):
+            raise Refusal(
+                RefusalStage.CONSTRUCTION,
+                f"{path}.value policy mappings must be tuples",
+            )
+        try:
+            return RegroupPolicies(
+                relations={
+                    name: ReplacementAction(action)
+                    for name, action in cast(
+                        tuple[tuple[QualifiedName, str], ...], relations
+                    )
+                },
+                layers={
+                    name: ReplacementAction(action)
+                    for name, action in cast(tuple[tuple[LayerName, str], ...], layers)
+                },
+                attributes={
+                    name: ReplacementAction(action)
+                    for name, action in cast(
+                        tuple[tuple[QualifiedName, str], ...], attributes
+                    )
+                },
+                container_values=ReplacementAction(
+                    _string(
+                        fields["container_values"], f"{path}.value.container_values"
+                    )
+                ),
+                seam_content=ReplacementAction(
+                    _string(fields["seam_content"], f"{path}.value.seam_content")
+                ),
+                clock=(
+                    None
+                    if fields["clock"] is None
+                    else ClockRebindingPolicy(
+                        _string(fields["clock"], f"{path}.value.clock")
+                    )
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
+    if kind == "regroup-restoration":
+        from tiergraph.container_edit import RegroupRestoration  # noqa: PLC0415
+
+        fields = _decode_object(
+            item,
+            f"{path}.value",
+            {
+                "survivor_item",
+                "membership_index",
+                "relation_count",
+                "polyadic_relation_count",
+                "relations",
+                "polyadic_relations",
+                "removed_relation_positions",
+                "removed_polyadic_relation_positions",
+                "layers",
+                "seam_values",
+            },
+        )
+        decoded = {
+            name: _decode_edit_argument(fields[name], f"{path}.value.{name}")
+            for name in (
+                "survivor_item",
+                "relations",
+                "polyadic_relations",
+                "removed_relation_positions",
+                "removed_polyadic_relation_positions",
+                "layers",
+                "seam_values",
+            )
+        }
+        try:
+            return RegroupRestoration(
+                cast(Item, decoded["survivor_item"]),
+                _integer(fields["membership_index"], f"{path}.value.membership_index"),
+                _integer(fields["relation_count"], f"{path}.value.relation_count"),
+                _integer(
+                    fields["polyadic_relation_count"],
+                    f"{path}.value.polyadic_relation_count",
+                ),
+                cast(tuple[tuple[int, RelationInstance], ...], decoded["relations"]),
+                cast(
+                    tuple[tuple[int, PolyadicRelationInstance], ...],
+                    decoded["polyadic_relations"],
+                ),
+                cast(tuple[int, ...], decoded["removed_relation_positions"]),
+                cast(tuple[int, ...], decoded["removed_polyadic_relation_positions"]),
+                cast(
+                    tuple[tuple[LayerName, tuple[LayerFact, ...]], ...],
+                    decoded["layers"],
+                ),
+                cast(Any, decoded["seam_values"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise Refusal(RefusalStage.VALUE, f"{path}.value: {error}") from error
     if kind == "qualified-name":
         return _decode_qname(item, f"{path}.value")
     if kind == "namespace-declaration":

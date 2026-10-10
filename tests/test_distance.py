@@ -18,6 +18,9 @@ from hypothesis.strategies import DataObject, DrawFn
 
 from tests.generated_graphs import GENERATED_HIERARCHIES, GeneratedHierarchy
 from tests.test_edit_primitives import fixture as primitive_fixture
+from tests.test_shift import PHRASE as REGROUP_PHRASE
+from tests.test_shift import PHRASE_WORDS as REGROUP_PHRASE_WORDS
+from tests.test_shift import hierarchy as regroup_hierarchy
 from tiergraph import (
     PRIMITIVE_KINDS,
     UNIT_COSTS,
@@ -209,6 +212,13 @@ def primitive_cases() -> tuple[PrimitiveCase, ...]:
     replacement = Item(
         attributes=(AttributeValue(case.note, XsdType.STRING, "replacement"),)
     )
+    regroup = regroup_hierarchy()
+    regroup_split = regroup.split_container(
+        ItemRef(REGROUP_PHRASE, 0),
+        1,
+        REGROUP_PHRASE_WORDS,
+        Item("distance-split"),
+    )
     return (
         edit_case(base, lambda editor: editor.add_layer(layer)),
         edit_case(layered, lambda editor: editor.remove_layer(layer)),
@@ -280,6 +290,24 @@ def primitive_cases() -> tuple[PrimitiveCase, ...]:
             ),
         ),
         edit_case(sealed, lambda editor: editor.unseal(case.spare, 1)),
+        edit_case(
+            regroup,
+            lambda editor: editor.split_container(
+                ItemRef(REGROUP_PHRASE, 0),
+                1,
+                REGROUP_PHRASE_WORDS,
+                Item("distance-split"),
+            ),
+        ),
+        edit_case(
+            regroup_split,
+            lambda editor: editor.merge_containers(
+                DurableItemRef("p0"),
+                DurableItemRef("distance-split"),
+                DurableItemRef("p0"),
+                REGROUP_PHRASE_WORDS,
+            ),
+        ),
     )
 
 
@@ -409,6 +437,12 @@ def generated_primitive_cases(
         "word-0",
         (AttributeValue(case.label, XsdType.STRING, "replacement"),),
     )
+    regroup_split = base.split_container(
+        ItemRef(case.phrase, 0),
+        1,
+        case.phrase_words,
+        Item("generated-distance-split"),
+    )
     return (
         edit_case(base, lambda editor: editor.add_layer(layer)),
         edit_case(layered, lambda editor: editor.remove_layer(layer)),
@@ -498,12 +532,39 @@ def generated_primitive_cases(
             ),
         ),
         edit_case(sealed, lambda editor: editor.unseal(case.word, 2)),
+        edit_case(
+            base,
+            lambda editor: editor.split_container(
+                ItemRef(case.phrase, 0),
+                1,
+                case.phrase_words,
+                Item("generated-distance-split"),
+            ),
+        ),
+        edit_case(
+            regroup_split,
+            lambda editor: editor.merge_containers(
+                DurableItemRef("phrase-0"),
+                DurableItemRef("generated-distance-split"),
+                DurableItemRef("phrase-0"),
+                case.phrase_words,
+            ),
+        ),
     )
 
 
 def test_atom_bound_has_a_realized_case_for_every_primitive() -> None:
     """Realized cases cover the complete public primitive vocabulary."""
     assert {case.kind for case in PRIMITIVE_CASES} == PRIMITIVE_KINDS
+
+
+def test_general_atom_bound_is_capped_by_container_regrouping() -> None:
+    """A multi-atom difference cannot exceed the cheapest regroup shortcut."""
+    before = graph("a0", "a1", "a2", "a3", "a4", "a5", relation=(0, 1))
+    after = graph("b0", "b1", "b2", "b3", "b4", "b5", relation=(0, 2))
+    assert _atom_multiset_lower_bound(
+        before, after, UNIT_COSTS, EquivalenceView.IDENTIFIED
+    ) == Decimal(3)
 
 
 @pytest.mark.parametrize("case", PRIMITIVE_CASES, ids=lambda case: case.kind)

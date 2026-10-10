@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 319 top-level `tiergraph` exports exactly once.
+It covers 323 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -996,6 +996,26 @@ old and new clock-binding endpoints. A shift without an explicit policy
 uses the operation's inherent ``keep-earlier`` seam behavior in that
 report.
 
+#### `ClockEditor.split_container`
+
+Method.
+
+```text
+ClockEditor.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'ClockEditor'
+```
+
+Split a container and bind its new seam to the selected child seam.
+
+#### `ClockEditor.merge_containers`
+
+Method.
+
+```text
+ClockEditor.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'ClockEditor'
+```
+
+Merge sister containers and withdraw only their timed internal seam.
+
 #### `ClockEditor.reparent`
 
 Method.
@@ -1057,6 +1077,8 @@ Name the structural operation summarized by a clock edit report.
 - `ITEM_MOVE` = `item move`
 - `ITEM_SWAP` = `item swap`
 - `SHIFT` = `shift`
+- `SPLIT_CONTAINER` = `container split`
+- `MERGE_CONTAINERS` = `container merge`
 - `REPARENT` = `reparent`
 - `DECLARATION_CASCADE` = `declaration cascade`
 - `SUBTREE_REPLACEMENT` = `subtree replacement`
@@ -1712,6 +1734,16 @@ GraphEditor.last_yield_changes(self) -> 'tuple[ContainmentYieldChange, ...]'
 
 Return parent-yield changes reported by the most recent shift.
 
+#### `GraphEditor.last_correspondence`
+
+Property.
+
+```text
+GraphEditor.last_correspondence(self) -> 'SubtreeCorrespondence | None'
+```
+
+Return the correspondence from the most recent derived edit.
+
 #### `GraphEditor.declare`
 
 Method.
@@ -2116,6 +2148,26 @@ boundary requires a named policy. The dropping policy withdraws stored
 values and facts at all such boundaries and reports them through
 :attr:`last_detachment`. Durable relations remain attached to their
 moved boundaries under either named policy.
+
+#### `GraphEditor.split_container`
+
+Method.
+
+```text
+GraphEditor.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'GraphEditor'
+```
+
+Split one ordered-containment membership into adjacent sisters.
+
+#### `GraphEditor.merge_containers`
+
+Method.
+
+```text
+GraphEditor.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'GraphEditor'
+```
+
+Merge two adjacent sister containers while retaining one identity.
 
 #### `GraphEditor.add_relation`
 
@@ -2718,6 +2770,26 @@ JournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direc
 
 Shift children and record the opposite sister shift as inverse.
 
+#### `JournalEditor.split_container`
+
+Method.
+
+```text
+JournalEditor.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'JournalEditor'
+```
+
+Split a container and record its exact semantic merge inverse.
+
+#### `JournalEditor.merge_containers`
+
+Method.
+
+```text
+JournalEditor.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'JournalEditor'
+```
+
+Merge sister containers and retain a semantic restoring split.
+
 #### `JournalEditor.add_relation`
 
 Method.
@@ -2913,6 +2985,26 @@ ClockJournalEditor.move_run(self, run: 'ItemRun', at: 'int | BoundaryRef') -> 'C
 ```
 
 Move one run under the named clock policy.
+
+#### `ClockJournalEditor.split_container`
+
+Method.
+
+```text
+ClockJournalEditor.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'ClockJournalEditor'
+```
+
+Split a container and journal its clock-aware semantic calls.
+
+#### `ClockJournalEditor.merge_containers`
+
+Method.
+
+```text
+ClockJournalEditor.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'ClockJournalEditor'
+```
+
+Merge containers and journal the restoring split payload.
 
 #### `ClockJournalEditor.swap_runs`
 
@@ -3263,6 +3355,34 @@ A speech-processing profile can use this default to retain provenance
 on corresponding alternatives while plain tiergraph editing continues
 to abandon dependencies unless the caller opts in.
 
+### `RegroupPolicies`
+
+```text
+RegroupPolicies(relations: 'Mapping[QualifiedName, ReplacementAction]' = <factory>, layers: 'Mapping[LayerName, ReplacementAction]' = <factory>, attributes: 'Mapping[QualifiedName, ReplacementAction]' = <factory>, container_values: 'ReplacementAction' = <ReplacementAction.FOLLOW: 'follow'>, seam_content: 'ReplacementAction' = <ReplacementAction.FOLLOW: 'follow'>, clock: 'ClockRebindingPolicy | None' = None) -> None
+```
+
+Name exact dependency handling for a container split or merge.
+
+Relations and layer facts follow the operation's functional
+correspondence unless their declaration or layer is explicitly ``drop``.
+Attribute actions address values on the container removed by a merge.
+``seam_content=DROP`` authorizes withdrawal of independent values and facts
+at the retired container seam. Timing changes additionally require the
+named clock rebinding policy.
+
+### `RegroupRestoration`
+
+```text
+RegroupRestoration(survivor_item: 'Item', membership_index: 'int', relation_count: 'int', polyadic_relation_count: 'int', relations: 'tuple[tuple[int, RelationInstance], ...]' = (), polyadic_relations: 'tuple[tuple[int, PolyadicRelationInstance], ...]' = (), removed_relation_positions: 'tuple[int, ...]' = (), removed_polyadic_relation_positions: 'tuple[int, ...]' = (), layers: 'tuple[tuple[LayerName, tuple[LayerFact, ...]], ...]' = (), seam_values: 'tuple[tuple[int, BoundaryRef | DurableBoundaryRef, tuple[Attribute, ...]], ...]' = ()) -> None
+```
+
+Carry only merge-destroyed content needed by its inverse split.
+
+Relation and layer entries retain their original carrier positions. Removed
+relation positions distinguish insertions from in-place rewrites. Seam
+entries retain their boundary-value carrier positions. The original
+survivor item restores its pre-merge attributes.
+
 ### `Subtree`
 
 ```text
@@ -3453,6 +3573,14 @@ invert_patch(patch: 'Patch') -> 'Patch'
 
 Reverse operation order and exchange every recorded transition.
 
+### `merge_containers`
+
+```text
+merge_containers(graph: 'Graph', first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'EditResult'
+```
+
+Merge adjacent sister containers and report every withdrawn link.
+
 ### `replace_subtree`
 
 ```text
@@ -3493,6 +3621,14 @@ stored values must still satisfy that profile. It does not apply a tolerance:
 callers should store external times as integral samples or milliseconds and
 put tolerance in a distance calculation. A journal records the endpoint
 changes as ordinary expanded primitives.
+
+### `split_container`
+
+```text
+split_container(graph: 'Graph', container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item' = Item(durable_id=None, attributes=()), side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'EditResult'
+```
+
+Split one container at an interior child seam and report withdrawals.
 
 ### `swap_subtrees`
 
@@ -5903,6 +6039,32 @@ change is intended. Use :meth:`Graph.edit` and inspect
 :attr:`GraphEditor.last_detachment` when the corresponding report is
 needed.
 
+#### `Graph.split_container`
+
+Method.
+
+```text
+Graph.split_container(self, container: 'ItemRef | DurableItemRef', at: 'int', containment: 'QualifiedName', new_container: 'Item | None' = None, side: "Literal['before', 'after']" = 'after', policies: 'RegroupPolicies | None' = None, restoration: 'RegroupRestoration | None' = None) -> 'Graph'
+```
+
+Return a graph with one container split at an interior child seam.
+
+Use :meth:`Graph.edit` and inspect the editor's correspondence when the
+structural mapping is needed.
+
+#### `Graph.merge_containers`
+
+Method.
+
+```text
+Graph.merge_containers(self, first: 'ItemRef | DurableItemRef', second: 'ItemRef | DurableItemRef', survivor: 'ItemRef | DurableItemRef', containment: 'QualifiedName', policies: 'RegroupPolicies | None' = None) -> 'Graph'
+```
+
+Return a graph with two adjacent sister containers merged.
+
+Use :meth:`Graph.edit` and inspect :attr:`GraphEditor.last_detachment`
+when withdrawn content must be retained.
+
 #### `Graph.add_relation`
 
 Method.
@@ -6621,7 +6783,7 @@ Version tag for serialized graph patches. Current value: `1`.
 
 ### `PRIMITIVE_KINDS`
 
-Graph operation names accepted by declared edit-cost tables. Current value: `frozenset({'add_layer', 'add_relation', 'declare', 'demote_boundary', 'demote_item', 'demote_relation', 'drop_seal', 'insert_item', 'move_item', 'promote_boundary', 'promote_item', 'promote_relation', 'put_fact', 'remove_attribute', 'remove_fact', 'remove_item', 'remove_layer', 'remove_relation', 'replace_item', 'seal', 'set_attribute', 'set_endpoints', 'swap_items', 'undeclare', 'unseal'})`.
+Graph operation names accepted by declared edit-cost tables. Current value: `frozenset({'add_layer', 'add_relation', 'declare', 'demote_boundary', 'demote_item', 'demote_relation', 'drop_seal', 'insert_item', 'merge_containers', 'move_item', 'promote_boundary', 'promote_item', 'promote_relation', 'put_fact', 'remove_attribute', 'remove_fact', 'remove_item', 'remove_layer', 'remove_relation', 'replace_item', 'seal', 'set_attribute', 'set_endpoints', 'split_container', 'swap_items', 'undeclare', 'unseal'})`.
 
 ### `MAX_DOCUMENT_BYTES`
 
@@ -7034,7 +7196,7 @@ registration order or on interpreter hash state.
 
 ### `UNIT_COSTS`
 
-Default symmetric graph-edit costs with reorder shortcuts priced as two edits. Current value: `CostTable(operations=mappingproxy({'add_layer': Decimal('1'), 'add_relation': Decimal('1'), 'declare': Decimal('1'), 'demote_boundary': Decimal('1'), 'demote_item': Decimal('1'), 'demote_relation': Decimal('1'), 'drop_seal': Decimal('1'), 'insert_item': Decimal('1'), 'move_item': Decimal('2'), 'promote_boundary': Decimal('1'), 'promote_item': Decimal('1'), 'promote_relation': Decimal('1'), 'put_fact': Decimal('1'), 'remove_attribute': Decimal('1'), 'remove_fact': Decimal('1'), 'remove_item': Decimal('1'), 'remove_layer': Decimal('1'), 'remove_relation': Decimal('1'), 'replace_item': Decimal('1'), 'seal': Decimal('1'), 'set_attribute': Decimal('1'), 'set_endpoints': Decimal('1'), 'swap_items': Decimal('2'), 'undeclare': Decimal('1'), 'unseal': Decimal('1')}), declarations=mappingproxy({}))`.
+Default symmetric graph-edit costs with reorder shortcuts priced as two edits. Current value: `CostTable(operations=mappingproxy({'add_layer': Decimal('1'), 'add_relation': Decimal('1'), 'declare': Decimal('1'), 'demote_boundary': Decimal('1'), 'demote_item': Decimal('1'), 'demote_relation': Decimal('1'), 'drop_seal': Decimal('1'), 'insert_item': Decimal('1'), 'merge_containers': Decimal('3'), 'move_item': Decimal('2'), 'promote_boundary': Decimal('1'), 'promote_item': Decimal('1'), 'promote_relation': Decimal('1'), 'put_fact': Decimal('1'), 'remove_attribute': Decimal('1'), 'remove_fact': Decimal('1'), 'remove_item': Decimal('1'), 'remove_layer': Decimal('1'), 'remove_relation': Decimal('1'), 'replace_item': Decimal('1'), 'seal': Decimal('1'), 'set_attribute': Decimal('1'), 'set_endpoints': Decimal('1'), 'split_container': Decimal('3'), 'swap_items': Decimal('2'), 'undeclare': Decimal('1'), 'unseal': Decimal('1')}), declarations=mappingproxy({}))`.
 
 ### `PersistedChoiceProfile`
 

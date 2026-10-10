@@ -13,14 +13,16 @@ from enum import IntEnum, StrEnum
 from functools import total_ordering
 from itertools import pairwise
 from types import MappingProxyType
-from typing import TYPE_CHECKING, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol, cast, overload
 
 if TYPE_CHECKING:
+    from tiergraph.container_edit import RegroupPolicies, RegroupRestoration
     from tiergraph.edit import Journal, JournalEditor
     from tiergraph.replacement import (
         DetachmentReport,
         ReplacementPolicies,
         Subtree,
+        SubtreeCorrespondence,
     )
 
 type JsonScalar = str | int | float | bool | None
@@ -2531,6 +2533,54 @@ class Graph:
             .freeze()
         )
 
+    def split_container(
+        self,
+        container: ItemRef | DurableItemRef,
+        at: int,
+        containment: QualifiedName,
+        new_container: Item | None = None,
+        side: Literal["before", "after"] = "after",
+        policies: RegroupPolicies | None = None,
+        restoration: RegroupRestoration | None = None,
+    ) -> Graph:
+        """Return a graph with one container split at an interior child seam.
+
+        Use :meth:`Graph.edit` and inspect the editor's correspondence when the
+        structural mapping is needed.
+        """
+        return (
+            self.edit()
+            .split_container(
+                container,
+                at,
+                containment,
+                Item() if new_container is None else new_container,
+                side,
+                policies,
+                restoration,
+            )
+            .freeze()
+        )
+
+    def merge_containers(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> Graph:
+        """Return a graph with two adjacent sister containers merged.
+
+        Use :meth:`Graph.edit` and inspect :attr:`GraphEditor.last_detachment`
+        when withdrawn content must be retained.
+        """
+        return (
+            self.edit()
+            .merge_containers(first, second, survivor, containment, policies)
+            .freeze()
+        )
+
     def add_relation(
         self,
         instance: RelationInstance | PolyadicRelationInstance,
@@ -2835,6 +2885,11 @@ class GraphEditor:
     def last_yield_changes(self) -> tuple[ContainmentYieldChange, ...]:
         """Return parent-yield changes reported by the most recent shift."""
         return getattr(self, "_last_yield_changes", ())
+
+    @property
+    def last_correspondence(self) -> SubtreeCorrespondence | None:
+        """Return the correspondence from the most recent derived edit."""
+        return getattr(self, "_last_correspondence", None)
 
     def declare(
         self, declaration: EditDeclaration, at: int | None = None
@@ -4182,6 +4237,87 @@ class GraphEditor:
         self._last_yield_changes = plan.yield_changes
         return self
 
+    def split_container(
+        self,
+        container: ItemRef | DurableItemRef,
+        at: int,
+        containment: QualifiedName,
+        new_container: Item | None = None,
+        side: Literal["before", "after"] = "after",
+        policies: RegroupPolicies | None = None,
+        restoration: RegroupRestoration | None = None,
+    ) -> GraphEditor:
+        """Split one ordered-containment membership into adjacent sisters."""
+        from tiergraph.container_edit import (  # noqa: PLC0415
+            RegroupPolicies,
+            RegroupRestoration,
+            _split_outcome,
+        )
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        if restoration is not None and not isinstance(restoration, RegroupRestoration):
+            raise TypeError("regroup restoration must be RegroupRestoration or None")
+        outcome = _split_outcome(
+            self.freeze(),
+            container,
+            at,
+            containment,
+            Item() if new_container is None else new_container,
+            side,
+            policies,
+            restoration,
+        )
+        temporary = GraphEditor(outcome.graph)
+        self._namespaces = temporary._namespaces
+        self._tiers = temporary._tiers
+        self._relation_declarations = temporary._relation_declarations
+        self._relations = temporary._relations
+        self._attribute_declarations = temporary._attribute_declarations
+        self._boundary_values = temporary._boundary_values
+        self._attributes = temporary._attributes
+        self._polyadic_relations = temporary._polyadic_relations
+        self._seals = temporary._seals
+        self._layers = temporary._layers
+        self._advance_displacement(cast(Displacement, outcome.displacement))
+        self._last_detachment = None
+        self._last_correspondence = outcome.correspondence
+        self._last_yield_changes = ()
+        return self
+
+    def merge_containers(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> GraphEditor:
+        """Merge two adjacent sister containers while retaining one identity."""
+        from tiergraph.container_edit import RegroupPolicies, _merge_outcome  # noqa: PLC0415
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        outcome = _merge_outcome(
+            self.freeze(), first, second, survivor, containment, policies
+        )
+        temporary = GraphEditor(outcome.graph)
+        self._namespaces = temporary._namespaces
+        self._tiers = temporary._tiers
+        self._relation_declarations = temporary._relation_declarations
+        self._relations = temporary._relations
+        self._attribute_declarations = temporary._attribute_declarations
+        self._boundary_values = temporary._boundary_values
+        self._attributes = temporary._attributes
+        self._polyadic_relations = temporary._polyadic_relations
+        self._seals = temporary._seals
+        self._layers = temporary._layers
+        self._advance_displacement(cast(Displacement, outcome.displacement))
+        self._last_detachment = outcome.report
+        self._last_correspondence = outcome.correspondence
+        self._last_yield_changes = ()
+        return self
+
     def add_relation(
         self,
         instance: RelationInstance | PolyadicRelationInstance,
@@ -5068,6 +5204,7 @@ class GraphEditor:
         subject: str,
         *,
         stationary_inputs: bool = False,
+        boundary_mapping: dict[int, int] | None = None,
     ) -> None:
         # Everything a refusal can see is computed before anything is written,
         # so a refused operation leaves this editor exactly as it was.
@@ -5088,7 +5225,11 @@ class GraphEditor:
             )
             if moved is not None:
                 self._refuse_seal_move(subject, name, moved, seal.sealed)
-        images = _boundary_images(len(member.items), len(items), mapping)
+        images = (
+            _boundary_images(len(member.items), len(items), mapping)
+            if boundary_mapping is None
+            else boundary_mapping
+        )
         departed_boundaries = frozenset(
             BoundaryRef(name, old)
             for old in range(len(member.items) + 1)
@@ -5121,13 +5262,13 @@ class GraphEditor:
         item_mapping = {
             ItemRef(name, old): ItemRef(name, new) for old, new in mapping.items()
         }
-        boundary_mapping = {
+        boundary_step_mapping = {
             BoundaryRef(name, old): BoundaryRef(name, new)
             for old, new in images.items()
         }
         step = self._current_displacement(
             items=item_mapping,
-            boundaries=boundary_mapping,
+            boundaries=boundary_step_mapping,
             departed_items=departed_items,
             departed_boundaries=departed_boundaries,
         )
@@ -5376,6 +5517,8 @@ _LINK_CHECKED_OPERATIONS = frozenset(
         "swap_runs",
         "swap_items",
         "shift",
+        "split_container",
+        "merge_containers",
         "add_relation",
         "remove_relation",
         "set_endpoints",
@@ -5453,7 +5596,14 @@ class _LinkCheckingGraphEditor(GraphEditor):
                         operation_displacement,
                         getattr(self, "_last_correspondence", None),
                     )
-                    if name in {"replace_subtree", "swap_subtrees", "shift"}
+                    if name
+                    in {
+                        "replace_subtree",
+                        "swap_subtrees",
+                        "shift",
+                        "split_container",
+                        "merge_containers",
+                    }
                     else None
                 )
                 link_ledger(before, after, record, operation=name)

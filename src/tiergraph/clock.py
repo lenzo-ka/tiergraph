@@ -8,10 +8,11 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 from math import gcd
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 if TYPE_CHECKING:
     from tiergraph.blob import BlobProfile
+    from tiergraph.container_edit import RegroupPolicies, RegroupRestoration
     from tiergraph.edit import ClockJournalEditor, Journal
     from tiergraph.replacement import (
         DetachedDependency,
@@ -121,6 +122,8 @@ class ClockEditOperation(StrEnum):
     ITEM_MOVE = "item move"
     ITEM_SWAP = "item swap"
     SHIFT = "shift"
+    SPLIT_CONTAINER = "container split"
+    MERGE_CONTAINERS = "container merge"
     REPARENT = "reparent"
     DECLARATION_CASCADE = "declaration cascade"
     SUBTREE_REPLACEMENT = "subtree replacement"
@@ -1396,6 +1399,237 @@ class ClockEditor:
         self._reports.extend(shift_reports)
         return self
 
+    def split_container(  # noqa: PLR0915 -- atomic structural and clock plan
+        self,
+        container: ItemRef | DurableItemRef,
+        at: int,
+        containment: QualifiedName,
+        new_container: Item | None = None,
+        side: Literal["before", "after"] = "after",
+        policies: RegroupPolicies | None = None,
+        restoration: RegroupRestoration | None = None,
+    ) -> ClockEditor:
+        """Split a container and bind its new seam to the selected child seam."""
+        from tiergraph.container_edit import (  # noqa: PLC0415
+            RegroupPolicies,
+            RegroupRestoration,
+        )
+
+        self._require_active_profile()
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        if restoration is not None and not isinstance(restoration, RegroupRestoration):
+            raise TypeError("regroup restoration must be RegroupRestoration or None")
+        selected = RegroupPolicies() if policies is None else policies
+        coordinate = self._graph.resolve_item(container)
+        operation = ClockEditOperation.SPLIT_CONTAINER
+        if coordinate.tier == self._profile.clock_tier:
+            raise GraphValidationError(
+                "container split cannot restructure the clock tier in a bound session"
+            )
+        probe = self._graph.edit()
+        _, instances = probe._containment_instances(containment)
+        membership = instances.get(coordinate)
+        if membership is None:
+            raise GraphValidationError(
+                f"container {str(coordinate)!r} has no {str(containment)!r} membership"
+            )
+        children = probe._resolved_containment_targets(membership)
+        if (
+            isinstance(at, bool)
+            or not isinstance(at, int)
+            or not 0 < at < len(children)
+        ):
+            raise GraphValidationError(
+                f"split position {at!r} must be inside the container's {len(children)} children"
+            )
+        child_seam = BoundaryRef(children[at].tier, children[at].index)
+        supplied = Item() if new_container is None else new_container
+        named = selected.clock if selected.clock is not None else self._policy
+        effective = (
+            replace(selected, clock=named)
+            if selected.clock is None and named is not None
+            else selected
+        )
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.split_container(
+                container,
+                at,
+                containment,
+                supplied,
+                side,
+                effective,
+                restoration,
+            )
+
+        if not self._profile.is_timed(coordinate.tier):
+            editor = self._graph.edit()
+            _edit(editor)
+            if getattr(self, "_capture_journal_displacement", False):
+                self._journal_displacement = editor.displacement()
+            candidate = editor.freeze()
+            self._graph = candidate
+            self._profile = self._profile_with_graph(candidate)
+            self._detached_content = editor.last_detachment
+            self._link_correspondence = editor.last_correspondence
+            return self
+        if named is None:
+            self._missing_policy(operation, coordinate.tier)
+        if named is not ClockRebindingPolicy.KEEP_EARLIER:
+            raise GraphValidationError(
+                "container split on a timed tier requires 'keep-earlier'"
+            )
+        if not self._profile.is_timed(child_seam.tier):
+            raise GraphValidationError(
+                f"container split child seam {str(child_seam)!r} is untimed"
+            )
+        child_record = next(
+            (
+                record
+                for record in self._binding_records(child_seam.tier)
+                if record.boundary == child_seam
+            ),
+            None,
+        )
+        if child_record is None:  # pragma: no cover - timed profile is boundary-total
+            raise GraphValidationError(
+                f"container split child seam {str(child_seam)!r} has no clock binding"
+            )
+        editor = self._graph.edit()
+        _edit(editor)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
+        candidate = editor.freeze()
+        seam = BoundaryRef(coordinate.tier, coordinate.index + 1)
+        binding = next(
+            relation
+            for relation in candidate.relations
+            if relation.declaration == self._profile.binding_relation
+            and isinstance(relation.left, DurableBoundaryRef)
+            and candidate.resolve_boundary(relation.left) == seam
+        )
+        change = ClockBindingChange(
+            None,
+            seam,
+            None,
+            binding.left,
+            None,
+            cast(DurableBoundaryRef, binding.right),
+            None,
+            self._profile.clock_index(child_seam),
+            False,
+        )
+        next_profile = self._profile_for(candidate)
+        self._graph = candidate
+        self._profile = next_profile
+        self._detached_content = editor.last_detachment
+        self._link_correspondence = editor.last_correspondence
+        self._reports.append(
+            ClockEditReport(
+                operation,
+                cast(ClockRebindingPolicy, named),
+                coordinate.tier,
+                (change,),
+                False,
+            )
+        )
+        return self
+
+    def merge_containers(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> ClockEditor:
+        """Merge sister containers and withdraw only their timed internal seam."""
+        from tiergraph.container_edit import RegroupPolicies  # noqa: PLC0415
+
+        self._require_active_profile()
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        selected = RegroupPolicies() if policies is None else policies
+        left, right = sorted(
+            (self._graph.resolve_item(first), self._graph.resolve_item(second)),
+            key=lambda reference: reference.index,
+        )
+        operation = ClockEditOperation.MERGE_CONTAINERS
+        if left.tier == self._profile.clock_tier:
+            raise GraphValidationError(
+                "container merge cannot restructure the clock tier in a bound session"
+            )
+        named = selected.clock if selected.clock is not None else self._policy
+        effective = (
+            replace(selected, clock=named)
+            if selected.clock is None and named is not None
+            else selected
+        )
+
+        def _edit(editor: GraphEditor) -> GraphEditor:
+            return editor.merge_containers(
+                first, second, survivor, containment, effective
+            )
+
+        if not self._profile.is_timed(left.tier):
+            editor = self._graph.edit()
+            _edit(editor)
+            if getattr(self, "_capture_journal_displacement", False):
+                self._journal_displacement = editor.displacement()
+            candidate = editor.freeze()
+            self._graph = candidate
+            self._profile = self._profile_with_graph(candidate)
+            self._detached_content = editor.last_detachment
+            self._link_correspondence = editor.last_correspondence
+            return self
+        if named is None:
+            self._missing_policy(operation, left.tier)
+        if named is not ClockRebindingPolicy.DROP_TO_PROVISIONAL:
+            raise GraphValidationError(
+                "container merge on a timed tier requires 'drop-to-provisional'"
+            )
+        records = self._binding_records(left.tier)
+        seam = BoundaryRef(left.tier, right.index)
+        seam_record = next(
+            (record for record in records if record.boundary == seam), None
+        )
+        if seam_record is None:  # pragma: no cover - timed profile is boundary-total
+            raise GraphValidationError(
+                f"container merge seam {str(seam)!r} has no clock binding"
+            )
+        editor = self._graph.edit()
+        _edit(editor)
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
+        candidate = editor.freeze()
+        change = ClockBindingChange(
+            seam,
+            None,
+            seam_record.relation.left,
+            None,
+            cast(DurableBoundaryRef, seam_record.relation.right),
+            None,
+            self._profile.clock_index(seam),
+            None,
+            False,
+        )
+        next_profile = self._profile_for(candidate)
+        self._graph = candidate
+        self._profile = next_profile
+        self._detached_content = editor.last_detachment
+        self._link_correspondence = editor.last_correspondence
+        self._reports.append(
+            ClockEditReport(
+                operation,
+                cast(ClockRebindingPolicy, named),
+                left.tier,
+                (change,),
+                False,
+            )
+        )
+        return self
+
     def _rebind_shift_boundaries(
         self,
         candidate: Graph,
@@ -2211,6 +2445,8 @@ _CLOCK_LINK_CHECKED_OPERATIONS = frozenset(
         "swap_items",
         "swap_runs",
         "shift",
+        "split_container",
+        "merge_containers",
         "reparent",
         "replace_subtree",
         "undeclare_with_contents",
@@ -2261,7 +2497,13 @@ class _LinkCheckingClockEditor(ClockEditor):
                         displacement,
                         getattr(self, "_link_correspondence", None),
                     )
-                    if name in {"replace_subtree", "shift"}
+                    if name
+                    in {
+                        "replace_subtree",
+                        "shift",
+                        "split_container",
+                        "merge_containers",
+                    }
                     else (None, displacement, None)
                 )
                 link_ledger(

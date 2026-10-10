@@ -85,6 +85,8 @@
       "PrunedFact",
       "ReplacementAction",
       "ReplacementPolicies",
+      "RegroupPolicies",
+      "RegroupRestoration",
       "Subtree",
       "SubtreeCorrespondence",
       "ShiftDirection",
@@ -97,8 +99,10 @@
       "contain_by_time",
       "diff",
       "invert_patch",
+      "merge_containers",
       "replace_subtree",
       "retime",
+      "split_container",
       "swap_subtrees",
       "undeclare_with_contents"
     ],
@@ -421,6 +425,7 @@
     ],
     "docs/guide/editing.md": [
       "python",
+      "text",
       "text",
       "text",
       "python",

@@ -11,10 +11,11 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from inspect import Parameter, signature
 from itertools import pairwise
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from tiergraph.blob import BlobProfile
+    from tiergraph.container_edit import RegroupPolicies, RegroupRestoration
     from tiergraph.patch import Patch
 
 from tiergraph.clock import (
@@ -76,6 +77,7 @@ from tiergraph.core import (
 from tiergraph.replacement import (
     DetachedDependency,
     DetachmentReport,
+    ReplacementAction,
     ReplacementPolicies,
     Subtree,
     SubtreeCorrespondence,
@@ -98,6 +100,7 @@ _GRAPH_FIELDS = (
 )
 _POSITIONAL_PATCH_LIMIT = 4
 _LEDGER_RECORD_LENGTH = 3
+_MERGE_CONTAINER_COUNT = 2
 type _ProvenanceKey = tuple[LayerSubject, QualifiedName]
 type _ProvenanceOwnershipDelta = tuple[
     frozenset[_ProvenanceKey], frozenset[_ProvenanceKey]
@@ -1296,6 +1299,8 @@ def _inverse_name(operation: str) -> str:
         "move_item": "move_item",
         "move_run": "move_run",
         "shift": "shift",
+        "split_container": "merge_containers",
+        "merge_containers": "split_container",
         "swap_items": "swap_items",
         "swap_runs": "swap_runs",
         "add_relation": "remove_relation",
@@ -2060,18 +2065,36 @@ class Journal:
             else:
                 forward_calls = ()
                 inverse_calls = ()
-            try:
+            if record.operation in {"split_container", "merge_containers"}:
                 opcode = DeltaOpcode.between(
                     record.operation, cursor, target, forward_calls
                 )
-            except (GraphValidationError, TypeError, ValueError):
-                opcode = DeltaOpcode.between("delta", cursor, target)
-            try:
+                if opcode.changes:
+                    raise GraphValidationError(
+                        f"{record.operation} call does not reproduce its target"
+                    )
+            else:
+                try:
+                    opcode = DeltaOpcode.between(
+                        record.operation, cursor, target, forward_calls
+                    )
+                except (GraphValidationError, TypeError, ValueError):
+                    opcode = DeltaOpcode.between("delta", cursor, target)
+            if record.inverse.operation in {"split_container", "merge_containers"}:
                 inverse = DeltaOpcode.between(
                     record.inverse.operation, target, cursor, inverse_calls
                 )
-            except (GraphValidationError, TypeError, ValueError):
-                inverse = DeltaOpcode.between("delta", target, cursor)
+                if inverse.changes:
+                    raise GraphValidationError(
+                        f"{record.inverse.operation} call does not reproduce its target"
+                    )
+            else:
+                try:
+                    inverse = DeltaOpcode.between(
+                        record.inverse.operation, target, cursor, inverse_calls
+                    )
+                except (GraphValidationError, TypeError, ValueError):
+                    inverse = DeltaOpcode.between("delta", target, cursor)
             operations.append(
                 PatchOperation(
                     opcode,
@@ -3357,6 +3380,147 @@ class JournalEditor(_JournalEditorBase):
             correspondence=correspondence,
         )
 
+    def split_container(
+        self,
+        container: ItemRef | DurableItemRef,
+        at: int,
+        containment: QualifiedName,
+        new_container: Item | None = None,
+        side: Literal["before", "after"] = "after",
+        policies: RegroupPolicies | None = None,
+        restoration: RegroupRestoration | None = None,
+    ) -> JournalEditor:
+        """Split a container and record its exact semantic merge inverse."""
+        from tiergraph.container_edit import (  # noqa: PLC0415
+            RegroupPolicies,
+            RegroupRestoration,
+            _split_outcome,
+        )
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        if restoration is not None and not isinstance(restoration, RegroupRestoration):
+            raise TypeError("regroup restoration must be RegroupRestoration or None")
+        supplied = Item() if new_container is None else new_container
+        coordinate = self._graph.resolve_item(container)
+        outcome = _split_outcome(
+            self._graph,
+            container,
+            at,
+            containment,
+            supplied,
+            side,
+            policies,
+            restoration,
+        )
+        original_after = outcome.correspondence.identity_correspondence[coordinate][0]
+        halves = outcome.correspondence.items[coordinate]
+        new_after = next(
+            reference for reference in halves if reference != original_after
+        )
+        inverse_policies = RegroupPolicies(
+            attributes={
+                value.name: ReplacementAction.DROP for value in supplied.attributes
+            }
+        )
+        operations = _operation_pair(
+            "split_container",
+            (
+                coordinate,
+                at,
+                containment,
+                supplied,
+                side,
+                policies,
+                restoration,
+            ),
+            "merge_containers",
+            (
+                original_after,
+                new_after,
+                original_after,
+                containment,
+                inverse_policies,
+            ),
+        )
+        self._finish(
+            "split_container",
+            outcome.graph,
+            cast(Displacement, outcome.displacement),
+            operations=operations,
+            provenance_subjects=_present_subject(
+                _stable_subject(self._graph, coordinate)
+            ),
+            detached_content=None,
+            correspondence=outcome.correspondence,
+        )
+        return self
+
+    def merge_containers(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> JournalEditor:
+        """Merge sister containers and retain a semantic restoring split."""
+        from tiergraph.container_edit import (  # noqa: PLC0415
+            RegroupPolicies,
+            _merge_outcome,
+        )
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        left, right = sorted(
+            (self._graph.resolve_item(first), self._graph.resolve_item(second)),
+            key=lambda reference: reference.index,
+        )
+        kept = self._graph.resolve_item(survivor)
+        removed = right if kept == left else left
+        removed_item = _item_at(self._graph, removed)
+        probe = GraphEditor(self._graph)
+        _, instances = probe._containment_instances(containment)
+        left_membership = instances.get(left)
+        left_count = (
+            0
+            if left_membership is None
+            else len(self._graph.polyadic_relations[left_membership].targets)
+        )
+        outcome = _merge_outcome(
+            self._graph, first, second, survivor, containment, policies
+        )
+        assert outcome.restoration is not None
+        after_kept = outcome.correspondence.identity_correspondence[kept][0]
+        side = "after" if kept == left else "before"
+        inverse_policies = RegroupPolicies(
+            clock=None if policies is None else policies.clock
+        )
+        operations = _operation_pair(
+            "merge_containers",
+            (left, right, kept, containment, policies),
+            "split_container",
+            (
+                after_kept,
+                left_count,
+                containment,
+                removed_item,
+                side,
+                inverse_policies,
+                outcome.restoration,
+            ),
+        )
+        self._finish(
+            "merge_containers",
+            outcome.graph,
+            cast(Displacement, outcome.displacement),
+            operations=operations,
+            provenance_subjects=_present_subject(_stable_subject(self._graph, kept)),
+            detached_content=outcome.report,
+            correspondence=outcome.correspondence,
+        )
+        return self
+
     def add_relation(
         self,
         instance: RelationInstance | PolyadicRelationInstance,
@@ -4093,6 +4257,289 @@ def _shift_endpoint_match(
     return (link, candidate) in moves
 
 
+def _regroup_endpoint_moves(  # noqa: PLR0915 -- validates both exact regroup shapes
+    before: Graph,
+    after: Graph,
+    displacement: Displacement,
+    correspondence: SubtreeCorrespondence | None,
+    operation: str | None,
+    source_links: tuple[_LinkSnapshot, ...],
+    target_links: tuple[_LinkSnapshot, ...],
+) -> frozenset[tuple[_LinkSnapshot, _LinkSnapshot]]:
+    """Return only endpoint moves authorized by one exact regroup shape."""
+    if correspondence is None or operation not in {
+        "split_container",
+        "merge_containers",
+    }:
+        return frozenset()
+
+    moves: set[tuple[_LinkSnapshot, _LinkSnapshot]] = set()
+    item_images = correspondence.items
+
+    # First account for whole instances whose positional owner departed from
+    # the displacement because regroup rewrote or inserted a neighboring
+    # membership. Matching the complete transformed instance keeps this route
+    # narrower than a declaration-only fallback.
+    for old_index, old_relation in enumerate(before.polyadic_relations):
+        transformed_sides: list[tuple[RelationEndpointRef, ...]] = []
+        for endpoints in (old_relation.sources, old_relation.targets):
+            transformed = tuple(
+                image
+                for endpoint in endpoints
+                for image in cast(
+                    tuple[RelationEndpointRef, ...],
+                    _reference_images(endpoint, displacement, correspondence),
+                )
+            )
+            if operation == "merge_containers":
+                transformed = tuple(dict.fromkeys(transformed))
+            transformed_sides.append(transformed)
+        candidates = tuple(
+            (new_index, new_relation)
+            for new_index, new_relation in enumerate(after.polyadic_relations)
+            if new_relation.declaration == old_relation.declaration
+            and new_relation.durable_id == old_relation.durable_id
+            and new_relation.attributes == old_relation.attributes
+            and new_relation.sources == transformed_sides[0]
+            and new_relation.targets == transformed_sides[1]
+        )
+        if len(candidates) != 1:
+            continue
+        new_index, new_relation = candidates[0]
+        for side, old_endpoints, new_endpoints in (
+            ("sources", old_relation.sources, new_relation.sources),
+            ("targets", old_relation.targets, new_relation.targets),
+        ):
+            next_position = 0
+            for old_position, endpoint in enumerate(old_endpoints):
+                images = cast(
+                    tuple[RelationEndpointRef, ...],
+                    _reference_images(endpoint, displacement, correspondence),
+                )
+                identity = (
+                    correspondence.identity_correspondence.get(
+                        before.resolve_item(endpoint)
+                    )
+                    if isinstance(endpoint, ItemRef | DurableItemRef)
+                    else None
+                )
+                selected = identity[0] if identity else images[0]
+                new_position = next(
+                    (
+                        position
+                        for position in range(next_position, len(new_endpoints))
+                        if new_endpoints[position] == selected
+                    ),
+                    None,
+                )
+                if new_position is None and operation == "merge_containers":
+                    new_position = next(
+                        (
+                            position
+                            for position, candidate in enumerate(new_endpoints)
+                            if candidate == selected
+                        ),
+                        None,
+                    )
+                if new_position is None:  # pragma: no cover - exact match invariant
+                    continue
+                next_position = new_position + 1
+                moves.add(
+                    (
+                        _LinkSnapshot(
+                            "endpoint",
+                            "polyadic_relations",
+                            ("polyadic_relations", old_index),
+                            endpoint,
+                            side,
+                            old_position,
+                        ),
+                        _LinkSnapshot(
+                            "endpoint",
+                            "polyadic_relations",
+                            ("polyadic_relations", new_index),
+                            selected,
+                            side,
+                            new_position,
+                        ),
+                    )
+                )
+
+    if operation == "merge_containers":
+        merged = tuple(item_images)
+        if len(merged) != _MERGE_CONTAINER_COUNT:  # pragma: no cover - edit invariant
+            return frozenset()
+        merged_images = {image for source in merged for image in item_images[source]}
+        if len(merged_images) != 1:  # pragma: no cover - edit invariant
+            return frozenset()
+        result = next(iter(merged_images))
+        for link in source_links:
+            if (
+                link.kind != "endpoint"
+                or link.carrier != "polyadic_relations"
+                or not isinstance(link.value, ItemRef | DurableItemRef)
+                or before.resolve_item(link.value) not in merged
+            ):
+                continue
+            _, relation_index = cast(tuple[str, int], link.owner)
+            image = displacement.polyadic_relations.get(relation_index)
+            if image is None:
+                continue
+            for candidate in target_links:
+                if (
+                    candidate.kind == "endpoint"
+                    and candidate.carrier == "polyadic_relations"
+                    and candidate.owner == ("polyadic_relations", image)
+                    and candidate.side == link.side
+                    and isinstance(candidate.value, ItemRef | DurableItemRef)
+                    and after.resolve_item(candidate.value) == result
+                ):
+                    moves.add((link, candidate))
+
+    membership_sources = tuple(item_images)
+    for before_relation in before.polyadic_relations:
+        if len(before_relation.sources) != 1 or not isinstance(  # pragma: no cover
+            before_relation.sources[0], ItemRef | DurableItemRef
+        ):
+            continue
+        source = before.resolve_item(before_relation.sources[0])
+        if source not in membership_sources:
+            continue
+        source_group = (
+            (source,)
+            if operation == "split_container"
+            else tuple(
+                sorted(
+                    membership_sources,
+                    key=lambda reference: (reference.tier, reference.index),
+                )
+            )
+        )
+        before_memberships = tuple(
+            (index, relation)
+            for index, relation in enumerate(before.polyadic_relations)
+            if relation.declaration == before_relation.declaration
+            and len(relation.sources) == 1
+            and isinstance(relation.sources[0], ItemRef | DurableItemRef)
+            and before.resolve_item(relation.sources[0]) in source_group
+        )
+        after_sources = {image for old in source_group for image in item_images[old]}
+        after_memberships = tuple(
+            (index, relation)
+            for index, relation in enumerate(after.polyadic_relations)
+            if relation.declaration == before_relation.declaration
+            and len(relation.sources) == 1
+            and isinstance(relation.sources[0], ItemRef | DurableItemRef)
+            and after.resolve_item(relation.sources[0]) in after_sources
+        )
+        expected_counts = (1, 2) if operation == "split_container" else (2, 1)
+        if (  # pragma: no cover - exact membership edit invariant
+            len(before_memberships),
+            len(after_memberships),
+        ) != expected_counts:
+            continue
+        before_memberships = tuple(
+            sorted(
+                before_memberships,
+                key=lambda entry: (
+                    before.resolve_item(
+                        cast(ItemRef | DurableItemRef, entry[1].sources[0])
+                    ).index
+                ),
+            )
+        )
+        after_memberships = tuple(
+            sorted(
+                after_memberships,
+                key=lambda entry: (
+                    after.resolve_item(
+                        cast(ItemRef | DurableItemRef, entry[1].sources[0])
+                    ).index
+                ),
+            )
+        )
+        before_targets = tuple(
+            endpoint
+            for _, relation in before_memberships
+            for endpoint in relation.targets
+        )
+        after_targets = tuple(
+            endpoint
+            for _, relation in after_memberships
+            for endpoint in relation.targets
+        )
+        if before_targets != after_targets:  # pragma: no cover - edit invariant
+            continue
+        before_slots = tuple(
+            (index, position, endpoint)
+            for index, relation in before_memberships
+            for position, endpoint in enumerate(relation.targets)
+        )
+        after_slots = tuple(
+            (index, position, endpoint)
+            for index, relation in after_memberships
+            for position, endpoint in enumerate(relation.targets)
+        )
+        for (old_index, old_position, endpoint), (
+            new_index,
+            new_position,
+            _,
+        ) in zip(before_slots, after_slots, strict=True):
+            moves.add(
+                (
+                    _LinkSnapshot(
+                        "endpoint",
+                        "polyadic_relations",
+                        ("polyadic_relations", old_index),
+                        endpoint,
+                        "targets",
+                        old_position,
+                    ),
+                    _LinkSnapshot(
+                        "endpoint",
+                        "polyadic_relations",
+                        ("polyadic_relations", new_index),
+                        endpoint,
+                        "targets",
+                        new_position,
+                    ),
+                )
+            )
+        if operation == "merge_containers":
+            new_index, new_relation = after_memberships[0]
+            for old_index, old_relation in before_memberships:
+                moves.add(
+                    (
+                        _LinkSnapshot(
+                            "endpoint",
+                            "polyadic_relations",
+                            ("polyadic_relations", old_index),
+                            old_relation.sources[0],
+                            "sources",
+                            0,
+                        ),
+                        _LinkSnapshot(
+                            "endpoint",
+                            "polyadic_relations",
+                            ("polyadic_relations", new_index),
+                            new_relation.sources[0],
+                            "sources",
+                            0,
+                        ),
+                    )
+                )
+    return frozenset(moves)
+
+
+def _regroup_endpoint_match(
+    link: _LinkSnapshot,
+    candidate: _LinkSnapshot,
+    moves: frozenset[tuple[_LinkSnapshot, _LinkSnapshot]],
+) -> bool:
+    """Recognize one endpoint in the regroup operation's exact move account."""
+    return (link, candidate) in moves
+
+
 def _clock_endpoint_match(
     link: _LinkSnapshot,
     candidate: _LinkSnapshot,
@@ -4136,7 +4583,7 @@ def _clock_endpoint_match(
     return False
 
 
-def link_ledger(
+def link_ledger(  # noqa: PLR0915 -- complete one-pass link partition
     before: Graph,
     after: Graph,
     record: object = None,
@@ -4169,6 +4616,15 @@ def link_ledger(
         _shift_endpoint_moves(before, after, correspondence)
         if operation == "shift"
         else frozenset()
+    )
+    regroup_endpoint_moves = _regroup_endpoint_moves(
+        before,
+        after,
+        displacement,
+        correspondence,
+        operation,
+        source,
+        target,
     )
     used: set[int] = set()
     endpoint_positions: dict[tuple[object, object, str | None], int] = {}
@@ -4236,6 +4692,35 @@ def link_ledger(
                 ),
                 None,
             )
+        if match is None and operation in {"split_container", "merge_containers"}:
+            match = next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(target)
+                    if index not in used
+                    and _regroup_endpoint_match(link, candidate, regroup_endpoint_moves)
+                    and _link_positions_match(link, candidate, endpoint_positions)
+                ),
+                None,
+            )
+            if match is not None:
+                reported_drop = False
+        if match is None and operation == "merge_containers":
+            # Two sister occurrences in one parent coalesce to the survivor's
+            # single occurrence. The candidate is intentionally already used
+            # by the survivor source link; the many-to-one correspondence is
+            # the explicit authority for this sole non-injective match.
+            match = next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(target)
+                    if index in used
+                    and _regroup_endpoint_match(link, candidate, regroup_endpoint_moves)
+                ),
+                None,
+            )
+            if match is not None:
+                reported_drop = False
         if match is None and not reported_drop and clock_reports:
             match = next(
                 (
@@ -4257,7 +4742,7 @@ def link_ledger(
             dropped.append(link)
             if not reported_drop:
                 raise GraphValidationError(
-                    f"link ledger found an unreported dropped {link.kind} link"
+                    f"link ledger found an unreported dropped {link.kind} link: {link!r}"
                 )
             continue
         index, candidate = match
@@ -4554,6 +5039,164 @@ class ClockJournalEditor(_JournalEditorBase):
                 if (stable := _stable_subject(self._graph, reference)) is not None
             ),
             correspondence=SubtreeCorrespondence(alignment, alignment),
+        )
+
+    def split_container(
+        self,
+        container: ItemRef | DurableItemRef,
+        at: int,
+        containment: QualifiedName,
+        new_container: Item | None = None,
+        side: Literal["before", "after"] = "after",
+        policies: RegroupPolicies | None = None,
+        restoration: RegroupRestoration | None = None,
+    ) -> ClockJournalEditor:
+        """Split a container and journal its clock-aware semantic calls."""
+        from tiergraph.container_edit import (  # noqa: PLC0415
+            RegroupPolicies,
+            RegroupRestoration,
+            _split_outcome,
+        )
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        if restoration is not None and not isinstance(restoration, RegroupRestoration):
+            raise TypeError("regroup restoration must be RegroupRestoration or None")
+        selected = RegroupPolicies() if policies is None else policies
+        effective = (
+            replace(selected, clock=self._policy)
+            if selected.clock is None and self._policy is not None
+            else selected
+        )
+        supplied = Item() if new_container is None else new_container
+        coordinate = self._graph.resolve_item(container)
+        plain = _split_outcome(
+            self._graph,
+            container,
+            at,
+            containment,
+            supplied,
+            side,
+            effective,
+            restoration,
+        )
+        original_after = plain.correspondence.identity_correspondence[coordinate][0]
+        new_after = next(
+            reference
+            for reference in plain.correspondence.items[coordinate]
+            if reference != original_after
+        )
+        inverse_policies = RegroupPolicies(
+            attributes={
+                value.name: ReplacementAction.DROP for value in supplied.attributes
+            },
+            clock=(
+                ClockRebindingPolicy.DROP_TO_PROVISIONAL
+                if effective.clock is not None
+                else None
+            ),
+        )
+        operations = _operation_pair(
+            "split_container",
+            (
+                coordinate,
+                at,
+                containment,
+                supplied,
+                side,
+                effective,
+                restoration,
+            ),
+            "merge_containers",
+            (
+                original_after,
+                new_after,
+                original_after,
+                containment,
+                inverse_policies,
+            ),
+        )
+        return self._apply_clock(
+            "split_container",
+            lambda editor: editor.split_container(
+                container,
+                at,
+                containment,
+                supplied,
+                side,
+                effective,
+                restoration,
+            ),
+            patch_operations=operations,
+            provenance_subjects=_present_subject(
+                _stable_subject(self._graph, coordinate)
+            ),
+            correspondence=plain.correspondence,
+        )
+
+    def merge_containers(
+        self,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> ClockJournalEditor:
+        """Merge containers and journal the restoring split payload."""
+        from tiergraph.container_edit import RegroupPolicies, _merge_outcome  # noqa: PLC0415
+
+        if policies is not None and not isinstance(policies, RegroupPolicies):
+            raise TypeError("regroup policies must be RegroupPolicies or None")
+        selected = RegroupPolicies() if policies is None else policies
+        effective = (
+            replace(selected, clock=self._policy)
+            if selected.clock is None and self._policy is not None
+            else selected
+        )
+        left, right = sorted(
+            (self._graph.resolve_item(first), self._graph.resolve_item(second)),
+            key=lambda reference: reference.index,
+        )
+        kept = self._graph.resolve_item(survivor)
+        removed = right if kept == left else left
+        removed_item = _item_at(self._graph, removed)
+        probe = GraphEditor(self._graph)
+        _, instances = probe._containment_instances(containment)
+        left_membership = instances.get(left)
+        left_count = (
+            0
+            if left_membership is None
+            else len(self._graph.polyadic_relations[left_membership].targets)
+        )
+        plain = _merge_outcome(
+            self._graph, first, second, survivor, containment, effective
+        )
+        assert plain.restoration is not None
+        after_kept = plain.correspondence.identity_correspondence[kept][0]
+        side = "after" if kept == left else "before"
+        inverse_policies = RegroupPolicies(clock=effective.clock)
+        operations = _operation_pair(
+            "merge_containers",
+            (left, right, kept, containment, effective),
+            "split_container",
+            (
+                after_kept,
+                left_count,
+                containment,
+                removed_item,
+                side,
+                inverse_policies,
+                plain.restoration,
+            ),
+        )
+        return self._apply_clock(
+            "merge_containers",
+            lambda editor: editor.merge_containers(
+                first, second, survivor, containment, effective
+            ),
+            patch_operations=operations,
+            provenance_subjects=_present_subject(_stable_subject(self._graph, kept)),
+            correspondence=plain.correspondence,
         )
 
     def swap_runs(self, first: ItemRun, second: ItemRun) -> ClockJournalEditor:
