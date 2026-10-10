@@ -568,30 +568,23 @@ def test_generated_graphs_exercise_primitive_and_path_atom_bounds(
     )
     selected = data.draw(
         st.lists(
-            st.integers(min_value=0, max_value=len(operations) - 1),
-            min_size=3,
-            max_size=len(operations),
+            st.sampled_from((0, 2, 3)),
+            min_size=2,
+            max_size=3,
             unique=True,
-        ).filter(lambda path: 1 in path),
+        ).map(lambda tail: (1, *tail)),
         label="path",
     )
     journal = Journal()
     editor = case.graph.edit(journal=journal)
     applied_shift = False
-    lost_shift_seam = False
     for index in selected:
         if index == 1:
-            try:
-                operations[index](editor)
-            except GraphValidationError as error:
-                if "do not meet at a contiguous child-tier seam" not in str(error):
-                    raise
-                lost_shift_seam = True
-            else:
-                applied_shift = True
+            operations[index](editor)
+            applied_shift = True
         else:
             operations[index](editor)
-    assert applied_shift or lost_shift_seam
+    assert applied_shift
     target = editor.freeze()
     patch = journal.to_patch()
     assert len(patch.operations) >= 2

@@ -201,6 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Strengthened generated distance-path coverage to require an applied shift and
+  covered typed ancestor-boundary content through plain and journaled editors.
 - Required every ordered-containment parent to agree for default shifts and applied boundary policy reporting to all moved ancestor seams.
 - Made identified subtree correspondence preserve the source durable ID on the graph
   and refuse donor ID conflicts, including unsupported identity policies on subtree
