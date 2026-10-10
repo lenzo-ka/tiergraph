@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from functools import partial
+from typing import Literal
 
+from tiergraph.clock import ClockRebindingPolicy
 from tiergraph.core import (
     Attribute,
     DurableItemRef,
     Graph,
+    GraphEditor,
     GraphValidationError,
     Item,
     ItemRef,
@@ -321,6 +325,8 @@ def _append_residue(patch: Patch, source: Graph, target: Graph) -> Patch:
 
 def _shift_patch(source: Graph, target: Graph) -> Patch | None:
     """Recognize one identity-preserving adjacent containment-boundary shift."""
+    if source.tiers != target.tiers:
+        return None
     if (
         replace(
             source,
@@ -373,6 +379,247 @@ def _shift_patch(source: Graph, target: Graph) -> Patch | None:
     return None
 
 
+def _containment_names(graph: Graph) -> tuple[QualifiedName, ...]:
+    """Return ordered-containment declarations in declared order."""
+    return tuple(
+        declaration.name
+        for declaration in graph.relation_declarations
+        if GraphEditor._is_ordered_containment(declaration)
+    )
+
+
+def _insertion_positions(before: Sequence[Item], after: Sequence[Item]) -> range:
+    """Return every position where one item insertion explains ``after``."""
+    if len(after) != len(before) + 1:
+        return range(0)
+    prefix = 0
+    while prefix < len(before) and before[prefix] == after[prefix]:
+        prefix += 1
+    suffix = 0
+    while suffix < len(before) and before[-suffix - 1] == after[-suffix - 1]:
+        suffix += 1
+    return range(len(before) - suffix, prefix + 1)
+
+
+def _before_insertion(
+    item: ItemRef, tier: QualifiedName, insertion: int
+) -> ItemRef | None:
+    """Map a post-insertion item coordinate to its earlier coordinate."""
+    if item.tier != tier:
+        return item
+    if item.index == insertion:
+        return None
+    return ItemRef(tier, item.index - (item.index > insertion))
+
+
+def _after_removal(item: ItemRef, tier: QualifiedName, removal: int) -> ItemRef | None:
+    """Map a pre-removal item coordinate to its later coordinate."""
+    if item.tier != tier:
+        return item
+    if item.index == removal:
+        return None
+    return ItemRef(tier, item.index - (item.index > removal))
+
+
+def _mapped_items(
+    items: Sequence[ItemRef],
+    mapping: Callable[[ItemRef], ItemRef | None],
+) -> tuple[ItemRef, ...] | None:
+    """Apply one coordinate map, refusing a sequence containing the changed item."""
+    mapped: list[ItemRef] = []
+    for item in items:
+        candidate = mapping(item)
+        if candidate is None:
+            return None
+        mapped.append(candidate)
+    return tuple(mapped)
+
+
+def _regroup_patch(  # noqa: PLR0915 -- derives and verifies both regroup directions
+    source: Graph, target: Graph
+) -> Patch | None:
+    """Recognize one exact container split or merge from changed memberships."""
+    from tiergraph.container_edit import RegroupPolicies  # noqa: PLC0415
+
+    if not _schemas_are_compatible(source, target):
+        return None
+    deltas = tuple(
+        len(after.items) - len(before.items)
+        for before, after in zip(source.tiers, target.tiers, strict=True)
+    )
+    if deltas.count(1) + deltas.count(-1) != 1 or any(
+        delta not in {-1, 0, 1} for delta in deltas
+    ):
+        return None
+    changed_tier = next(index for index, delta in enumerate(deltas) if delta in {-1, 1})
+    if any(
+        before.items != after.items
+        for index, (before, after) in enumerate(
+            zip(source.tiers, target.tiers, strict=True)
+        )
+        if index != changed_tier
+    ):
+        return None
+    tier = source.tiers[changed_tier].declaration.name
+    names = _containment_names(source)
+    if not names:
+        return None
+    source_probe = GraphEditor(source)
+    target_probe = GraphEditor(target)
+    memberships = tuple(
+        (
+            containment,
+            source_probe._containment_instances(containment)[1],
+            target_probe._containment_instances(containment)[1],
+        )
+        for containment in names
+    )
+    if deltas[changed_tier] == 1:
+        before_items = source.tiers[changed_tier].items
+        after_items = target.tiers[changed_tier].items
+        candidates: list[
+            tuple[ItemRef, int, QualifiedName, Literal["after", "before"], int]
+        ] = []
+        for insertion in _insertion_positions(before_items, after_items):
+            split_placements: tuple[tuple[Literal["after", "before"], int], ...] = (
+                ("after", insertion - 1),
+                ("before", insertion),
+            )
+            for side, container_index in split_placements:
+                if container_index < 0 or container_index >= len(before_items):
+                    continue
+                container = ItemRef(tier, container_index)
+                original_after = ItemRef(tier, container_index + (side == "before"))
+                new_after = ItemRef(tier, insertion)
+                for containment, source_instances, target_instances in memberships:
+                    source_membership = source_instances.get(container)
+                    original_membership = target_instances.get(original_after)
+                    new_membership = target_instances.get(new_after)
+                    if (
+                        source_membership is None
+                        or original_membership is None
+                        or new_membership is None
+                        or original_membership == new_membership
+                    ):
+                        continue
+                    source_children = source_probe._resolved_containment_targets(
+                        source_membership
+                    )
+                    original_children = _mapped_items(
+                        target_probe._resolved_containment_targets(original_membership),
+                        partial(_before_insertion, tier=tier, insertion=insertion),
+                    )
+                    new_children = _mapped_items(
+                        target_probe._resolved_containment_targets(new_membership),
+                        partial(_before_insertion, tier=tier, insertion=insertion),
+                    )
+                    if original_children is None or new_children is None:
+                        continue
+                    child_prefix, child_suffix = (
+                        (original_children, new_children)
+                        if side == "after"
+                        else (new_children, original_children)
+                    )
+                    at = len(child_prefix)
+                    if (
+                        not child_prefix
+                        or not child_suffix
+                        or (*child_prefix, *child_suffix) != source_children
+                    ):
+                        continue
+                    split_candidate = (container, at, containment, side, insertion)
+                    candidates.append(split_candidate)
+        for container, at, containment, side, insertion in candidates:
+            for policies in (
+                None,
+                RegroupPolicies(clock=ClockRebindingPolicy.KEEP_EARLIER),
+            ):
+                journal = Journal()
+                editor = source.edit(journal=journal)
+                try:
+                    editor.split_container(
+                        container,
+                        at,
+                        containment,
+                        after_items[insertion],
+                        side,
+                        policies,
+                    )
+                except GraphValidationError:
+                    continue
+                if editor.freeze() == target:
+                    return journal.to_patch()
+        reverse = _regroup_patch(target, source)
+        return None if reverse is None else reverse.invert()
+
+    before_items = source.tiers[changed_tier].items
+    after_items = target.tiers[changed_tier].items
+    merge_candidates: list[tuple[ItemRef, ItemRef, ItemRef, QualifiedName]] = []
+    for removal in _insertion_positions(after_items, before_items):
+        merge_placements: list[tuple[ItemRef, ItemRef, ItemRef]] = []
+        if removal > 0:
+            merge_placements.append(
+                (
+                    ItemRef(tier, removal - 1),
+                    ItemRef(tier, removal),
+                    ItemRef(tier, removal - 1),
+                )
+            )
+        if removal + 1 < len(before_items):
+            merge_placements.append(
+                (
+                    ItemRef(tier, removal),
+                    ItemRef(tier, removal + 1),
+                    ItemRef(tier, removal + 1),
+                )
+            )
+        for first, second, survivor in merge_placements:
+            survivor_after = ItemRef(tier, survivor.index - (survivor.index > removal))
+            for containment, source_instances, target_instances in memberships:
+                left_membership = source_instances.get(first)
+                right_membership = source_instances.get(second)
+                survivor_membership = target_instances.get(survivor_after)
+                if (
+                    left_membership is None
+                    or right_membership is None
+                    or survivor_membership is None
+                ):
+                    continue
+                left_children = _mapped_items(
+                    source_probe._resolved_containment_targets(left_membership),
+                    partial(_after_removal, tier=tier, removal=removal),
+                )
+                right_children = _mapped_items(
+                    source_probe._resolved_containment_targets(right_membership),
+                    partial(_after_removal, tier=tier, removal=removal),
+                )
+                target_children = target_probe._resolved_containment_targets(
+                    survivor_membership
+                )
+                if (
+                    left_children is None
+                    or right_children is None
+                    or (*left_children, *right_children) != target_children
+                ):
+                    continue
+                merge_candidate = (first, second, survivor, containment)
+                merge_candidates.append(merge_candidate)
+    for first, second, survivor, containment in merge_candidates:
+        for policies in (
+            None,
+            RegroupPolicies(clock=ClockRebindingPolicy.DROP_TO_PROVISIONAL),
+        ):
+            journal = Journal()
+            editor = source.edit(journal=journal)
+            try:
+                editor.merge_containers(first, second, survivor, containment, policies)
+            except GraphValidationError:
+                continue
+            if editor.freeze() == target:
+                return journal.to_patch()
+    return None
+
+
 def diff(
     source: Graph,
     target: Graph,
@@ -380,14 +627,15 @@ def diff(
 ) -> Patch:
     """Return a deterministic executable patch from ``source`` toward ``target``.
 
-    Compatible schemas use a per-tier unit-cost alignment. Reused equal items
-    become moves, unmatched items become replacements, insertions, or removals,
-    and references are torn down and rebuilt in dependency order. Incompatible
-    declarations use one guarded rebuild delta. Applying the result always
-    produces a graph equivalent to ``target`` under ``view``; an already
-    equivalent pair produces an empty patch guarded to ``source``. When such a
-    pair differs under the identified view, that no-op patch is not an exact
-    transition to ``target`` and does not compose as one.
+    One exact containment shift, split, or merge remains its semantic
+    operation. Other compatible schemas use a per-tier unit-cost alignment.
+    Reused equal items become moves, unmatched items become replacements,
+    insertions, or removals, and references are torn down and rebuilt in
+    dependency order. Incompatible declarations use one guarded rebuild delta.
+    Applying the result always produces a graph equivalent to ``target`` under
+    ``view``; an already equivalent pair produces an empty patch guarded to
+    ``source``. When such a pair differs under the identified view, that no-op
+    patch is not an exact transition to ``target`` and does not compose as one.
 
     This graph-level operation validates graph structure only. It does not
     preserve or report a clock profile's rebinding policy; construct edits
@@ -401,6 +649,9 @@ def diff(
     recognized_shift = _shift_patch(source, target)
     if recognized_shift is not None:
         return recognized_shift
+    recognized_regroup = _regroup_patch(source, target)
+    if recognized_regroup is not None:
+        return recognized_regroup
     if not _schemas_are_compatible(source, target):
         return _delta_patch(source, target)
     try:

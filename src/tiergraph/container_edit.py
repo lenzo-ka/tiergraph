@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from itertools import pairwise
 from types import MappingProxyType
 from typing import Literal, cast
 
@@ -64,8 +65,8 @@ class RegroupPolicies:
     correspondence unless their declaration or layer is explicitly ``drop``.
     Attribute actions address values on the container removed by a merge.
     ``seam_content=DROP`` authorizes withdrawal of independent values and facts
-    at the retired container seam. Timing changes additionally require the
-    named clock rebinding policy.
+    at the retired container seam. Split and timed merge each admit only their
+    operation-specific clock policy.
     """
 
     relations: Mapping[QualifiedName, ReplacementAction] = field(default_factory=dict)
@@ -466,6 +467,10 @@ def _validate_split_policies(policies: RegroupPolicies) -> None:
         raise GraphValidationError(
             "container split accepts only the clock regroup policy"
         )
+    if policies.clock not in {None, ClockRebindingPolicy.KEEP_EARLIER}:
+        raise GraphValidationError(
+            "container split on a timed tier requires 'keep-earlier'"
+        )
 
 
 def _split_temporary(  # noqa: PLR0915 -- one atomic ordered split
@@ -498,14 +503,30 @@ def _split_temporary(  # noqa: PLR0915 -- one atomic ordered split
         raise GraphValidationError(
             f"split position {at} must be inside the container's {len(children)} children"
         )
+    if len({child.tier for child in children}) != 1 or any(
+        following.index != preceding.index + 1
+        for preceding, following in pairwise(children)
+    ):
+        raise GraphValidationError(
+            "split children do not form one contiguous child-tier span"
+        )
     if new_container.durable_id is not None:
         temporary._require_unused_durable_id(new_container.durable_id)
     child_seam = BoundaryRef(children[at].tier, children[at].index)
-    clock_bindings = (
-        _split_clock_bindings(temporary, original.tier, child_seam)
-        if policies.clock is not None
-        else ()
-    )
+    complete_clock_relations = _complete_boundary_relations(temporary, original.tier)
+    clock_bindings = _split_clock_bindings(temporary, original.tier, child_seam)
+    if complete_clock_relations and policies.clock is None:
+        raise GraphValidationError(
+            "container split on a timed tier requires a named clock policy"
+        )
+    clock_counts = {
+        declaration: sum(candidate == declaration for candidate, _ in clock_bindings)
+        for declaration in complete_clock_relations
+    }
+    if complete_clock_relations and any(count != 1 for count in clock_counts.values()):
+        raise GraphValidationError(
+            "container split child seam has no unambiguous clock binding"
+        )
 
     incoming = _ordered_memberships(temporary, original)
     insert_index = original.index + (1 if side == "after" else 0)
@@ -693,6 +714,7 @@ def _merge_temporary(  # noqa: PLR0915 -- one atomic dependency-routed merge
         raise GraphValidationError(
             "merged containers do not meet at a contiguous child-tier seam"
         )
+    child_seam = BoundaryRef(right_children[0].tier, right_children[0].index)
 
     left_parents = _ordered_memberships(temporary, left)
     right_parents = _ordered_memberships(temporary, right)
@@ -736,11 +758,39 @@ def _merge_temporary(  # noqa: PLR0915 -- one atomic dependency-routed merge
             for endpoint in (*relation.sources, *relation.targets)
         )
     )
-    clock_drops = (
-        _merge_clock_bindings(temporary, left.tier, seam)
-        if policies.clock is ClockRebindingPolicy.DROP_TO_PROVISIONAL
-        else frozenset()
-    )
+    clock_drops = _merge_clock_bindings(temporary, left.tier, seam)
+    if clock_drops and policies.clock is None:
+        raise GraphValidationError(
+            "container merge on a timed tier requires a named clock policy"
+        )
+    if clock_drops and policies.clock is not ClockRebindingPolicy.DROP_TO_PROVISIONAL:
+        raise GraphValidationError(
+            "container merge on a timed tier requires 'drop-to-provisional'"
+        )
+    for index in clock_drops:
+        parent_binding = temporary._relations[index]
+        child_bindings = tuple(
+            relation
+            for relation in temporary._relations
+            if relation.declaration == parent_binding.declaration
+            and isinstance(relation.left, BoundaryRef | DurableBoundaryRef)
+            and temporary._resolve_boundary(relation.left) == child_seam
+        )
+        if len(child_bindings) != 1:
+            raise GraphValidationError(
+                "container merge child seam has no unambiguous clock binding"
+            )
+        child_binding = child_bindings[0]
+        parent_clock = temporary._resolve_boundary(
+            cast(BoundaryRef | DurableBoundaryRef, parent_binding.right)
+        )
+        child_clock = temporary._resolve_boundary(
+            cast(BoundaryRef | DurableBoundaryRef, child_binding.right)
+        )
+        if parent_clock != child_clock:
+            raise GraphValidationError(
+                "container merge parent seam and child seam disagree on the clock"
+            )
     nonclock_seam_relations = seam_relation_indexes - clock_drops
     if (
         seam_values or seam_facts
@@ -787,10 +837,6 @@ def _merge_temporary(  # noqa: PLR0915 -- one atomic dependency-routed merge
                 f"container attribute {str(value.name)!r} conflicts across merge; "
                 "name its action 'drop'"
             )
-    temporary._member(kept.tier, "container merge").items[kept.index] = replace(
-        survivor_item, attributes=tuple(merged_attributes)
-    )
-
     stable_kept = _stable_item(temporary, kept)
     dropped_binary: set[int] = set(seam_relation_indexes)
     dropped_polyadic: set[int] = set(seam_polyadic_indexes)
@@ -814,6 +860,34 @@ def _merge_temporary(  # noqa: PLR0915 -- one atomic dependency-routed merge
     )
     nonsurvivor_membership = right_membership if kept == left else left_membership
     dropped_polyadic.add(nonsurvivor_membership)
+    parent_memberships = {site[0] for site in left_parents.values()}
+
+    for index, binary_relation in before_relations:
+        if index in dropped_binary:
+            continue
+        binary_endpoints = (binary_relation.left, binary_relation.right)
+        resolved_binary = tuple(
+            _endpoint_item(temporary, endpoint) for endpoint in binary_endpoints
+        )
+        if kept in resolved_binary and removed in resolved_binary:
+            raise GraphValidationError(
+                "container merge would collapse distinct relation endpoints"
+            )
+    for index, polyadic_relation in before_polyadic:
+        if index in dropped_polyadic or index in parent_memberships:
+            continue
+        polyadic_endpoints = (*polyadic_relation.sources, *polyadic_relation.targets)
+        resolved_polyadic = tuple(
+            _endpoint_item(temporary, endpoint) for endpoint in polyadic_endpoints
+        )
+        if kept in resolved_polyadic and removed in resolved_polyadic:
+            raise GraphValidationError(
+                "container merge would duplicate or collapse relation endpoints"
+            )
+
+    temporary._member(kept.tier, "container merge").items[kept.index] = replace(
+        survivor_item, attributes=tuple(merged_attributes)
+    )
 
     for index, binary_relation in enumerate(temporary._relations):
         if index in dropped_binary:
@@ -841,10 +915,14 @@ def _merge_temporary(  # noqa: PLR0915 -- one atomic dependency-routed merge
             _replace_item_endpoint(temporary, endpoint, removed, stable_kept)
             for endpoint in polyadic_relation.sources
         )
-        targets = tuple(
-            endpoint
-            for endpoint in polyadic_relation.targets
-            if _endpoint_item(temporary, endpoint) != removed
+        targets = (
+            tuple(
+                endpoint
+                for endpoint in polyadic_relation.targets
+                if _endpoint_item(temporary, endpoint) != removed
+            )
+            if index in parent_memberships
+            else polyadic_relation.targets
         )
         targets = tuple(
             _replace_item_endpoint(temporary, endpoint, removed, stable_kept)
@@ -1057,7 +1135,7 @@ def split_container(
     policies: RegroupPolicies | None = None,
     restoration: RegroupRestoration | None = None,
 ) -> EditResult:
-    """Split one container at an interior child seam and report withdrawals."""
+    """Split one contiguous container at an interior seam and report withdrawals."""
     outcome = _split_outcome(
         graph,
         container,
@@ -1079,7 +1157,7 @@ def merge_containers(
     containment: QualifiedName,
     policies: RegroupPolicies | None = None,
 ) -> EditResult:
-    """Merge adjacent sister containers and report every withdrawn link."""
+    """Merge adjacent sisters, refusing endpoint collapse, and report withdrawals."""
     outcome = _merge_outcome(graph, first, second, survivor, containment, policies)
     return EditResult(outcome.graph, outcome.report)
 

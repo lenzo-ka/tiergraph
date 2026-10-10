@@ -3421,7 +3421,12 @@ class JournalEditor(_JournalEditorBase):
         inverse_policies = RegroupPolicies(
             attributes={
                 value.name: ReplacementAction.DROP for value in supplied.attributes
-            }
+            },
+            clock=(
+                ClockRebindingPolicy.DROP_TO_PROVISIONAL
+                if policies is not None and policies.clock is not None
+                else None
+            ),
         )
         operations = _operation_pair(
             "split_container",
@@ -3494,7 +3499,11 @@ class JournalEditor(_JournalEditorBase):
         after_kept = outcome.correspondence.identity_correspondence[kept][0]
         side = "after" if kept == left else "before"
         inverse_policies = RegroupPolicies(
-            clock=None if policies is None else policies.clock
+            clock=(
+                ClockRebindingPolicy.KEEP_EARLIER
+                if policies is not None and policies.clock is not None
+                else None
+            )
         )
         operations = _operation_pair(
             "merge_containers",
@@ -4540,6 +4549,55 @@ def _regroup_endpoint_match(
     return (link, candidate) in moves
 
 
+def _regroup_reused_endpoint_moves(
+    before: Graph,
+    correspondence: SubtreeCorrespondence | None,
+    operation: str | None,
+    moves: frozenset[tuple[_LinkSnapshot, _LinkSnapshot]],
+) -> frozenset[tuple[_LinkSnapshot, _LinkSnapshot]]:
+    """Authorize reuse only for two merged sisters in one containment parent."""
+    if correspondence is None or operation != "merge_containers":
+        return frozenset()
+    merged = tuple(correspondence.items)
+    if len(merged) != _MERGE_CONTAINER_COUNT:  # pragma: no cover - edit invariant
+        return frozenset()
+    declarations = {
+        declaration.name: declaration for declaration in before.relation_declarations
+    }
+    allowed: set[tuple[_LinkSnapshot, _LinkSnapshot]] = set()
+    for old_index, relation in enumerate(before.polyadic_relations):
+        declaration = declarations[relation.declaration]
+        if not GraphEditor._is_ordered_containment(declaration):
+            continue
+        sister_positions = tuple(
+            position
+            for position, endpoint in enumerate(relation.targets)
+            if isinstance(endpoint, ItemRef | DurableItemRef)
+            and before.resolve_item(endpoint) in merged
+        )
+        if (
+            len(sister_positions) != _MERGE_CONTAINER_COUNT
+            or sister_positions[1] != sister_positions[0] + 1
+        ):
+            continue
+        sister_items = {
+            before.resolve_item(
+                cast(ItemRef | DurableItemRef, relation.targets[position])
+            )
+            for position in sister_positions
+        }
+        if sister_items != set(merged):  # pragma: no cover - positions select both
+            continue
+        allowed.update(
+            pair
+            for pair in moves
+            if pair[0].owner == ("polyadic_relations", old_index)
+            and pair[0].side == "targets"
+            and pair[0].position in sister_positions
+        )
+    return frozenset(allowed)
+
+
 def _clock_endpoint_match(
     link: _LinkSnapshot,
     candidate: _LinkSnapshot,
@@ -4626,6 +4684,12 @@ def link_ledger(  # noqa: PLR0915 -- complete one-pass link partition
         source,
         target,
     )
+    regroup_reused_endpoint_moves = _regroup_reused_endpoint_moves(
+        before,
+        correspondence,
+        operation,
+        regroup_endpoint_moves,
+    )
     used: set[int] = set()
     endpoint_positions: dict[tuple[object, object, str | None], int] = {}
     carried: list[_LinkSnapshot] = []
@@ -4692,7 +4756,11 @@ def link_ledger(  # noqa: PLR0915 -- complete one-pass link partition
                 ),
                 None,
             )
-        if match is None and operation in {"split_container", "merge_containers"}:
+        if (
+            match is None
+            and not reported_drop
+            and operation in {"split_container", "merge_containers"}
+        ):
             match = next(
                 (
                     (index, candidate)
@@ -4715,7 +4783,7 @@ def link_ledger(  # noqa: PLR0915 -- complete one-pass link partition
                     (index, candidate)
                     for index, candidate in enumerate(target)
                     if index in used
-                    and _regroup_endpoint_match(link, candidate, regroup_endpoint_moves)
+                    and (link, candidate) in regroup_reused_endpoint_moves
                 ),
                 None,
             )
@@ -5174,7 +5242,13 @@ class ClockJournalEditor(_JournalEditorBase):
         assert plain.restoration is not None
         after_kept = plain.correspondence.identity_correspondence[kept][0]
         side = "after" if kept == left else "before"
-        inverse_policies = RegroupPolicies(clock=effective.clock)
+        inverse_policies = RegroupPolicies(
+            clock=(
+                ClockRebindingPolicy.KEEP_EARLIER
+                if effective.clock is not None
+                else None
+            )
+        )
         operations = _operation_pair(
             "merge_containers",
             (left, right, kept, containment, effective),

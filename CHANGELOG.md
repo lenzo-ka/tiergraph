@@ -226,6 +226,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Made container regrouping preserve cross-tier targets, refuse endpoint
+  collapse, enforce contiguous clock-consistent seams, and remain one semantic
+  diff operation without searching unrelated item pairs.
 - Captured complete clock-replacement detachments and reported exact durable clock-target changes.
 - Strengthened generated distance-path coverage to require an applied shift and
   covered typed ancestor-boundary content through plain and journaled editors.

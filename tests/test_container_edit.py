@@ -71,7 +71,7 @@ from tiergraph import (
 )
 from tiergraph.container_edit import _merge_outcome, _split_outcome
 from tiergraph.distance import _atom_multiset_lower_bound
-from tiergraph.edit import _operation, _OperationPair
+from tiergraph.edit import _operation, _OperationPair, link_ledger
 from tiergraph.equivalence import EquivalenceView
 from tiergraph.machine import DeltaOpcode, _argument_data, _decode_edit_argument
 
@@ -79,6 +79,42 @@ from tiergraph.machine import DeltaOpcode, _argument_data, _decode_edit_argument
 def _durable_ids(graph: Graph, tier: QualifiedName) -> list[str | None]:
     """Return tier item IDs from a graph fixture."""
     return [item.durable_id for item in graph._tiers_by_name[tier].items]
+
+
+def _cross_tier_phrase_link(*targets: str) -> tuple[Graph, QualifiedName]:
+    """Add a third phrase and one Token-to-Phrase polyadic link."""
+    relation = name("token-phrases")
+    source = hierarchy()
+    tiers = tuple(
+        replace(tier, items=(*tier.items, Item("p2")))
+        if tier.declaration.name == PHRASE
+        else tier
+        for tier in source.tiers
+    )
+    tiers = (*tiers, Tier(TierDeclaration(TOKEN, "Tokens"), (Item("t0"),)))
+    endpoint = (RelationEndpointKind.ITEM,)
+    declaration = PolyadicRelationDeclaration(
+        relation,
+        RelationSideDeclaration(endpoint, tiers=(TOKEN,), maximum=1),
+        RelationSideDeclaration(endpoint, tiers=(PHRASE,), allow_empty=True),
+    )
+    utterance = replace(
+        source.polyadic_relations[0],
+        targets=(*source.polyadic_relations[0].targets, DurableItemRef("p2")),
+    )
+    linked = PolyadicRelationInstance(
+        relation,
+        (DurableItemRef("t0"),),
+        tuple(DurableItemRef(target) for target in targets),
+        "token-phrases-0",
+    )
+    graph = replace(
+        source,
+        tiers=tiers,
+        relation_declarations=(*source.relation_declarations, declaration),
+        polyadic_relations=(utterance, *source.polyadic_relations[1:], linked),
+    )
+    return graph, relation
 
 
 @pytest.mark.parametrize(
@@ -173,6 +209,138 @@ def test_merge_and_restoring_split_are_exact_for_either_survivor(survivor: str) 
     assert isinstance(inverse, DeltaOpcode)
     assert inverse.changes == ()
     assert patch_loads(patch_dumps(patch)).apply(graph) == changed
+
+
+def test_merge_repoints_a_cross_tier_polyadic_target() -> None:
+    """A link into the departing container follows it to the survivor."""
+    graph, relation = _cross_tier_phrase_link("p1")
+    merged = graph.merge_containers(
+        DurableItemRef("p0"),
+        DurableItemRef("p1"),
+        DurableItemRef("p0"),
+        PHRASE_WORDS,
+    )
+    linked = next(
+        instance
+        for instance in merged.polyadic_relations
+        if instance.declaration == relation
+    )
+    assert linked.targets == (DurableItemRef("p0"),)
+    assert tuple(tier for tier in merged.tiers if tier.declaration.name != PHRASE) == (
+        tuple(tier for tier in graph.tiers if tier.declaration.name != PHRASE)
+    )
+    assert merged.relations == graph.relations
+    assert merged.boundary_values == graph.boundary_values
+    assert merged.attributes == graph.attributes
+    assert merged.layers == graph.layers
+    unaffected = {relation, PHRASE_WORDS, UTTERANCE_PHRASES}
+    assert tuple(
+        instance
+        for instance in merged.polyadic_relations
+        if instance.declaration not in unaffected
+    ) == tuple(
+        instance
+        for instance in graph.polyadic_relations
+        if instance.declaration not in unaffected
+    )
+
+
+def test_merge_refuses_collapsing_distinct_polyadic_targets() -> None:
+    """A relation cannot silently turn two container targets into duplicates."""
+    graph, relation = _cross_tier_phrase_link("p0", "p1")
+    with pytest.raises(GraphValidationError, match="duplicate or collapse"):
+        graph.merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+        )
+    dropped = merge_containers(
+        graph,
+        DurableItemRef("p0"),
+        DurableItemRef("p1"),
+        DurableItemRef("p0"),
+        PHRASE_WORDS,
+        RegroupPolicies(relations={relation: ReplacementAction.DROP}),
+    )
+    assert all(
+        instance.declaration != relation
+        for instance in dropped.graph.polyadic_relations
+    )
+    assert any(
+        instance.declaration == relation for _, instance in dropped.report.relations
+    )
+
+
+def test_merge_refuses_collapsing_distinct_binary_endpoints() -> None:
+    """A binary relation cannot collapse its two container endpoints."""
+    graph = hierarchy()
+    relation = name("phrase-link")
+    linked = replace(
+        graph,
+        relation_declarations=(
+            *graph.relation_declarations,
+            BipartiteRelationDeclaration(
+                relation, name("phrase-type"), name("phrase-type")
+            ),
+        ),
+        relations=(
+            *graph.relations,
+            RelationInstance(relation, DurableItemRef("p0"), DurableItemRef("p1")),
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="collapse distinct"):
+        linked.merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+        )
+
+
+def test_checked_merge_refuses_a_lost_noncontainment_sister_target() -> None:
+    """Only a containment parent's two sister slots may share one ledger image."""
+    graph, relation = _cross_tier_phrase_link("p0", "p1")
+    base = replace(
+        graph,
+        relation_declarations=tuple(
+            declaration
+            for declaration in graph.relation_declarations
+            if declaration.name != relation
+        ),
+        polyadic_relations=tuple(
+            instance
+            for instance in graph.polyadic_relations
+            if instance.declaration != relation
+        ),
+    )
+    outcome = _merge_outcome(
+        base,
+        DurableItemRef("p0"),
+        DurableItemRef("p1"),
+        DurableItemRef("p0"),
+        PHRASE_WORDS,
+    )
+    lost = replace(
+        outcome.graph,
+        relation_declarations=graph.relation_declarations,
+        polyadic_relations=(
+            *outcome.graph.polyadic_relations,
+            PolyadicRelationInstance(
+                relation,
+                (DurableItemRef("t0"),),
+                (DurableItemRef("p0"),),
+                "token-phrases-0",
+            ),
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        link_ledger(
+            graph,
+            lost,
+            (outcome.report, outcome.displacement, outcome.correspondence),
+            operation="merge_containers",
+        )
 
 
 @pytest.mark.parametrize("survivor", ["p0", "p1"])
@@ -460,6 +628,123 @@ def test_clock_regroup_requires_the_operation_specific_policy() -> None:
     with pytest.raises(GraphValidationError, match="requires 'keep-earlier'"):
         profile.edit(ClockRebindingPolicy.DROP_TO_PROVISIONAL).split_container(
             DurableItemRef("p0"), 1, PHRASE_WORDS, Item("px")
+        )
+    with pytest.raises(GraphValidationError, match="requires a named clock policy"):
+        profile.graph.split_container(
+            DurableItemRef("p0"), 1, PHRASE_WORDS, Item("plain-px")
+        )
+    with pytest.raises(GraphValidationError, match="requires a named clock policy"):
+        profile.graph.merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+        )
+    with pytest.raises(GraphValidationError, match="requires 'drop-to-provisional'"):
+        profile.graph.merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+            RegroupPolicies(clock=ClockRebindingPolicy.KEEP_EARLIER),
+        )
+    with pytest.raises(GraphValidationError, match="requires 'keep-earlier'"):
+        profile.graph.split_container(
+            DurableItemRef("p0"),
+            1,
+            PHRASE_WORDS,
+            Item("wrong-policy"),
+            policies=RegroupPolicies(clock=ClockRebindingPolicy.DROP_TO_PROVISIONAL),
+        )
+    plain = profile.graph.split_container(
+        DurableItemRef("p0"),
+        1,
+        PHRASE_WORDS,
+        Item("plain-px"),
+        policies=RegroupPolicies(clock=ClockRebindingPolicy.KEEP_EARLIER),
+    )
+    ClockProfile(plain, profile.clock_tier, CLOCK_BINDING, None, profile.unit_attribute)
+
+    child_seam = BoundaryRef(WORD, 1)
+    missing_child_seam = replace(
+        profile.graph,
+        relations=tuple(
+            relation
+            for relation in profile.graph.relations
+            if not (
+                relation.declaration == CLOCK_BINDING
+                and profile.graph.resolve_boundary(
+                    cast(DurableBoundaryRef, relation.left)
+                )
+                == child_seam
+            )
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="unambiguous clock binding"):
+        missing_child_seam.split_container(
+            DurableItemRef("p0"),
+            1,
+            PHRASE_WORDS,
+            Item("missing-child-seam"),
+            policies=RegroupPolicies(clock=ClockRebindingPolicy.KEEP_EARLIER),
+        )
+
+
+def test_clock_merge_refuses_containment_seam_disagreement() -> None:
+    """A retired parent seam must resolve to its contiguous child seam."""
+    profile = fully_timed_hierarchy()
+    relations = list(profile.graph.relations)
+    seam = BoundaryRef(PHRASE, 1)
+    index = next(
+        position
+        for position, relation in enumerate(relations)
+        if profile.graph.resolve_boundary(cast(DurableBoundaryRef, relation.left))
+        == seam
+    )
+    relations[index] = replace(
+        relations[index],
+        right=DurableBoundaryRef(DurableItemRef("c8"), BoundarySide.BEFORE),
+    )
+    disagreeing = replace(profile.graph, relations=tuple(relations))
+    disagreeing_profile = ClockProfile(
+        disagreeing,
+        profile.clock_tier,
+        CLOCK_BINDING,
+        None,
+        profile.unit_attribute,
+    )
+    with pytest.raises(GraphValidationError, match="parent seam and child seam"):
+        disagreeing_profile.edit(
+            ClockRebindingPolicy.DROP_TO_PROVISIONAL
+        ).merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+        )
+
+    child_seam = BoundaryRef(WORD, 3)
+    missing_child_seam = replace(
+        profile.graph,
+        relations=tuple(
+            relation
+            for relation in profile.graph.relations
+            if not (
+                relation.declaration == CLOCK_BINDING
+                and profile.graph.resolve_boundary(
+                    cast(DurableBoundaryRef, relation.left)
+                )
+                == child_seam
+            )
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="unambiguous clock binding"):
+        missing_child_seam.merge_containers(
+            DurableItemRef("p0"),
+            DurableItemRef("p1"),
+            DurableItemRef("p0"),
+            PHRASE_WORDS,
+            RegroupPolicies(clock=ClockRebindingPolicy.DROP_TO_PROVISIONAL),
         )
 
 
@@ -917,6 +1202,26 @@ def test_split_refuses_malformed_or_noninterior_requests() -> None:
     for changes in cases:
         with pytest.raises((TypeError, GraphValidationError)):
             _split_outcome(graph, **(base | changes))  # type: ignore[arg-type]
+
+    gapped = replace(
+        graph,
+        polyadic_relations=(
+            graph.polyadic_relations[0],
+            replace(
+                graph.polyadic_relations[1],
+                targets=(ItemRef(WORD, 0), ItemRef(WORD, 1), ItemRef(WORD, 4)),
+            ),
+            replace(
+                graph.polyadic_relations[2],
+                targets=(ItemRef(WORD, 2), ItemRef(WORD, 3)),
+            ),
+            *graph.polyadic_relations[3:],
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="contiguous child-tier span"):
+        gapped.split_container(
+            DurableItemRef("p0"), 1, PHRASE_WORDS, Item("gapped-split")
+        )
 
 
 def test_merge_refuses_invalid_pair_topology() -> None:
