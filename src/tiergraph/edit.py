@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Set
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from inspect import Parameter, signature
+from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -3934,29 +3935,154 @@ def _link_positions_match(
     return candidate.position is not None and candidate.position > previous
 
 
+def _shift_endpoint_moves(
+    before: Graph,
+    after: Graph,
+    correspondence: SubtreeCorrespondence | None,
+) -> frozenset[tuple[_LinkSnapshot, _LinkSnapshot]]:
+    """Return the exact cut-hold and insert-held endpoint pairs for one shift."""
+    if correspondence is None or len(before.polyadic_relations) != len(
+        after.polyadic_relations
+    ):
+        return frozenset()
+    moved = tuple(correspondence.identity_correspondence)
+    if not moved or any(
+        correspondence.identity_correspondence[source] != (source,) for source in moved
+    ):
+        return frozenset()
+
+    relation_pairs: list[tuple[int, int, tuple[RelationEndpointRef, ...], bool]] = []
+    for source_index, (source_before, source_after) in enumerate(
+        zip(before.polyadic_relations, after.polyadic_relations, strict=True)
+    ):
+        if (
+            source_before.declaration != source_after.declaration
+            or source_before.sources != source_after.sources
+            or source_before.durable_id != source_after.durable_id
+            or source_before.attributes != source_after.attributes
+        ):
+            continue
+        for held_at_end in (True, False):
+            held = (
+                source_before.targets[-len(moved) :]
+                if held_at_end
+                else source_before.targets[: len(moved)]
+            )
+            remaining = (
+                source_before.targets[: -len(moved)]
+                if held_at_end
+                else source_before.targets[len(moved) :]
+            )
+            if (
+                source_after.targets != remaining
+                or not all(
+                    isinstance(endpoint, ItemRef | DurableItemRef) for endpoint in held
+                )
+                or tuple(
+                    before.resolve_item(cast(ItemRef | DurableItemRef, endpoint))
+                    for endpoint in held
+                )
+                != moved
+            ):
+                continue
+            for target_index, (target_before, target_after) in enumerate(
+                zip(before.polyadic_relations, after.polyadic_relations, strict=True)
+            ):
+                if source_index == target_index or (
+                    target_before.declaration != source_before.declaration
+                    or target_before.declaration != target_after.declaration
+                    or target_before.sources != target_after.sources
+                    or target_before.durable_id != target_after.durable_id
+                    or target_before.attributes != target_after.attributes
+                ):
+                    continue
+                expected = (
+                    (*held, *target_before.targets)
+                    if held_at_end
+                    else (*target_before.targets, *held)
+                )
+                if len(source_before.sources) != 1 or len(target_before.sources) != 1:
+                    continue
+                source_items = (*source_before.sources, *source_before.targets)
+                target_items = (*target_before.sources, *target_before.targets)
+                if not all(
+                    isinstance(endpoint, ItemRef | DurableItemRef)
+                    for endpoint in (*source_items, *target_items)
+                ):
+                    continue
+                source_container = before.resolve_item(
+                    cast(ItemRef | DurableItemRef, source_before.sources[0])
+                )
+                target_container = before.resolve_item(
+                    cast(ItemRef | DurableItemRef, target_before.sources[0])
+                )
+                container_step = 1 if held_at_end else -1
+                left_targets, right_targets = (
+                    (source_before.targets, target_before.targets)
+                    if held_at_end
+                    else (target_before.targets, source_before.targets)
+                )
+                resolved_targets = tuple(
+                    before.resolve_item(cast(ItemRef | DurableItemRef, endpoint))
+                    for endpoint in (*left_targets, *right_targets)
+                )
+                if (
+                    target_after.targets == expected
+                    and source_container.tier == target_container.tier
+                    and target_container.index
+                    == source_container.index + container_step
+                    and left_targets
+                    and right_targets
+                    and len({target.tier for target in resolved_targets}) == 1
+                    and all(
+                        right.index == left.index + 1
+                        for left, right in pairwise(resolved_targets)
+                    )
+                ):
+                    relation_pairs.append(
+                        (source_index, target_index, held, held_at_end)
+                    )
+    if len(relation_pairs) != 1:
+        return frozenset()
+    source_index, target_index, held, held_at_end = relation_pairs[0]
+    source_start = (
+        len(before.polyadic_relations[source_index].targets) - len(held)
+        if held_at_end
+        else 0
+    )
+    target_start = (
+        0 if held_at_end else len(before.polyadic_relations[target_index].targets)
+    )
+    return frozenset(
+        (
+            _LinkSnapshot(
+                "endpoint",
+                "polyadic_relations",
+                ("polyadic_relations", source_index),
+                endpoint,
+                "targets",
+                source_start + offset,
+            ),
+            _LinkSnapshot(
+                "endpoint",
+                "polyadic_relations",
+                ("polyadic_relations", target_index),
+                endpoint,
+                "targets",
+                target_start + offset,
+            ),
+        )
+        for offset, endpoint in enumerate(held)
+    )
+
+
 def _shift_endpoint_match(
     link: _LinkSnapshot,
     candidate: _LinkSnapshot,
-    before: Graph,
-    after: Graph,
-    values: tuple[object, ...],
+    moves: frozenset[tuple[_LinkSnapshot, _LinkSnapshot]],
 ) -> bool:
-    """Recognize an ordered-containment endpoint moved by a sister shift."""
-    if (
-        link.kind != "endpoint"
-        or candidate.kind != "endpoint"
-        or link.carrier != candidate.carrier
-        or link.carrier != "polyadic_relations"
-        or link.side != candidate.side
-    ):
-        return False
-    _, source_index = cast(tuple[str, int], link.owner)
-    _, target_index = cast(tuple[str, int], candidate.owner)
-    source_relation = _relation_at(before, link.carrier, source_index)
-    target_relation = _relation_at(after, candidate.carrier, target_index)
-    if source_relation.declaration != target_relation.declaration:
-        return False
-    return candidate.value in values
+    """Recognize one endpoint in the shift's exact source-to-sister move."""
+    return (link, candidate) in moves
 
 
 def _clock_endpoint_match(
@@ -4002,6 +4128,11 @@ def _clock_endpoint_match(
                 and before.resolve_boundary(link.value).index
                 == change.previous_clock_index
                 and after.resolve_boundary(candidate.value).index == change.clock_index
+                and any(
+                    relation.declaration == source_relation.declaration
+                    and relation.right == candidate.value
+                    for relation in before.relations
+                )
             ):
                 return True
     return False
@@ -4036,6 +4167,11 @@ def link_ledger(
 
     source = _graph_links(before)
     target = _graph_links(after)
+    shift_endpoint_moves = (
+        _shift_endpoint_moves(before, after, correspondence)
+        if operation == "shift"
+        else frozenset()
+    )
     used: set[int] = set()
     endpoint_positions: dict[tuple[object, object, str | None], int] = {}
     carried: list[_LinkSnapshot] = []
@@ -4097,7 +4233,7 @@ def link_ledger(
                     (index, candidate)
                     for index, candidate in enumerate(target)
                     if index not in used
-                    and _shift_endpoint_match(link, candidate, before, after, values)
+                    and _shift_endpoint_match(link, candidate, shift_endpoint_moves)
                     and _link_positions_match(link, candidate, endpoint_positions)
                 ),
                 None,
