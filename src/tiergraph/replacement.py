@@ -77,6 +77,8 @@ class SubtreeCorrespondence:
     marks holes whose aligned items retain identity; an absent entry claims
     functional correspondence only. Identity correspondence is linear: each
     source names exactly one target, and no target is claimed by two sources.
+    On replacement, an identified target carries the source item's durable ID.
+    A target that already carries another durable ID refuses the replacement.
     """
 
     items: Mapping[ItemRef, tuple[ItemRef, ...]] = field(default_factory=dict)
@@ -455,6 +457,14 @@ def _swap_subtrees(
         raise GraphValidationError("subtree swap roots must be distinct")
     if left.root in right.descendants or right.root in left.descendants:
         raise GraphValidationError("subtree swap roots must not contain one another")
+    for side, policies in (
+        ("first", first_policies),
+        ("second", second_policies),
+    ):
+        if policies is not None and policies.correspondence.identity_correspondence:
+            raise GraphValidationError(
+                f"subtree swap {side} policies cannot declare identity correspondence"
+            )
     temporary_graph, temporary_ids = _temporary_subtree(graph, right)
     first_outcome = _replace_subtree(
         graph,
@@ -1000,6 +1010,59 @@ def _local_correspondence(
     return result
 
 
+def _identified_donor_items(
+    old: Graph,
+    new: Graph,
+    identities: Mapping[ItemRef, tuple[ItemRef, ...]],
+) -> dict[ItemRef, Item]:
+    """Return donor items rewritten to carry their identified source IDs."""
+    if not identities:
+        return {}
+    identified: dict[ItemRef, Item] = {}
+    source_ids = {
+        old._tiers_by_name[source.tier].items[source.index].durable_id
+        for source in identities
+    }.difference({None})
+    donor_id_sites: dict[str, str] = {}
+    for tier in new.tiers:
+        for index, item in enumerate(tier.items):
+            if item.durable_id in source_ids:
+                reference = ItemRef(tier.declaration.name, index)
+                donor_id_sites[cast(str, item.durable_id)] = f"donor item {reference}"
+    for index, binary_relation in enumerate(new.relations):
+        if binary_relation.durable_id in source_ids:
+            donor_id_sites[cast(str, binary_relation.durable_id)] = (
+                f"donor relation instance {index}"
+            )
+    for index, polyadic_relation in enumerate(new.polyadic_relations):
+        if polyadic_relation.durable_id in source_ids:
+            donor_id_sites[cast(str, polyadic_relation.durable_id)] = (
+                f"donor polyadic relation instance {index}"
+            )
+    for source, targets in identities.items():
+        target = targets[0]
+        source_item = old._tiers_by_name[source.tier].items[source.index]
+        target_item = new._tiers_by_name[target.tier].items[target.index]
+        source_id = source_item.durable_id
+        target_id = target_item.durable_id
+        if target_id is not None and target_id != source_id:
+            raise GraphValidationError(
+                f"identity correspondence source {source} carries durable id "
+                f"{source_id!r}, but donor target {target} carries conflicting "
+                f"durable id {target_id!r}"
+            )
+        if source_id is not None:
+            existing = donor_id_sites.get(source_id)
+            if existing is not None and existing != f"donor item {target}":
+                raise GraphValidationError(
+                    f"identity correspondence source {source} carries durable id "
+                    f"{source_id!r}, but {existing} already carries it "
+                    f"instead of target {target}"
+                )
+        identified[target] = replace(target_item, durable_id=source_id)
+    return identified
+
+
 def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     graph: Graph,
     root: ItemRef | DurableItemRef,
@@ -1074,6 +1137,11 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
         source: tuple(source_to_target[target] for target in targets)
         for source, targets in chosen.correspondence.identity_correspondence.items()
     }
+    identified_donor_items = _identified_donor_items(
+        graph,
+        new.graph,
+        chosen.correspondence.identity_correspondence,
+    )
 
     editor = GraphEditor(graph)
     detached: list[DetachedDependency] = []
@@ -1148,7 +1216,12 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
     for tier, indexes in sorted(old_runs.items(), key=lambda pair: str(pair[0])):
         editor.remove_items(tier, indexes[0], len(indexes))
     for tier, indexes in sorted(new_runs.items(), key=lambda pair: str(pair[0])):
-        items = tuple(new.graph._tiers_by_name[tier].items[index] for index in indexes)
+        items = tuple(
+            identified_donor_items.get(
+                ItemRef(tier, index), new.graph._tiers_by_name[tier].items[index]
+            )
+            for index in indexes
+        )
         editor.insert_items(tier, insertions[tier], items)
     item_images = editor.displacement().items
     inserted_graph = editor.freeze()

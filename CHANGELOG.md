@@ -196,6 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Made identified subtree correspondence preserve the source durable ID on the graph
+  and refuse donor ID conflicts, including unsupported identity policies on subtree
+  swaps.
 - Fixed checked editors to refuse unreported link withdrawals while accepting
   reported polyadic endpoint trims.
 - Required identity correspondence to be linear: every identified source names
