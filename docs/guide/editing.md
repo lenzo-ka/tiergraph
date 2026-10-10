@@ -405,20 +405,25 @@ Correspondence is opt-in through `ReplacementPolicies`. An explicit
 `SubtreeCorrespondence` records named old-to-new alignment holes. Each hole can
 optionally carry `identity_correspondence`: its absence claims functional
 correspondence only, while its presence declares that exactly one target in the
-hole retains identity. For a split, the claim names that target and the other
-targets are fresh. Carrying a crossing relation does not promote a functional
-alignment to identity. Journal reports retain the effective correspondence so
-this distinction is explicit. Stable local per-tier matching can fill equal
-unmatched items, but remains functional unless the caller explicitly declares
-identity. `follow` requires exactly one counterpart for facts and boundary
-values, while `split` duplicates them across all declared counterparts.
+hole retains identity on the graph by carrying the source item's durable ID.
+The target may be anonymous or already carry that ID; a different donor ID, or
+the source ID on another donor item, refuses. An anonymous source requires an
+anonymous target. For a split, the claim names the identified target and the
+other targets are fresh. Carrying a crossing relation does not promote a
+functional alignment to identity. Journal reports retain the effective
+correspondence so this distinction is explicit. Stable local per-tier matching
+can fill equal unmatched items, but remains functional unless the caller
+explicitly declares identity. `follow` requires exactly one counterpart for
+facts and boundary values, while `split` duplicates them across all declared
+counterparts.
 Boundary-subject facts use the same boundary correspondence as boundary values.
 Policies can differ by relation or layer. `swap_subtrees()` also returns an
 `EditResult`, composes two replacements, reports boundary values absent from the
-final graph, and refuses equal or nested roots. `Graph.swap_subtrees()` keeps
-returning only the graph. Clock-aware replacement is available, but the
-graph-level subtree swap has no clock policy; do not use that convenience
-operation on clock-bound tiers.
+final graph, and refuses equal or nested roots. A swap preserves each moved
+item's identity, so its per-side replacement policies cannot declare identity
+correspondence. `Graph.swap_subtrees()` keeps returning only the graph.
+Clock-aware replacement is available, but the graph-level subtree swap has no
+clock policy; do not use that convenience operation on clock-bound tiers.
 
 Three higher-level operations support reconciliation without placing
 application-specific structures in the kernel:
@@ -1037,8 +1042,12 @@ assert (
 )
 
 plain_value = AttributeValue(surface, XsdType.STRING, "alpha")
+upper_value = AttributeValue(surface, XsdType.STRING, "ALPHA")
+different_value = AttributeValue(surface, XsdType.STRING, "omega")
 controlled_value = AttributeValue(surface, XsdType.STRING, "al\u200cpha")
 assert views["strict"].costs.substitute_value(plain_value, controlled_value) == 1
+assert views["presentation"].costs.substitute_value(plain_value, upper_value) == 0
+assert views["presentation"].costs.substitute_value(plain_value, different_value) == 1
 assert (
     views["format-control-insensitive"].costs.substitute_value(
         plain_value, controlled_value
@@ -1125,6 +1134,20 @@ free_control_distance = graph_distance(
 assert strict_control_distance.value is not None
 assert strict_control_distance.value > 0
 assert free_control_distance.value == 0
+
+linked_control_absent = replace(
+    two_tier,
+    tiers=(*two_tier.tiers[:-1], replace(control_tier, items=())),
+    relations=(),
+)
+linked_control_distance = graph_distance(
+    views["format-control-insensitive"].normalize(two_tier),
+    views["format-control-insensitive"].normalize(linked_control_absent),
+    views["format-control-insensitive"].costs,
+)
+assert linked_control_distance.value is None
+assert linked_control_distance.lower == 1
+assert linked_control_distance.upper == 8
 ```
 
 The dedicated zero-cost declaration makes that table a pseudometric at the
@@ -1132,7 +1155,10 @@ raw-graph level, which `metric_violations()` reports. It is appropriate only
 when the application intentionally quotients away that class. If format
 controls share ordinary items with visible text, their whole-item insertion and
 removal remain ordinary costs; the projection and `value_substitution` callback
-still make control-only replacements free. The multi-tier comparison above
+still make control-only replacements free. Removing the linked control above
+has a lower cost bound of one for its relation even though removal of its
+control-tier item is free; the realized general-graph edit gives an upper bound
+of eight. The multi-tier comparison above
 normalizes copies under the selected view and retains cross-tier references
 before calling `graph_distance()` with the matching table. The sequence
 projection itself is not a lower-bound certificate for a general graph.

@@ -3271,6 +3271,8 @@ reference names one alignment hole. ``identity_correspondence`` optionally
 marks holes whose aligned items retain identity; an absent entry claims
 functional correspondence only. Identity correspondence is linear: each
 source names exactly one target, and no target is claimed by two sources.
+On replacement, an identified target carries the source item's durable ID.
+A target that already carries another durable ID refuses the replacement.
 
 #### `SubtreeCorrespondence.to_data`
 

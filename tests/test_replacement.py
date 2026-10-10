@@ -567,7 +567,19 @@ def test_identity_correspondence_is_linear_through_apply_and_journal() -> None:
         {source: (first,)},
     )
     policies = drop_crossings(case, ReplacementPolicies(correspondence=correspondence))
-    subtree = Subtree(case.alternative, ItemRef(case.root, 0))
+    donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.alternative.tiers
+        ),
+    )
+    subtree = Subtree(donor, ItemRef(case.root, 0))
 
     direct = replace_subtree(
         case.graph,
@@ -585,6 +597,13 @@ def test_identity_correspondence_is_linear_through_apply_and_journal() -> None:
     assert effective is not None
     assert len(effective.items[source]) == 2
     assert effective.identity_correspondence[source] == (effective.items[source][0],)
+    identified_target = effective.identity_correspondence[source][0]
+    assert (
+        direct.graph._tiers_by_name[identified_target.tier]
+        .items[identified_target.index]
+        .durable_id
+        == "leaf-0"
+    )
     assert effective.items[source][1] not in {
         target
         for targets in effective.identity_correspondence.values()
@@ -593,6 +612,150 @@ def test_identity_correspondence_is_linear_through_apply_and_journal() -> None:
     report_data = journal.records[0].to_data()["report"]
     assert isinstance(report_data, dict)
     assert report_data["correspondence"] == effective.to_data()
+    editor.undo()
+    assert editor.freeze() == case.graph
+    editor.redo()
+    assert editor.freeze() == direct.graph
+
+
+def test_identity_correspondence_preserves_or_refuses_donor_ids() -> None:
+    """Anonymous identity carries; conflicting or duplicate donor IDs refuse."""
+    case = fixture("speech")
+    source = ItemRef(case.leaf, 0)
+    target = ItemRef(case.leaf, 0)
+    policies = ReplacementPolicies(
+        correspondence=SubtreeCorrespondence(
+            {source: (target,)},
+            {source: (target,)},
+        )
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"source .*'leaf-0'.*donor target .*'new-leaf-0'",
+    ):
+        replace_subtree(
+            case.graph,
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(case.alternative, ItemRef(case.root, 0)),
+            policies,
+        )
+
+    donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(tier, items=(replace(tier.items[0], durable_id="leaf-0"),))
+            if tier.declaration.name == case.root
+            else replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.alternative.tiers
+        ),
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"source .*'leaf-0'.*donor item .*already carries it.*target",
+    ):
+        replace_subtree(
+            case.graph,
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(donor, ItemRef(case.root, 0)),
+            policies,
+        )
+
+    relation_donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.alternative.tiers
+        ),
+        relations=(
+            replace(case.alternative.relations[0], durable_id="leaf-0"),
+            *case.alternative.relations[1:],
+        ),
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"source .*'leaf-0'.*donor relation instance 0.*target",
+    ):
+        replace_subtree(
+            case.graph,
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(relation_donor, ItemRef(case.root, 0)),
+            policies,
+        )
+
+    polyadic_donor = replace(
+        relation_donor,
+        relations=case.alternative.relations,
+        polyadic_relations=(
+            PolyadicRelationInstance(
+                case.group,
+                (ItemRef(case.middle, 0),),
+                (ItemRef(case.middle, 0),),
+                "leaf-0",
+            ),
+            PolyadicRelationInstance(
+                case.group,
+                (ItemRef(case.middle, 0),),
+                (ItemRef(case.middle, 0),),
+            ),
+        ),
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match=r"source .*'leaf-0'.*donor polyadic relation instance 0.*target",
+    ):
+        replace_subtree(
+            case.graph,
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(polyadic_donor, ItemRef(case.root, 0)),
+            policies,
+        )
+
+    anonymous_source = replace(
+        case.graph,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.graph.tiers
+        ),
+    )
+    anonymous_donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.alternative.tiers
+        ),
+    )
+    anonymous_result = replace_subtree(
+        anonymous_source,
+        DurableItemRef("root"),
+        case.containment,
+        Subtree(anonymous_donor, ItemRef(case.root, 0)),
+        drop_crossings(case, policies),
+    )
+    assert anonymous_result.graph._tiers_by_name[case.leaf].items[0].durable_id is None
 
 
 def test_identity_correspondence_refuses_splits_and_merges() -> None:
@@ -1396,6 +1559,30 @@ def test_swap_subtrees_is_exactly_undoable_and_refuses_nested_roots() -> None:
         swap_subtrees(graph, DurableItemRef("right"), DurableItemRef("b"), contains)
     with pytest.raises(GraphValidationError, match="must be distinct"):
         swap_subtrees(graph, DurableItemRef("left"), DurableItemRef("left"), contains)
+    first_identity = SubtreeCorrespondence(
+        {ItemRef(tier, 1): (ItemRef(tier, 3),)},
+        {ItemRef(tier, 1): (ItemRef(tier, 3),)},
+    )
+    second_identity = SubtreeCorrespondence(
+        {ItemRef(tier, 3): (ItemRef(tier, 1),)},
+        {ItemRef(tier, 3): (ItemRef(tier, 1),)},
+    )
+    for first_policies, second_policies, side in (
+        (ReplacementPolicies(correspondence=first_identity), None, "first"),
+        (None, ReplacementPolicies(correspondence=second_identity), "second"),
+    ):
+        with pytest.raises(
+            GraphValidationError,
+            match=rf"subtree swap {side} policies cannot declare identity",
+        ):
+            swap_subtrees(
+                graph,
+                DurableItemRef("left"),
+                DurableItemRef("right"),
+                contains,
+                first_policies,
+                second_policies,
+            )
 
 
 def _boundary_swap_graph(
