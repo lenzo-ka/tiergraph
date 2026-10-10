@@ -765,6 +765,18 @@
       "TextGridReadResult",
       "from_textgrid",
       "to_textgrid"
+    ],
+    "tiergraph.tgdb": [
+      "SqliteTooOld",
+      "StaleJournalBase",
+      "StaleVersion",
+      "StoreBusy",
+      "StoreCorrupt",
+      "StoreInfo",
+      "StoreSchemaTooNew",
+      "TgdbError",
+      "TgdbLimits",
+      "TgdbStore"
     ]
   }
 }

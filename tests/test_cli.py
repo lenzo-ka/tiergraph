@@ -1836,11 +1836,12 @@ def test_version_default_help_and_every_command_help(
     assert json.loads(capsys.readouterr().out) == {"version": tiergraph.__version__}
     assert main([]) == 0
     assert (
-        "{validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,"
-        "grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,"
+        "{tgdb,validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,"
+        "path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,"
         "program}" in capsys.readouterr().out
     )
     for command in (
+        "tgdb",
         "validate",
         "blob",
         "bundle",
@@ -1876,6 +1877,7 @@ def test_version_default_help_and_every_command_help(
         if isinstance(action, argparse._SubParsersAction)
     )
     assert list(action.choices) == [
+        "tgdb",
         "validate",
         "blob",
         "bundle",
@@ -1925,6 +1927,10 @@ def _documented_help_examples() -> list[tuple[str, str]]:
 
 def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
     """Write the public input documents named by one help example."""
+    if arguments[:2] == ["tgdb", "info"]:
+        from tiergraph.tgdb import TgdbStore  # noqa: PLC0415 -- help fixture only
+
+        TgdbStore.create(directory / "corpus.tgdb").close()
     source_graph = _path_graph(directory / "graph.json")
     tier_name = QualifiedName("urn:path", "tokens")
     item_type = QualifiedName("urn:path", "Token")
@@ -2118,7 +2124,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 76
+    assert len(examples) == 81
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

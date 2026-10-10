@@ -330,13 +330,14 @@ Each output line is independently parseable JSON.
 
 ```text
 usage: tiergraph [-h] [--version]
-                 {validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
+                 {tgdb,validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
                  ...
 
 Validate, query, transform, and render tiergraph documents.
 
 positional arguments:
-  {validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
+  {tgdb,validate,blob,bundle,discharge,render,inspect,convert,schema,run,step,walk,path,grammar,clock,span,select,match,fold,semirings,edit,patch,diff,distance,program}
+    tgdb                manage a versioned tiergraph store
     validate            validate a graph document
     blob                inspect and move external-resource payloads
     bundle              build and inspect external-resource bundles
@@ -368,6 +369,82 @@ options:
 
 Examples:
   $ tiergraph validate graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb`
+
+```text
+usage: tiergraph tgdb [-h] {init,info} ...
+
+Create or inspect a local versioned tiergraph store.
+
+positional arguments:
+  {init,info}
+    init       initialize a store
+    info       inspect store metadata
+
+options:
+  -h, --help   show this help message and exit
+
+Examples:
+  $ tiergraph tgdb info corpus.tgdb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb init`
+
+```text
+usage: tiergraph tgdb init [-h] [--inline-threshold SIZE] STORE
+
+Create a new store directory and its SQLite catalog.
+
+positional arguments:
+  STORE                 new store directory
+
+options:
+  -h, --help            show this help message and exit
+  --inline-threshold SIZE
+                        largest inline object size in bytes (default: 65536)
+
+Examples:
+  $ tiergraph tgdb init corpus.tgdb
+  $ tiergraph tgdb init corpus.tgdb --inline-threshold 131072
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb info`
+
+```text
+usage: tiergraph tgdb info [-h] [--json] STORE
+
+Read store identity and format metadata without loading graphs.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --json      emit structured JSON
+
+Examples:
+  $ tiergraph tgdb info corpus.tgdb
+  $ tiergraph tgdb info corpus.tgdb --json
 
 Exit codes:
   0  success

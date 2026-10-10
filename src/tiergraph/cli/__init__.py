@@ -97,6 +97,46 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     parser.add_argument("--version", action="store_true", help="print the version")
     subparsers = parser.add_subparsers(dest="command")
 
+    tgdb = _subcommand(
+        subparsers,
+        "tgdb",
+        summary="manage a versioned tiergraph store",
+        description="Create or inspect a local versioned tiergraph store.",
+        examples=("tiergraph tgdb info corpus.tgdb",),
+    )
+    tgdb_subparsers = tgdb.add_subparsers(dest="tgdb_command", required=True)
+    tgdb_init = _subcommand(
+        tgdb_subparsers,
+        "init",
+        summary="initialize a store",
+        description="Create a new store directory and its SQLite catalog.",
+        examples=(
+            "tiergraph tgdb init corpus.tgdb",
+            "tiergraph tgdb init corpus.tgdb --inline-threshold 131072",
+        ),
+    )
+    tgdb_init.set_defaults(handler=_handle_tgdb)
+    tgdb_init.add_argument("store", metavar="STORE", help="new store directory")
+    tgdb_init.add_argument(
+        "--inline-threshold",
+        type=_nonnegative_byte_count,
+        metavar="SIZE",
+        help="largest inline object size in bytes (default: 65536)",
+    )
+    tgdb_info = _subcommand(
+        tgdb_subparsers,
+        "info",
+        summary="inspect store metadata",
+        description="Read store identity and format metadata without loading graphs.",
+        examples=(
+            "tiergraph tgdb info corpus.tgdb",
+            "tiergraph tgdb info corpus.tgdb --json",
+        ),
+    )
+    tgdb_info.set_defaults(handler=_handle_tgdb)
+    tgdb_info.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_info.add_argument("--json", action="store_true", help="emit structured JSON")
+
     validate = _subcommand(
         subparsers,
         "validate",
@@ -1371,6 +1411,17 @@ def _positive_step_count(value: str) -> int:
     return parsed
 
 
+def _nonnegative_byte_count(value: str) -> int:
+    """Decode one nonnegative byte count for argparse."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return parsed
+
+
 def _media_type_argument(value: str) -> str:
     """Require the canonical media-type spelling accepted by the blob profile."""
     if _MEDIA_TYPE_TEXT.fullmatch(value) is None:
@@ -1490,6 +1541,34 @@ def _handle_validate(args: argparse.Namespace) -> None:
     if args.profile == "blob":
         tiergraph.BlobProfile(graph)
     _stdout_text("ok\n")
+
+
+def _handle_tgdb(args: argparse.Namespace) -> int:
+    """Create or inspect a store while keeping tgdb out of parser imports."""
+    from tiergraph import tgdb  # noqa: PLC0415 -- tgdb and sqlite3 stay lazy
+
+    try:
+        if args.tgdb_command == "init":
+            limits = (
+                tgdb.TgdbLimits()
+                if args.inline_threshold is None
+                else tgdb.TgdbLimits(inline_threshold=args.inline_threshold)
+            )
+            with tgdb.TgdbStore.create(args.store, limits=limits):
+                pass
+            _stdout_text(f"initialized {args.store}\n")
+            return 0
+        with tgdb.TgdbStore.open(args.store) as store:
+            info = store.info()
+        if args.json:
+            _stdout_text(_json_bytes(info.to_data()).decode("utf-8"))
+        else:
+            for key, value in info.to_data().items():
+                _stdout_text(f"{key}: {value}\n")
+    except tgdb.TgdbError as error:
+        _refusal_diagnostic(args.command, error)
+        return 1
+    return 0
 
 
 class _DirectoryResolver:
@@ -2036,7 +2115,7 @@ def _refusal_diagnostic(
     command: str,
     error: Refusal | tiergraph.EffectRefusal | tiergraph.ExactnessRefusal,
 ) -> None:
-    """Report one discharge refusal as a diagnostic line and as data beside it.
+    """Report one refusal as a diagnostic line and as data beside it.
 
     The line keeps this command's stderr readable the way every other command's
     is; the object after it carries the stage, which a caller acts on and must
