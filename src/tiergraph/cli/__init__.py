@@ -1029,7 +1029,10 @@ def _editing_commands(subparsers: Any) -> None:  # noqa: PLR0915
     shift.add_argument(
         "--across-parent",
         action="store_true",
-        help="require different adjacent parents and report changed ancestor yields",
+        help=(
+            "require an adjacent differing parent pair and report changed "
+            "ancestor yields"
+        ),
     )
 
     relate = operation("relate", "insert one relation instance")

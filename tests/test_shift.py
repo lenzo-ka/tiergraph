@@ -455,6 +455,52 @@ def test_cross_parent_shift_is_explicit_and_reports_the_parent_yield() -> None:
     assert recorded.freeze() == source
 
 
+def test_default_shift_requires_matching_parents_in_every_containment() -> None:
+    """One shared parent leaves the differing path to the explicit operation."""
+    source = hierarchy()
+    alternate = name("alternate-word-syllables")
+    mixed = replace(
+        source,
+        relation_declarations=(
+            *source.relation_declarations,
+            containment(alternate, WORD, SYLLABLE),
+        ),
+        polyadic_relations=(
+            *source.polyadic_relations,
+            PolyadicRelationInstance(
+                alternate,
+                (ItemRef(WORD, 0),),
+                (ItemRef(SYLLABLE, 0), ItemRef(SYLLABLE, 1)),
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        GraphValidationError,
+        match=(
+            r"do not share every containment parent.*word-syllables: .*word\[0\]"
+            r".*word-syllables: .*word\[1\].*across_parent=True"
+        ),
+    ):
+        mixed.shift(ItemRef(SYLLABLE, 0), 1, "right", SYLLABLE_SEGMENTS)
+
+    editor = mixed.edit()
+    editor.shift(
+        ItemRef(SYLLABLE, 0),
+        1,
+        "right",
+        SYLLABLE_SEGMENTS,
+        across_parent=True,
+    )
+    assert editor.last_yield_changes == (
+        ContainmentYieldChange(
+            BoundaryRef(WORD, 1),
+            BoundaryRef(SEGMENT, 3),
+            BoundaryRef(SEGMENT, 2),
+        ),
+    )
+
+
 def test_cross_parent_shift_reports_every_changed_ancestor_yield() -> None:
     """A cross-utterance seam reports and retimes every ancestor boundary."""
     source = cross_utterance_hierarchy()
@@ -1053,6 +1099,100 @@ def test_cross_parent_shift_rebinds_container_and_parent_on_common_clock() -> No
         )
 
 
+def test_cross_parent_shift_policies_cover_ancestor_boundary_content() -> None:
+    """Ancestor values and facts require policy and drop with exact undo."""
+    profile = fully_timed_hierarchy()
+    value = AttributeValue(BOUNDARY_NOTE, XsdType.STRING, "source offset")
+    fact = LayerFact(BoundaryRef(WORD, 1), value)
+    graph = replace(
+        profile.graph,
+        attribute_declarations=(
+            *profile.graph.attribute_declarations,
+            AttributeDeclaration(
+                BOUNDARY_NOTE, AttributeDomain.BOUNDARY, XsdType.STRING
+            ),
+        ),
+        boundary_values=(Boundary(BoundaryRef(WORD, 1), (value,)),),
+        layers=(Layer(SOURCE_LAYER, (fact,)),),
+    )
+    stored = ClockProfile(graph, CLOCK, CLOCK_BINDING, None, UNIT)
+
+    def shift(editor: Any) -> None:
+        editor.shift(
+            ItemRef(SYLLABLE, 0),
+            1,
+            "right",
+            SYLLABLE_SEGMENTS,
+            across_parent=True,
+        )
+
+    with pytest.raises(GraphValidationError, match="stored ancestor boundary"):
+        shift(stored.edit())
+
+    facts_only_graph = replace(graph, boundary_values=())
+    facts_only = ClockProfile(facts_only_graph, CLOCK, CLOCK_BINDING, None, UNIT)
+    with pytest.raises(GraphValidationError, match="ancestor boundary fact"):
+        shift(facts_only.edit())
+
+    boundary_relation = BipartiteRelationDeclaration(
+        BOUND,
+        name("timed-type"),
+        name("timed-type"),
+        left_endpoint=RelationEndpointKind.BOUNDARY,
+        right_endpoint=RelationEndpointKind.BOUNDARY,
+    )
+    relation_only_graph = replace(
+        facts_only_graph,
+        relation_declarations=(
+            *facts_only_graph.relation_declarations,
+            boundary_relation,
+        ),
+        relations=(
+            *facts_only_graph.relations,
+            RelationInstance(
+                BOUND,
+                DurableBoundaryRef(DurableItemRef("w1"), BoundarySide.BEFORE),
+                DurableBoundaryRef(SEGMENT, BoundarySide.BEFORE),
+            ),
+        ),
+        layers=(),
+    )
+    relation_only = ClockProfile(relation_only_graph, CLOCK, CLOCK_BINDING, None, UNIT)
+    with pytest.raises(GraphValidationError, match="shared with another tier"):
+        shift(relation_only.edit())
+    for policy in ("keep-earlier", "drop-to-provisional"):
+        link_journal = Journal()
+        linked = relation_only.edit(policy, journal=link_journal)
+        shift(linked)
+        assert tuple(
+            relation
+            for relation in linked.freeze().relations
+            if relation.declaration == BOUND
+        ) == tuple(
+            relation
+            for relation in relation_only_graph.relations
+            if relation.declaration == BOUND
+        )
+        assert link_journal.records[0].report.detached_content is None
+
+    journal = Journal()
+    editor = stored.edit("drop-to-provisional", journal=journal)
+    shift(editor)
+    result = editor.freeze()
+    assert result.boundary_values == ()
+    assert result.layers == (Layer(SOURCE_LAYER, ()),)
+    assert editor.profile.clock_index(BoundaryRef(WORD, 1)) == 2
+    report = journal.records[0].report.detached_content
+    assert report is not None
+    assert report.boundary_values == ((BoundaryRef(WORD, 1), value),)
+    assert report.facts == ((SOURCE_LAYER, fact),)
+
+    editor.undo()
+    assert editor.freeze() == graph
+    editor.redo()
+    assert editor.freeze() == result
+
+
 def test_clock_shift_distinguishes_untimed_seams_and_revalidates_atomically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1250,6 +1390,37 @@ def test_cross_parent_shift_refuses_ambiguous_and_nonadjacent_parent_shapes() ->
             1,
             "right",
             PHRASE_WORDS,
+            across_parent=True,
+        )
+
+    other_parents = name("other-word-syllables")
+    relations = list(source.polyadic_relations)
+    second_parent = next(
+        index
+        for index, relation in enumerate(relations)
+        if relation.declaration == WORD_SYLLABLES
+        and relation.targets == (ItemRef(SYLLABLE, 1),)
+    )
+    relations[second_parent] = replace(
+        relations[second_parent], declaration=other_parents
+    )
+    mismatched_relations = replace(
+        source,
+        relation_declarations=(
+            *source.relation_declarations,
+            containment(other_parents, WORD, SYLLABLE),
+        ),
+        polyadic_relations=tuple(relations),
+    )
+    with pytest.raises(
+        GraphValidationError,
+        match="differing parents.*same ordered-containment relation",
+    ):
+        mismatched_relations.shift(
+            ItemRef(SYLLABLE, 0),
+            1,
+            "right",
+            SYLLABLE_SEGMENTS,
             across_parent=True,
         )
 
