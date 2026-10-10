@@ -1018,6 +1018,11 @@ class ClockEditor:
         """Return every successful timed-tier policy outcome in order."""
         return tuple(self._reports)
 
+    @property
+    def last_detachment(self) -> DetachmentReport | None:
+        """Return the report from the most recent abandonment-capable edit."""
+        return self._detached_content
+
     def freeze(self) -> Graph:
         """Return the graph without consuming the editor after guarded checks."""
         if self._blob_profile is not None and self._profile_active:
@@ -1822,7 +1827,9 @@ class ClockEditor:
             )
         )
         unbound, detached = _unbind_relations(self._graph, records)
-        outcome = _replace_subtree(unbound, root, names, new, policies)
+        outcome = _replace_subtree(
+            unbound, root, names, new, policies, capture_report=True
+        )
         candidate = outcome.graph
         new_by_tier = _descendant_indexes(frozenset(outcome.new_items.values()))
         candidate, reports, detached_dependencies = self._replacement_bindings(
@@ -2263,6 +2270,7 @@ class ClockEditor:
                 template is None
                 or previous_source != source
                 or previous_clock != clock_index
+                or template.relation.right != relation.right
             ):
                 changes.append(
                     ClockBindingChange(

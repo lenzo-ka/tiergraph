@@ -340,6 +340,38 @@ def test_drop_to_provisional_collapses_times_and_records_realigning_fact() -> No
     assert cast(AttributeValue, fact.value).lexical == "true"
 
 
+def test_unchecked_edit_reports_an_exact_durable_clock_target_change() -> None:
+    """A stable clock index does not hide a changed durable target spelling."""
+    graph = fixture()
+    shared = anchored_boundary(graph, BoundaryRef(CLOCK, 1))
+    alternate = DurableBoundaryRef(DurableItemRef("clock-0"), BoundarySide.AFTER)
+    assert shared != alternate
+    assert graph.resolve_boundary(shared) == graph.resolve_boundary(alternate)
+    bindings = tuple(
+        replace(
+            relation,
+            right=(
+                alternate
+                if graph.resolve_boundary(cast(DurableBoundaryRef, relation.left))
+                == BoundaryRef(SEGMENT, 2)
+                else shared
+            ),
+        )
+        for relation in graph.relations
+    )
+    graph = replace(graph, relations=bindings)
+    editor = ClockProfile(graph, CLOCK, BINDING, RATE, UNIT).edit("drop-to-provisional")
+
+    editor.swap_items(ItemRef(SEGMENT, 0), ItemRef(SEGMENT, 1))
+
+    change = next(
+        change
+        for change in editor.reports[0].changes
+        if change.previous_target == alternate and change.target == shared
+    )
+    assert change.previous_clock_index == change.clock_index == 1
+
+
 def test_insert_and_bound_remove_keep_clock_profile_valid_and_reported() -> None:
     """Insertion binds its new boundary and removal keeps a surviving binding."""
     profile = ClockProfile(fixture(), CLOCK, BINDING, RATE, UNIT)
