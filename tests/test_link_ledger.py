@@ -1,4 +1,4 @@
-"""Prove link accounting across primitive and derived graph edits."""
+"""Exercise link accounting across primitive and derived graph edits."""
 
 from __future__ import annotations
 
@@ -10,13 +10,22 @@ from typing import cast
 import pytest
 from hypothesis import given, settings
 
-from tests import test_reconcile, test_replacement
+from tests import test_reconcile, test_replacement, test_shift
 from tests.generated_graphs import GENERATED_HIERARCHIES, GeneratedHierarchy
 from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
     AttributeValue,
+    BipartiteRelationDeclaration,
     BlobProfile,
+    Boundary,
     BoundaryRef,
     BoundarySide,
+    ClockBindingChange,
+    ClockEditOperation,
+    ClockEditor,
+    ClockEditReport,
+    ClockRebindingPolicy,
     DetachedDependency,
     DetachmentReport,
     Displacement,
@@ -49,7 +58,17 @@ from tiergraph import (
     contain_by_time,
     retime,
 )
-from tiergraph.edit import _detachment_has_link, _graph_links, link_ledger
+from tiergraph.edit import (
+    _clock_endpoint_match,
+    _detachment_has_link,
+    _displacement_between,
+    _graph_links,
+    _link_positions_match,
+    _owner_images,
+    _shift_endpoint_match,
+    _value_images,
+    link_ledger,
+)
 
 type Edit = Callable[[GraphEditor], object]
 
@@ -61,7 +80,6 @@ _REFUSED_UNREPORTED_DROPS = frozenset(
         "remove-attribute",
         "set-attribute",
         "substitute",
-        "shift",
         "endpoints",
         "boundary-value",
         "blob-attachment",
@@ -80,10 +98,93 @@ def _assert_complete_partition(
         _graph_links(before)
     )
     report = record.report.detached_content if record is not None else None
+    displacement = (
+        record.report.displacement
+        if record is not None
+        else _displacement_between(before, after)
+    )
+    correspondence = record.report.correspondence if record is not None else None
     assert all(
-        report is not None and _detachment_has_link(link, before, after, report)
+        report is not None
+        and _detachment_has_link(
+            link,
+            before,
+            after,
+            report,
+            displacement,
+            correspondence,
+        )
         for link in ledger.dropped
     )
+
+    targets = _graph_links(after)
+    used: set[int] = set()
+    endpoint_positions: dict[tuple[object, object, str | None], int] = {}
+    expected: dict[str, list[object]] = {
+        "carried": [],
+        "repointed": [],
+        "dropped": [],
+    }
+    for link in _graph_links(before):
+        reported = report is not None and _detachment_has_link(
+            link,
+            before,
+            after,
+            report,
+            displacement,
+            correspondence,
+        )
+        if reported:
+            expected["dropped"].append(link)
+            continue
+        assert displacement is not None
+        owners = _owner_images(link, before, after, displacement, correspondence)
+        structural_fallback = not owners and link.carrier in {
+            "relations",
+            "polyadic_relations",
+        }
+        if structural_fallback:
+            owners = (link.owner,)
+        values = _value_images(link, displacement, correspondence)
+        if structural_fallback and link.value not in values:
+            values = (*values, link.value)
+        match = next(
+            (
+                (index, candidate)
+                for index, candidate in enumerate(targets)
+                if index not in used
+                and candidate.kind == link.kind
+                and candidate.carrier == link.carrier
+                and candidate.owner in owners
+                and candidate.value in values
+                and candidate.side == link.side
+                and _link_positions_match(link, candidate, endpoint_positions)
+            ),
+            None,
+        )
+        if match is None and record is not None and record.operation == "shift":
+            match = next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(targets)
+                    if index not in used
+                    and _shift_endpoint_match(link, candidate, before, after, values)
+                    and _link_positions_match(link, candidate, endpoint_positions)
+                ),
+                None,
+            )
+        assert match is not None
+        index, candidate = match
+        used.add(index)
+        if link.kind == "endpoint" and link.carrier == "polyadic_relations":
+            assert candidate.position is not None
+            endpoint_positions[(link.owner, candidate.owner, link.side)] = (
+                candidate.position
+            )
+        expected["carried" if candidate == link else "repointed"].append(link)
+    for partition in ("carried", "repointed", "dropped"):
+        actual = getattr(ledger, partition)
+        assert Counter(map(repr, actual)) == Counter(map(repr, expected[partition]))
 
 
 def _edits(case: GeneratedHierarchy) -> tuple[tuple[str, Edit], ...]:
@@ -446,6 +547,371 @@ def test_checked_editors_refuse_an_unreported_plain_withdrawal(
         assert editor.freeze() == case.graph
 
 
+def test_checked_shift_repoints_containment_on_both_editor_paths() -> None:
+    """Default and cross-parent shifts account for the sister re-pointing."""
+    source = test_shift.hierarchy()
+    cases = (
+        (
+            ItemRef(test_shift.PHRASE, 0),
+            test_shift.PHRASE_WORDS,
+            False,
+        ),
+        (
+            ItemRef(test_shift.SYLLABLE, 0),
+            test_shift.SYLLABLE_SEGMENTS,
+            True,
+        ),
+    )
+    for container, containment, across_parent in cases:
+        results = []
+        for journaled in (False, True):
+            journal = Journal() if journaled else None
+            editor = (
+                source.edit(journal=journal, check_links=True)
+                if journal is not None
+                else source.edit(check_links=True)
+            )
+            editor.shift(
+                container,
+                1,
+                "right",
+                containment,
+                across_parent=across_parent,
+            )
+            result = editor.freeze()
+            results.append(result)
+            if journal is not None:
+                _assert_complete_partition(source, result, journal.records[0])
+        assert results[0] == results[1]
+
+
+def test_plain_checked_shift_uses_the_same_detachment_report_as_journaled() -> None:
+    """A reported boundary withdrawal has one outcome on both checked paths."""
+    source = test_shift.hierarchy()
+    value = AttributeValue(test_shift.BOUNDARY_NOTE, XsdType.STRING, "break")
+    source = replace(
+        source,
+        attribute_declarations=(
+            *source.attribute_declarations,
+            AttributeDeclaration(
+                test_shift.BOUNDARY_NOTE,
+                AttributeDomain.BOUNDARY,
+                XsdType.STRING,
+            ),
+        ),
+        boundary_values=(Boundary(BoundaryRef(test_shift.PHRASE, 1), (value,)),),
+    )
+    results = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        editor = (
+            source.edit(journal=journal, check_links=True)
+            if journal is not None
+            else source.edit(check_links=True)
+        )
+        editor.shift(
+            ItemRef(test_shift.PHRASE, 0),
+            1,
+            "right",
+            test_shift.PHRASE_WORDS,
+            "drop-to-provisional",
+        )
+        results.append(editor.freeze())
+    assert results[0] == results[1]
+    assert results[0].boundary_values == ()
+
+
+def test_clock_and_commit_path_expose_checked_link_accounting() -> None:
+    """Clock shifts and complete path commits audit plain and journaled edits."""
+    basic = test_reconcile.clock_profile(test_reconcile.timing_graph())
+    moved = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        editor = (
+            basic.edit("keep-earlier", journal=journal, check_links=True)
+            if journal is not None
+            else basic.edit("keep-earlier", check_links=True)
+        )
+        editor.move_item(ItemRef(test_reconcile.CHILDREN, 0), 1)
+        moved.append(editor.freeze())
+    assert moved[0] == moved[1]
+
+    profile = test_shift.fully_timed_hierarchy()
+    clock_results = []
+    clock_reports = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        editor = (
+            profile.edit(journal=journal, check_links=True)
+            if journal is not None
+            else profile.edit(check_links=True)
+        )
+        editor.shift(
+            ItemRef(test_shift.PHRASE, 0),
+            1,
+            "right",
+            test_shift.PHRASE_WORDS,
+        )
+        clock_results.append(editor.freeze())
+        clock_reports.append(editor.reports)
+    assert clock_results[0] == clock_results[1]
+    assert clock_reports[0] == clock_reports[1]
+    assert tuple(report.operation for report in clock_reports[0]) == (
+        ClockEditOperation.SHIFT,
+    )
+    assert clock_reports[0][0].changes
+
+    lattice_source = test_reconcile.path_graph()
+    plans = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        plans.append(
+            commit_path(
+                test_reconcile.path_plan(lattice_source),
+                ("s", "a", "f"),
+                journal=journal,
+                check_links=True,
+            ).graph
+        )
+    assert plans[0] == plans[1]
+    with pytest.raises(TypeError, match="check_links must be a boolean"):
+        profile.edit(check_links=1)  # type: ignore[call-overload]
+    with pytest.raises(TypeError, match="check_links must be a boolean"):
+        ClockEditor(profile, check_links=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="check_links must be a boolean"):
+        commit_path(
+            test_reconcile.path_plan(lattice_source),
+            ("s", "a", "f"),
+            check_links=1,  # type: ignore[arg-type]
+        )
+
+
+def test_checked_shift_refuses_an_unaccounted_binary_repoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shift cannot conceal an unrelated binary endpoint change."""
+    source = test_shift.hierarchy()
+    declaration = test_shift.name("checked-shift-link")
+    phrase_type = test_shift.name("phrase-type")
+    source = replace(
+        source,
+        relation_declarations=(
+            *source.relation_declarations,
+            BipartiteRelationDeclaration(declaration, phrase_type, phrase_type),
+        ),
+        relations=(
+            RelationInstance(
+                declaration,
+                ItemRef(test_shift.PHRASE, 0),
+                ItemRef(test_shift.PHRASE, 0),
+            ),
+        ),
+    )
+    original = GraphEditor.shift
+
+    def corrupt_shift(
+        editor: GraphEditor,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        policy: str | None = None,
+        across_parent: bool = False,
+    ) -> GraphEditor:
+        result = original(
+            editor,
+            container,
+            k,
+            direction,
+            containment,
+            policy,
+            across_parent,
+        )
+        editor.set_endpoints(
+            RelationInstanceRef(0),
+            ItemRef(test_shift.PHRASE, 0),
+            ItemRef(test_shift.PHRASE, 1),
+        )
+        return result
+
+    monkeypatch.setattr(GraphEditor, "shift", corrupt_shift)
+    editor = source.edit(check_links=True)
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        editor.shift(
+            ItemRef(test_shift.PHRASE, 0),
+            1,
+            "right",
+            test_shift.PHRASE_WORDS,
+        )
+    assert editor.freeze() == source
+
+
+def test_checked_clock_refusal_restores_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clock ledger refusal restores its graph, profile, and reports."""
+    profile = test_reconcile.clock_profile(test_reconcile.timing_graph())
+    editor = profile.edit("keep-earlier", check_links=True)
+    object.__setattr__(editor, "_link_check_depth", 1)
+    assert callable(editor.move_item)
+    object.__setattr__(editor, "_link_check_depth", 0)
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise GraphValidationError("fault-injected clock ledger refusal")
+
+    monkeypatch.setattr("tiergraph.edit.link_ledger", refuse)
+    with pytest.raises(GraphValidationError, match="fault-injected"):
+        editor.move_item(ItemRef(test_reconcile.CHILDREN, 0), 1)
+    assert editor.freeze() == profile.graph
+    assert editor.reports == ()
+
+
+def test_endpoint_match_helpers_refuse_mismatches_and_cover_clock_sides() -> None:
+    """Shift and clock matching require declared relation and report agreement."""
+    case = test_replacement.fixture("speech")
+    endpoints = [link for link in _graph_links(case.graph) if link.kind == "endpoint"]
+    shift_source, shift_target = next(
+        (source, target)
+        for source in endpoints
+        for target in endpoints
+        if case.graph.relations[cast(tuple[str, int], source.owner)[1]].declaration
+        != case.graph.relations[cast(tuple[str, int], target.owner)[1]].declaration
+    )
+    assert not _shift_endpoint_match(
+        shift_source,
+        shift_target,
+        case.graph,
+        case.graph,
+        (shift_target.value,),
+    )
+    hierarchy = test_shift.hierarchy()
+    hierarchy_endpoints = [
+        link for link in _graph_links(hierarchy) if link.kind == "endpoint"
+    ]
+    polyadic_source, polyadic_target = next(
+        (source, target)
+        for source in hierarchy_endpoints
+        for target in hierarchy_endpoints
+        if source.side == target.side
+        and hierarchy.polyadic_relations[
+            cast(tuple[str, int], source.owner)[1]
+        ].declaration
+        != hierarchy.polyadic_relations[
+            cast(tuple[str, int], target.owner)[1]
+        ].declaration
+    )
+    assert not _shift_endpoint_match(
+        polyadic_source,
+        polyadic_target,
+        hierarchy,
+        hierarchy,
+        (polyadic_target.value,),
+    )
+
+    timing = test_reconcile.timing_graph()
+    timing_links = _graph_links(timing)
+    relation_link = next(link for link in timing_links if link.kind == "relation")
+    assert not _clock_endpoint_match(
+        relation_link, relation_link, timing, timing, (), ()
+    )
+    left = next(
+        link
+        for link in timing_links
+        if link.kind == "endpoint"
+        and link.owner == ("relations", 4)
+        and link.side == "left"
+    )
+    assert not _clock_endpoint_match(left, left, timing, timing, (left.owner,), ())
+
+    right = next(
+        link
+        for link in timing_links
+        if link.kind == "endpoint"
+        and link.owner == ("relations", 4)
+        and link.side == "right"
+    )
+    later_right = next(
+        link
+        for link in timing_links
+        if link.kind == "endpoint"
+        and link.owner == ("relations", 5)
+        and link.side == "right"
+    )
+    report = ClockEditReport(
+        ClockEditOperation.ITEM_MOVE,
+        ClockRebindingPolicy.KEEP_EARLIER,
+        test_reconcile.CHILDREN,
+        (
+            ClockBindingChange(
+                None,
+                None,
+                timing.relations[4].left,
+                timing.relations[5].left,
+                1,
+                3,
+                False,
+            ),
+        ),
+        False,
+    )
+    nonmatching_change = replace(report.changes[0], previous_clock_index=None)
+    assert _clock_endpoint_match(
+        right,
+        later_right,
+        timing,
+        timing,
+        (later_right.owner,),
+        (
+            replace(report, changes=()),
+            replace(report, changes=(nonmatching_change, *report.changes)),
+        ),
+    )
+
+    wrong_declaration = next(
+        link
+        for link in endpoints
+        if case.graph.relations[cast(tuple[str, int], link.owner)[1]].declaration
+        != case.graph.relations[
+            cast(tuple[str, int], endpoints[0].owner)[1]
+        ].declaration
+    )
+    assert not _clock_endpoint_match(
+        endpoints[0],
+        wrong_declaration,
+        case.graph,
+        case.graph,
+        (wrong_declaration.owner,),
+        (report,),
+    )
+
+
+def test_partition_assertion_rejects_a_fault_injected_repoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unmatched link filed as re-pointed fails the named partition check."""
+    case = test_replacement.fixture("speech")
+    journal = Journal()
+    editor = case.graph.edit(journal=journal)
+    editor.replace_subtree(
+        DurableItemRef("root"),
+        case.containment,
+        Subtree(case.alternative, ItemRef(case.root, 0)),
+        ReplacementPolicies(ReplacementAction.DROP),
+    )
+    result = editor.freeze()
+    record = journal.records[0]
+    actual = link_ledger(case.graph, result, record)
+    assert actual.dropped
+    injected = replace(
+        actual,
+        repointed=(*actual.repointed, actual.dropped[0]),
+        dropped=actual.dropped[1:],
+    )
+    monkeypatch.setitem(globals(), "link_ledger", lambda *args, **kwargs: injected)
+    with pytest.raises(AssertionError):
+        _assert_complete_partition(case.graph, result, record)
+
+
 @settings(max_examples=10, deadline=None)
 @given(case=GENERATED_HIERARCHIES)
 def test_idless_polyadic_endpoint_order_and_trim_are_accounted(
@@ -489,6 +955,34 @@ def test_idless_polyadic_endpoint_order_and_trim_are_accounted(
         link_ledger(
             source, trimmed, (incomplete, Displacement.stationary(source), None)
         )
+
+    relation_level = replace(
+        incomplete,
+        dependencies=(
+            DetachedDependency(
+                "polyadic_relations",
+                index,
+                declaration=source_relation.declaration,
+            ),
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="unreported dropped endpoint link"):
+        link_ledger(
+            source,
+            trimmed,
+            (relation_level, Displacement.stationary(source), None),
+        )
+    surviving_endpoint = next(
+        link
+        for link in _graph_links(source)
+        if link.kind == "endpoint" and link.owner == ("polyadic_relations", index)
+    )
+    assert not _detachment_has_link(
+        surviving_endpoint,
+        source,
+        source,
+        relation_level,
+    )
 
     partial = replace(
         incomplete,

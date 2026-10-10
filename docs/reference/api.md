@@ -682,7 +682,7 @@ caller's spine byte-identical.
 Method.
 
 ```text
-ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None, journal: 'Journal | None' = None) -> 'ClockEditor | ClockJournalEditor'
+ClockProfile.edit(self, rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None, journal: 'Journal | None' = None, check_links: 'bool' = False) -> 'ClockEditor | ClockJournalEditor'
 ```
 
 Return an editor that keeps this clock profile valid after every edit.
@@ -698,7 +698,9 @@ session. A named declaration cascade may explicitly remove this clock
 definition and retire the session; its graph and withdrawal reports
 remain available, but later profile-aware edits refuse.
 
-Passing ``blob`` adds an opt-in external-resource agreement guard. The
+Set ``check_links=True`` to audit each operation against the complete
+before-and-after link ledger. Passing ``blob`` adds an opt-in
+external-resource agreement guard. The
 supplied blob profile must describe this graph and agree initially.
 Later clock and span edits may be staged in either order, but
 :meth:`ClockEditor.freeze` refuses while any linear attachment span
@@ -834,7 +836,7 @@ Return the legacy coarse-tick span and rate when a rate exists.
 ### `ClockEditor`
 
 ```text
-ClockEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None) -> 'None'
+ClockEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None' = None, *, blob: 'BlobProfile | None' = None, check_links: 'bool' = False) -> 'ClockEditor'
 ```
 
 Edit one graph while preserving a declared clock profile.
@@ -989,6 +991,11 @@ ClockEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', directi
 
 Shift containment and bind every moved yield to its new child seam.
 
+Each affected timed tier receives a ``SHIFT`` report naming the exact
+old and new clock-binding endpoints. A shift without an explicit policy
+uses the operation's inherent ``keep-earlier`` seam behavior in that
+report.
+
 #### `ClockEditor.reparent`
 
 Method.
@@ -1049,6 +1056,7 @@ Name the structural operation summarized by a clock edit report.
 - `ITEM_REMOVAL` = `item removal`
 - `ITEM_MOVE` = `item move`
 - `ITEM_SWAP` = `item swap`
+- `SHIFT` = `shift`
 - `REPARENT` = `reparent`
 - `DECLARATION_CASCADE` = `declaration cascade`
 - `SUBTREE_REPLACEMENT` = `subtree replacement`
@@ -2750,7 +2758,7 @@ Bound history by record count, conservative estimated bytes, or both.
 ### `ClockJournalEditor`
 
 ```text
-ClockJournalEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None', journal: 'Journal', *, blob: 'BlobProfile | None' = None) -> 'None'
+ClockJournalEditor(profile: 'ClockProfile', rebinding: 'ClockRebindingPolicy | str | None', journal: 'Journal', *, blob: 'BlobProfile | None' = None, check_links: 'bool' = False) -> 'None'
 ```
 
 Record atomic edits that preserve a clock and optional blob-span guard.
@@ -3360,7 +3368,7 @@ equivalent selected structural operations through the appropriate editor.
 ### `commit_path`
 
 ```text
-commit_path(lattice: 'PathPlan[Any]', path: 'PathChoice', *, containment: 'QualifiedName | Iterable[QualifiedName]' = (), journal: 'Journal | None' = None) -> 'EditResult'
+commit_path(lattice: 'PathPlan[Any]', path: 'PathChoice', *, containment: 'QualifiedName | Iterable[QualifiedName]' = (), journal: 'Journal | None' = None, check_links: 'bool' = False) -> 'EditResult'
 ```
 
 Keep one complete path and its declared containment substructure.
@@ -3381,7 +3389,8 @@ removed explicitly, never orphaned silently. The detachment report includes
 every removed boundary value in source order. When ``journal`` is supplied,
 the derived edit is recorded as its expanded fact, relation, value, and item
 primitives. A resulting patch therefore retains no reference to the
-request-scoped path plan.
+request-scoped path plan. Set ``check_links=True`` to audit the complete
+path commitment against its detachment report before returning it.
 
 ### `compose_patches`
 

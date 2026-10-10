@@ -104,6 +104,7 @@ def commit_path(
     *,
     containment: QualifiedName | Iterable[QualifiedName] = (),
     journal: Journal | None = None,
+    check_links: bool = False,
 ) -> EditResult:
     """Keep one complete path and its declared containment substructure.
 
@@ -123,10 +124,13 @@ def commit_path(
     every removed boundary value in source order. When ``journal`` is supplied,
     the derived edit is recorded as its expanded fact, relation, value, and item
     primitives. A resulting patch therefore retains no reference to the
-    request-scoped path plan.
+    request-scoped path plan. Set ``check_links=True`` to audit the complete
+    path commitment against its detachment report before returning it.
     """
     if not isinstance(lattice, PathPlan):
         raise TypeError("commit_path lattice must be a PathPlan")
+    if not isinstance(check_links, bool):
+        raise TypeError("check_links must be a boolean")
     chosen = _chosen_path(lattice, path)
     graph = lattice.declaration.graph
     containments = _containment_traversals(graph, _containment_names(containment))
@@ -138,16 +142,33 @@ def commit_path(
         """Remove every alternative-exclusive item and its dependencies."""
         _remove_items(editor, departing)
 
+    def checked_result(result: Graph, displacement: Displacement) -> EditResult:
+        """Build and optionally audit the complete derived-edit account."""
+        report = _detachment_report(
+            graph,
+            items=displacement.departed_items,
+            binary=displacement.departed_relations,
+            polyadic=displacement.departed_polyadic_relations,
+            facts=_detached_fact_sites(graph, result, displacement),
+            boundary_values=_removed_boundary_values(graph, result, displacement),
+        )
+        account = EditResult(result, report)
+        if check_links:
+            from tiergraph.edit import link_ledger  # noqa: PLC0415
+
+            link_ledger(
+                graph,
+                result,
+                (report, displacement, None),
+                operation="commit_path",
+            )
+        return account
+
+    if check_links and journal is not None:
+        staged, staged_displacement = _apply_derived(graph, None, apply)
+        checked_result(staged, staged_displacement)
     result, displacement = _apply_derived(graph, journal, apply)
-    report = _detachment_report(
-        graph,
-        items=displacement.departed_items,
-        binary=displacement.departed_relations,
-        polyadic=displacement.departed_polyadic_relations,
-        facts=_detached_fact_sites(graph, result, displacement),
-        boundary_values=_removed_boundary_values(graph, result, displacement),
-    )
-    return EditResult(result, report)
+    return checked_result(result, displacement)
 
 
 def retime(

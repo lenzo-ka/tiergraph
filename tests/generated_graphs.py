@@ -1,4 +1,4 @@
-"""Shared generated graph shapes for edit-ledger and distance proofs."""
+"""Shared generated graph shapes for edit-ledger and distance checks."""
 
 from __future__ import annotations
 

@@ -120,6 +120,7 @@ class ClockEditOperation(StrEnum):
     ITEM_REMOVAL = "item removal"
     ITEM_MOVE = "item move"
     ITEM_SWAP = "item swap"
+    SHIFT = "shift"
     REPARENT = "reparent"
     DECLARATION_CASCADE = "declaration cascade"
     SUBTREE_REPLACEMENT = "subtree replacement"
@@ -595,6 +596,7 @@ class ClockProfile:
         rebinding: ClockRebindingPolicy | str | None = None,
         *,
         blob: BlobProfile | None = None,
+        check_links: bool = False,
     ) -> ClockEditor:
         """Return a plain clock editor when no journal is attached."""
         ...
@@ -606,6 +608,7 @@ class ClockProfile:
         *,
         blob: BlobProfile | None = None,
         journal: Journal,
+        check_links: bool = False,
     ) -> ClockJournalEditor:
         """Return an opt-in journaled clock editor."""
         ...
@@ -616,6 +619,7 @@ class ClockProfile:
         *,
         blob: BlobProfile | None = None,
         journal: Journal | None = None,
+        check_links: bool = False,
     ) -> ClockEditor | ClockJournalEditor:
         """Return an editor that keeps this clock profile valid after every edit.
 
@@ -630,15 +634,19 @@ class ClockProfile:
         definition and retire the session; its graph and withdrawal reports
         remain available, but later profile-aware edits refuse.
 
-        Passing ``blob`` adds an opt-in external-resource agreement guard. The
+        Set ``check_links=True`` to audit each operation against the complete
+        before-and-after link ledger. Passing ``blob`` adds an opt-in
+        external-resource agreement guard. The
         supplied blob profile must describe this graph and agree initially.
         Later clock and span edits may be staged in either order, but
         :meth:`ClockEditor.freeze` refuses while any linear attachment span
         disagrees with the current subject timing.
         """
+        if not isinstance(check_links, bool):
+            raise TypeError("check_links must be a boolean")
         if journal is None:
-            return ClockEditor(self, rebinding, blob=blob)
-        return journal._attach_clock(self, rebinding, blob)
+            return ClockEditor(self, rebinding, blob=blob, check_links=check_links)
+        return journal._attach_clock(self, rebinding, blob, check_links=check_links)
 
     @property
     def is_structural(self) -> bool:
@@ -934,14 +942,31 @@ class ClockEditor:
     _capture_journal_displacement: bool
     _journal_displacement: Displacement
 
+    def __new__(
+        cls,
+        profile: ClockProfile,
+        rebinding: ClockRebindingPolicy | str | None = None,
+        *,
+        blob: BlobProfile | None = None,
+        check_links: bool = False,
+    ) -> ClockEditor:
+        """Select the opt-in checked carrier without changing the plain class."""
+        del profile, rebinding, blob
+        if cls is ClockEditor and check_links:
+            return object.__new__(_LinkCheckingClockEditor)
+        return object.__new__(cls)
+
     def __init__(
         self,
         profile: ClockProfile,
         rebinding: ClockRebindingPolicy | str | None = None,
         *,
         blob: BlobProfile | None = None,
+        check_links: bool = False,
     ) -> None:
         """Start a profile-aware session with optional policy and blob guard."""
+        if not isinstance(check_links, bool):
+            raise TypeError("check_links must be a boolean")
         if profile.is_structural:
             raise ValueError(
                 "a structural clock-spine profile has no tier bindings to edit"
@@ -971,6 +996,10 @@ class ClockEditor:
         self._detached_dependencies: tuple[DetachedDependency, ...] = ()
         self._detached_content: DetachmentReport | None = None
         self._yield_changes: tuple[ContainmentYieldChange, ...] = ()
+        if check_links:
+            self._checked_graph = profile.graph
+            self._link_check_depth = 0
+            self._capture_journal_displacement = True
 
     @property
     def profile(self) -> ClockProfile:
@@ -1282,7 +1311,13 @@ class ClockEditor:
         policy: ClockRebindingPolicy | str | None = None,
         across_parent: bool = False,
     ) -> ClockEditor:
-        """Shift containment and bind every moved yield to its new child seam."""
+        """Shift containment and bind every moved yield to its new child seam.
+
+        Each affected timed tier receives a ``SHIFT`` report naming the exact
+        old and new clock-binding endpoints. A shift without an explicit policy
+        uses the operation's inherent ``keep-earlier`` seam behavior in that
+        report.
+        """
         self._require_active_profile()
         try:
             selected = ShiftDirection(direction)
@@ -1337,23 +1372,13 @@ class ClockEditor:
         if getattr(self, "_capture_journal_displacement", False):
             self._journal_displacement = editor.displacement()
         candidate = editor.freeze()
-        if timed:
-            child_records = {
-                record.boundary: record
-                for record in self._binding_records(plan.child_boundary.tier)
-            }
-            child_record = child_records[plan.child_boundary]
-            relations = list(candidate.relations)
-            for boundary in timed:
-                records = {
-                    record.boundary: record
-                    for record in self._binding_records(boundary.tier)
-                }
-                record = records[boundary]
-                relations[record.position] = replace(
-                    relations[record.position], right=child_record.relation.right
-                )
-            candidate = replace(candidate, relations=tuple(relations))
+        report_policy = ClockRebindingPolicy.KEEP_EARLIER if named is None else named
+        candidate, shift_reports = self._rebind_shift_boundaries(
+            candidate,
+            timed,
+            plan.child_boundary,
+            report_policy,
+        )
         try:
             next_profile = self._profile_for(candidate)
         except ValueError as error:
@@ -1364,7 +1389,66 @@ class ClockEditor:
         self._profile = next_profile
         self._detached_content = editor.last_detachment
         self._yield_changes = editor.last_yield_changes
+        self._link_correspondence = getattr(editor, "_last_correspondence", None)
+        self._reports.extend(shift_reports)
         return self
+
+    def _rebind_shift_boundaries(
+        self,
+        candidate: Graph,
+        boundaries: tuple[BoundaryRef, ...],
+        child_boundary: BoundaryRef,
+        policy: ClockRebindingPolicy,
+    ) -> tuple[Graph, tuple[ClockEditReport, ...]]:
+        """Re-point shifted clock bindings and report their exact endpoint pairs."""
+        if not boundaries:
+            return candidate, ()
+        child_records = {
+            record.boundary: record
+            for record in self._binding_records(child_boundary.tier)
+        }
+        child_record = child_records[child_boundary]
+        changes_by_tier: dict[QualifiedName, list[ClockBindingChange]] = {}
+        relations = list(candidate.relations)
+        for boundary in boundaries:
+            changes = changes_by_tier.setdefault(boundary.tier, [])
+            records = {
+                record.boundary: record
+                for record in self._binding_records(boundary.tier)
+            }
+            record = records[boundary]
+            updated = replace(
+                relations[record.position], right=child_record.relation.right
+            )
+            relations[record.position] = updated
+            if record.relation == updated:
+                continue
+            changes.append(
+                ClockBindingChange(
+                    record.boundary,
+                    candidate.resolve_boundary(cast(DurableBoundaryRef, updated.left)),
+                    record.relation.left,
+                    updated.left,
+                    self._graph.resolve_boundary(
+                        cast(DurableBoundaryRef, record.relation.right)
+                    ).index,
+                    candidate.resolve_boundary(
+                        cast(DurableBoundaryRef, updated.right)
+                    ).index,
+                    False,
+                )
+            )
+        reports = tuple(
+            ClockEditReport(
+                ClockEditOperation.SHIFT,
+                policy,
+                tier,
+                tuple(changes),
+                False,
+            )
+            for tier, changes in changes_by_tier.items()
+        )
+        return replace(candidate, relations=tuple(relations)), reports
 
     def reparent(
         self,
@@ -1516,6 +1600,8 @@ class ClockEditor:
         self._graph = candidate
         self._profile = next_profile
         self._detached_dependencies = detached_dependencies
+        self._detached_content = outcome.report
+        self._link_correspondence = outcome.correspondence
         self._reports.extend(reports)
         return self
 
@@ -2087,6 +2173,90 @@ class ClockEditor:
             f"{operation} on clock-bound tier {str(tier)!r} requires a named "
             "rebinding policy"
         )
+
+
+_CLOCK_LINK_CHECKED_OPERATIONS = frozenset(
+    {
+        "set_attribute",
+        "remove_attribute",
+        "insert_item",
+        "insert_items",
+        "remove_item",
+        "remove_items",
+        "move_item",
+        "move_run",
+        "swap_items",
+        "swap_runs",
+        "shift",
+        "reparent",
+        "replace_subtree",
+        "undeclare_with_contents",
+    }
+)
+
+
+class _LinkCheckingClockEditor(ClockEditor):
+    """Run the complete link ledger around each opted-in clock edit."""
+
+    def _snapshot_state(self) -> dict[str, object]:
+        """Copy mutable report storage so a refusal restores the session."""
+        state = self.__dict__.copy()
+        state["_reports"] = list(self._reports)
+        return state
+
+    def _restore_state(self, state: dict[str, object]) -> None:
+        """Restore the exact profile-aware state from before one operation."""
+        self.__dict__.clear()
+        self.__dict__.update(state)
+
+    def __getattribute__(self, name: str) -> object:
+        value = super().__getattribute__(name)
+        if name not in _CLOCK_LINK_CHECKED_OPERATIONS or not callable(value):
+            return value
+        if object.__getattribute__(self, "_link_check_depth"):
+            return value
+
+        def _checked(*args: object, **kwargs: object) -> object:
+            from tiergraph.edit import (  # noqa: PLC0415
+                _displacement_between,
+                link_ledger,
+            )
+
+            before = object.__getattribute__(self, "_checked_graph")
+            state = self._snapshot_state()
+            report_count = len(self._reports)
+            self.__dict__.pop("_journal_displacement", None)
+            object.__setattr__(self, "_link_check_depth", 1)
+            try:
+                result = value(*args, **kwargs)
+                after = ClockEditor.freeze(self)
+                positional = getattr(self, "_journal_displacement", None)
+                displacement = _displacement_between(before, after, positional)
+                record = (
+                    (
+                        getattr(self, "_detached_content", None),
+                        displacement,
+                        getattr(self, "_link_correspondence", None),
+                    )
+                    if name in {"replace_subtree", "shift"}
+                    else (None, displacement, None)
+                )
+                link_ledger(
+                    before,
+                    after,
+                    record,
+                    operation=name,
+                    clock_reports=tuple(self._reports[report_count:]),
+                )
+                object.__setattr__(self, "_checked_graph", after)
+                return result
+            except BaseException:
+                self._restore_state(state)
+                raise
+            finally:
+                object.__setattr__(self, "_link_check_depth", 0)
+
+        return _checked
 
 
 def _endpoint_tuple(

@@ -4145,9 +4145,13 @@ class GraphEditor:
                     for value in boundary.attributes
                 ),
             )
-        self._swap_containment_boundary(
+        moved = self._swap_containment_boundary(
             plan.source_index, plan.sister_index, k, selected
         )
+        from tiergraph.replacement import SubtreeCorrespondence  # noqa: PLC0415
+
+        alignment = {reference: (reference,) for reference in moved}
+        self._last_correspondence = SubtreeCorrespondence(alignment, alignment)
         if policy == "drop-to-provisional":
             stored_indexes = {index for index, _ in stored}
             if stored_indexes:
@@ -5432,10 +5436,10 @@ class _LinkCheckingGraphEditor(GraphEditor):
                         self.displacement(),
                         getattr(self, "_last_correspondence", None),
                     )
-                    if name in {"replace_subtree", "swap_subtrees"}
+                    if name in {"replace_subtree", "swap_subtrees", "shift"}
                     else None
                 )
-                link_ledger(before, after, record)
+                link_ledger(before, after, record, operation=name)
                 object.__setattr__(self, "_checked_graph", after)
                 return result
             except BaseException:
@@ -6458,6 +6462,11 @@ def _validate_endpoint(
     items_by_id: dict[str, ItemRef],
 ) -> None:
     subject = f"relation instance {relation_index} {side} endpoint"
+    if isinstance(reference, BoundaryRef):
+        raise GraphValidationError(
+            f"{subject} {str(reference)!r} is a positional boundary; relation "
+            "boundary endpoints require a DurableBoundaryRef"
+        )
     actual_kind = (
         RelationEndpointKind.ITEM
         if isinstance(reference, ItemRef | DurableItemRef)

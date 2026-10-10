@@ -502,7 +502,7 @@ def generated_primitive_cases(
 
 
 def test_atom_bound_has_a_realized_case_for_every_primitive() -> None:
-    """The local proof surface covers the complete public primitive vocabulary."""
+    """Realized cases cover the complete public primitive vocabulary."""
     assert {case.kind for case in PRIMITIVE_CASES} == PRIMITIVE_KINDS
 
 
@@ -541,9 +541,10 @@ def test_generated_graphs_exercise_primitive_and_path_atom_bounds(
         )
         assert bound <= costs.operation(primitive.kind, primitive.declaration)
 
-        witness = primitive.after.set_attribute(
-            DurableItemRef("segment-2"),
-            AttributeValue(case.label, XsdType.STRING, f"witness-{primitive.kind}"),
+        witness = primitive.after.insert_item(
+            case.segment,
+            len(primitive.after._tiers_by_name[case.segment].items),
+            Item(f"witness-{primitive.kind}"),
         )
         witness_bound = _atom_multiset_lower_bound(
             primitive.before, witness, UNIT_COSTS, EquivalenceView.EXACT
@@ -551,7 +552,7 @@ def test_generated_graphs_exercise_primitive_and_path_atom_bounds(
         assert witness_bound > 0
         assert witness_bound <= UNIT_COSTS.operation(
             primitive.kind, primitive.declaration
-        ) + UNIT_COSTS.operation("set_attribute", case.label)
+        ) + UNIT_COSTS.operation("insert_item", case.segment)
 
     operations: tuple[Callable[[JournalEditor], object], ...] = (
         lambda editor: editor.move_run(ItemRun(case.word, 0, 1), 3),
