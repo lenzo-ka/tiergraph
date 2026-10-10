@@ -552,7 +552,7 @@ def test_path_resolve_accepts_a_declarative_chart_profile(
     forest = tiergraph.recognize(tiergraph.lower_grammar(declaration), ("x",))
     graph_path = tmp_path / "forest-graph.json"
     graph_path.write_bytes(tiergraph.dump_bytes(forest.graph))
-    profile = tiergraph.GrammarChartProfile(forest)
+    profile = tiergraph.GrammarChartProfile(forest.graph, forest.root)
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps(profile.to_data()), encoding="utf-8")
     relation = QualifiedName(forest.root.tier.namespace, "alternatives")

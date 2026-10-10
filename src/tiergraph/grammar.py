@@ -1385,28 +1385,26 @@ class ParseForest:
 
 
 @dataclass(frozen=True, slots=True)
-class _GrammarChartSnapshot:
-    """Hold the graph identity and root a chart path profile actually reads."""
+class GrammarChartProfile:
+    """Address chart alternatives in a stable order within one graph snapshot.
+
+    The profile vocabulary is
+    ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
+    independent of rule weights, but intentionally are not stable across graph
+    snapshots whose sets of alternatives differ. The root is the serialized chart
+    anchor and supplies the vocabulary namespace; it must belong to the graph.
+    """
 
     graph: Graph
     root: ItemRef
 
-
-@dataclass(frozen=True, slots=True)
-class GrammarChartProfile:
-    """Address chart alternatives in a stable order within one forest snapshot.
-
-    The profile vocabulary is
-    ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
-    independent of rule weights, but intentionally are not stable across forest
-    snapshots whose sets of alternatives differ.
-    """
-
-    forest: ParseForest
+    def __post_init__(self) -> None:
+        """Require the serialized chart anchor to belong to this graph."""
+        self.graph.resolve_item(self.root)
 
     def to_data(self) -> dict[str, JsonValue]:
         """Return the declarative chart-profile input used by the CLI."""
-        return {"kind": "grammar-chart", "root": self.forest.root.to_data()}
+        return {"kind": "grammar-chart", "root": self.root.to_data()}
 
     @classmethod
     def from_data(cls, graph: Graph, data: object) -> GrammarChartProfile:
@@ -1415,18 +1413,17 @@ class GrammarChartProfile:
         if obj["kind"] != "grammar-chart":
             raise ValueError("grammar chart profile.kind must be 'grammar-chart'")
         root = _decode_item_ref(obj["root"], "grammar chart profile.root")
-        graph.resolve_item(root)
-        return cls(cast(ParseForest, _GrammarChartSnapshot(graph, root)))
+        return cls(graph, root)
 
     def bind(self, path: CanonicalPath, graph: Graph) -> PathBinding:
         """Bind a chart coordinate and profile-owned alternatives literal."""
-        if graph is not self.forest.graph:
+        if graph is not self.graph:
             raise PathRefusal(
                 PathRefusalCode.PROFILE_REFUSED,
                 PathOffender(
                     text=str(path),
                     path=path,
-                    profile_reason="different_forest_snapshot",
+                    profile_reason="different_graph_snapshot",
                 ),
             )
         segments = path.segments
@@ -1443,7 +1440,7 @@ class GrammarChartProfile:
         start = _chart_path_index(segments[2], 2, path)
         end = _chart_path_index(segments[3], 3, path)
         index = _chart_path_index(segments[5], 5, path)
-        names = _forest_names(self.forest)
+        names = _forest_names(self)
         owner = next(
             (
                 reference
@@ -1467,12 +1464,12 @@ class GrammarChartProfile:
 
     def spell(self, binding: PathBinding, graph: Graph) -> CanonicalPath:
         """Spell an alternative binding in this chart vocabulary."""
-        if not isinstance(binding, AlternativeRef) or graph is not self.forest.graph:
+        if not isinstance(binding, AlternativeRef) or graph is not self.graph:
             raise PathRefusal(
                 PathRefusalCode.UNSPELLABLE,
                 PathOffender(text="", profile_reason="unsupported_binding"),
             )
-        names = _forest_names(self.forest)
+        names = _forest_names(self)
         if binding.relation != names["alternatives"]:
             raise PathRefusal(
                 PathRefusalCode.UNSPELLABLE,
@@ -1499,8 +1496,8 @@ class GrammarChartProfile:
         self, owner: ItemRef, relation: QualifiedName, graph: Graph
     ) -> tuple[object, ...]:
         """Order by application start, ordered child spans, then application index."""
-        names = _forest_names(self.forest)
-        if graph is not self.forest.graph or relation != names["alternatives"]:
+        names = _forest_names(self)
+        if graph is not self.graph or relation != names["alternatives"]:
             raise PathRefusal(
                 PathRefusalCode.PROFILE_REFUSED,
                 PathOffender(
@@ -2303,7 +2300,9 @@ def _build_parse_forest(  # noqa: PLR0915 -- one ordered graph construction
     )
 
 
-def _forest_names(forest: ParseForest | TargetLattice) -> dict[str, QualifiedName]:
+def _forest_names(
+    forest: ParseForest | TargetLattice | GrammarChartProfile,
+) -> dict[str, QualifiedName]:
     return {
         local: _name(forest.root.tier.namespace, local)
         for local in (
