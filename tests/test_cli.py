@@ -1933,6 +1933,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
         with TgdbStore.create(directory / "corpus.tgdb") as store:
             command = arguments[1]
             collection_command = arguments[2] if command == "collection" else None
+            index_command = arguments[2] if command == "index" else None
             needs_collection = (
                 command
                 in {
@@ -1961,6 +1962,14 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     collection_uid = transaction.create_collection("recordings")
                     if command == "collection" and collection_command == "move":
                         transaction.create_collection("other")
+                    transaction.commit()
+            if command == "index" and index_command == "drop":
+                with store.write() as transaction:
+                    transaction.declare_index(
+                        "score",
+                        QualifiedName("urn:example", "tokens"),
+                        QualifiedName("urn:example", "score"),
+                    )
                     transaction.commit()
             if command in {
                 "apply",
@@ -2234,7 +2243,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 113
+    assert len(examples) == 118
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

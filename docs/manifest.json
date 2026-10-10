@@ -775,6 +775,7 @@
       "CheckReport",
       "CollectionInfo",
       "CommitReceipt",
+      "IndexInfo",
       "InstanceInfo",
       "Query",
       "ReindexReport",

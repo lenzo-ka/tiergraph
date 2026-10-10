@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from os import PathLike
 from pathlib import Path
 from types import TracebackType
@@ -23,7 +24,13 @@ from typing import BinaryIO, Literal, Self, cast
 
 from tiergraph import predicate as _predicate
 from tiergraph.blob import BlobRef, VerifiedReader
-from tiergraph.core import Graph, QualifiedName
+from tiergraph.core import (
+    Attribute,
+    AttributeValue,
+    Graph,
+    QualifiedName,
+    XsdType,
+)
 from tiergraph.diff import diff as graph_diff
 from tiergraph.edit import EditAnnotations
 from tiergraph.equivalence import EquivalenceView, equivalent, fingerprint
@@ -34,9 +41,9 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 _LAYOUT_VERSION = 1
-_INDEX_VERSION = 2
+_INDEX_VERSION = 3
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -50,6 +57,8 @@ _SHARD_NAME = re.compile(r"[0-9a-f]{2}")
 _STORE_UID_HEX_LENGTH = 32
 _UID_BYTES = 16
 _MAX_NAME_BYTES = 4_096
+_NUMERIC_OFFSET = MAX_DOCUMENT_BYTES + 1
+_NUMERIC_EXPONENT_WIDTH = len(str(2 * _NUMERIC_OFFSET))
 _META_KEYS = frozenset(
     {
         "store_uid",
@@ -174,6 +183,27 @@ class InstanceInfo:
             "generation": self.generation,
             "retired": self.retired,
             "retired_commit": self.retired_commit,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IndexInfo:
+    """Describe one declared item index in its declared catalog order."""
+
+    name: str
+    position: int
+    tier: QualifiedName
+    attribute: QualifiedName
+    history: bool
+
+    def to_data(self) -> dict[str, str | int | bool]:
+        """Return a JSON-compatible description in stable field order."""
+        return {
+            "name": self.name,
+            "position": self.position,
+            "tier": _qname_spelling(self.tier),
+            "attribute": _qname_spelling(self.attribute),
+            "history": self.history,
         }
 
 
@@ -347,7 +377,7 @@ class CheckReport:
 
 @dataclass(frozen=True, slots=True)
 class ReindexReport:
-    """Summarize a checked or rebuilt set of per-graph derived indexes."""
+    """Summarize checked or rebuilt graph, tier, and declared-item indexes."""
 
     rebuilt: bool
     graphs: int
@@ -387,6 +417,15 @@ class _TierClause:
 
 
 @dataclass(frozen=True, slots=True)
+class _IndexClause:
+    name: str
+    value: AttributeValue | None
+    minimum: Decimal | int | None
+    maximum: Decimal | int | None
+    present: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _StageClause:
     stage: str | None
     iteration: int | None
@@ -403,6 +442,7 @@ type _QueryClause = (
     | _NamesClause
     | _FingerprintClause
     | _TierClause
+    | _IndexClause
     | _StageClause
     | _ChangedSinceClause
 )
@@ -484,6 +524,41 @@ class Query:
         return replace(
             self,
             _clauses=(*self._clauses, _TierClause(tier, 0, None, False)),
+        )
+
+    def indexed(
+        self,
+        index: str,
+        value: AttributeValue | None = None,
+        *,
+        minimum: Decimal | int | None = None,
+        maximum: Decimal | int | None = None,
+        present: bool = True,
+    ) -> Query:
+        """Restrict results by one declared per-item index.
+
+        With no value or range, ``present=True`` requires at least one indexed
+        item and ``present=False`` requires none. Equality keeps the scalar
+        value's type distinct and verifies its canonical text after the digest
+        lookup. Inclusive numeric bounds match only integer- and decimal-typed
+        indexed values.
+        """
+        _validate_name(index)
+        if value is not None and not isinstance(value, AttributeValue):
+            raise TypeError("value must be an AttributeValue or None")
+        _validate_numeric_bounds(minimum, maximum)
+        if value is not None and (minimum is not None or maximum is not None):
+            raise ValueError("indexed equality and numeric ranges are exclusive")
+        if not present and (
+            value is not None or minimum is not None or maximum is not None
+        ):
+            raise ValueError("an absent index filter cannot take a value or range")
+        return replace(
+            self,
+            _clauses=(
+                *self._clauses,
+                _IndexClause(index, value, minimum, maximum, present),
+            ),
         )
 
     def stage(self, stage: str | None, *, iteration: int | None = None) -> Query:
@@ -720,6 +795,28 @@ class TgdbStore:
         except sqlite3.DatabaseError as error:
             raise StoreCorrupt(f"cannot list instances: {error}") from error
 
+    def indexes(self) -> tuple[IndexInfo, ...]:
+        """Return declared item indexes in their declared order."""
+        self._require_open()
+        self._require_current_schema()
+        try:
+            rows = self._connection.execute(
+                "SELECT name, position, tier, attribute, history "
+                "FROM declared_indexes ORDER BY position"
+            )
+            return tuple(
+                IndexInfo(
+                    name,
+                    position,
+                    _qname_from_text(tier),
+                    _qname_from_text(attribute),
+                    bool(history),
+                )
+                for name, position, tier, attribute, history in rows
+            )
+        except (sqlite3.DatabaseError, TypeError, ValueError) as error:
+            raise StoreCorrupt(f"cannot list declared indexes: {error}") from error
+
     def get(
         self,
         instance: bytes | str,
@@ -910,6 +1007,7 @@ class TgdbStore:
                 raise StoreCorrupt(
                     f"graph_tiers rows for object {incomplete_tiers[0]} are incomplete"
                 )
+            _require_complete_item_indexes(self._connection)
             for fact in self._connection.execute(
                 "SELECT f.digest, f.functional, f.identified, f.size, o.size "
                 "FROM graph_facts AS f JOIN objects AS o ON o.digest = f.digest"
@@ -958,7 +1056,7 @@ class TgdbStore:
         )
 
     def reindex(self, *, rebuild: bool = False) -> ReindexReport:
-        """Check or rebuild deterministic per-graph facts and tier summaries.
+        """Check or rebuild deterministic graph, tier, and declared-item rows.
 
         The check form works through a read-only handle and changes nothing.
         Rebuilding requires a writable handle, replaces only derived rows, and
@@ -972,7 +1070,9 @@ class TgdbStore:
             self._require_writable()
             if self._writer is not None:
                 raise TgdbError("cannot rebuild indexes during a write transaction")
-        expected_facts, expected_tiers = _derive_indexes(self)
+        expected_facts, expected_tiers, expected_item_counts, expected_items = (
+            _derive_indexes(self)
+        )
         if rebuild:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
@@ -987,6 +1087,8 @@ class TgdbStore:
                         "stored graph set changed while derived indexes were rebuilt"
                     )
                 self._connection.execute("DELETE FROM graph_tiers")
+                self._connection.execute("DELETE FROM item_index")
+                self._connection.execute("DELETE FROM item_index_counts")
                 self._connection.execute("DELETE FROM graph_facts")
                 self._connection.executemany(
                     "INSERT INTO graph_facts("
@@ -998,6 +1100,18 @@ class TgdbStore:
                     "INSERT INTO graph_tiers(digest, position, tier, item_count) "
                     "VALUES (?, ?, ?, ?)",
                     expected_tiers,
+                )
+                self._connection.executemany(
+                    "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
+                    "VALUES (?, ?, ?)",
+                    expected_item_counts,
+                )
+                self._connection.executemany(
+                    "INSERT INTO item_index("
+                    "graph_digest, index_name, tier_position, item_position, "
+                    "value_type, value_text, value_num, value_digest) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    expected_items,
                 )
                 self._connection.execute(
                     "UPDATE store_meta SET value = ? WHERE key = 'index_version'",
@@ -1026,7 +1140,13 @@ class TgdbStore:
                 fingerprint_domain=_FINGERPRINT_DOMAIN,
             )
         else:
-            _compare_derived_indexes(self._connection, expected_facts, expected_tiers)
+            _compare_derived_indexes(
+                self._connection,
+                expected_facts,
+                expected_tiers,
+                expected_item_counts,
+                expected_items,
+            )
         return ReindexReport(
             rebuilt=rebuild,
             graphs=len(expected_facts),
@@ -1375,6 +1495,7 @@ class WriteTransaction:
         self._versions: list[VersionChange] = []
         self._staged_objects: set[str] = set()
         self._staged_graphs: set[str] = set()
+        self._indexes_changed = False
         self._kind = "catalog"
         encoded = _encode_annotations(annotations)
         connection: sqlite3.Connection | None = None
@@ -1990,6 +2111,139 @@ class WriteTransaction:
         """Restore a retired instance at its existing declared position."""
         self._change_instance_retirement(instance, collection=collection, retire=False)
 
+    def declare_index(
+        self,
+        name: str,
+        tier: QualifiedName,
+        attribute: QualifiedName,
+        *,
+        history: bool = False,
+    ) -> None:
+        """Declare and build one ordered per-item attribute index.
+
+        By default only documents that are current instance heads retain rows.
+        ``history=True`` indexes every retained version instead. The declaration
+        may name a tier or attribute that no stored graph currently uses.
+        """
+        self._require_active()
+        _validate_name(name)
+        if not isinstance(tier, QualifiedName):
+            raise TypeError("tier must be a QualifiedName")
+        if not isinstance(attribute, QualifiedName):
+            raise TypeError("attribute must be a QualifiedName")
+        if not isinstance(history, bool):
+            raise TypeError("history must be a boolean")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_indexes WHERE name = ?", (name,)
+            ).fetchone()
+            is not None
+        ):
+            raise TgdbError(f"item index {name!r} is already declared")
+        position = cast(
+            int,
+            self._connection.execute(
+                "SELECT coalesce(max(position) + 1, 0) FROM declared_indexes"
+            ).fetchone()[0],
+        )
+        self._declare_index(name, position, tier, attribute, history)
+        action = _index_action(
+            "declare_index", name, position, tier, attribute, history
+        )
+        self._record(action, _drop_index_action(name))
+
+    def drop_index(self, name: str) -> None:
+        """Drop one declared item index and its rebuildable value rows."""
+        self._require_active()
+        _validate_name(name)
+        row = self._connection.execute(
+            "SELECT position, tier, attribute, history FROM declared_indexes "
+            "WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            raise TgdbError(f"item index {name!r} is not declared")
+        position, tier_text, attribute_text, history = row
+        self._connection.execute("DELETE FROM item_index WHERE index_name = ?", (name,))
+        self._connection.execute(
+            "DELETE FROM item_index_counts WHERE index_name = ?", (name,)
+        )
+        self._connection.execute("DELETE FROM declared_indexes WHERE name = ?", (name,))
+        self._indexes_changed = True
+        self._record(
+            _drop_index_action(name),
+            _index_action(
+                "declare_index",
+                name,
+                position,
+                _qname_from_text(tier_text),
+                _qname_from_text(attribute_text),
+                bool(history),
+            ),
+        )
+
+    def _declare_index(
+        self,
+        name: str,
+        position: int,
+        tier: QualifiedName,
+        attribute: QualifiedName,
+        history: bool,
+    ) -> None:
+        """Insert and fully populate one already validated declaration."""
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_indexes WHERE name = ?", (name,)
+            ).fetchone()
+            is not None
+        ):
+            raise StaleVersion(f"item index {name!r} is already declared")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_indexes WHERE position = ?", (position,)
+            ).fetchone()
+            is not None
+        ):
+            raise StaleVersion(
+                f"declared item index position {position} is no longer available"
+            )
+        self._connection.execute(
+            "INSERT INTO declared_indexes(name, position, tier, attribute, history) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                name,
+                position,
+                _qname_text(tier),
+                _qname_text(attribute),
+                int(history),
+            ),
+        )
+        if history:
+            digest_rows = self._connection.execute(
+                "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+            )
+        else:
+            digest_rows = self._connection.execute(
+                "SELECT DISTINCT v.graph_digest FROM instances AS i "
+                "JOIN versions AS v ON v.id = i.head_version ORDER BY v.graph_digest"
+            )
+        declaration = ((name, _qname_text(tier), _qname_text(attribute)),)
+        for (digest,) in digest_rows:
+            graph = self._load_graph_digest(digest)
+            rows = _item_index_rows(graph, digest, declaration)
+            self._connection.execute(
+                "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
+                "VALUES (?, ?, ?)",
+                (digest, name, len(rows)),
+            )
+            self._connection.executemany(
+                "INSERT INTO item_index("
+                "graph_digest, index_name, tier_position, item_position, value_type, "
+                "value_text, value_num, value_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+        self._indexes_changed = True
+
     def _store_graph(self, graph: Graph) -> str:
         """Store one canonical graph document and its small derived facts."""
         return self._store_graph_document(graph, _graph_document(graph))
@@ -2046,8 +2300,48 @@ class WriteTransaction:
         )
         if recorded_tiers != tier_rows:
             raise StoreCorrupt(f"graph tiers for object {digest} are inconsistent")
+        self._index_graph(graph, digest)
         self._staged_graphs.add(digest)
         return digest
+
+    def _index_graph(self, graph: Graph, digest: str) -> None:
+        """Replace this graph's rows for every current declaration."""
+        declarations = tuple(
+            cast(tuple[str, str, str], row)
+            for row in self._connection.execute(
+                "SELECT name, tier, attribute FROM declared_indexes ORDER BY position"
+            )
+        )
+        self._connection.execute(
+            "DELETE FROM item_index WHERE graph_digest = ?", (digest,)
+        )
+        self._connection.execute(
+            "DELETE FROM item_index_counts WHERE graph_digest = ?", (digest,)
+        )
+        rows = _item_index_rows(graph, digest, declarations)
+        self._connection.executemany(
+            "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
+            "VALUES (?, ?, ?)",
+            _item_index_count_rows(digest, declarations, rows),
+        )
+        self._connection.executemany(
+            "INSERT INTO item_index("
+            "graph_digest, index_name, tier_position, item_position, value_type, "
+            "value_text, value_num, value_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+    def _changed_head_digests(self) -> set[str]:
+        """Return prior head digests displaced by this commit's new versions."""
+        return {
+            cast(str, row[0])
+            for row in self._connection.execute(
+                "SELECT DISTINCT parent.graph_digest FROM versions AS current "
+                "JOIN versions AS parent ON parent.id = current.parent_id "
+                "WHERE current.commit_seq = ?",
+                (self._commit_seq,),
+            )
+        }
 
     def _insert_version(
         self,
@@ -2094,6 +2388,9 @@ class WriteTransaction:
                 return CommitReceipt(None, "unchanged", (), versions)
             raise TgdbError("write transaction has no changes")
         try:
+            changed_head_digests = self._changed_head_digests()
+            if not self._indexes_changed:
+                _prune_head_indexes(self._connection, changed_head_digests)
             self._connection.execute(
                 "UPDATE commits SET kind = ? WHERE seq = ?",
                 (self._kind, self._commit_seq),
@@ -2115,6 +2412,8 @@ class WriteTransaction:
                 self._commit_seq,
                 self._staged_objects,
                 self._staged_graphs,
+                indexes_changed=self._indexes_changed,
+                changed_head_digests=changed_head_digests,
             )
             catalog.execute("COMMIT")
         except sqlite3.OperationalError as error:
@@ -2250,6 +2549,40 @@ class WriteTransaction:
         """Apply one bounded internal action and return its current inverse."""
         kind = action.get("action")
         touches = list(_action_touches(action))
+        if kind == "declare_index":
+            name, position, tier, attribute, history = _index_action_data(action)
+            self._declare_index(name, position, tier, attribute, history)
+            return _drop_index_action(name)
+        if kind == "drop_index":
+            index_name = action.get("name")
+            _validate_name(index_name)
+            index_name = cast(str, index_name)
+            row = self._connection.execute(
+                "SELECT position, tier, attribute, history FROM declared_indexes "
+                "WHERE name = ?",
+                (index_name,),
+            ).fetchone()
+            if row is None:
+                raise StaleVersion(f"item index {index_name!r} is no longer declared")
+            position, tier_text, attribute_text, history = row
+            self._connection.execute(
+                "DELETE FROM item_index WHERE index_name = ?", (index_name,)
+            )
+            self._connection.execute(
+                "DELETE FROM item_index_counts WHERE index_name = ?", (index_name,)
+            )
+            self._connection.execute(
+                "DELETE FROM declared_indexes WHERE name = ?", (index_name,)
+            )
+            self._indexes_changed = True
+            return _index_action(
+                "declare_index",
+                index_name,
+                position,
+                _qname_from_text(tier_text),
+                _qname_from_text(attribute_text),
+                bool(history),
+            )
         if kind == "republish":
             uid = _action_uid(action)
             version_id = cast(int, action["version_id"])
@@ -2303,6 +2636,8 @@ class WriteTransaction:
                 transition = "patch"
                 reason = None
             next_seq = current[0] + 1
+            self._index_graph(self._load_graph_digest(target[0]), target[0])
+            self._staged_graphs.add(target[0])
             new_id = self._insert_version(
                 instance[0],
                 seq=next_seq,
@@ -2339,8 +2674,9 @@ class WriteTransaction:
             }
         if kind in {"rename_collection", "rename_instance"}:
             uid = _action_uid(action)
-            name = action.get("name")
-            _validate_name(name)
+            renamed = action.get("name")
+            _validate_name(renamed)
+            renamed = cast(str, renamed)
             rename_table = "collections" if kind == "rename_collection" else "instances"
             columns = (
                 "id, name"
@@ -2355,20 +2691,20 @@ class WriteTransaction:
             if rename_table == "collections":
                 conflict = self._connection.execute(
                     "SELECT 1 FROM collections WHERE name = ? AND id != ?",
-                    (name, row[0]),
+                    (renamed, row[0]),
                 ).fetchone()
             else:
                 conflict = self._connection.execute(
                     "SELECT 1 FROM instances WHERE collection_id = ? AND name = ? "
                     "AND id != ?",
-                    (row[2], name, row[0]),
+                    (row[2], renamed, row[0]),
                 ).fetchone()
             if conflict is not None:
                 raise StaleVersion(
-                    f"recorded {rename_table[:-1]} name {name!r} is no longer available"
+                    f"recorded {rename_table[:-1]} name {renamed!r} is no longer available"
                 )
             self._connection.execute(
-                f"UPDATE {rename_table} SET name = ? WHERE uid = ?", (name, uid)
+                f"UPDATE {rename_table} SET name = ? WHERE uid = ?", (renamed, uid)
             )
             if rename_table == "instances":
                 self._connection.execute(
@@ -2423,12 +2759,12 @@ class WriteTransaction:
             raw_positions = cast(dict[str, object], action["positions"])
             positions: dict[bytes, int] = {}
             previous: dict[bytes, int] = {}
-            for uid_text, position in raw_positions.items():
+            for uid_text, moved_position in raw_positions.items():
                 item_uid = _uid_from_hex(uid_text)
                 if (
-                    isinstance(position, bool)
-                    or not isinstance(position, int)
-                    or position < 0
+                    isinstance(moved_position, bool)
+                    or not isinstance(moved_position, int)
+                    or moved_position < 0
                 ):
                     raise StoreCorrupt("recorded catalog position is malformed")
                 row = self._connection.execute(
@@ -2438,7 +2774,7 @@ class WriteTransaction:
                     raise StoreCorrupt(
                         f"recorded {positions_table[:-1]} identity is missing"
                     )
-                positions[item_uid] = position
+                positions[item_uid] = moved_position
                 previous[item_uid] = row[0]
             _set_positions(self._connection, positions_table, positions)
             if positions_table == "instances":
@@ -2564,6 +2900,9 @@ def _publish_staged_catalog(
     commit_seq: int,
     object_digests: set[str],
     graph_digests: set[str],
+    *,
+    indexes_changed: bool,
+    changed_head_digests: set[str],
 ) -> None:
     """Copy one staged catalog delta into a locked live catalog in dependency order."""
     commit = staged.execute(
@@ -2607,6 +2946,10 @@ def _publish_staged_catalog(
         graph_digests,
     )
     _copy_graph_tiers(staged, catalog, graph_digests)
+    if indexes_changed:
+        _replace_declared_indexes(staged, catalog)
+    else:
+        _copy_item_indexes(staged, catalog, graph_digests)
     _publication_step("derived-rows")
 
     version_columns = (
@@ -2637,6 +2980,8 @@ def _publish_staged_catalog(
     _publication_step("versions")
 
     _merge_instance_heads(staged, catalog)
+    if not indexes_changed:
+        _prune_head_indexes(catalog, changed_head_digests)
     _publication_step("heads")
 
     rows = staged.execute(
@@ -2712,6 +3057,129 @@ def _copy_graph_tiers(
                 "VALUES (?, ?, ?, ?)",
                 rows,
             )
+
+
+def _copy_item_indexes(
+    staged: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    digests: set[str],
+) -> None:
+    """Copy deterministic declared-index rows for selected graph objects."""
+    count_columns = "graph_digest, index_name, row_count"
+    columns = (
+        "graph_digest, index_name, tier_position, item_position, value_type, "
+        "value_text, value_num, value_digest"
+    )
+    for digest in sorted(digests):
+        counts = staged.execute(
+            f"SELECT {count_columns} FROM item_index_counts "
+            "WHERE graph_digest = ? ORDER BY index_name",
+            (digest,),
+        ).fetchall()
+        for count in counts:
+            existing_count = catalog.execute(
+                f"SELECT {count_columns} FROM item_index_counts "
+                "WHERE graph_digest = ? AND index_name = ?",
+                (count[0], count[1]),
+            ).fetchone()
+            if existing_count is None:
+                catalog.execute(
+                    f"INSERT INTO item_index_counts({count_columns}) VALUES (?, ?, ?)",
+                    count,
+                )
+            elif existing_count != count:
+                raise StoreCorrupt(
+                    f"staged item_index_counts row {(count[0], count[1])!r} "
+                    "conflicts with the catalog"
+                )
+        rows = staged.execute(
+            f"SELECT {columns} FROM item_index WHERE graph_digest = ? "
+            "ORDER BY index_name, item_position",
+            (digest,),
+        ).fetchall()
+        for row in rows:
+            existing = catalog.execute(
+                f"SELECT {columns} FROM item_index WHERE graph_digest = ? "
+                "AND index_name = ? AND item_position = ?",
+                (row[0], row[1], row[3]),
+            ).fetchone()
+            if existing is None:
+                catalog.execute(
+                    f"INSERT INTO item_index({columns}) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    row,
+                )
+            elif existing != row:
+                raise StoreCorrupt(
+                    f"staged item_index row {(row[0], row[1], row[3])!r} "
+                    "conflicts with the catalog"
+                )
+
+
+def _replace_declared_indexes(
+    staged: sqlite3.Connection, catalog: sqlite3.Connection
+) -> None:
+    """Publish one declaration change and its complete derived rows atomically."""
+    declarations = staged.execute(
+        "SELECT name, position, tier, attribute, history FROM declared_indexes "
+        "ORDER BY position"
+    ).fetchall()
+    items = staged.execute(
+        "SELECT graph_digest, index_name, tier_position, item_position, value_type, "
+        "value_text, value_num, value_digest FROM item_index "
+        "ORDER BY graph_digest, index_name, item_position"
+    ).fetchall()
+    catalog.execute("DELETE FROM item_index")
+    catalog.execute("DELETE FROM item_index_counts")
+    catalog.execute("DELETE FROM declared_indexes")
+    catalog.executemany(
+        "INSERT INTO declared_indexes(name, position, tier, attribute, history) "
+        "VALUES (?, ?, ?, ?, ?)",
+        declarations,
+    )
+    counts = staged.execute(
+        "SELECT graph_digest, index_name, row_count FROM item_index_counts "
+        "ORDER BY graph_digest, index_name"
+    ).fetchall()
+    catalog.executemany(
+        "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
+        "VALUES (?, ?, ?)",
+        counts,
+    )
+    catalog.executemany(
+        "INSERT INTO item_index("
+        "graph_digest, index_name, tier_position, item_position, value_type, "
+        "value_text, value_num, value_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        items,
+    )
+
+
+def _prune_head_indexes(
+    connection: sqlite3.Connection, changed_digests: set[str]
+) -> None:
+    """Remove head-only rows for changed digests that no head still names."""
+    if not changed_digests:
+        return
+    head_digests = {
+        cast(str, row[0])
+        for row in connection.execute(
+            "SELECT DISTINCT v.graph_digest FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version"
+        )
+    }
+    stale_digests = changed_digests - head_digests
+    for digest in sorted(stale_digests):
+        connection.execute(
+            "DELETE FROM item_index WHERE graph_digest = ? AND index_name IN ("
+            "SELECT name FROM declared_indexes WHERE history = 0)",
+            (digest,),
+        )
+        connection.execute(
+            "DELETE FROM item_index_counts WHERE graph_digest = ? "
+            "AND index_name IN ("
+            "SELECT name FROM declared_indexes WHERE history = 0)",
+            (digest,),
+        )
 
 
 def _remove_staged_catalog(path: Path) -> None:
@@ -3059,6 +3527,29 @@ def _validate_tier_filter(tier: object, minimum: object, maximum: object) -> Non
             raise ValueError("maximum must be at least minimum")
 
 
+def _validate_numeric_bounds(minimum: object, maximum: object) -> None:
+    """Require optional finite integer or decimal bounds in ascending order."""
+    for label, value in (("minimum", minimum), ("maximum", maximum)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int | Decimal):
+            raise TypeError(f"{label} must be an integer, Decimal, or None")
+        if isinstance(value, Decimal) and not value.is_finite():
+            raise ValueError(f"{label} must be finite")
+        try:
+            _numeric_sort_key(Decimal(value))
+        except ValueError as error:
+            raise ValueError(f"{label} exceeds the supported numeric range") from error
+    minimum_number = cast(int | Decimal | None, minimum)
+    maximum_number = cast(int | Decimal | None, maximum)
+    if (
+        minimum_number is not None
+        and maximum_number is not None
+        and Decimal(minimum_number) > Decimal(maximum_number)
+    ):
+        raise ValueError("maximum must be at least minimum")
+
+
 def _validate_query_run(
     query: object,
     order_by: object,
@@ -3087,7 +3578,69 @@ def _qname_text(name: QualifiedName) -> str:
     return json.dumps(name.to_data(), separators=(",", ":"), sort_keys=True)
 
 
-def _query_sql(query: Query, order_by: str | None) -> tuple[str, list[object]]:
+def _qname_from_text(value: str) -> QualifiedName:
+    """Decode one internally stored expanded name."""
+    data = json.loads(value)
+    if not isinstance(data, dict) or set(data) != {"namespace", "local_name"}:
+        raise ValueError("stored qualified name is malformed")
+    return QualifiedName(data["namespace"], data["local_name"])
+
+
+def _qname_spelling(name: QualifiedName) -> str:
+    """Return the CLI spelling for one expanded name."""
+    return f"{name.namespace}|{name.local_name}"
+
+
+def _index_value(value: Attribute) -> tuple[str, str, str | None, str]:
+    """Return canonical typed text, an exact numeric key, and its digest."""
+    if isinstance(value, AttributeValue):
+        value_type = value.value_type.value
+        value_text = value.lexical
+        value_num = (
+            _numeric_sort_key(Decimal(value.lexical))
+            if value.value_type in {XsdType.INTEGER, XsdType.DECIMAL}
+            else None
+        )
+    else:
+        value_type = value.value_type.value
+        value_text = json.dumps(
+            value.to_value(),
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        value_num = None
+    digest_source = json.dumps(
+        [value_type, value_text],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return value_type, value_text, value_num, hashlib.sha256(digest_source).hexdigest()
+
+
+def _numeric_sort_key(value: Decimal) -> str:
+    """Encode a finite decimal so ordinary text order is exact numeric order."""
+    if not value.is_finite():
+        raise ValueError("numeric index values must be finite")
+    if value.is_zero():
+        return "1"
+    absolute = value.copy_abs()
+    adjusted = absolute.adjusted()
+    if not -_NUMERIC_OFFSET < adjusted < _NUMERIC_OFFSET:
+        raise ValueError("numeric index value exceeds the graph document bound")
+    digits = "".join(str(digit) for digit in absolute.as_tuple().digits).rstrip("0")
+    if value > 0:
+        exponent = adjusted + _NUMERIC_OFFSET
+        return f"2{exponent:0{_NUMERIC_EXPONENT_WIDTH}d}:{digits}/"
+    exponent = _NUMERIC_OFFSET - adjusted
+    complement = "".join(str(9 - int(digit)) for digit in digits)
+    return f"0{exponent:0{_NUMERIC_EXPONENT_WIDTH}d}:{complement}:"
+
+
+def _query_sql(  # noqa: PLR0915 -- each typed clause stays visibly parameterized
+    query: Query, order_by: str | None
+) -> tuple[str, list[object]]:
     """Compile one typed query into internal SQL and bound parameters."""
     conditions: list[str] = []
     parameters: list[object] = []
@@ -3130,6 +3683,38 @@ def _query_sql(query: Query, order_by: str | None) -> tuple[str, list[object]]:
             )
             conditions.append(exists)
             parameters.extend(tier_parameters)
+        elif isinstance(clause, _IndexClause):
+            index_conditions = [
+                "ix.graph_digest = v.graph_digest",
+                "ix.index_name = ?",
+            ]
+            index_parameters: list[object] = [clause.name]
+            if clause.value is not None:
+                value_type, value_text, _value_num, value_digest = _index_value(
+                    clause.value
+                )
+                index_conditions.extend(
+                    (
+                        "ix.value_digest = ?",
+                        "ix.value_type = ?",
+                        "ix.value_text = ?",
+                    )
+                )
+                index_parameters.extend((value_digest, value_type, value_text))
+            if clause.minimum is not None:
+                index_conditions.append("ix.value_num >= ?")
+                index_parameters.append(_numeric_sort_key(Decimal(clause.minimum)))
+            if clause.maximum is not None:
+                index_conditions.append("ix.value_num <= ?")
+                index_parameters.append(_numeric_sort_key(Decimal(clause.maximum)))
+            exists = (
+                ("EXISTS" if clause.present else "NOT EXISTS")
+                + " (SELECT 1 FROM item_index AS ix WHERE "
+                + " AND ".join(index_conditions)
+                + ")"
+            )
+            conditions.append(exists)
+            parameters.extend(index_parameters)
         elif isinstance(clause, _StageClause):
             conditions.append("v.stage IS ?")
             parameters.append(clause.stage)
@@ -3191,6 +3776,85 @@ def _run_query(
         raise StoreCorrupt(f"cannot query tgdb catalog: {error}") from error
 
 
+def _require_complete_item_indexes(
+    connection: sqlite3.Connection,
+    *,
+    index_name: str | None = None,
+    heads_only: bool = False,
+) -> None:
+    """Refuse missing, extra, or incomplete declared-item derived rows."""
+    if heads_only:
+        if index_name is None:
+            raise ValueError("heads-only item-index checks require an index name")
+        expected_rows = connection.execute(
+            "SELECT DISTINCT v.graph_digest, d.name FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version "
+            "JOIN declared_indexes AS d ON d.name = ? "
+            "ORDER BY v.graph_digest, d.name",
+            (index_name,),
+        )
+        counts_rows = connection.execute(
+            "SELECT c.graph_digest, c.index_name, c.row_count "
+            "FROM item_index_counts AS c WHERE c.index_name = ? "
+            "AND EXISTS (SELECT 1 FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version "
+            "WHERE v.graph_digest = c.graph_digest) "
+            "ORDER BY c.graph_digest, c.index_name",
+            (index_name,),
+        )
+        actual_rows = connection.execute(
+            "SELECT ix.graph_digest, ix.index_name, count(*) FROM item_index AS ix "
+            "WHERE ix.index_name = ? AND EXISTS (SELECT 1 FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version "
+            "WHERE v.graph_digest = ix.graph_digest) "
+            "GROUP BY ix.graph_digest, ix.index_name "
+            "ORDER BY ix.graph_digest, ix.index_name",
+            (index_name,),
+        )
+    else:
+        expected_rows = connection.execute(
+            "SELECT v.graph_digest, d.name FROM ("
+            "SELECT DISTINCT graph_digest FROM versions"
+            ") AS v JOIN declared_indexes AS d ON d.history = 1 "
+            "UNION SELECT v.graph_digest, d.name FROM ("
+            "SELECT DISTINCT head.graph_digest FROM instances AS i "
+            "JOIN versions AS head ON head.id = i.head_version"
+            ") AS v JOIN declared_indexes AS d ON d.history = 0 "
+            "ORDER BY 1, 2"
+        )
+        counts_rows = connection.execute(
+            "SELECT graph_digest, index_name, row_count FROM item_index_counts "
+            "ORDER BY graph_digest, index_name"
+        )
+        actual_rows = connection.execute(
+            "SELECT graph_digest, index_name, count(*) FROM item_index "
+            "GROUP BY graph_digest, index_name ORDER BY graph_digest, index_name"
+        )
+    expected = {
+        (cast(str, row[0]), cast(str, row[1])) for row in expected_rows.fetchall()
+    }
+    counts = {
+        (cast(str, row[0]), cast(str, row[1])): cast(int, row[2])
+        for row in counts_rows.fetchall()
+    }
+    actual = {
+        (cast(str, row[0]), cast(str, row[1])): cast(int, row[2])
+        for row in actual_rows.fetchall()
+    }
+    for key in sorted(expected):
+        recorded = counts.pop(key, None)
+        if recorded is None:
+            raise StoreCorrupt(f"item_index_counts row {key!r} is missing")
+        if actual.pop(key, 0) != recorded:
+            raise StoreCorrupt(f"item_index rows for {key!r} are incomplete")
+    if counts:
+        key = next(iter(counts))
+        raise StoreCorrupt(f"item_index_counts row {key!r} is unexpected")
+    if actual:
+        key = next(iter(actual))
+        raise StoreCorrupt(f"item_index rows for {key!r} are unexpected")
+
+
 def _query_rows(
     store: TgdbStore,
     query: Query,
@@ -3200,6 +3864,26 @@ def _query_rows(
     limit: int | None,
 ) -> Iterator[VersionHandle]:
     """Execute validated query SQL and post-filter its bounded row stream."""
+    checked_indexes: set[str] = set()
+    for clause in query._clauses:
+        if not isinstance(clause, _IndexClause):
+            continue
+        declaration = store._connection.execute(
+            "SELECT attribute FROM declared_indexes WHERE name = ?", (clause.name,)
+        ).fetchone()
+        if declaration is None:
+            raise TgdbError(f"item index {clause.name!r} is not declared")
+        if clause.value is not None and declaration[0] != _qname_text(
+            clause.value.name
+        ):
+            raise TgdbError(
+                f"item index {clause.name!r} is declared for another attribute"
+            )
+        if clause.name not in checked_indexes:
+            _require_complete_item_indexes(
+                store._connection, index_name=clause.name, heads_only=True
+            )
+            checked_indexes.add(clause.name)
     needs_facts = any(
         isinstance(clause, _ChangedSinceClause)
         or (
@@ -3290,13 +3974,73 @@ def _query_rows(
                 return
 
 
+type _ItemIndexRow = tuple[str, str, int, int, str, str, str | None, str]
+type _ItemIndexCountRow = tuple[str, str, int]
+
+
+def _item_index_rows(
+    graph: Graph,
+    digest: str,
+    declarations: tuple[tuple[str, str, str], ...],
+) -> tuple[_ItemIndexRow, ...]:
+    """Derive ordered item-value rows for declarations that match this graph."""
+    selected = tuple(
+        (name, tier_text, _qname_from_text(attribute_text))
+        for name, tier_text, attribute_text in declarations
+    )
+    rows: list[_ItemIndexRow] = []
+    for tier_position, tier in enumerate(graph.tiers):
+        tier_text = _qname_text(tier.declaration.name)
+        matching = tuple(
+            (name, attribute)
+            for name, declared_tier, attribute in selected
+            if declared_tier == tier_text
+        )
+        if not matching:
+            continue
+        for item_position, item in enumerate(tier.items):
+            attributes = {attribute.name: attribute for attribute in item.attributes}
+            for index_name, attribute_name in matching:
+                value = attributes.get(attribute_name)
+                if value is None:
+                    continue
+                value_type, value_text, value_num, value_digest = _index_value(value)
+                rows.append(
+                    (
+                        digest,
+                        index_name,
+                        tier_position,
+                        item_position,
+                        value_type,
+                        value_text,
+                        value_num,
+                        value_digest,
+                    )
+                )
+    return tuple(rows)
+
+
+def _item_index_count_rows(
+    digest: str,
+    declarations: tuple[tuple[str, str, str], ...],
+    rows: tuple[_ItemIndexRow, ...],
+) -> tuple[_ItemIndexCountRow, ...]:
+    """Record the expected row count, including zero, for each declaration."""
+    counts = {name: 0 for name, _tier, _attribute in declarations}
+    for row in rows:
+        counts[row[1]] += 1
+    return tuple((digest, name, count) for name, count in counts.items())
+
+
 def _derive_indexes(
     store: TgdbStore,
 ) -> tuple[
     dict[str, tuple[str, str, str, str, str, int, int]],
     tuple[tuple[str, int, str, int], ...],
+    tuple[_ItemIndexCountRow, ...],
+    tuple[_ItemIndexRow, ...],
 ]:
-    """Recompute every small per-graph index from canonical stored documents."""
+    """Recompute graph facts, tiers, and declared items from stored documents."""
     try:
         digests = tuple(
             cast(str, row[0])
@@ -3308,6 +4052,22 @@ def _derive_indexes(
         raise StoreCorrupt(f"cannot enumerate stored graphs: {error}") from error
     facts: dict[str, tuple[str, str, str, str, str, int, int]] = {}
     tiers: list[tuple[str, int, str, int]] = []
+    item_counts: list[_ItemIndexCountRow] = []
+    items: list[_ItemIndexRow] = []
+    declarations = tuple(
+        cast(tuple[str, str, str, int], row)
+        for row in store._connection.execute(
+            "SELECT name, tier, attribute, history FROM declared_indexes "
+            "ORDER BY position"
+        )
+    )
+    head_digests = {
+        cast(str, row[0])
+        for row in store._connection.execute(
+            "SELECT DISTINCT v.graph_digest FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version"
+        )
+    }
     for digest in digests:
         with store._open_object(digest) as source:
             document = source.read()
@@ -3332,13 +4092,23 @@ def _derive_indexes(
             (digest, position, _qname_text(tier.declaration.name), len(tier.items))
             for position, tier in enumerate(graph.tiers)
         )
-    return facts, tuple(tiers)
+        applicable = tuple(
+            (name, tier, attribute)
+            for name, tier, attribute, history in declarations
+            if history or digest in head_digests
+        )
+        item_rows = _item_index_rows(graph, digest, applicable)
+        item_counts.extend(_item_index_count_rows(digest, applicable, item_rows))
+        items.extend(item_rows)
+    return facts, tuple(tiers), tuple(item_counts), tuple(items)
 
 
 def _compare_derived_indexes(
     connection: sqlite3.Connection,
     expected_facts: dict[str, tuple[str, str, str, str, str, int, int]],
     expected_tiers: tuple[tuple[str, int, str, int], ...],
+    expected_item_counts: tuple[_ItemIndexCountRow, ...],
+    expected_items: tuple[_ItemIndexRow, ...],
 ) -> None:
     """Refuse the first missing, unexpected, or drifted derived row."""
     metadata = dict(
@@ -3387,6 +4157,45 @@ def _compare_derived_indexes(
     if actual_tiers:
         tier_key = next(iter(actual_tiers))
         raise StoreCorrupt(f"graph_tiers row {tier_key!r} is unexpected")
+    actual_item_counts = {
+        (cast(str, row[0]), cast(str, row[1])): cast(_ItemIndexCountRow, row)
+        for row in connection.execute(
+            "SELECT graph_digest, index_name, row_count FROM item_index_counts "
+            "ORDER BY graph_digest, index_name"
+        )
+    }
+    for count_expected in expected_item_counts:
+        count_key = (count_expected[0], count_expected[1])
+        count_actual = actual_item_counts.pop(count_key, None)
+        if count_actual is None:
+            raise StoreCorrupt(f"item_index_counts row {count_key!r} is missing")
+        if count_actual != count_expected:
+            raise StoreCorrupt(
+                f"item_index_counts row {count_key!r} differs from its document"
+            )
+    if actual_item_counts:
+        count_key = next(iter(actual_item_counts))
+        raise StoreCorrupt(f"item_index_counts row {count_key!r} is unexpected")
+    actual_items = {
+        (cast(str, row[0]), cast(str, row[1]), cast(int, row[3])): cast(
+            _ItemIndexRow, row
+        )
+        for row in connection.execute(
+            "SELECT graph_digest, index_name, tier_position, item_position, "
+            "value_type, value_text, value_num, value_digest FROM item_index "
+            "ORDER BY graph_digest, index_name, item_position"
+        )
+    }
+    for item_expected in expected_items:
+        item_key = (item_expected[0], item_expected[1], item_expected[3])
+        item_actual = actual_items.pop(item_key, None)
+        if item_actual is None:
+            raise StoreCorrupt(f"item_index row {item_key!r} is missing")
+        if item_actual != item_expected:
+            raise StoreCorrupt(f"item_index row {item_key!r} differs from its document")
+    if actual_items:
+        item_key = next(iter(actual_items))
+        raise StoreCorrupt(f"item_index row {item_key!r} is unexpected")
 
 
 _VERSION_SELECT = (
@@ -3531,6 +4340,69 @@ def _touch(kind: Literal["collection", "instance"], uid: bytes) -> str:
     return f"{kind}:{uid.hex()}"
 
 
+def _index_touch(name: str) -> str:
+    """Return one stable staleness key for a declared item index."""
+    return f"index:{name}"
+
+
+def _index_action(
+    action: Literal["declare_index"],
+    name: str,
+    position: int,
+    tier: QualifiedName,
+    attribute: QualifiedName,
+    history: bool,
+) -> dict[str, object]:
+    """Build one complete declaration action for replay and undo."""
+    return {
+        "action": action,
+        "attribute": _qname_text(attribute),
+        "history": history,
+        "name": name,
+        "position": position,
+        "tier": _qname_text(tier),
+        "touches": [_index_touch(name)],
+    }
+
+
+def _drop_index_action(name: str) -> dict[str, object]:
+    """Build one stable index-removal action."""
+    return {
+        "action": "drop_index",
+        "name": name,
+        "touches": [_index_touch(name)],
+    }
+
+
+def _index_action_data(
+    action: dict[str, object],
+) -> tuple[str, int, QualifiedName, QualifiedName, bool]:
+    """Validate and decode one recorded index declaration."""
+    name = action.get("name")
+    position = action.get("position")
+    tier = action.get("tier")
+    attribute = action.get("attribute")
+    history = action.get("history")
+    _validate_name(name)
+    name = cast(str, name)
+    if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+        raise StoreCorrupt("recorded item index position is malformed")
+    if not isinstance(tier, str) or not isinstance(attribute, str):
+        raise StoreCorrupt("recorded item index names are malformed")
+    if not isinstance(history, bool):
+        raise StoreCorrupt("recorded item index history flag is malformed")
+    try:
+        return (
+            name,
+            position,
+            _qname_from_text(tier),
+            _qname_from_text(attribute),
+            history,
+        )
+    except (TypeError, ValueError) as error:
+        raise StoreCorrupt("recorded item index names are malformed") from error
+
+
 def _name_action(
     kind: Literal["collection", "instance"], uid: bytes, name: str
 ) -> dict[str, object]:
@@ -3590,6 +4462,18 @@ def _action_touches(action: dict[str, object]) -> tuple[str, ...]:
         "republish": "instance",
     }
     action_name = cast(str, action.get("action"))
+    if action_name in {"declare_index", "drop_index"}:
+        name = action.get("name")
+        try:
+            _validate_name(name)
+        except (TypeError, ValueError) as error:
+            raise StoreCorrupt("recorded item index name is malformed") from error
+        index_expected = (_index_touch(cast(str, name)),)
+        if action_name == "declare_index":
+            _index_action_data(action)
+        if touches != index_expected:
+            raise StoreCorrupt("recorded catalog touches do not match its operation")
+        return touches
     identity_kind = identity_kinds.get(action_name)
     expected: tuple[str, ...]
     if identity_kind is not None:
@@ -3797,6 +4681,15 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             ") STRICT"
         )
         connection.execute(
+            "CREATE TABLE declared_indexes("
+            "name TEXT PRIMARY KEY CHECK(length(name) > 0), "
+            "position INTEGER NOT NULL UNIQUE CHECK(position >= 0), "
+            "tier TEXT NOT NULL CHECK(length(tier) > 0), "
+            "attribute TEXT NOT NULL CHECK(length(attribute) > 0), "
+            "history INTEGER NOT NULL CHECK(history IN (0, 1))"
+            ") STRICT"
+        )
+        connection.execute(
             "CREATE TABLE graph_facts("
             "digest TEXT PRIMARY KEY REFERENCES objects(digest), "
             "format_version TEXT NOT NULL, "
@@ -3816,6 +4709,33 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "tier TEXT NOT NULL CHECK(length(tier) > 0), "
             "item_count INTEGER NOT NULL CHECK(item_count >= 0), "
             "PRIMARY KEY(digest, position)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE item_index_counts("
+            "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+            "ON DELETE CASCADE, "
+            "index_name TEXT NOT NULL REFERENCES declared_indexes(name) "
+            "ON DELETE CASCADE, "
+            "row_count INTEGER NOT NULL CHECK(row_count >= 0), "
+            "PRIMARY KEY(graph_digest, index_name)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE item_index("
+            "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+            "ON DELETE CASCADE, "
+            "index_name TEXT NOT NULL REFERENCES declared_indexes(name) "
+            "ON DELETE CASCADE, "
+            "tier_position INTEGER NOT NULL CHECK(tier_position >= 0), "
+            "item_position INTEGER NOT NULL CHECK(item_position >= 0), "
+            "value_type TEXT NOT NULL CHECK(length(value_type) > 0), "
+            "value_text TEXT NOT NULL, "
+            "value_num TEXT, "
+            "value_digest TEXT NOT NULL "
+            "CHECK(length(value_digest) = 64 AND "
+            "value_digest NOT GLOB '*[^0-9a-f]*'), "
+            "PRIMARY KEY(graph_digest, index_name, item_position)"
             ") STRICT"
         )
         connection.execute(
@@ -3852,6 +4772,13 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
         connection.execute(
             "CREATE INDEX graph_tiers_tier_count "
             "ON graph_tiers(tier, item_count, digest)"
+        )
+        connection.execute(
+            "CREATE INDEX item_index_value_digest "
+            "ON item_index(index_name, value_digest)"
+        )
+        connection.execute(
+            "CREATE INDEX item_index_value_num ON item_index(index_name, value_num)"
         )
         connection.execute(
             "CREATE INDEX versions_instance_commit ON versions(instance_id, commit_seq)"
@@ -4153,6 +5080,7 @@ __all__ = [
     "CheckReport",
     "CollectionInfo",
     "CommitReceipt",
+    "IndexInfo",
     "InstanceInfo",
     "Query",
     "ReindexReport",
