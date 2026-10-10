@@ -50,6 +50,8 @@ _MEDIA_TYPE_TEXT = re.compile(
     r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}"
 )
 _TGDB_UID_HEX_LENGTH = 32
+_TGDB_TIER_RANGE_PARTS = 3
+_TGDB_TIER_MINIMUM_PARTS = 2
 _BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 
 _EXIT_STATUS_HELP = """Exit codes:
@@ -467,6 +469,117 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     tgdb_history.add_argument(
         "--json", action="store_true", help="emit structured JSON"
+    )
+    tgdb_find = _subcommand(
+        tgdb_subparsers,
+        "find",
+        summary="find current graph versions",
+        description=(
+            "Query indexed head versions in declared order. Only --where opens "
+            "matching graph documents, one at a time."
+        ),
+        details=(
+            "Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Predicate values "
+            "are inline strict predicate JSON.\n\n"
+        ),
+        examples=(
+            "tiergraph tgdb find corpus.tgdb --collection recordings",
+            "tiergraph tgdb find corpus.tgdb --tier urn:example|words:1 --json",
+            "tiergraph tgdb find corpus.tgdb --changed-since 12 --count",
+        ),
+    )
+    tgdb_find.set_defaults(handler=_handle_tgdb)
+    tgdb_find.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_find.add_argument(
+        "--collection", metavar="NAME", help="limit to one collection"
+    )
+    tgdb_find.add_argument(
+        "--name", action="append", metavar="NAME", help="instance name; repeatable"
+    )
+    tgdb_find.add_argument(
+        "--fingerprint",
+        action="append",
+        type=_tgdb_fingerprint,
+        metavar="VIEW:HEX",
+        help="functional, identified, or exact fingerprint; repeatable",
+    )
+    tgdb_find.add_argument(
+        "--tier",
+        action="append",
+        type=_tgdb_tier_filter,
+        metavar="Q[:MIN[:MAX]]",
+        help="required tier and optional item-count range; repeatable",
+    )
+    tgdb_find.add_argument(
+        "--lacks-tier",
+        action="append",
+        type=_qualified_spelling,
+        metavar="Q",
+        help="absent tier as NAMESPACE|LOCAL; repeatable",
+    )
+    tgdb_find.add_argument("--stage", metavar="NAME", help="version stage")
+    tgdb_find.add_argument(
+        "--iteration", type=int, metavar="N", help="iteration within --stage"
+    )
+    tgdb_find.add_argument(
+        "--changed-since",
+        type=_nonnegative_integer,
+        metavar="COMMIT",
+        help="head differs from the version current at this commit",
+    )
+    tgdb_find.add_argument(
+        "--changed-view",
+        choices=tuple(view.value for view in tiergraph.EquivalenceView),
+        metavar="VIEW",
+        help="equivalence view for --changed-since (default: functional)",
+    )
+    tgdb_find.add_argument(
+        "--where",
+        type=_tgdb_predicate,
+        metavar="PREDICATE",
+        help="inline strict predicate JSON applied to every graph item",
+    )
+    tgdb_find.add_argument(
+        "--order-by",
+        choices=(
+            "collection",
+            "name",
+            "position",
+            "version",
+            "seq",
+            "commit",
+            "commit_seq",
+            "graph_digest",
+            "functional",
+            "identified",
+            "stage",
+            "iteration",
+        ),
+        metavar="COLUMN",
+        help="explicit order; declared order breaks ties",
+    )
+    tgdb_find.add_argument(
+        "--retired", action="store_true", help="include retired catalog rows"
+    )
+    tgdb_find.add_argument("--count", action="store_true", help="print only a count")
+    tgdb_find.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_reindex = _subcommand(
+        tgdb_subparsers,
+        "reindex",
+        summary="check or rebuild derived indexes",
+        description=(
+            "Recompute graph facts and tier summaries from stored documents. "
+            "The default compares without writing; --rebuild replaces derived rows."
+        ),
+        examples=(
+            "tiergraph tgdb reindex corpus.tgdb",
+            "tiergraph tgdb reindex corpus.tgdb --rebuild",
+        ),
+    )
+    tgdb_reindex.set_defaults(handler=_handle_tgdb)
+    tgdb_reindex.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_reindex.add_argument(
+        "--rebuild", action="store_true", help="replace every derived row"
     )
     for command in ("rename", "move"):
         subcommand = _subcommand(
@@ -1854,6 +1967,70 @@ def _tgdb_version(value: str) -> int | Literal["head"]:
     return _positive_integer(value)
 
 
+def _tgdb_fingerprint(
+    value: str,
+) -> tuple[tiergraph.EquivalenceView, str]:
+    """Parse one view-qualified canonical graph fingerprint."""
+    view_text, separator, digest = value.partition(":")
+    if not separator:
+        raise argparse.ArgumentTypeError("must use VIEW:HEX")
+    try:
+        view = tiergraph.EquivalenceView(view_text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "view must be functional, identified, or exact"
+        ) from error
+    if not _SHA256_TEXT.fullmatch(digest):
+        raise argparse.ArgumentTypeError("fingerprint must be lowercase SHA-256")
+    return view, digest
+
+
+def _tgdb_tier_filter(
+    value: str,
+) -> tuple[tiergraph.QualifiedName, int, int | None]:
+    """Parse an expanded tier name and optional inclusive item-count range."""
+    namespace, separator, tail = value.rpartition("|")
+    if not separator:
+        raise argparse.ArgumentTypeError(
+            "tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]"
+        )
+    local_name = tail
+    minimum = 1
+    maximum: int | None = None
+    parts = tail.rsplit(":", 2)
+    if (
+        len(parts) == _TGDB_TIER_RANGE_PARTS
+        and parts[1].isascii()
+        and parts[1].isdecimal()
+        and (not parts[2] or parts[2].isascii() and parts[2].isdecimal())
+    ):
+        local_name = parts[0]
+        minimum = int(parts[1])
+        maximum = None if not parts[2] else int(parts[2])
+    elif (
+        len(parts) >= _TGDB_TIER_MINIMUM_PARTS
+        and parts[-1].isascii()
+        and parts[-1].isdecimal()
+    ):
+        local_name = ":".join(parts[:-1])
+        minimum = int(parts[-1])
+    if maximum is not None and maximum < minimum:
+        raise argparse.ArgumentTypeError("tier maximum must be at least minimum")
+    try:
+        tier = tiergraph.QualifiedName(namespace, local_name)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return tier, minimum, maximum
+
+
+def _tgdb_predicate(value: str) -> _predicate.Predicate:
+    """Parse one inline strict predicate JSON document for a store query."""
+    try:
+        return _predicate.predicate_loads(value)
+    except (Refusal, TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def _tgdb_annotations(value: str) -> tiergraph.EditAnnotations:
     """Parse one strict EditAnnotations JSON object for version metadata."""
     try:
@@ -2146,6 +2323,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
         } and not (
             args.tgdb_command == "collection" and args.tgdb_collection_command == "list"
         )
+        writable = writable or (args.tgdb_command == "reindex" and args.rebuild)
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
             if args.tgdb_command == "check":
                 report = store.check(full=args.full)
@@ -2153,6 +2331,15 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 _stdout_text(
                     f"ok: {detail} check, {report.objects} objects, "
                     f"{report.object_bytes} bytes\n"
+                )
+                return 0
+            if args.tgdb_command == "reindex":
+                index_report = store.reindex(rebuild=args.rebuild)
+                action = "rebuilt" if index_report.rebuilt else "checked"
+                _stdout_text(
+                    f"{action} {index_report.graphs} graphs and "
+                    f"{index_report.tiers} "
+                    f"{'tier' if index_report.tiers == 1 else 'tiers'}\n"
                 )
                 return 0
             if args.tgdb_command == "collection":
@@ -2447,6 +2634,68 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                                     instance.uid.hex(),
                                     instance.name,
                                     state,
+                                )
+                            )
+                            + "\n"
+                        )
+                return 0
+            if args.tgdb_command == "find":
+                if args.iteration is not None and args.stage is None:
+                    raise ValueError("--iteration requires --stage")
+                if args.changed_view is not None and args.changed_since is None:
+                    raise ValueError("--changed-view requires --changed-since")
+                query = tgdb.Query.all(args.collection)
+                if args.name:
+                    query = query.names(*args.name)
+                for view, digest in args.fingerprint or ():
+                    query = query.fingerprint(digest, view)
+                for tier, minimum, maximum in args.tier or ():
+                    query = query.has_tier(tier, minimum=minimum, maximum=maximum)
+                for tier in args.lacks_tier or ():
+                    query = query.lacks_tier(tier)
+                if args.stage is not None:
+                    query = query.stage(args.stage, iteration=args.iteration)
+                if args.changed_since is not None:
+                    query = query.changed_since(
+                        args.changed_since,
+                        tiergraph.EquivalenceView(
+                            args.changed_view
+                            or tiergraph.EquivalenceView.FUNCTIONAL.value
+                        ),
+                    )
+                if args.where is not None:
+                    query = query.where(args.where)
+                if args.retired:
+                    query = query.include_retired()
+                if args.count:
+                    with store.snapshot() as snapshot:
+                        count = snapshot.count(query)
+                    if args.json:
+                        _stdout_text(_json_bytes({"count": count}).decode("utf-8"))
+                    else:
+                        _stdout_text(f"{count}\n")
+                    return 0
+                handles = store.query(query, order_by=args.order_by)
+                if args.json:
+                    _stdout_text(
+                        _json_bytes([handle.to_data() for handle in handles]).decode(
+                            "utf-8"
+                        )
+                    )
+                else:
+                    for handle in handles:
+                        _stdout_text(
+                            "\t".join(
+                                _text_report_field(value)
+                                for value in (
+                                    handle.collection,
+                                    handle.position,
+                                    handle.instance_uid.hex(),
+                                    handle.name,
+                                    handle.seq,
+                                    handle.graph_digest,
+                                    handle.stage,
+                                    handle.iteration,
                                 )
                             )
                             + "\n"

@@ -20,6 +20,9 @@ import pytest
 
 import tiergraph.tgdb as tgdb
 from tiergraph import (
+    AttributeDeclaration,
+    AttributeDomain,
+    AttributeValue,
     EditAnnotations,
     EquivalenceView,
     Graph,
@@ -32,11 +35,13 @@ from tiergraph import (
     RefusalStage,
     Tier,
     TierDeclaration,
+    XsdType,
     diff,
     dumps,
     fingerprint,
     patch_dumps,
 )
+from tiergraph.predicate import Cell, Equals
 from tiergraph.wire import MAX_DOCUMENT_BYTES
 
 
@@ -99,6 +104,35 @@ def _version_graph(name: str | None = None) -> Graph:
     return Graph(namespaces, (), ())
 
 
+def _indexed_graph(
+    tier_name: str,
+    count: int,
+    *,
+    value: str | None = None,
+) -> Graph:
+    """Return one graph with indexed tier size and optional item metadata."""
+    namespace = "urn:tgdb:test"
+    tier = QualifiedName(namespace, tier_name)
+    attribute = QualifiedName(namespace, "kind")
+    items = tuple(
+        Item(
+            str(index),
+            ()
+            if value is None
+            else (AttributeValue(attribute, XsdType.STRING, value),),
+        )
+        for index in range(count)
+    )
+    return Graph(
+        (NamespaceDeclaration("test", namespace),),
+        (Tier(TierDeclaration(tier, tier_name), items),),
+        (),
+        attribute_declarations=(
+            AttributeDeclaration(attribute, AttributeDomain.ITEM, XsdType.STRING),
+        ),
+    )
+
+
 def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
     """Return the durable sequence from a receipt known to record a commit."""
     assert receipt.commit_seq is not None
@@ -130,9 +164,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 4,
+        "schema_version": 5,
         "layout_version": 1,
-        "index_version": 1,
+        "index_version": 2,
         "inline_threshold": 1234,
         "fingerprint_domain": "tiergraph-equivalence/1",
         "mode": "rw",
@@ -140,7 +174,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (4,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (5,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -158,6 +192,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     ).fetchone() == (1,)
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'graph_facts'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'graph_tiers'"
     ).fetchone() == (1,)
     assert (store.path / "objects" / "sha256").is_dir()
     assert (store.path / "staging").is_dir()
@@ -322,12 +359,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 5)
+    _set_pragma(path, "user_version", 6)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 5
-    assert caught.value.supported == 4
-    assert "5" in str(caught.value) and "4" in str(caught.value)
+    assert caught.value.found == 6
+    assert caught.value.supported == 5
+    assert "6" in str(caught.value) and "5" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -344,7 +381,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 4"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 5"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -1023,6 +1060,554 @@ def test_versions_store_canonical_documents_facts_history_and_annotations(
         ]
         assert store.instances()[0].generation == 1
         store.check(full=True)
+
+
+def test_per_graph_tier_indexes_and_typed_queries_cover_head_filters(
+    tmp_path: Path,
+) -> None:
+    """TG7 indexes every tier and composes typed filters without loading graphs."""
+    words = QualifiedName("urn:tgdb:test", "words")
+    phones = QualifiedName("urn:tgdb:test", "phones")
+    first_graph = _indexed_graph("words", 2, value="yes")
+    second_graph = _indexed_graph("phones", 0, value="no")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            first = transaction.create_instance(
+                collection,
+                "zeta",
+                first_graph,
+                annotations=EditAnnotations(stage="seed", iteration=0),
+            )
+            second = transaction.create_instance(
+                collection,
+                "alpha",
+                second_graph,
+                annotations=EditAnnotations(stage="seed", iteration=1),
+            )
+            initial = transaction.commit()
+        assert initial.commit_seq == 2
+        first_handle = store.get(first)
+        assert store._connection.execute(
+            "SELECT position, tier, item_count FROM graph_tiers "
+            "WHERE digest = ? ORDER BY position",
+            (first_handle.graph_digest,),
+        ).fetchall() == [
+            (
+                0,
+                '{"local_name":"words","namespace":"urn:tgdb:test"}',
+                2,
+            )
+        ]
+
+        assert [handle.name for handle in store.query(tgdb.Query.all())] == [
+            "zeta",
+            "alpha",
+        ]
+        assert [
+            handle.name
+            for handle in store.query(tgdb.Query.all("collection").stage(None))
+        ] == []
+        assert [
+            handle.name for handle in store.query(tgdb.Query.all(), order_by="name")
+        ] == ["alpha", "zeta"]
+        assert store.query(tgdb.Query.all().ids(first).names("zeta")) == [first_handle]
+        assert store.query(tgdb.Query.all().has_tier(words, minimum=2, maximum=2)) == [
+            first_handle
+        ]
+        assert [
+            handle.instance_uid
+            for handle in store.query(tgdb.Query.all().lacks_tier(words))
+        ] == [second]
+        assert [
+            handle.instance_uid
+            for handle in store.query(
+                tgdb.Query.all().has_tier(phones, minimum=0, maximum=0)
+            )
+        ] == [second]
+        assert [
+            handle.instance_uid
+            for handle in store.query(tgdb.Query.all().stage("seed", iteration=1))
+        ] == [second]
+        for view, value in (
+            (EquivalenceView.FUNCTIONAL, first_handle.functional),
+            (EquivalenceView.IDENTIFIED, first_handle.identified),
+            (EquivalenceView.EXACT, first_handle.graph_digest),
+        ):
+            assert store.query(tgdb.Query.all().fingerprint(value, view)) == [
+                first_handle
+            ]
+
+        predicate = Equals(Cell(QualifiedName("urn:tgdb:test", "kind")), ("yes",))
+        assert store.query(tgdb.Query.all().where(predicate), batch_size=1) == [
+            first_handle
+        ]
+        assert store.query(tgdb.Query.all(), limit=1) == [first_handle]
+        assert store.query(tgdb.Query.all(), limit=0) == []
+
+        with store.write() as transaction:
+            transaction.publish(
+                first,
+                _indexed_graph("words", 3, value="yes"),
+                expected=1,
+                annotations=EditAnnotations(stage="reconcile", iteration=2),
+            )
+            transaction.commit()
+        assert [
+            handle.instance_uid
+            for handle in store.query(tgdb.Query.all().changed_since(2))
+        ] == [first]
+        assert (
+            store.query(tgdb.Query.all().changed_since(2, EquivalenceView.EXACT))[0].seq
+            == 2
+        )
+        assert store.query(tgdb.Query.all().changed_since(99)) == []
+
+        with store.write() as transaction:
+            transaction.retire(second)
+            transaction.commit()
+        assert [handle.instance_uid for handle in store.query(tgdb.Query.all())] == [
+            first
+        ]
+        assert [
+            handle.instance_uid
+            for handle in store.query(tgdb.Query.all().include_retired())
+        ] == [first, second]
+
+
+def test_snapshot_query_is_stable_bounded_and_closes_with_its_handles(
+    tmp_path: Path,
+) -> None:
+    """Snapshot query batches retain one pinned head view and explicit lifetime."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", _indexed_graph("words", 1))
+            transaction.create_instance(
+                collection, "second", _indexed_graph("words", 2)
+            )
+            transaction.commit()
+        snapshot = store.snapshot()
+        handles = tuple(snapshot.run(tgdb.Query.all(), batch_size=1))
+        assert [handle.name for handle in handles] == ["first", "second"]
+        assert (
+            snapshot.count(
+                tgdb.Query.all().has_tier(
+                    QualifiedName("urn:tgdb:test", "words"), minimum=2
+                )
+            )
+            == 1
+        )
+        snapshot.close()
+        with pytest.raises(tgdb.TgdbError, match="snapshot is closed"):
+            snapshot.run(tgdb.Query.all())
+        with pytest.raises(tgdb.TgdbError, match="store is closed"):
+            handles[0].load()
+
+
+def test_query_uses_one_catalog_statement_for_unfiltered_heads(tmp_path: Path) -> None:
+    """A head query does not resolve each handle's collection separately."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", _version_graph("first"))
+            transaction.create_instance(collection, "second", _version_graph("second"))
+            transaction.commit()
+        statements: list[str] = []
+        store._connection.set_trace_callback(statements.append)
+        assert [handle.name for handle in store.query(tgdb.Query.all())] == [
+            "first",
+            "second",
+        ]
+        store._connection.set_trace_callback(None)
+        assert sum(statement.startswith("SELECT") for statement in statements) == 1
+
+
+def test_where_skips_graphs_without_predicate_declarations(tmp_path: Path) -> None:
+    """A corpus predicate treats graphs outside its vocabulary as nonmatches."""
+    kind = QualifiedName("urn:tgdb:test", "kind")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            matching = transaction.create_instance(
+                collection, "matching", _indexed_graph("words", 1, value="yes")
+            )
+            transaction.create_instance(collection, "other", _version_graph())
+            transaction.commit()
+        query = tgdb.Query.all().where(Equals(Cell(kind), ("yes",)))
+        assert [handle.instance_uid for handle in store.query(query)] == [matching]
+        invalid = tgdb.Query.all().where(Equals(Cell(kind), (1,)))
+        with pytest.raises(Refusal, match="can never hold"):
+            store.query(invalid)
+
+
+def test_indexed_queries_and_fixpoint_checks_open_no_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fingerprint, tier, stage, and fixpoint filters stay index-only."""
+    words = QualifiedName("urn:tgdb:test", "words")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(
+                collection,
+                "sample",
+                _indexed_graph("words", 1),
+                annotations=EditAnnotations(stage="seed"),
+            )
+            transaction.commit()
+        handle = store.get(uid)
+
+        def opened(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("indexed query opened a graph document")
+
+        monkeypatch.setattr(tgdb.TgdbStore, "_open_object", opened)
+        query = (
+            tgdb.Query.all("collection")
+            .ids(uid)
+            .fingerprint(handle.functional)
+            .has_tier(words)
+            .stage("seed")
+            .changed_since(handle.commit_seq)
+        )
+        assert store.query(query) == []
+
+
+def test_reindex_detects_repairs_and_versions_derived_rows(tmp_path: Path) -> None:
+    """Reindex compares documents exactly and rebuilds only deterministic rows."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(
+                collection, "sample", _indexed_graph("words", 2)
+            )
+            transaction.commit()
+        assert store.reindex().to_data() == {
+            "rebuilt": False,
+            "graphs": 1,
+            "tiers": 1,
+        }
+        digest = store.get("sample").graph_digest
+        store._connection.execute(
+            "UPDATE graph_tiers SET item_count = 9 WHERE digest = ?", (digest,)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers row .* differs"):
+            store.reindex()
+        assert store.reindex(rebuild=True) == tgdb.ReindexReport(True, 1, 1)
+        assert store._connection.execute(
+            "SELECT item_count FROM graph_tiers WHERE digest = ?", (digest,)
+        ).fetchone() == (2,)
+
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ? WHERE digest = ?",
+            ("f" * 64, digest),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_facts row .* differs"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "UPDATE store_meta SET value = '1' WHERE key = 'index_version'"
+        )
+        store._info = replace(store._info, index_version=1)
+        with pytest.raises(tgdb.TgdbError, match="indexes are stale"):
+            store.query(tgdb.Query.all())
+        with pytest.raises(tgdb.StoreCorrupt, match="index version is stale"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        assert store.info().index_version == 2
+
+    with tgdb.TgdbStore.open(tmp_path / "store") as readonly:
+        with pytest.raises(tgdb.TgdbError, match="read-only"):
+            readonly.reindex(rebuild=True)
+
+
+def test_query_validation_refuses_untyped_or_unbounded_requests(tmp_path: Path) -> None:
+    """Every public query builder and execution bound has a typed refusal."""
+    query = tgdb.Query.all()
+    with pytest.raises(ValueError, match="at least one"):
+        query.ids()
+    with pytest.raises(ValueError, match="at least one"):
+        query.names()
+    with pytest.raises(ValueError, match="exactly 16 bytes"):
+        query.ids(b"short")
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        query.fingerprint("bad")
+    with pytest.raises(TypeError, match="EquivalenceView"):
+        query.fingerprint("0" * 64, cast(EquivalenceView, "functional"))
+    with pytest.raises(TypeError, match="QualifiedName"):
+        query.has_tier(cast(QualifiedName, "words"))
+    words = QualifiedName("urn:tgdb:test", "words")
+    with pytest.raises(TypeError, match="minimum"):
+        query.has_tier(words, minimum=cast(int, "one"))
+    with pytest.raises(ValueError, match="nonnegative"):
+        query.has_tier(words, minimum=-1)
+    with pytest.raises(TypeError, match="maximum"):
+        query.has_tier(words, maximum=cast(int, "many"))
+    with pytest.raises(ValueError, match="at least minimum"):
+        query.has_tier(words, minimum=2, maximum=1)
+    with pytest.raises(TypeError, match="iteration"):
+        query.stage("seed", iteration=cast(int, "one"))
+    with pytest.raises(TypeError, match="commit_seq"):
+        query.changed_since(cast(int, "one"))
+    with pytest.raises(ValueError, match="nonnegative"):
+        query.changed_since(-1)
+    with pytest.raises(TypeError, match="Predicate"):
+        query.where(cast(Equals, object()))
+    assert tgdb.Query.all("collection").stage(None) != query
+
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        for invalid, message in (
+            (cast(tgdb.Query, object()), "query must be"),
+            (query, ""),
+        ):
+            if message:
+                with pytest.raises(TypeError, match=message):
+                    store.query(invalid)
+        with pytest.raises(ValueError, match="order_by"):
+            store.query(query, order_by="unknown")
+        with pytest.raises(TypeError, match="batch_size"):
+            store.query(query, batch_size=cast(int, "many"))
+        with pytest.raises(ValueError, match="positive"):
+            store.query(query, batch_size=0)
+        with pytest.raises(TypeError, match="limit"):
+            store.query(query, limit=cast(int, "many"))
+        with pytest.raises(ValueError, match="nonnegative"):
+            store.query(query, limit=-1)
+        with pytest.raises(TypeError, match="boolean"):
+            store.reindex(rebuild=cast(bool, 1))
+
+
+def test_query_and_reindex_internal_failures_keep_store_taxonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SQLite failures, stale derivations, and row drift remain precise refusals."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    with store.write() as transaction:
+        collection = transaction.create_collection("collection")
+        transaction.create_instance(collection, "sample", _indexed_graph("words", 1))
+        transaction.commit()
+    wrapped = store._connection
+    for statement in ("BEGIN", "SELECT i.id"):
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, statement, sqlite3.DatabaseError("query failed")
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot query"):
+            store.query(tgdb.Query.all())
+        store._connection = wrapped
+
+    transaction = store.write()
+    with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+        store.reindex(rebuild=True)
+    transaction.discard()
+
+    original_derive = tgdb._derive_indexes
+
+    def changed(
+        selected: tgdb.TgdbStore,
+    ) -> tuple[
+        dict[str, tuple[str, str, str, str, str, int, int]],
+        tuple[tuple[str, int, str, int], ...],
+    ]:
+        facts, tiers = original_derive(selected)
+        return {"0" * 64: next(iter(facts.values()))}, tiers
+
+    monkeypatch.setattr(tgdb, "_derive_indexes", changed)
+    with pytest.raises(tgdb.StaleVersion, match="graph set changed"):
+        store.reindex(rebuild=True)
+    monkeypatch.setattr(tgdb, "_derive_indexes", original_derive)
+
+    for error, expected in (
+        (sqlite3.OperationalError("failed"), tgdb.StoreCorrupt),
+        (sqlite3.OperationalError("busy"), tgdb.StoreBusy),
+    ):
+        if expected is tgdb.StoreBusy:
+            error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, "DELETE FROM graph_tiers", error
+        )
+        with pytest.raises(expected):
+            store.reindex(rebuild=True)
+        store._connection = wrapped
+
+    begin_errors: tuple[sqlite3.DatabaseError, ...] = (
+        sqlite3.OperationalError("begin failed"),
+        cast(sqlite3.DatabaseError, RuntimeError("begin interrupted")),
+    )
+    for begin_error in begin_errors:
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, "BEGIN IMMEDIATE", begin_error
+        )
+        with pytest.raises(
+            tgdb.StoreCorrupt
+            if isinstance(begin_error, sqlite3.Error)
+            else RuntimeError
+        ):
+            store.reindex(rebuild=True)
+        store._connection = wrapped
+
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped,
+        "SELECT DISTINCT graph_digest",
+        sqlite3.DatabaseError("enumeration failed"),
+    )
+    with pytest.raises(tgdb.StoreCorrupt, match="enumerate stored graphs"):
+        store.reindex()
+    store._connection = wrapped
+    store.close()
+
+
+def test_reindex_names_every_missing_unexpected_and_noncanonical_row(
+    tmp_path: Path,
+) -> None:
+    """Every derived-table drift shape names its first document-backed key."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(
+                collection, "sample", _indexed_graph("words", 1)
+            )
+            transaction.commit()
+        digest = store.get("sample").graph_digest
+        store._connection.execute(
+            "UPDATE store_meta SET value = 'other' WHERE key = 'fingerprint_domain'"
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="fingerprint domain is stale"):
+            store.reindex()
+        store._connection.execute(
+            "UPDATE store_meta SET value = ? WHERE key = 'fingerprint_domain'",
+            ("tiergraph-equivalence/1",),
+        )
+
+        store._connection.execute("DELETE FROM graph_tiers WHERE digest = ?", (digest,))
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers row .* is missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "INSERT INTO graph_tiers(digest, position, tier, item_count) "
+            "VALUES (?, 1, ?, 0)",
+            (digest, '{"local_name":"extra","namespace":"urn:tgdb:test"}'),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers row .* unexpected"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        store._connection.execute("DELETE FROM graph_facts WHERE digest = ?", (digest,))
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_facts row .* is missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        extra_digest = "f" * 64
+        store._connection.execute(
+            "INSERT INTO objects(digest, size, residency, data) "
+            "VALUES (?, 0, 'inline', x'')",
+            (extra_digest,),
+        )
+        store._connection.execute(
+            "INSERT INTO graph_facts("
+            "digest, format_version, fp_domain, functional, identified, size, "
+            "tier_count) VALUES (?, '0.3.0', 'tiergraph-equivalence/1', ?, ?, 0, 0)",
+            (extra_digest, "e" * 64, "d" * 64),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_facts row .* unexpected"):
+            store.reindex()
+        store._connection.execute(
+            "DELETE FROM graph_facts WHERE digest = ?", (extra_digest,)
+        )
+        store._connection.execute(
+            "DELETE FROM objects WHERE digest = ?", (extra_digest,)
+        )
+
+        document = dumps(_indexed_graph("words", 1)).replace("\n", "").encode()
+        noncanonical_digest = hashlib.sha256(document).hexdigest()
+        store._connection.execute(
+            "INSERT INTO objects(digest, size, residency, data) "
+            "VALUES (?, ?, 'inline', ?)",
+            (noncanonical_digest, len(document), document),
+        )
+        store._connection.execute(
+            "UPDATE versions SET graph_digest = ? WHERE graph_digest = ?",
+            (noncanonical_digest, digest),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="not in canonical form"):
+            store.reindex()
+
+    with tgdb.TgdbStore.create(tmp_path / "missing-fact") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(
+                collection, "sample", _indexed_graph("words", 1)
+            )
+            transaction.commit()
+        store._connection.execute("DELETE FROM graph_facts")
+        with pytest.raises(tgdb.StoreCorrupt, match="has no graph facts"):
+            store.query(tgdb.Query.all().changed_since(0))
+
+    with tgdb.TgdbStore.create(tmp_path / "missing-tier") as store:
+        words = QualifiedName("urn:tgdb:test", "words")
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(
+                collection, "sample", _indexed_graph("words", 1)
+            )
+            transaction.commit()
+        store._connection.execute("DELETE FROM graph_tiers")
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers rows .* incomplete"):
+            store.query(tgdb.Query.all().lacks_tier(words))
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers rows .* incomplete"):
+            store.check()
+
+
+def test_reindex_wraps_document_refusals_as_store_corruption(tmp_path: Path) -> None:
+    """Reindex reports an unreadable stored graph through the tgdb taxonomy."""
+    document = b"{}"
+    digest = hashlib.sha256(document).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _version_graph())
+            transaction.commit()
+        store._connection.execute(
+            "INSERT INTO objects(digest, size, residency, data) "
+            "VALUES (?, ?, 'inline', ?)",
+            (digest, len(document), document),
+        )
+        store._connection.execute("UPDATE versions SET graph_digest = ?", (digest,))
+        with pytest.raises(
+            tgdb.StoreCorrupt, match=f"cannot reindex graph object {digest}"
+        ):
+            store.reindex()
+
+
+def test_staged_tier_rows_cannot_drift_before_publication(tmp_path: Path) -> None:
+    """Staged and live tier facts must agree when a graph object is reused."""
+    graph = _indexed_graph("words", 1)
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", graph)
+            transaction.commit()
+        digest = store.get("first").graph_digest
+        with store.write() as transaction:
+            transaction.create_instance(collection, "second", graph)
+            transaction.commit()
+        transaction = store.write()
+        transaction.create_instance(collection, "third", graph)
+        store._connection.execute(
+            "UPDATE graph_tiers SET item_count = 9 WHERE digest = ?", (digest,)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="graph_tiers rows .* conflict"):
+            transaction.commit()
+
+    with tgdb.TgdbStore.create(tmp_path / "inconsistent") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", graph)
+            transaction.commit()
+        store._connection.execute("UPDATE graph_tiers SET item_count = 9")
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="graph tiers .* inconsistent"):
+                transaction.create_instance(collection, "second", graph)
 
 
 def test_unchanged_publish_checks_expected_and_writes_nothing(tmp_path: Path) -> None:
@@ -2765,6 +3350,8 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "CollectionInfo",
         "CommitReceipt",
         "InstanceInfo",
+        "Query",
+        "ReindexReport",
         "Snapshot",
         "SqliteTooOld",
         "StaleJournalBase",

@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -401,6 +401,8 @@ positional arguments:
     revert              republish a retained version
     get                 write a stored graph version
     history             list stored graph versions
+    find                find current graph versions
+    reindex             check or rebuild derived indexes
     rename              rename an instance
     move                move an instance
     retire              retire an instance
@@ -779,6 +781,84 @@ options:
 Examples:
   $ tiergraph tgdb history corpus.tgdb sample
   $ tiergraph tgdb history corpus.tgdb sample --json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb find`
+
+```text
+usage: tiergraph tgdb find [-h] [--collection NAME] [--name NAME]
+                           [--fingerprint VIEW:HEX] [--tier Q[:MIN[:MAX]]]
+                           [--lacks-tier Q] [--stage NAME] [--iteration N]
+                           [--changed-since COMMIT] [--changed-view VIEW]
+                           [--where PREDICATE] [--order-by COLUMN] [--retired]
+                           [--count] [--json]
+                           STORE
+
+Query indexed head versions in declared order. Only --where opens matching graph documents, one at a time.
+
+positional arguments:
+  STORE                 store directory
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     limit to one collection
+  --name NAME           instance name; repeatable
+  --fingerprint VIEW:HEX
+                        functional, identified, or exact fingerprint;
+                        repeatable
+  --tier Q[:MIN[:MAX]]  required tier and optional item-count range;
+                        repeatable
+  --lacks-tier Q        absent tier as NAMESPACE|LOCAL; repeatable
+  --stage NAME          version stage
+  --iteration N         iteration within --stage
+  --changed-since COMMIT
+                        head differs from the version current at this commit
+  --changed-view VIEW   equivalence view for --changed-since (default:
+                        functional)
+  --where PREDICATE     inline strict predicate JSON applied to every graph
+                        item
+  --order-by COLUMN     explicit order; declared order breaks ties
+  --retired             include retired catalog rows
+  --count               print only a count
+  --json                emit structured JSON
+
+Tier spellings use NAMESPACE|LOCAL[:MIN[:MAX]]. Predicate values are inline strict predicate JSON.
+
+Examples:
+  $ tiergraph tgdb find corpus.tgdb --collection recordings
+  $ tiergraph tgdb find corpus.tgdb --tier urn:example|words:1 --json
+  $ tiergraph tgdb find corpus.tgdb --changed-since 12 --count
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb reindex`
+
+```text
+usage: tiergraph tgdb reindex [-h] [--rebuild] STORE
+
+Recompute graph facts and tier summaries from stored documents. The default compares without writing; --rebuild replaces derived rows.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --rebuild   replace every derived row
+
+Examples:
+  $ tiergraph tgdb reindex corpus.tgdb
+  $ tiergraph tgdb reindex corpus.tgdb --rebuild
 
 Exit codes:
   0  success

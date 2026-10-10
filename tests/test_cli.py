@@ -1941,6 +1941,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     "batch",
                     "collection",
                     "diff",
+                    "find",
                     "get",
                     "history",
                     "list",
@@ -2233,7 +2234,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 108
+    assert len(examples) == 113
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

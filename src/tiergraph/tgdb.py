@@ -13,26 +13,30 @@ import os
 import re
 import secrets
 import sqlite3
+from collections.abc import Iterator
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from os import PathLike
 from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Literal, Self, cast
 
+from tiergraph import predicate as _predicate
 from tiergraph.blob import BlobRef, VerifiedReader
-from tiergraph.core import Graph
+from tiergraph.core import Graph, QualifiedName
 from tiergraph.diff import diff as graph_diff
 from tiergraph.edit import EditAnnotations
 from tiergraph.equivalence import EquivalenceView, equivalent, fingerprint
 from tiergraph.patch import Patch, invert_patch, patch_dumps, patch_loads
+from tiergraph.predicate import Predicate
 from tiergraph.schema import Refusal, RefusalStage
+from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _LAYOUT_VERSION = 1
-_INDEX_VERSION = 1
+_INDEX_VERSION = 2
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -341,6 +345,208 @@ class CheckReport:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ReindexReport:
+    """Summarize a checked or rebuilt set of per-graph derived indexes."""
+
+    rebuilt: bool
+    graphs: int
+    tiers: int
+
+    def to_data(self) -> dict[str, bool | int]:
+        """Return a JSON-compatible report in stable field order."""
+        return {
+            "rebuilt": self.rebuilt,
+            "graphs": self.graphs,
+            "tiers": self.tiers,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _IdsClause:
+    values: tuple[bytes, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NamesClause:
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FingerprintClause:
+    value: str
+    view: EquivalenceView
+
+
+@dataclass(frozen=True, slots=True)
+class _TierClause:
+    tier: QualifiedName
+    minimum: int
+    maximum: int | None
+    present: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _StageClause:
+    stage: str | None
+    iteration: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ChangedSinceClause:
+    commit_seq: int
+    view: EquivalenceView
+
+
+type _QueryClause = (
+    _IdsClause
+    | _NamesClause
+    | _FingerprintClause
+    | _TierClause
+    | _StageClause
+    | _ChangedSinceClause
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Query:
+    """Build an immutable, typed query over current instance versions.
+
+    Every builder adds an intersecting condition. Each ``where`` predicate is
+    satisfied independently by at least one item, and a graph that lacks a
+    declaration named by a predicate does not match it. Results use declared
+    collection and instance order unless a caller requests another order. A
+    predicate is the only filter that loads documents, and it evaluates against
+    one graph's items before the next document is opened.
+    """
+
+    _collection: str | None = None
+    _clauses: tuple[_QueryClause, ...] = ()
+    _predicates: tuple[Predicate, ...] = ()
+    _include_retired: bool = False
+
+    @classmethod
+    def all(cls, collection: str | None = None) -> Query:
+        """Return a query for every active head, optionally in one collection."""
+        if collection is not None:
+            _validate_name(collection)
+        return cls(_collection=collection)
+
+    def ids(self, *uids: bytes) -> Query:
+        """Restrict results to any of the supplied stable instance ids."""
+        if not uids:
+            raise ValueError("ids needs at least one instance id")
+        for uid in uids:
+            _validate_uid(uid, "instance uid")
+        return replace(self, _clauses=(*self._clauses, _IdsClause(tuple(uids))))
+
+    def names(self, *names: str) -> Query:
+        """Restrict results to any of the supplied instance names."""
+        if not names:
+            raise ValueError("names needs at least one instance name")
+        for name in names:
+            _validate_name(name)
+        return replace(self, _clauses=(*self._clauses, _NamesClause(tuple(names))))
+
+    def fingerprint(
+        self,
+        digest: str,
+        view: EquivalenceView = EquivalenceView.FUNCTIONAL,
+    ) -> Query:
+        """Restrict results to one fingerprint under the requested view."""
+        _validate_query_digest(digest, "fingerprint")
+        _validate_equivalence_view(view)
+        return replace(
+            self,
+            _clauses=(*self._clauses, _FingerprintClause(digest, view)),
+        )
+
+    def has_tier(
+        self,
+        tier: QualifiedName,
+        *,
+        minimum: int = 1,
+        maximum: int | None = None,
+    ) -> Query:
+        """Restrict results to graphs with a tier in the requested size range."""
+        _validate_tier_filter(tier, minimum, maximum)
+        return replace(
+            self,
+            _clauses=(
+                *self._clauses,
+                _TierClause(tier, minimum, maximum, True),
+            ),
+        )
+
+    def lacks_tier(self, tier: QualifiedName) -> Query:
+        """Restrict results to graphs that do not declare the requested tier."""
+        _validate_tier_filter(tier, 0, None)
+        return replace(
+            self,
+            _clauses=(*self._clauses, _TierClause(tier, 0, None, False)),
+        )
+
+    def stage(self, stage: str | None, *, iteration: int | None = None) -> Query:
+        """Restrict results by indexed version stage and optional iteration."""
+        if stage is not None:
+            _validate_name(stage)
+        if iteration is not None and (
+            isinstance(iteration, bool) or not isinstance(iteration, int)
+        ):
+            raise TypeError("iteration must be an integer or None")
+        return replace(
+            self,
+            _clauses=(*self._clauses, _StageClause(stage, iteration)),
+        )
+
+    def changed_since(
+        self,
+        commit_seq: int,
+        view: EquivalenceView = EquivalenceView.FUNCTIONAL,
+    ) -> Query:
+        """Keep heads that differ from the version current at a commit."""
+        if isinstance(commit_seq, bool) or not isinstance(commit_seq, int):
+            raise TypeError("commit_seq must be an integer")
+        if commit_seq < 0:
+            raise ValueError("commit_seq must be nonnegative")
+        _validate_equivalence_view(view)
+        return replace(
+            self,
+            _clauses=(
+                *self._clauses,
+                _ChangedSinceClause(commit_seq, view),
+            ),
+        )
+
+    def where(self, predicate: Predicate) -> Query:
+        """Keep graphs where this predicate independently holds for an item.
+
+        A graph that lacks a declaration named by the predicate does not match.
+        Other binding and evaluation refusals remain errors.
+        """
+        if not isinstance(
+            predicate,
+            (
+                _predicate.Has,
+                _predicate.Equals,
+                _predicate.Compare,
+                _predicate.Matches,
+                _predicate.Elements,
+                _predicate.Related,
+                _predicate.Spans,
+                _predicate.And,
+                _predicate.Or,
+                _predicate.Not,
+            ),
+        ):
+            raise TypeError("predicate must be a tiergraph Predicate")
+        return replace(self, _predicates=(*self._predicates, predicate))
+
+    def include_retired(self) -> Query:
+        """Include retired instances and collections in the result."""
+        return replace(self, _include_retired=True)
+
+
 class _VerifiedObjectReader(VerifiedReader):
     """Translate a stored object's EOF mismatch into a store corruption."""
 
@@ -599,6 +805,37 @@ class TgdbStore:
         self._require_current_schema()
         return Snapshot(self._path, self._limits)
 
+    def query(
+        self,
+        query: Query,
+        *,
+        order_by: str | None = None,
+        batch_size: int | None = None,
+        limit: int | None = None,
+    ) -> list[VersionHandle]:
+        """Run one short query and return handles bound to this open store."""
+        self._require_open()
+        self._require_current_schema()
+        self._require_current_indexes()
+        size = self._limits.batch_size if batch_size is None else batch_size
+        _validate_query_run(query, order_by, size, limit)
+        try:
+            self._connection.execute("BEGIN")
+            return list(
+                _run_query(
+                    self,
+                    query,
+                    order_by=order_by,
+                    batch_size=size,
+                    limit=limit,
+                )
+            )
+        except sqlite3.DatabaseError as error:
+            raise StoreCorrupt(f"cannot query tgdb catalog: {error}") from error
+        finally:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+
     def undo(
         self,
         commit_seq: int,
@@ -662,6 +899,17 @@ class TgdbStore:
                 raise StoreCorrupt(
                     f"version object {missing_fact[0]} has no graph facts"
                 )
+            incomplete_tiers = self._connection.execute(
+                "SELECT f.digest FROM graph_facts AS f LEFT JOIN ("
+                "SELECT digest, count(*) AS row_count "
+                "FROM graph_tiers GROUP BY digest"
+                ") AS gt ON gt.digest = f.digest "
+                "WHERE coalesce(gt.row_count, 0) != f.tier_count LIMIT 1"
+            ).fetchone()
+            if incomplete_tiers is not None:
+                raise StoreCorrupt(
+                    f"graph_tiers rows for object {incomplete_tiers[0]} are incomplete"
+                )
             for fact in self._connection.execute(
                 "SELECT f.digest, f.functional, f.identified, f.size, o.size "
                 "FROM graph_facts AS f JOIN objects AS o ON o.digest = f.digest"
@@ -707,6 +955,82 @@ class TgdbStore:
             inline_objects=inline_objects,
             file_objects=file_objects,
             object_bytes=object_bytes,
+        )
+
+    def reindex(self, *, rebuild: bool = False) -> ReindexReport:
+        """Check or rebuild deterministic per-graph facts and tier summaries.
+
+        The check form works through a read-only handle and changes nothing.
+        Rebuilding requires a writable handle, replaces only derived rows, and
+        records the build's index and fingerprint-domain versions.
+        """
+        self._require_open()
+        self._require_current_schema()
+        if not isinstance(rebuild, bool):
+            raise TypeError("rebuild must be a boolean")
+        if rebuild:
+            self._require_writable()
+            if self._writer is not None:
+                raise TgdbError("cannot rebuild indexes during a write transaction")
+        expected_facts, expected_tiers = _derive_indexes(self)
+        if rebuild:
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                current = tuple(
+                    row[0]
+                    for row in self._connection.execute(
+                        "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+                    )
+                )
+                if current != tuple(expected_facts):
+                    raise StaleVersion(
+                        "stored graph set changed while derived indexes were rebuilt"
+                    )
+                self._connection.execute("DELETE FROM graph_tiers")
+                self._connection.execute("DELETE FROM graph_facts")
+                self._connection.executemany(
+                    "INSERT INTO graph_facts("
+                    "digest, format_version, fp_domain, functional, identified, size, "
+                    "tier_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    expected_facts.values(),
+                )
+                self._connection.executemany(
+                    "INSERT INTO graph_tiers(digest, position, tier, item_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    expected_tiers,
+                )
+                self._connection.execute(
+                    "UPDATE store_meta SET value = ? WHERE key = 'index_version'",
+                    (str(_INDEX_VERSION),),
+                )
+                self._connection.execute(
+                    "UPDATE store_meta SET value = ? WHERE key = 'fingerprint_domain'",
+                    (_FINGERPRINT_DOMAIN,),
+                )
+                self._connection.execute("COMMIT")
+            except sqlite3.OperationalError as error:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                if _sqlite_busy(error):
+                    raise StoreBusy(
+                        "tgdb catalog remained busy while rebuilding indexes"
+                    ) from error
+                raise StoreCorrupt(f"cannot rebuild tgdb indexes: {error}") from error
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            self._info = replace(
+                self._info,
+                index_version=_INDEX_VERSION,
+                fingerprint_domain=_FINGERPRINT_DOMAIN,
+            )
+        else:
+            _compare_derived_indexes(self._connection, expected_facts, expected_tiers)
+        return ReindexReport(
+            rebuilt=rebuild,
+            graphs=len(expected_facts),
+            tiers=len(expected_tiers),
         )
 
     def _put_object(
@@ -872,6 +1196,14 @@ class TgdbStore:
                 f"explicit migration to version {_SCHEMA_VERSION}"
             )
 
+    def _require_current_indexes(self) -> None:
+        """Refuse queries whose derived rows use another derivation contract."""
+        if (
+            self._info.index_version != _INDEX_VERSION
+            or self._info.fingerprint_domain != _FINGERPRINT_DOMAIN
+        ):
+            raise TgdbError("store derived indexes are stale; run reindex --rebuild")
+
     def _require_writable(self) -> None:
         """Refuse writes through a read-only, closed, or older store handle."""
         self._require_open()
@@ -975,6 +1307,31 @@ class Snapshot:
     ) -> Patch:
         """Return an exact patch between versions in the pinned catalog view."""
         return self._reader.diff(instance, source, target, collection=collection)
+
+    def run(
+        self,
+        query: Query,
+        *,
+        order_by: str | None = None,
+        batch_size: int = 256,
+        limit: int | None = None,
+    ) -> Iterator[VersionHandle]:
+        """Stream matching handles in bounded batches from the pinned view."""
+        if self.closed:
+            raise TgdbError("snapshot is closed")
+        self._reader._require_current_indexes()
+        _validate_query_run(query, order_by, batch_size, limit)
+        return _run_query(
+            self._reader,
+            query,
+            order_by=order_by,
+            batch_size=batch_size,
+            limit=limit,
+        )
+
+    def count(self, query: Query) -> int:
+        """Count matching heads without loading documents unless ``where`` is set."""
+        return sum(1 for _handle in self.run(query))
 
     def close(self) -> None:
         """End the read transaction; repeated calls have no effect."""
@@ -1644,8 +2001,8 @@ class WriteTransaction:
         identified = fingerprint(graph, EquivalenceView.IDENTIFIED)
         self._connection.execute(
             "INSERT OR IGNORE INTO graph_facts("
-            "digest, format_version, fp_domain, functional, identified, size"
-            ") VALUES (?, ?, ?, ?, ?, ?)",
+            "digest, format_version, fp_domain, functional, identified, size, "
+            "tier_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 digest,
                 FORMAT_VERSION,
@@ -1653,10 +2010,11 @@ class WriteTransaction:
                 functional,
                 identified,
                 len(document),
+                len(graph.tiers),
             ),
         )
         recorded = self._connection.execute(
-            "SELECT format_version, fp_domain, functional, identified, size "
+            "SELECT format_version, fp_domain, functional, identified, size, tier_count "
             "FROM graph_facts WHERE digest = ?",
             (digest,),
         ).fetchone()
@@ -1666,9 +2024,28 @@ class WriteTransaction:
             functional,
             identified,
             len(document),
+            len(graph.tiers),
         )
         if recorded != expected:
             raise StoreCorrupt(f"graph facts for object {digest} are inconsistent")
+        tier_rows = tuple(
+            (digest, position, _qname_text(tier.declaration.name), len(tier.items))
+            for position, tier in enumerate(graph.tiers)
+        )
+        self._connection.executemany(
+            "INSERT OR IGNORE INTO graph_tiers("
+            "digest, position, tier, item_count) VALUES (?, ?, ?, ?)",
+            tier_rows,
+        )
+        recorded_tiers = tuple(
+            self._connection.execute(
+                "SELECT digest, position, tier, item_count FROM graph_tiers "
+                "WHERE digest = ? ORDER BY position",
+                (digest,),
+            )
+        )
+        if recorded_tiers != tier_rows:
+            raise StoreCorrupt(f"graph tiers for object {digest} are inconsistent")
         self._staged_graphs.add(digest)
         return digest
 
@@ -2224,10 +2601,12 @@ def _publish_staged_catalog(
             "functional",
             "identified",
             "size",
+            "tier_count",
         ),
         "digest",
         graph_digests,
     )
+    _copy_graph_tiers(staged, catalog, graph_digests)
     _publication_step("derived-rows")
 
     version_columns = (
@@ -2303,6 +2682,35 @@ def _copy_selected_rows(
         elif existing != row:
             raise StoreCorrupt(
                 f"staged {table} row {row[key_index]!r} conflicts with the catalog"
+            )
+
+
+def _copy_graph_tiers(
+    staged: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    digests: set[str],
+) -> None:
+    """Copy ordered tier facts for selected graph objects without drift."""
+    for digest in sorted(digests):
+        rows = staged.execute(
+            "SELECT digest, position, tier, item_count FROM graph_tiers "
+            "WHERE digest = ? ORDER BY position",
+            (digest,),
+        ).fetchall()
+        existing = catalog.execute(
+            "SELECT digest, position, tier, item_count FROM graph_tiers "
+            "WHERE digest = ? ORDER BY position",
+            (digest,),
+        ).fetchall()
+        if existing and existing != rows:
+            raise StoreCorrupt(
+                f"staged graph_tiers rows for {digest!r} conflict with the catalog"
+            )
+        if not existing:
+            catalog.executemany(
+                "INSERT INTO graph_tiers(digest, position, tier, item_count) "
+                "VALUES (?, ?, ?, ?)",
+                rows,
             )
 
 
@@ -2603,6 +3011,384 @@ def _require_active_instance(
         raise TgdbError(f"collection {collection[0]!r} is retired")
 
 
+_QUERY_ORDERS = {
+    "collection": "c.name",
+    "name": "i.name",
+    "position": "i.position",
+    "version": "v.seq",
+    "seq": "v.seq",
+    "commit": "v.commit_seq",
+    "commit_seq": "v.commit_seq",
+    "graph_digest": "v.graph_digest",
+    "functional": "f.functional",
+    "identified": "f.identified",
+    "stage": "v.stage",
+    "iteration": "v.iteration",
+}
+
+
+def _validate_query_digest(value: object, description: str) -> None:
+    """Require one canonical lowercase SHA-256 query value."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _DIGEST_HEX_LENGTH
+        or not value.isascii()
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{description} must be a lowercase SHA-256 digest")
+
+
+def _validate_equivalence_view(view: object) -> None:
+    """Require one public equivalence view without accepting a raw string."""
+    if not isinstance(view, EquivalenceView):
+        raise TypeError("view must be an EquivalenceView")
+
+
+def _validate_tier_filter(tier: object, minimum: object, maximum: object) -> None:
+    """Require one typed tier and a closed or open nonnegative count range."""
+    if not isinstance(tier, QualifiedName):
+        raise TypeError("tier must be a QualifiedName")
+    if isinstance(minimum, bool) or not isinstance(minimum, int):
+        raise TypeError("minimum must be an integer")
+    if minimum < 0:
+        raise ValueError("minimum must be nonnegative")
+    if maximum is not None:
+        if isinstance(maximum, bool) or not isinstance(maximum, int):
+            raise TypeError("maximum must be an integer or None")
+        if maximum < minimum:
+            raise ValueError("maximum must be at least minimum")
+
+
+def _validate_query_run(
+    query: object,
+    order_by: object,
+    batch_size: object,
+    limit: object,
+) -> None:
+    """Validate public execution controls before opening a result cursor."""
+    if not isinstance(query, Query):
+        raise TypeError("query must be a Query")
+    if order_by is not None and order_by not in _QUERY_ORDERS:
+        choices = ", ".join(_QUERY_ORDERS)
+        raise ValueError(f"order_by must be one of: {choices}")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int):
+        raise TypeError("batch_size must be an integer")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("limit must be an integer or None")
+        if limit < 0:
+            raise ValueError("limit must be nonnegative")
+
+
+def _qname_text(name: QualifiedName) -> str:
+    """Encode an expanded name without depending on document-local prefixes."""
+    return json.dumps(name.to_data(), separators=(",", ":"), sort_keys=True)
+
+
+def _query_sql(query: Query, order_by: str | None) -> tuple[str, list[object]]:
+    """Compile one typed query into internal SQL and bound parameters."""
+    conditions: list[str] = []
+    parameters: list[object] = []
+    if query._collection is not None:
+        conditions.append("c.name = ?")
+        parameters.append(query._collection)
+    if not query._include_retired:
+        conditions.extend(("i.retired_commit IS NULL", "c.retired_commit IS NULL"))
+    for clause in query._clauses:
+        if isinstance(clause, _IdsClause):
+            marks = ", ".join("?" for _value in clause.values)
+            conditions.append(f"i.uid IN ({marks})")
+            parameters.extend(clause.values)
+        elif isinstance(clause, _NamesClause):
+            marks = ", ".join("?" for _value in clause.values)
+            conditions.append(f"i.name IN ({marks})")
+            parameters.extend(clause.values)
+        elif isinstance(clause, _FingerprintClause):
+            column = {
+                EquivalenceView.FUNCTIONAL: "f.functional",
+                EquivalenceView.IDENTIFIED: "f.identified",
+                EquivalenceView.EXACT: "v.graph_digest",
+            }[clause.view]
+            conditions.append(f"{column} = ?")
+            parameters.append(clause.value)
+        elif isinstance(clause, _TierClause):
+            tier_conditions = ["gt.digest = v.graph_digest", "gt.tier = ?"]
+            tier_parameters: list[object] = [_qname_text(clause.tier)]
+            if clause.present:
+                tier_conditions.append("gt.item_count >= ?")
+                tier_parameters.append(clause.minimum)
+                if clause.maximum is not None:
+                    tier_conditions.append("gt.item_count <= ?")
+                    tier_parameters.append(clause.maximum)
+            exists = (
+                ("EXISTS" if clause.present else "NOT EXISTS")
+                + " (SELECT 1 FROM graph_tiers AS gt WHERE "
+                + " AND ".join(tier_conditions)
+                + ")"
+            )
+            conditions.append(exists)
+            parameters.extend(tier_parameters)
+        elif isinstance(clause, _StageClause):
+            conditions.append("v.stage IS ?")
+            parameters.append(clause.stage)
+            if clause.iteration is not None:
+                conditions.append("v.iteration = ?")
+                parameters.append(clause.iteration)
+        else:
+            current, historical = {
+                EquivalenceView.FUNCTIONAL: ("f.functional", "oldf.functional"),
+                EquivalenceView.IDENTIFIED: ("f.identified", "oldf.identified"),
+                EquivalenceView.EXACT: ("v.graph_digest", "oldv.graph_digest"),
+            }[clause.view]
+            conditions.append(
+                "(NOT EXISTS (SELECT 1 FROM versions AS beforev "
+                "WHERE beforev.instance_id = i.id AND beforev.commit_seq <= ?) "
+                f"OR {current} != (SELECT {historical} FROM versions AS oldv "
+                "LEFT JOIN graph_facts AS oldf ON oldf.digest = oldv.graph_digest "
+                "WHERE oldv.instance_id = i.id AND oldv.commit_seq <= ? "
+                "ORDER BY oldv.seq DESC LIMIT 1))"
+            )
+            parameters.extend((clause.commit_seq, clause.commit_seq))
+    where = "" if not conditions else " WHERE " + " AND ".join(conditions)
+    order = "c.position, i.position"
+    if order_by is not None:
+        order = f"{_QUERY_ORDERS[order_by]}, c.position, i.position"
+    statement = (
+        "SELECT i.id, i.uid, i.collection_id, i.name, i.position, i.generation, "
+        "i.retired_commit, i.head_version, c.name, "
+        "v.seq, v.commit_seq, v.graph_digest, f.functional, f.identified, "
+        "v.stage, v.id, v.iteration, v.patch_digest, v.transition, v.reason "
+        "FROM instances AS i JOIN collections AS c ON c.id = i.collection_id "
+        "JOIN versions AS v ON v.id = i.head_version "
+        "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest"
+        f"{where} ORDER BY {order}"
+    )
+    return statement, parameters
+
+
+def _run_query(
+    store: TgdbStore,
+    query: Query,
+    *,
+    order_by: str | None,
+    batch_size: int,
+    limit: int | None,
+) -> Iterator[VersionHandle]:
+    """Yield one compiled query while retaining only a bounded row batch."""
+    if limit == 0:
+        return
+    try:
+        yield from _query_rows(
+            store,
+            query,
+            order_by=order_by,
+            batch_size=batch_size,
+            limit=limit,
+        )
+    except sqlite3.DatabaseError as error:
+        raise StoreCorrupt(f"cannot query tgdb catalog: {error}") from error
+
+
+def _query_rows(
+    store: TgdbStore,
+    query: Query,
+    *,
+    order_by: str | None,
+    batch_size: int,
+    limit: int | None,
+) -> Iterator[VersionHandle]:
+    """Execute validated query SQL and post-filter its bounded row stream."""
+    needs_facts = any(
+        isinstance(clause, _ChangedSinceClause)
+        or (
+            isinstance(clause, _FingerprintClause)
+            and clause.view is not EquivalenceView.EXACT
+        )
+        for clause in query._clauses
+    )
+    if needs_facts:
+        missing = store._connection.execute(
+            "SELECT v.graph_digest FROM versions AS v "
+            "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest "
+            "WHERE f.digest IS NULL LIMIT 1"
+        ).fetchone()
+        if missing is not None:
+            raise StoreCorrupt(f"version object {missing[0]} has no graph facts")
+    if any(isinstance(clause, _TierClause) for clause in query._clauses):
+        incomplete = store._connection.execute(
+            "SELECT f.digest FROM graph_facts AS f LEFT JOIN ("
+            "SELECT digest, count(*) AS row_count FROM graph_tiers GROUP BY digest"
+            ") AS gt ON gt.digest = f.digest "
+            "WHERE coalesce(gt.row_count, 0) != f.tier_count LIMIT 1"
+        ).fetchone()
+        if incomplete is not None:
+            raise StoreCorrupt(
+                f"graph_tiers rows for object {incomplete[0]} are incomplete"
+            )
+    statement, parameters = _query_sql(query, order_by)
+    cursor = store._connection.execute(statement, parameters)
+    compiled = tuple(
+        _predicate.compile_predicate(predicate) for predicate in query._predicates
+    )
+    emitted = 0
+    while rows := cursor.fetchmany(batch_size):
+        for row in rows:
+            instance = cast(
+                tuple[int, bytes, int, str, int, int, int | None, int | None],
+                row[:8],
+            )
+            version = cast(
+                tuple[
+                    int,
+                    int,
+                    str,
+                    str,
+                    str,
+                    str | None,
+                    int,
+                    int | None,
+                    str | None,
+                    Literal["initial", "patch", "snapshot"],
+                    str | None,
+                ],
+                row[9:],
+            )
+            handle = _version_handle(
+                store,
+                instance,
+                version,
+                collection_name=cast(str, row[8]),
+            )
+            if compiled:
+                graph = handle.load()
+                candidates = NodeSet(
+                    graph,
+                    tuple(
+                        Node(NodeKind.ITEM, reference)
+                        for reference in graph.canonical_items()
+                    ),
+                )
+                matches = True
+                for bound in compiled:
+                    try:
+                        selected = bound.bind(graph).select(candidates)
+                    except Refusal as error:
+                        if error.stage is not RefusalStage.REFERENCE:
+                            raise
+                        matches = False
+                        break
+                    if not selected.nodes:
+                        matches = False
+                        break
+                if not matches:
+                    continue
+            yield handle
+            emitted += 1
+            if limit is not None and emitted >= limit:
+                return
+
+
+def _derive_indexes(
+    store: TgdbStore,
+) -> tuple[
+    dict[str, tuple[str, str, str, str, str, int, int]],
+    tuple[tuple[str, int, str, int], ...],
+]:
+    """Recompute every small per-graph index from canonical stored documents."""
+    try:
+        digests = tuple(
+            cast(str, row[0])
+            for row in store._connection.execute(
+                "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+            )
+        )
+    except sqlite3.DatabaseError as error:
+        raise StoreCorrupt(f"cannot enumerate stored graphs: {error}") from error
+    facts: dict[str, tuple[str, str, str, str, str, int, int]] = {}
+    tiers: list[tuple[str, int, str, int]] = []
+    for digest in digests:
+        with store._open_object(digest) as source:
+            document = source.read()
+        try:
+            graph = loads(document)
+        except Refusal as error:
+            raise StoreCorrupt(
+                f"cannot reindex graph object {digest}: {error}"
+            ) from error
+        if dumps(graph).encode() != document:
+            raise StoreCorrupt(f"graph object {digest} is not in canonical form")
+        facts[digest] = (
+            digest,
+            FORMAT_VERSION,
+            _FINGERPRINT_DOMAIN,
+            fingerprint(graph, EquivalenceView.FUNCTIONAL),
+            fingerprint(graph, EquivalenceView.IDENTIFIED),
+            len(document),
+            len(graph.tiers),
+        )
+        tiers.extend(
+            (digest, position, _qname_text(tier.declaration.name), len(tier.items))
+            for position, tier in enumerate(graph.tiers)
+        )
+    return facts, tuple(tiers)
+
+
+def _compare_derived_indexes(
+    connection: sqlite3.Connection,
+    expected_facts: dict[str, tuple[str, str, str, str, str, int, int]],
+    expected_tiers: tuple[tuple[str, int, str, int], ...],
+) -> None:
+    """Refuse the first missing, unexpected, or drifted derived row."""
+    metadata = dict(
+        connection.execute(
+            "SELECT key, value FROM store_meta "
+            "WHERE key IN ('index_version', 'fingerprint_domain')"
+        )
+    )
+    if metadata.get("index_version") != str(_INDEX_VERSION):
+        raise StoreCorrupt("derived index version is stale; run reindex --rebuild")
+    if metadata.get("fingerprint_domain") != _FINGERPRINT_DOMAIN:
+        raise StoreCorrupt("derived fingerprint domain is stale; run reindex --rebuild")
+    actual_facts = {
+        cast(str, row[0]): cast(tuple[str, str, str, str, str, int, int], row)
+        for row in connection.execute(
+            "SELECT digest, format_version, fp_domain, functional, identified, size, "
+            "tier_count "
+            "FROM graph_facts ORDER BY digest"
+        )
+    }
+    for digest, expected in expected_facts.items():
+        actual = actual_facts.pop(digest, None)
+        if actual is None:
+            raise StoreCorrupt(f"graph_facts row {digest!r} is missing")
+        if actual != expected:
+            raise StoreCorrupt(f"graph_facts row {digest!r} differs from its document")
+    if actual_facts:
+        digest = next(iter(actual_facts))
+        raise StoreCorrupt(f"graph_facts row {digest!r} is unexpected")
+    actual_tiers = {
+        (cast(str, row[0]), cast(int, row[1])): cast(tuple[str, int, str, int], row)
+        for row in connection.execute(
+            "SELECT digest, position, tier, item_count FROM graph_tiers "
+            "ORDER BY digest, position"
+        )
+    }
+    for tier_expected in expected_tiers:
+        tier_key = (tier_expected[0], tier_expected[1])
+        tier_actual = actual_tiers.pop(tier_key, None)
+        if tier_actual is None:
+            raise StoreCorrupt(f"graph_tiers row {tier_key!r} is missing")
+        if tier_actual != tier_expected:
+            raise StoreCorrupt(
+                f"graph_tiers row {tier_key!r} differs from its document"
+            )
+    if actual_tiers:
+        tier_key = next(iter(actual_tiers))
+        raise StoreCorrupt(f"graph_tiers row {tier_key!r} is unexpected")
+
+
 _VERSION_SELECT = (
     "SELECT v.seq, v.commit_seq, v.graph_digest, f.functional, f.identified, "
     "v.stage, v.id, v.iteration, v.patch_digest, v.transition, v.reason "
@@ -2680,20 +3466,24 @@ def _version_handle(
         Literal["initial", "patch", "snapshot"],
         str | None,
     ],
+    *,
+    collection_name: str | None = None,
 ) -> VersionHandle:
     """Bind one immutable version row to its verified object loader."""
-    collection = store._connection.execute(
-        "SELECT name FROM collections WHERE id = ?", (instance[2],)
-    ).fetchone()
-    if collection is None:
-        raise StoreCorrupt(f"instance {instance[3]!r} has no collection")
+    if collection_name is None:
+        collection = store._connection.execute(
+            "SELECT name FROM collections WHERE id = ?", (instance[2],)
+        ).fetchone()
+        if collection is None:
+            raise StoreCorrupt(f"instance {instance[3]!r} has no collection")
+        collection_name = cast(str, collection[0])
     _validate_digest(version[2])
     _validate_fingerprint(version[3], "functional", version[2])
     _validate_fingerprint(version[4], "identified", version[2])
     if version[8] is not None:
         _validate_digest(version[8])
     return VersionHandle(
-        collection=cast(str, collection[0]),
+        collection=collection_name,
         instance_uid=instance[1],
         name=instance[3],
         position=instance[4],
@@ -3015,7 +3805,17 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "CHECK(length(functional) = 64 AND functional NOT GLOB '*[^0-9a-f]*'), "
             "identified TEXT NOT NULL "
             "CHECK(length(identified) = 64 AND identified NOT GLOB '*[^0-9a-f]*'), "
-            "size INTEGER NOT NULL CHECK(size >= 0)"
+            "size INTEGER NOT NULL CHECK(size >= 0), "
+            "tier_count INTEGER NOT NULL CHECK(tier_count >= 0)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE graph_tiers("
+            "digest TEXT NOT NULL REFERENCES graph_facts(digest) ON DELETE CASCADE, "
+            "position INTEGER NOT NULL CHECK(position >= 0), "
+            "tier TEXT NOT NULL CHECK(length(tier) > 0), "
+            "item_count INTEGER NOT NULL CHECK(item_count >= 0), "
+            "PRIMARY KEY(digest, position)"
             ") STRICT"
         )
         connection.execute(
@@ -3048,6 +3848,10 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
         )
         connection.execute(
             "CREATE INDEX graph_facts_identified ON graph_facts(identified)"
+        )
+        connection.execute(
+            "CREATE INDEX graph_tiers_tier_count "
+            "ON graph_tiers(tier, item_count, digest)"
         )
         connection.execute(
             "CREATE INDEX versions_instance_commit ON versions(instance_id, commit_seq)"
@@ -3350,6 +4154,8 @@ __all__ = [
     "CollectionInfo",
     "CommitReceipt",
     "InstanceInfo",
+    "Query",
+    "ReindexReport",
     "Snapshot",
     "SqliteTooOld",
     "StaleJournalBase",

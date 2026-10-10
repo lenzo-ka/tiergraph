@@ -11796,6 +11796,142 @@ InstanceInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
 
 Return a JSON-compatible description in stable field order.
 
+### `Query`
+
+```text
+Query() -> None
+```
+
+Build an immutable, typed query over current instance versions.
+
+Every builder adds an intersecting condition. Each ``where`` predicate is
+satisfied independently by at least one item, and a graph that lacks a
+declaration named by a predicate does not match it. Results use declared
+collection and instance order unless a caller requests another order. A
+predicate is the only filter that loads documents, and it evaluates against
+one graph's items before the next document is opened.
+
+#### `Query.all`
+
+Class method.
+
+```text
+Query.all(cls, collection: 'str | None' = None) -> 'Query'
+```
+
+Return a query for every active head, optionally in one collection.
+
+#### `Query.ids`
+
+Method.
+
+```text
+Query.ids(self, *uids: 'bytes') -> 'Query'
+```
+
+Restrict results to any of the supplied stable instance ids.
+
+#### `Query.names`
+
+Method.
+
+```text
+Query.names(self, *names: 'str') -> 'Query'
+```
+
+Restrict results to any of the supplied instance names.
+
+#### `Query.fingerprint`
+
+Method.
+
+```text
+Query.fingerprint(self, digest: 'str', view: 'EquivalenceView' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'Query'
+```
+
+Restrict results to one fingerprint under the requested view.
+
+#### `Query.has_tier`
+
+Method.
+
+```text
+Query.has_tier(self, tier: 'QualifiedName', *, minimum: 'int' = 1, maximum: 'int | None' = None) -> 'Query'
+```
+
+Restrict results to graphs with a tier in the requested size range.
+
+#### `Query.lacks_tier`
+
+Method.
+
+```text
+Query.lacks_tier(self, tier: 'QualifiedName') -> 'Query'
+```
+
+Restrict results to graphs that do not declare the requested tier.
+
+#### `Query.stage`
+
+Method.
+
+```text
+Query.stage(self, stage: 'str | None', *, iteration: 'int | None' = None) -> 'Query'
+```
+
+Restrict results by indexed version stage and optional iteration.
+
+#### `Query.changed_since`
+
+Method.
+
+```text
+Query.changed_since(self, commit_seq: 'int', view: 'EquivalenceView' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'Query'
+```
+
+Keep heads that differ from the version current at a commit.
+
+#### `Query.where`
+
+Method.
+
+```text
+Query.where(self, predicate: 'Predicate') -> 'Query'
+```
+
+Keep graphs where this predicate independently holds for an item.
+
+A graph that lacks a declaration named by the predicate does not match.
+Other binding and evaluation refusals remain errors.
+
+#### `Query.include_retired`
+
+Method.
+
+```text
+Query.include_retired(self) -> 'Query'
+```
+
+Include retired instances and collections in the result.
+
+### `ReindexReport`
+
+```text
+ReindexReport(rebuilt: 'bool', graphs: 'int', tiers: 'int') -> None
+```
+
+Summarize a checked or rebuilt set of per-graph derived indexes.
+
+#### `ReindexReport.to_data`
+
+Method.
+
+```text
+ReindexReport.to_data(self) -> 'dict[str, bool | int]'
+```
+
+Return a JSON-compatible report in stable field order.
+
 ### `Snapshot`
 
 ```text
@@ -11888,6 +12024,26 @@ Snapshot.diff(self, instance: 'bytes | str', source: 'int', target: "int | Liter
 
 Return an exact patch between versions in the pinned catalog view.
 
+#### `Snapshot.run`
+
+Method.
+
+```text
+Snapshot.run(self, query: 'Query', *, order_by: 'str | None' = None, batch_size: 'int' = 256, limit: 'int | None' = None) -> 'Iterator[VersionHandle]'
+```
+
+Stream matching handles in bounded batches from the pinned view.
+
+#### `Snapshot.count`
+
+Method.
+
+```text
+Snapshot.count(self, query: 'Query') -> 'int'
+```
+
+Count matching heads without loading documents unless ``where`` is set.
+
 #### `Snapshot.close`
 
 Method.
@@ -11959,7 +12115,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 4) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 5) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12125,6 +12281,16 @@ The snapshot keeps its own SQLite connection and must be closed promptly;
 a long-lived snapshot can delay WAL checkpointing. Writers can continue
 while the snapshot is open, but every snapshot query sees the same heads.
 
+#### `TgdbStore.query`
+
+Method.
+
+```text
+TgdbStore.query(self, query: 'Query', *, order_by: 'str | None' = None, batch_size: 'int | None' = None, limit: 'int | None' = None) -> 'list[VersionHandle]'
+```
+
+Run one short query and return handles bound to this open store.
+
 #### `TgdbStore.undo`
 
 Method.
@@ -12148,6 +12314,20 @@ Check the catalog and every recorded object without changing the store.
 A normal check validates SQLite, object records, file placement, residency,
 and byte counts.  A full check additionally hashes every inline and file
 object and compares it with its content address.
+
+#### `TgdbStore.reindex`
+
+Method.
+
+```text
+TgdbStore.reindex(self, *, rebuild: 'bool' = False) -> 'ReindexReport'
+```
+
+Check or rebuild deterministic per-graph facts and tier summaries.
+
+The check form works through a read-only handle and changes nothing.
+Rebuilding requires a writable handle, replaces only derived rows, and
+records the build's index and fingerprint-domain versions.
 
 ### `VersionChange`
 
