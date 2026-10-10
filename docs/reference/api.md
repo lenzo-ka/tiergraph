@@ -11511,6 +11511,163 @@ to_textgrid(graph: 'Graph', profile: 'SpanViewProfile', *, clock: 'ClockProfile 
 
 Render declared span and point tiers as a long-form TextGrid document.
 
+### `tiergraph.tgdb`
+
+This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+
+### `SqliteTooOld`
+
+```text
+SqliteTooOld(found: 'tuple[int, int, int]', minimum: 'tuple[int, int, int]' = (3, 37, 0)) -> 'None'
+```
+
+Refuse a SQLite runtime below the catalog's required version.
+
+### `StaleJournalBase`
+
+```text
+StaleJournalBase(message: 'str') -> 'None'
+```
+
+Refuse a journal patch whose base is not the stored instance head.
+
+### `StaleVersion`
+
+```text
+StaleVersion(message: 'str') -> 'None'
+```
+
+Refuse a write based on an instance version that is no longer current.
+
+### `StoreBusy`
+
+```text
+StoreBusy(message: 'str') -> 'None'
+```
+
+Refuse a write when the catalog remains busy past its declared timeout.
+
+### `StoreCorrupt`
+
+```text
+StoreCorrupt(message: 'str') -> 'None'
+```
+
+Refuse a catalog whose identity, schema, or metadata is inconsistent.
+
+### `StoreInfo`
+
+```text
+StoreInfo(store_uid: 'str', schema_version: 'int', layout_version: 'int', index_version: 'int', inline_threshold: 'int', fingerprint_domain: 'str', mode: "Literal['ro', 'rw']") -> None
+```
+
+Describe one catalog without loading any stored graph content.
+
+#### `StoreInfo.to_data`
+
+Method.
+
+```text
+StoreInfo.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible description in stable field order.
+
+### `StoreSchemaTooNew`
+
+```text
+StoreSchemaTooNew(found: 'int', supported: 'int' = 1) -> 'None'
+```
+
+Refuse a catalog whose schema is newer than this build supports.
+
+### `TgdbError`
+
+```text
+TgdbError(message: 'str') -> 'None'
+```
+
+Refuse a tgdb store operation through the shared refusal channel.
+
+### `TgdbLimits`
+
+```text
+TgdbLimits(inline_threshold: 'int' = 65536, busy_timeout_ms: 'int' = 5000, batch_size: 'int' = 256, nesting_depth: 'int' = 8) -> None
+```
+
+Bound store residency, waiting, query batches, and nested resources.
+
+### `TgdbStore`
+
+```text
+TgdbStore(path: 'Path', connection: 'sqlite3.Connection', info: 'StoreInfo') -> 'None'
+```
+
+Own one connection to a local tgdb catalog.
+
+#### `TgdbStore.create`
+
+Class method.
+
+```text
+TgdbStore.create(cls, path: 'str | PathLike[str]', *, limits: 'TgdbLimits' = TgdbLimits(inline_threshold=65536, busy_timeout_ms=5000, batch_size=256, nesting_depth=8)) -> 'Self'
+```
+
+Create and open a new store directory without replacing any path.
+
+#### `TgdbStore.open`
+
+Class method.
+
+```text
+TgdbStore.open(cls, path: 'str | PathLike[str]', *, mode: "Literal['ro', 'rw']" = 'ro', limits: 'TgdbLimits' = TgdbLimits(inline_threshold=65536, busy_timeout_ms=5000, batch_size=256, nesting_depth=8)) -> 'Self'
+```
+
+Open a store without migrating it or loading graph content.
+
+The catalog's recorded inline threshold takes precedence over the
+corresponding value in ``limits``.
+
+#### `TgdbStore.path`
+
+Property.
+
+```text
+TgdbStore.path(self) -> 'Path'
+```
+
+Return the caller-supplied store directory path.
+
+#### `TgdbStore.closed`
+
+Property.
+
+```text
+TgdbStore.closed(self) -> 'bool'
+```
+
+Return whether this store connection has been closed.
+
+#### `TgdbStore.info`
+
+Method.
+
+```text
+TgdbStore.info(self) -> 'StoreInfo'
+```
+
+Return catalog metadata read and validated when the store opened.
+
+#### `TgdbStore.close`
+
+Method.
+
+```text
+TgdbStore.close(self) -> 'None'
+```
+
+Close this store connection; repeated calls have no effect.
+
 
 ## Companion package
 

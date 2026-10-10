@@ -296,7 +296,11 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
         stability = (
             "This module is a supported secondary API."
             if module_name
-            in ("tiergraph.match", "tiergraph.predicate", "tiergraph.semiring")
+            in (
+                "tiergraph.match",
+                "tiergraph.predicate",
+                "tiergraph.semiring",
+            )
             else "This module is importable and usable, but carries no "
             f"API-stability promise at version {tiergraph.__version__}."
         )
