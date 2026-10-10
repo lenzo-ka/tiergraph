@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from tiergraph.clock import ClockRebindingPolicy
 from tiergraph.core import (
     Attribute,
+    BoundaryRef,
+    DurableBoundaryRef,
     DurableItemRef,
     Graph,
     GraphEditor,
@@ -18,6 +21,7 @@ from tiergraph.core import (
     Item,
     ItemRef,
     JsonValue,
+    LayerName,
     PolyadicInstanceRef,
     QualifiedName,
     RelationInstanceRef,
@@ -26,6 +30,10 @@ from tiergraph.edit import Journal, JournalEditor
 from tiergraph.equivalence import EquivalenceView, equivalent, fingerprint
 from tiergraph.machine import DeltaOpcode
 from tiergraph.patch import Patch, PatchOperation
+from tiergraph.replacement import ReplacementAction
+
+if TYPE_CHECKING:
+    from tiergraph.container_edit import RegroupPolicies
 
 type _ItemKey = str
 
@@ -435,6 +443,91 @@ def _mapped_items(
     return tuple(mapped)
 
 
+def _merge_policies(
+    source: Graph,
+    target: Graph,
+    first: ItemRef,
+    second: ItemRef,
+    survivor: ItemRef,
+    containment: QualifiedName,
+) -> RegroupPolicies:
+    """Derive the narrow drop permissions needed by one candidate merge."""
+    from tiergraph.container_edit import (  # noqa: PLC0415
+        RegroupPolicies,
+        _merge_clock_bindings,
+    )
+
+    probe = GraphEditor(source)
+    left, right = sorted((first, second), key=lambda item: item.index)
+    removed = right if survivor == left else left
+    seam = BoundaryRef(left.tier, right.index)
+    clock_drops = _merge_clock_bindings(probe, left.tier, seam)
+
+    source_counts: Counter[QualifiedName] = Counter(
+        relation.declaration for relation in source.relations
+    )
+    source_counts.update(relation.declaration for relation in source.polyadic_relations)
+    target_counts: Counter[QualifiedName] = Counter(
+        relation.declaration for relation in target.relations
+    )
+    target_counts.update(relation.declaration for relation in target.polyadic_relations)
+    required_drops: Counter[QualifiedName] = Counter({containment: 1})
+    required_drops.update(source.relations[index].declaration for index in clock_drops)
+    relation_drops = {
+        name: ReplacementAction.DROP
+        for name, count in source_counts.items()
+        if count - target_counts[name] > required_drops[name]
+    }
+
+    removed_item = source._tiers_by_name[removed.tier].items[removed.index]
+    survivor_after = ItemRef(
+        survivor.tier, survivor.index - (removed.index < survivor.index)
+    )
+    target_item = target._tiers_by_name[survivor_after.tier].items[survivor_after.index]
+    target_attributes = {value.name: value for value in target_item.attributes}
+    attribute_drops = {
+        value.name: ReplacementAction.DROP
+        for value in removed_item.attributes
+        if target_attributes.get(value.name) != value
+    }
+
+    def is_retired_seam(subject: object) -> bool:
+        """Report whether one source subject denotes the retired seam."""
+        return (
+            isinstance(subject, BoundaryRef | DurableBoundaryRef)
+            and probe._resolve_boundary(subject) == seam
+        )
+
+    seam_has_content = any(
+        is_retired_seam(boundary.reference) for boundary in source.boundary_values
+    )
+    layer_drops: dict[LayerName, ReplacementAction] = {}
+    for layer in source.layers:
+        values: dict[tuple[ItemRef, QualifiedName], Attribute] = {}
+        for fact in layer.facts:
+            seam_has_content = seam_has_content or is_retired_seam(fact.subject)
+            if not isinstance(fact.subject, ItemRef | DurableItemRef):
+                continue
+            subject = probe._resolve_item(fact.subject)
+            mapped = survivor if subject == removed else subject
+            key = (mapped, fact.value.name)
+            prior = values.get(key)
+            if prior is not None and prior != fact.value:
+                layer_drops[layer.name] = ReplacementAction.DROP
+            else:
+                values[key] = fact.value
+
+    return RegroupPolicies(
+        relations=relation_drops,
+        layers=layer_drops,
+        attributes=attribute_drops,
+        seam_content=(
+            ReplacementAction.DROP if seam_has_content else ReplacementAction.FOLLOW
+        ),
+        clock=(ClockRebindingPolicy.DROP_TO_PROVISIONAL if clock_drops else None),
+    )
+
+
 def _regroup_patch(  # noqa: PLR0915 -- derives and verifies both regroup directions
     source: Graph, target: Graph
 ) -> Patch | None:
@@ -605,10 +698,12 @@ def _regroup_patch(  # noqa: PLR0915 -- derives and verifies both regroup direct
                 merge_candidate = (first, second, survivor, containment)
                 merge_candidates.append(merge_candidate)
     for first, second, survivor, containment in merge_candidates:
-        for policies in (
-            None,
-            RegroupPolicies(clock=ClockRebindingPolicy.DROP_TO_PROVISIONAL),
-        ):
+        for named_drops in (False, True):
+            policies = (
+                _merge_policies(source, target, first, second, survivor, containment)
+                if named_drops
+                else None
+            )
             journal = Journal()
             editor = source.edit(journal=journal)
             try:
