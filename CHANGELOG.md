@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the tgdb content-addressed object pool with threshold-based inline or
+  file residency, durable staging, verified reads, deduplication, and checks.
 - Added the lazy `tiergraph.tgdb` storage skeleton with versioned SQLite catalog
   creation, read-only or writable opening, metadata inspection, and CLI commands.
 - Added an opt-in per-edit link ledger that verifies carried, re-pointed, and

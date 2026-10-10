@@ -101,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         subparsers,
         "tgdb",
         summary="manage a versioned tiergraph store",
-        description="Create or inspect a local versioned tiergraph store.",
+        description="Create, inspect, or check a local versioned tiergraph store.",
         examples=("tiergraph tgdb info corpus.tgdb",),
     )
     tgdb_subparsers = tgdb.add_subparsers(dest="tgdb_command", required=True)
@@ -136,6 +136,24 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_info.set_defaults(handler=_handle_tgdb)
     tgdb_info.add_argument("store", metavar="STORE", help="store directory")
     tgdb_info.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_check = _subcommand(
+        tgdb_subparsers,
+        "check",
+        summary="check store integrity",
+        description=(
+            "Validate the catalog and object pool without changing the store. "
+            "Use --full to hash every object's bytes."
+        ),
+        examples=(
+            "tiergraph tgdb check corpus.tgdb",
+            "tiergraph tgdb check corpus.tgdb --full",
+        ),
+    )
+    tgdb_check.set_defaults(handler=_handle_tgdb)
+    tgdb_check.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_check.add_argument(
+        "--full", action="store_true", help="hash every stored object"
+    )
 
     validate = _subcommand(
         subparsers,
@@ -1547,7 +1565,7 @@ def _handle_validate(args: argparse.Namespace) -> None:
 
 
 def _handle_tgdb(args: argparse.Namespace) -> int:
-    """Create or inspect a store while keeping tgdb out of parser imports."""
+    """Create, inspect, or check a store while keeping tgdb imports lazy."""
     from tiergraph import tgdb  # noqa: PLC0415 -- tgdb and sqlite3 stay lazy
 
     try:
@@ -1562,12 +1580,20 @@ def _handle_tgdb(args: argparse.Namespace) -> int:
             _stdout_text(f"initialized {args.store}\n")
             return 0
         with tgdb.TgdbStore.open(args.store) as store:
+            if args.tgdb_command == "check":
+                report = store.check(full=args.full)
+                detail = "full" if report.full else "structural"
+                _stdout_text(
+                    f"ok: {detail} check, {report.objects} objects, "
+                    f"{report.object_bytes} bytes\n"
+                )
+                return 0
             info = store.info()
-        if args.json:
-            _stdout_text(_json_bytes(info.to_data()).decode("utf-8"))
-        else:
-            for key, value in info.to_data().items():
-                _stdout_text(f"{key}: {value}\n")
+            if args.json:
+                _stdout_text(_json_bytes(info.to_data()).decode("utf-8"))
+            else:
+                for key, value in info.to_data().items():
+                    _stdout_text(f"{key}: {value}\n")
     except tgdb.TgdbError as error:
         _refusal_diagnostic(args.command, error)
         return 1

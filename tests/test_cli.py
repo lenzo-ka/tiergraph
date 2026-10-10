@@ -1927,7 +1927,7 @@ def _documented_help_examples() -> list[tuple[str, str]]:
 
 def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
     """Write the public input documents named by one help example."""
-    if arguments[:2] == ["tgdb", "info"]:
+    if arguments[:2] in (["tgdb", "info"], ["tgdb", "check"]):
         from tiergraph.tgdb import TgdbStore  # noqa: PLC0415 -- help fixture only
 
         TgdbStore.create(directory / "corpus.tgdb").close()
@@ -2124,7 +2124,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 81
+    assert len(examples) == 83
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

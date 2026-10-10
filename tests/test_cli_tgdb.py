@@ -37,7 +37,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 1\n" in plain
+    assert "schema_version: 2\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -49,10 +49,23 @@ def test_tgdb_init_and_info_plain_and_json(
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 1,
+        "schema_version": 2,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
+
+
+def test_tgdb_check_reports_structural_and_full_success(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The check command exposes both verification levels without mutation."""
+    path = tmp_path / "corpus.tgdb"
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "check", str(path)]) == 0
+    assert capsys.readouterr().out == "ok: structural check, 0 objects, 0 bytes\n"
+    assert main(["tgdb", "check", str(path), "--full"]) == 0
+    assert capsys.readouterr().out == "ok: full check, 0 objects, 0 bytes\n"
 
 
 def test_tgdb_refusal_is_a_status_one_staged_diagnostic(

@@ -11521,6 +11521,24 @@ Render declared span and point tiers as a long-form TextGrid document.
 
 This module is importable and usable, but carries no API-stability promise at version 0.8.0.
 
+### `CheckReport`
+
+```text
+CheckReport(full: 'bool', objects: 'int', inline_objects: 'int', file_objects: 'int', object_bytes: 'int') -> None
+```
+
+Summarize a successful catalog and object-pool integrity check.
+
+#### `CheckReport.to_data`
+
+Method.
+
+```text
+CheckReport.to_data(self) -> 'dict[str, bool | int]'
+```
+
+Return a JSON-compatible report in stable field order.
+
 ### `SqliteTooOld`
 
 ```text
@@ -11582,7 +11600,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 1) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 2) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -11673,6 +11691,20 @@ TgdbStore.close(self) -> 'None'
 ```
 
 Close this store connection; repeated calls have no effect.
+
+#### `TgdbStore.check`
+
+Method.
+
+```text
+TgdbStore.check(self, *, full: 'bool' = False) -> 'CheckReport'
+```
+
+Check the catalog and every recorded object without changing the store.
+
+A normal check validates SQLite, object records, file placement, residency,
+and byte counts.  A full check additionally hashes every inline and file
+object and compares it with its content address.
 
 
 ## Companion package

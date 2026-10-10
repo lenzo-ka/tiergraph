@@ -767,6 +767,7 @@
       "to_textgrid"
     ],
     "tiergraph.tgdb": [
+      "CheckReport",
       "SqliteTooOld",
       "StaleJournalBase",
       "StaleVersion",

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import io
 import json
+import os
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -44,6 +48,11 @@ def _set_meta(path: Path, key: str, value: str) -> None:
         )
 
 
+def _object_path(path: Path, digest: str) -> Path:
+    """Return the fixed file-resident path for one test digest."""
+    return path / "objects" / "sha256" / digest[:2] / digest[2:4] / digest
+
+
 def test_importing_tiergraph_keeps_tgdb_and_sqlite_lazy() -> None:
     """The standard package import pays for neither the store nor SQLite."""
     source = (
@@ -69,7 +78,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 1,
+        "schema_version": 2,
         "layout_version": 1,
         "index_version": 1,
         "inline_threshold": 1234,
@@ -79,7 +88,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -89,6 +98,11 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'store_meta'"
     ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'objects'"
+    ).fetchone() == (1,)
+    assert (store.path / "objects" / "sha256").is_dir()
+    assert (store.path / "staging").is_dir()
     assert (
         connection.execute(
             "SELECT type FROM sqlite_schema WHERE type IN ('trigger', 'view')"
@@ -250,12 +264,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 2)
+    _set_pragma(path, "user_version", 3)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 2
-    assert caught.value.supported == 1
-    assert "2" in str(caught.value) and "1" in str(caught.value)
+    assert caught.value.found == 3
+    assert caught.value.supported == 2
+    assert "3" in str(caught.value) and "2" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -269,9 +283,11 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     ) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone() == ("delete",)
 
-    _set_pragma(path, "user_version", 0)
+    _set_pragma(path, "user_version", 1)
     with tgdb.TgdbStore.open(path) as store:
-        assert store.info().schema_version == 0
+        assert store.info().schema_version == 1
+        with pytest.raises(tgdb.TgdbError, match="migration to version 2"):
+            store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
 
@@ -359,6 +375,455 @@ def test_initializer_rolls_back_a_failed_schema_transaction() -> None:
     connection.close()
 
 
+def test_object_pool_uses_threshold_deduplicates_and_verifies_reads(
+    tmp_path: Path,
+) -> None:
+    """Objects are stored once, split by size, and verified only at EOF."""
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        inline = b"tiny"
+        file_data = b"large"
+        inline_digest = store._put_object(io.BytesIO(inline))
+        file_digest = store._put_object(io.BytesIO(file_data))
+        assert inline_digest == hashlib.sha256(inline).hexdigest()
+        assert file_digest == hashlib.sha256(file_data).hexdigest()
+        assert store._put_object(io.BytesIO(inline)) == inline_digest
+        assert store._put_object(io.BytesIO(file_data)) == file_digest
+
+        rows = store._connection.execute(
+            "SELECT digest, size, residency, data FROM objects ORDER BY size"
+        ).fetchall()
+        assert rows == [
+            (inline_digest, 4, "inline", inline),
+            (file_digest, 5, "file", None),
+        ]
+        file_path = _object_path(path, file_digest)
+        assert file_path.read_bytes() == file_data
+        assert list((path / "staging").iterdir()) == []
+
+        with store._open_object(inline_digest) as reader:
+            assert reader.read(4) == inline
+            assert reader.verified is False
+            assert reader.read(1) == b""
+            assert reader.verified is True
+        with store._open_object(file_digest) as reader:
+            assert reader.read() == file_data
+            assert reader.verified is True
+
+        assert store.check().to_data() == {
+            "full": False,
+            "objects": 2,
+            "inline_objects": 1,
+            "file_objects": 1,
+            "object_bytes": 9,
+        }
+        assert store.check(full=True).to_data() == {
+            "full": True,
+            "objects": 2,
+            "inline_objects": 1,
+            "file_objects": 1,
+            "object_bytes": 9,
+        }
+
+
+def test_zero_threshold_and_short_reads_keep_ingest_bounded(tmp_path: Path) -> None:
+    """The threshold is inclusive and short binary reads do not imply EOF."""
+
+    class ShortReader(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            requested = -1 if size is None else size
+            return super().read(1 if requested < 0 else min(requested, 1))
+
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        empty = store._put_object(ShortReader(b""))
+        payload = b"streamed"
+        digest = store._put_object(ShortReader(payload))
+        assert store._object_record(empty) == (0, "inline", b"")
+        assert store._object_record(digest) == (len(payload), "file", None)
+        assert _object_path(store.path, digest).read_bytes() == payload
+
+
+def test_large_put_bounded_memory(tmp_path: Path) -> None:
+    """A large streamed object uses chunk-bounded memory rather than its full size."""
+    import tracemalloc  # noqa: PLC0415 -- measure only this focused allocation window
+
+    class RepeatingReader:
+        def __init__(self, size: int) -> None:
+            self.remaining = size
+
+        def read(self, size: int = -1) -> bytes:
+            amount = self.remaining if size < 0 else min(size, self.remaining)
+            self.remaining -= amount
+            return b"x" * amount
+
+    object_size = 16 << 20
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        tracemalloc.start()
+        try:
+            digest = store._put_object(RepeatingReader(object_size))  # type: ignore[arg-type]
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 4 << 20
+        assert store._object_record(digest) == (object_size, "file", None)
+        assert _object_path(store.path, digest).stat().st_size == object_size
+
+
+def test_object_ingest_refuses_nonbinary_sources_and_cleans_staging(
+    tmp_path: Path,
+) -> None:
+    """A broken binary stream cannot leave a staged or cataloged object."""
+
+    class TextReader:
+        def read(self, _size: int = -1) -> str:
+            return "text"
+
+    class BrokenLater:
+        calls = 0
+
+        def read(self, _size: int = -1) -> bytes | bytearray:
+            self.calls += 1
+            return b"abcde" if self.calls == 1 else bytearray(b"bad")
+
+    class OversizedRead:
+        def read(self, size: int = -1) -> bytes:
+            return b"x" * (size + 1)
+
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        with pytest.raises(TypeError, match="must return bytes"):
+            store._put_object(TextReader())  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="must return bytes"):
+            store._put_object(BrokenLater())  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="more bytes than requested"):
+            store._put_object(OversizedRead())  # type: ignore[arg-type]
+        assert list((store.path / "staging").iterdir()) == []
+        assert store._connection.execute("SELECT count(*) FROM objects").fetchone() == (
+            0,
+        )
+
+
+def test_object_operations_refuse_wrong_store_state_and_identity(
+    tmp_path: Path,
+) -> None:
+    """Object access requires an open current store and a canonical known digest."""
+    path = _created(tmp_path)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.TgdbError, match="read-only"):
+            store._put_object(io.BytesIO(b"payload"))
+        with pytest.raises(tgdb.StoreCorrupt, match="malformed"):
+            store._open_object("ABC")
+        with pytest.raises(tgdb.TgdbError, match="is not stored"):
+            store._open_object("0" * 64)
+    with pytest.raises(tgdb.TgdbError, match="store is closed"):
+        store.check()
+    with pytest.raises(tgdb.TgdbError, match="store is closed"):
+        store._put_object(io.BytesIO(b"payload"))
+
+
+def test_existing_orphan_file_is_reused_only_when_its_bytes_match(
+    tmp_path: Path,
+) -> None:
+    """A prepublication orphan can be adopted, but conflicting bytes refuse."""
+    payload = b"file-resident"
+    digest = hashlib.sha256(payload).hexdigest()
+    with tgdb.TgdbStore.create(
+        tmp_path / "good", limits=tgdb.TgdbLimits(inline_threshold=1)
+    ) as store:
+        target = _object_path(store.path, digest)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(payload)
+        assert store._put_object(io.BytesIO(payload)) == digest
+        assert store._object_record(digest) == (len(payload), "file", None)
+
+    with tgdb.TgdbStore.create(
+        tmp_path / "bad", limits=tgdb.TgdbLimits(inline_threshold=1)
+    ) as store:
+        target = _object_path(store.path, digest)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"x" * len(payload))
+        with pytest.raises(tgdb.StoreCorrupt, match="instead of its content address"):
+            store._put_object(io.BytesIO(payload))
+        assert list((store.path / "staging").iterdir()) == []
+        assert store._object_record(digest) is None
+
+
+def test_check_distinguishes_structural_and_full_content_validation(
+    tmp_path: Path,
+) -> None:
+    """Structural checks count bytes while full checks detect equal-size damage."""
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        inline_digest = store._put_object(io.BytesIO(b"four"))
+        file_digest = store._put_object(io.BytesIO(b"five!"))
+        store._connection.execute(
+            "UPDATE objects SET data = ? WHERE digest = ?",
+            (b"ruin", inline_digest),
+        )
+        assert store.check().objects == 2
+        with pytest.raises(tgdb.StoreCorrupt, match=inline_digest):
+            store.check(full=True)
+        with store._open_object(inline_digest) as reader:
+            with pytest.raises(tgdb.StoreCorrupt, match="failed verification"):
+                reader.read()
+
+        store._connection.execute(
+            "UPDATE objects SET data = ? WHERE digest = ?",
+            (b"four", inline_digest),
+        )
+        _object_path(path, file_digest).write_bytes(b"ruin!")
+        assert store.check().file_objects == 1
+        with pytest.raises(tgdb.StoreCorrupt, match=file_digest):
+            store.check(full=True)
+        with store._open_object(file_digest) as reader:
+            with pytest.raises(tgdb.StoreCorrupt, match="failed verification"):
+                reader.read()
+
+
+def test_missing_wrong_size_and_symlinked_object_files_refuse(
+    tmp_path: Path,
+) -> None:
+    """Checks never follow substituted content paths or accept missing bytes."""
+    for case in ("missing", "size", "symlink"):
+        directory = tmp_path / case
+        with tgdb.TgdbStore.create(
+            directory, limits=tgdb.TgdbLimits(inline_threshold=1)
+        ) as store:
+            digest = store._put_object(io.BytesIO(b"payload"))
+            target = _object_path(directory, digest)
+            if case == "missing":
+                target.unlink()
+                message = "cannot read object"
+            elif case == "size":
+                target.write_bytes(b"short")
+                message = "file has"
+            else:
+                payload = target.read_bytes()
+                target.unlink()
+                elsewhere = directory / "elsewhere"
+                elsewhere.write_bytes(payload)
+                target.symlink_to(elsewhere)
+                message = "not a plain file"
+            with pytest.raises(tgdb.StoreCorrupt, match=message):
+                store.check()
+            if case == "symlink":
+                with pytest.raises(tgdb.StoreCorrupt, match=message):
+                    store._open_object(digest)
+
+
+def test_pool_directories_must_be_plain_and_present(tmp_path: Path) -> None:
+    """Pool roots and digest shards cannot be files, links, or absent paths."""
+    for case in ("absent", "file", "symlink"):
+        directory = tmp_path / case
+        with tgdb.TgdbStore.create(directory) as store:
+            hashes = directory / "objects" / "sha256"
+            hashes.rmdir()
+            if case == "file":
+                hashes.write_bytes(b"not a directory")
+            elif case == "symlink":
+                hashes.symlink_to(directory / "staging", target_is_directory=True)
+            with pytest.raises(tgdb.StoreCorrupt, match="SHA-256 object directory"):
+                store.check()
+
+
+@pytest.mark.parametrize("case", ("root", "first", "second", "object"))
+def test_check_refuses_non_derived_object_paths(tmp_path: Path, case: str) -> None:
+    """An unrecorded object-pool entry must still have a digest-derived path."""
+    with tgdb.TgdbStore.create(tmp_path / case) as store:
+        hashes = store.path / "objects" / "sha256"
+        if case == "root":
+            (store.path / "objects" / "extra").write_bytes(b"")
+        elif case == "first":
+            (hashes / "zz").write_bytes(b"")
+        elif case == "second":
+            (hashes / "aa").mkdir()
+            (hashes / "aa" / "zz").write_bytes(b"")
+        else:
+            (hashes / "aa" / "bb").mkdir(parents=True)
+            (hashes / "aa" / "bb" / ("0" * 64)).write_bytes(b"")
+        with pytest.raises(tgdb.StoreCorrupt, match="non-derived"):
+            store.check()
+
+
+def test_check_refuses_unreferenced_symlink_and_accepts_derived_orphan(
+    tmp_path: Path,
+) -> None:
+    """Pool scans reject unused links while permitting a canonical orphan file."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        hashes = store.path / "objects" / "sha256"
+        orphan_digest = "aabb" + ("0" * 60)
+        orphan = hashes / "aa" / "bb" / orphan_digest
+        orphan.parent.mkdir(parents=True)
+        orphan.write_bytes(b"orphan")
+        assert store.check().objects == 0
+
+        (hashes / "cc").symlink_to(store.path / "staging", target_is_directory=True)
+        with pytest.raises(tgdb.StoreCorrupt, match="object shard 'cc'"):
+            store.check()
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        (("g" * 64, 0, "inline", b""), "digest"),
+        ((("0" * 64), True, "inline", b""), "malformed size"),
+        ((("0" * 64), -1, "inline", b""), "malformed size"),
+        ((("0" * 64), 0, "inline", None), "malformed data"),
+        ((("0" * 64), 0, "file", b""), "unexpected inline data"),
+        ((("0" * 64), 0, "remote", None), "unknown residency"),
+    ],
+)
+def test_object_record_validation_names_each_malformed_field(
+    record: tuple[object, object, object, object], message: str
+) -> None:
+    """Corrupt object rows are diagnosed by the field that broke the schema."""
+    with pytest.raises(tgdb.StoreCorrupt, match=message):
+        tgdb._validate_object_record(*record)
+
+
+def test_object_record_conflicts_roll_back_without_changing_bytes(
+    tmp_path: Path,
+) -> None:
+    """A conflicting publication leaves the existing row and transaction intact."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        payload = b"stable"
+        digest = store._put_object(io.BytesIO(payload))
+        with pytest.raises(tgdb.StoreCorrupt, match="conflicting recorded sizes"):
+            store._record_object(digest, len(payload) + 1, "inline", payload)
+        assert store._connection.in_transaction is False
+        assert store._object_record(digest) == (len(payload), "inline", payload)
+
+
+def test_object_record_joins_and_does_not_commit_an_outer_transaction(
+    tmp_path: Path,
+) -> None:
+    """A future batch can publish an object row in its one outer transaction."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        payload = b"pending"
+        digest = hashlib.sha256(payload).hexdigest()
+        store._connection.execute("BEGIN IMMEDIATE")
+        store._record_object(digest, len(payload), "inline", payload)
+        assert store._connection.in_transaction is True
+        assert store._object_record(digest) == (len(payload), "inline", payload)
+        with pytest.raises(tgdb.StoreCorrupt, match="conflicting recorded sizes"):
+            store._record_object(digest, len(payload) + 1, "inline", payload)
+        assert store._connection.in_transaction is True
+        store._connection.execute("ROLLBACK")
+        assert store._object_record(digest) is None
+
+
+def test_staging_name_collision_never_removes_an_unowned_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exclusive staging collision leaves the existing entry untouched."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=1)
+    ) as store:
+        collision = store.path / "staging" / "fixed"
+        collision.write_bytes(b"keep")
+        monkeypatch.setattr(secrets, "token_hex", lambda _size: "fixed")
+        with pytest.raises(FileExistsError):
+            store._put_object(io.BytesIO(b"payload"))
+        assert collision.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("result", (None, ("damaged",)))
+def test_check_refuses_failed_sqlite_quick_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: tuple[str] | None
+) -> None:
+    """A missing or failed SQLite quick-check result is a store corruption."""
+
+    class Cursor:
+        def fetchone(self) -> tuple[str] | None:
+            return result
+
+    class Connection:
+        def execute(self, _statement: str) -> Cursor:
+            return Cursor()
+
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(store, "_connection", Connection())
+            message = "no result" if result is None else "damaged"
+            with pytest.raises(tgdb.StoreCorrupt, match=message):
+                store.check()
+
+
+def test_check_and_lookup_wrap_catalog_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SQLite read failures leave the module through the corruption taxonomy."""
+
+    class Connection:
+        def execute(self, _statement: str, _values: object = ()) -> None:
+            raise sqlite3.DatabaseError("broken page")
+
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(store, "_connection", Connection())
+            with pytest.raises(tgdb.StoreCorrupt, match="cannot check tgdb catalog"):
+                store.check()
+            with pytest.raises(tgdb.StoreCorrupt, match="cannot read object"):
+                store._object_record("0" * 64)
+
+
+def test_inline_size_corruption_is_found_before_hashing(tmp_path: Path) -> None:
+    """A malformed inline byte count refuses even in a structural check."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        digest = store._put_object(io.BytesIO(b"payload"))
+        store._connection.execute("PRAGMA ignore_check_constraints = ON")
+        store._connection.execute(
+            "UPDATE objects SET size = size + 1 WHERE digest = ?", (digest,)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="stores 7 inline bytes"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="stores 7 inline bytes"):
+            tgdb._check_recorded_object(
+                store.path, digest, (8, "inline", b"payload"), full=False
+            )
+        tgdb._check_recorded_object(
+            store.path, digest, (7, "inline", b"payload"), full=False
+        )
+
+
+def test_open_and_full_check_wrap_file_open_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that becomes unreadable is named as corrupt by both read paths."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=1)
+    ) as store:
+        digest = store._put_object(io.BytesIO(b"payload"))
+        target = _object_path(store.path, digest)
+        original_os_open = os.open
+
+        def cannot_open(path: str | os.PathLike[str], flags: int) -> int:
+            if Path(path) == target:
+                raise PermissionError("denied")
+            return original_os_open(path, flags)
+
+        monkeypatch.setattr(os, "open", cannot_open)
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot open object"):
+            store._open_object(digest)
+        monkeypatch.undo()
+
+        def cannot_hash(_source: object, _digest: object) -> object:
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(hashlib, "file_digest", cannot_hash)
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot read object"):
+            store.check(full=True)
+
+
 def test_wal_refusal_closes_the_connection() -> None:
     """A runtime that declines WAL cannot leave an apparently writable store."""
 
@@ -393,6 +858,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         assert isinstance(error, Refusal)
         assert error.stage is RefusalStage.SEMANTICS
     assert tgdb.__all__ == [
+        "CheckReport",
         "SqliteTooOld",
         "StaleJournalBase",
         "StaleVersion",
