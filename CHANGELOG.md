@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added tgdb graph versions with canonical document storage, functional and
+  identified fingerprints, optimistic publication, unchanged no-ops, history,
+  and verified lazy loading.
 - Added ordered tgdb collections and instances with stable ids, explicit
   lifecycle commits, recorded inverses, collision-safe catalog undo, escaped
   text listings, and strict commit-operation integrity checks.

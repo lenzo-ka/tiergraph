@@ -18,7 +18,17 @@ from typing import Literal, cast
 import pytest
 
 import tiergraph.tgdb as tgdb
-from tiergraph import EditAnnotations, Refusal, RefusalStage
+from tiergraph import (
+    EditAnnotations,
+    EquivalenceView,
+    Graph,
+    NamespaceDeclaration,
+    Refusal,
+    RefusalStage,
+    dumps,
+    fingerprint,
+)
+from tiergraph.wire import MAX_DOCUMENT_BYTES
 
 
 def _created(tmp_path: Path, *, limits: tgdb.TgdbLimits | None = None) -> Path:
@@ -74,6 +84,18 @@ def _seed_instance(
     return instance_uid
 
 
+def _version_graph(name: str | None = None) -> Graph:
+    """Return a small canonical graph whose optional namespace changes its bytes."""
+    namespaces = () if name is None else (NamespaceDeclaration("n", f"urn:{name}"),)
+    return Graph(namespaces, (), ())
+
+
+def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
+    """Return the durable sequence from a receipt known to record a commit."""
+    assert receipt.commit_seq is not None
+    return receipt.commit_seq
+
+
 def test_importing_tiergraph_keeps_tgdb_and_sqlite_lazy() -> None:
     """The standard package import pays for neither the store nor SQLite."""
     source = (
@@ -99,7 +121,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 3,
+        "schema_version": 4,
         "layout_version": 1,
         "index_version": 1,
         "inline_threshold": 1234,
@@ -109,7 +131,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (4,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -121,6 +143,12 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     ).fetchone() == (1,)
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'objects'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'versions'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'graph_facts'"
     ).fetchone() == (1,)
     assert (store.path / "objects" / "sha256").is_dir()
     assert (store.path / "staging").is_dir()
@@ -285,12 +313,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 4)
+    _set_pragma(path, "user_version", 5)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 4
-    assert caught.value.supported == 3
-    assert "4" in str(caught.value) and "3" in str(caught.value)
+    assert caught.value.found == 5
+    assert caught.value.supported == 4
+    assert "5" in str(caught.value) and "4" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -304,10 +332,10 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     ) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone() == ("delete",)
 
-    _set_pragma(path, "user_version", 2)
+    _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
-        assert store.info().schema_version == 2
-        with pytest.raises(tgdb.TgdbError, match="migration to version 3"):
+        assert store.info().schema_version == 3
+        with pytest.raises(tgdb.TgdbError, match="migration to version 4"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -867,6 +895,398 @@ def test_wal_refusal_closes_the_connection() -> None:
     assert connection.closed is True
 
 
+def test_versions_store_canonical_documents_facts_history_and_annotations(
+    tmp_path: Path,
+) -> None:
+    """Initial and later versions retain complete bytes and indexed fingerprints."""
+    first_graph = _version_graph()
+    second_graph = _version_graph("second")
+    first_annotations = EditAnnotations(stage="seed", iteration=0, fields={"set": 1})
+    second_annotations = EditAnnotations(
+        stage="reconcile", iteration=2, fields={"set": 2}
+    )
+    fixed_uid = bytes.fromhex("12" * 16)
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            instance = transaction.create_instance(
+                collection,
+                "sample",
+                first_graph,
+                uid=fixed_uid,
+                annotations=first_annotations,
+            )
+            created = transaction.commit()
+        assert instance == fixed_uid
+        first_digest = hashlib.sha256(dumps(first_graph).encode()).hexdigest()
+        assert created.to_data() == {
+            "commit_seq": 2,
+            "kind": "version",
+            "operations": ["create_instance"],
+            "versions": [
+                {
+                    "instance_uid": fixed_uid.hex(),
+                    "name": "sample",
+                    "seq": 1,
+                    "graph_digest": first_digest,
+                    "status": "created",
+                }
+            ],
+        }
+        head = store.get("sample", collection="collection")
+        assert head.load() == first_graph
+        assert head.to_data() == {
+            "collection": "collection",
+            "instance_uid": fixed_uid.hex(),
+            "name": "sample",
+            "position": 0,
+            "seq": 1,
+            "commit_seq": 2,
+            "graph_digest": first_digest,
+            "functional": fingerprint(first_graph, EquivalenceView.FUNCTIONAL),
+            "identified": fingerprint(first_graph, EquivalenceView.IDENTIFIED),
+            "stage": "seed",
+            "iteration": 0,
+        }
+        assert store.get(fixed_uid, seq=1) == head
+        assert store.history(fixed_uid) == (head,)
+        assert store._connection.execute(
+            "SELECT format_version, fp_domain, size FROM graph_facts WHERE digest = ?",
+            (first_digest,),
+        ).fetchone() == (
+            "0.3.0",
+            "tiergraph-equivalence/1",
+            len(dumps(first_graph).encode()),
+        )
+
+        with store.write() as transaction:
+            transaction.publish(
+                fixed_uid,
+                second_graph,
+                expected=1,
+                annotations=second_annotations,
+            )
+            published = transaction.commit()
+        second_digest = hashlib.sha256(dumps(second_graph).encode()).hexdigest()
+        assert published.versions == (
+            tgdb.VersionChange(fixed_uid, "sample", 2, second_digest, "published"),
+        )
+        assert published.operations == ("publish",)
+        history = store.history("sample", collection=collection)
+        assert [version.seq for version in history] == [1, 2]
+        assert history[0].load() == first_graph
+        assert history[1].load() == second_graph
+        assert history[1].stage == "reconcile"
+        assert history[1].iteration == 2
+        assert store.get(fixed_uid).seq == 2
+        assert store._connection.execute(
+            "SELECT parent_id, transition, reason, annotations FROM versions "
+            "WHERE instance_id = (SELECT id FROM instances WHERE uid = ?) "
+            "ORDER BY seq",
+            (fixed_uid,),
+        ).fetchall() == [
+            (
+                None,
+                "initial",
+                None,
+                json.dumps(
+                    first_annotations.to_data(), separators=(",", ":"), sort_keys=True
+                ),
+            ),
+            (
+                1,
+                "snapshot",
+                "patch-not-recorded",
+                json.dumps(
+                    second_annotations.to_data(), separators=(",", ":"), sort_keys=True
+                ),
+            ),
+        ]
+        assert store.instances()[0].generation == 1
+        store.check(full=True)
+
+
+def test_unchanged_publish_checks_expected_and_writes_nothing(tmp_path: Path) -> None:
+    """A byte-identical graph reports a no-op without a commit or object churn."""
+    graph = _version_graph()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            uid = transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        before = tuple(
+            store._connection.execute(
+                "SELECT (SELECT count(*) FROM commits), "
+                "(SELECT count(*) FROM versions), (SELECT count(*) FROM objects)"
+            ).fetchone()
+        )
+        with store.write() as transaction:
+            transaction.publish(uid, graph, expected=1)
+            receipt = transaction.commit()
+        assert receipt == tgdb.CommitReceipt(
+            None,
+            "unchanged",
+            (),
+            (
+                tgdb.VersionChange(
+                    uid,
+                    "sample",
+                    1,
+                    hashlib.sha256(dumps(graph).encode()).hexdigest(),
+                    "unchanged",
+                ),
+            ),
+        )
+        after = tuple(
+            store._connection.execute(
+                "SELECT (SELECT count(*) FROM commits), "
+                "(SELECT count(*) FROM versions), (SELECT count(*) FROM objects)"
+            ).fetchone()
+        )
+        assert after == before
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StaleVersion, match="expected version 2"):
+                transaction.publish(uid, graph, expected=2)
+        assert store.history(uid)[0].load() == graph
+
+
+def test_version_creation_and_selection_refuse_invalid_operands(tmp_path: Path) -> None:
+    """Version writes validate identities, positions, graph types, and sequences."""
+    graph = _version_graph()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            retired_collection = transaction.create_collection("retired")
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.retire_collection(retired_collection)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="is retired"):
+                transaction.create_instance(retired_collection, "sample", graph)
+            with pytest.raises(TypeError, match="graph must"):
+                transaction.create_instance(collection, "sample", object())  # type: ignore[arg-type]
+            with pytest.raises(TypeError, match="EditAnnotations"):
+                transaction.create_instance(
+                    collection,
+                    "sample",
+                    graph,
+                    annotations="bad",  # type: ignore[arg-type]
+                )
+            with pytest.raises(ValueError, match="between"):
+                transaction.create_instance(collection, "sample", graph, position=1)
+        fixed_uid = bytes.fromhex("21" * 16)
+        with store.write() as transaction:
+            uid = transaction.create_instance(
+                collection, "sample", graph, uid=fixed_uid
+            )
+            with pytest.raises(tgdb.TgdbError, match="uid .* already exists"):
+                transaction.create_instance(collection, "other", graph, uid=fixed_uid)
+            with pytest.raises(tgdb.TgdbError, match="name 'sample' already exists"):
+                transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        assert uid == fixed_uid
+        for seq, error, message in (
+            (True, TypeError, "integer"),
+            ("1", TypeError, "integer"),
+            (0, ValueError, "positive"),
+        ):
+            with pytest.raises(error, match=message):
+                store.get(uid, seq=seq)  # type: ignore[arg-type]
+            with store.write() as transaction:
+                with pytest.raises(error, match=message):
+                    transaction.publish(uid, graph, expected=seq)  # type: ignore[arg-type]
+        with pytest.raises(tgdb.TgdbError, match="has no version 2"):
+            store.get(uid, seq=2)
+        with pytest.raises(TypeError, match="graph must"):
+            with store.write() as transaction:
+                transaction.publish(uid, object(), expected=1)  # type: ignore[arg-type]
+        with store.write() as transaction:
+            transaction.retire(uid)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="instance .* is retired"):
+                transaction.publish(uid, _version_graph("new"), expected=1)
+
+
+def test_publish_refuses_oversized_documents_before_object_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Oversized creates and publishes refuse before changing transaction state."""
+    graph = _version_graph()
+    oversized = "x" * (MAX_DOCUMENT_BYTES + 1)
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            uid = transaction.create_instance(collection, "first", graph)
+            transaction.commit()
+        monkeypatch.setattr(tgdb, "dumps", lambda _graph: oversized)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="exceeds limit"):
+                transaction.create_instance(collection, "refused", graph, position=0)
+            monkeypatch.setattr(tgdb, "dumps", dumps)
+            transaction.create_instance(collection, "second", graph)
+            transaction.commit()
+        assert [entry.name for entry in store.instances(collection)] == [
+            "first",
+            "second",
+        ]
+        monkeypatch.setattr(tgdb, "dumps", lambda _graph: oversized)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="exceeds limit"):
+                transaction.publish(uid, _version_graph("changed"), expected=1)
+        assert store._connection.execute("SELECT count(*) FROM objects").fetchone() == (
+            1,
+        )
+        assert store.get(uid).seq == 1
+
+
+def test_undo_refuses_after_a_later_publication_touched_the_instance(
+    tmp_path: Path,
+) -> None:
+    """A later graph version makes an earlier instance operation stale."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            uid = transaction.create_instance(
+                collection, "sample", _version_graph("first")
+            )
+            created = transaction.commit()
+        with store.write() as transaction:
+            transaction.create_instance(collection, "other", _version_graph("other"))
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(uid, _version_graph("second"), expected=1)
+            published = transaction.commit()
+        with pytest.raises(tgdb.StaleVersion, match="touched the same"):
+            store.undo(_commit_seq(created))
+        assert store.get(uid).seq == 2
+        assert published.commit_seq == 4
+        assert store.instances(collection)[0].retired is False
+
+
+def test_graph_fact_and_head_corruption_are_named(tmp_path: Path) -> None:
+    """Structural checks and duplicate publication reject inconsistent version facts."""
+    graph = _version_graph()
+    with tgdb.TgdbStore.create(tmp_path / "facts") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        digest = store.get("sample").graph_digest
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ? WHERE digest = ?",
+            ("f" * 64, digest),
+        )
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="facts .* inconsistent"):
+                transaction.create_instance(collection, "other", graph)
+        store._connection.execute("PRAGMA ignore_check_constraints = ON")
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ? WHERE digest = ?",
+            ("z" * 64, digest),
+        )
+        store._connection.execute("PRAGMA ignore_check_constraints = OFF")
+        with pytest.raises(tgdb.StoreCorrupt, match="catalog check failed"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="malformed functional"):
+            tgdb._validate_fingerprint("z" * 64, "functional", digest)
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ?, size = size + 1 WHERE digest = ?",
+            (fingerprint(graph), digest),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="record size"):
+            store.check()
+        store._connection.execute(
+            "UPDATE graph_facts SET size = size - 1 WHERE digest = ?", (digest,)
+        )
+        store._connection.execute("DELETE FROM graph_facts WHERE digest = ?", (digest,))
+        with pytest.raises(tgdb.StoreCorrupt, match="malformed functional"):
+            store.get("sample")
+        with pytest.raises(tgdb.StoreCorrupt, match="has no graph facts"):
+            store.check()
+
+    with tgdb.TgdbStore.create(tmp_path / "head") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", graph)
+            transaction.create_instance(collection, "second", _version_graph("two"))
+            transaction.commit()
+        first_id, second_head = (
+            store._connection.execute(
+                "SELECT id, head_version FROM instances ORDER BY position"
+            ).fetchall()[0][0],
+            store._connection.execute(
+                "SELECT head_version FROM instances ORDER BY position"
+            ).fetchall()[1][0],
+        )
+        store._connection.execute(
+            "UPDATE instances SET head_version = ? WHERE id = ?",
+            (second_head, first_id),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="invalid head"):
+            store.check()
+
+
+def test_version_internal_refusal_edges_are_covered(tmp_path: Path) -> None:
+    """Missing heads, parents, and helper selectors retain the store taxonomy."""
+    graph = _version_graph()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        versionless = _seed_instance(store, collection, "versionless", 0)
+        with pytest.raises(tgdb.TgdbError, match="has no head"):
+            store.get(versionless)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="no stored head"):
+                transaction.publish(versionless, graph, expected=1)
+        assert (
+            tgdb._version_row(store._connection, 1, head_version=None, seq=None) is None
+        )
+        fake_row = (0, b"x" * 16, 999, "missing", 0, 0, None, None)
+        with pytest.raises(tgdb.StoreCorrupt, match="has no collection"):
+            tgdb._require_active_instance(store._connection, fake_row)
+        fake_version = (1, 1, "0" * 64, "1" * 64, "2" * 64, None, 1, None)
+        with pytest.raises(tgdb.StoreCorrupt, match="has no collection"):
+            tgdb._version_handle(store, fake_row, fake_version)
+
+
+def test_instance_insert_position_and_retired_collection_publish(
+    tmp_path: Path,
+) -> None:
+    """Instance insertion is explicit and a retired container blocks publication."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            last = transaction.create_instance(
+                collection, "last", _version_graph("last")
+            )
+            first = transaction.create_instance(
+                collection, "first", _version_graph("first"), position=0
+            )
+            transaction.commit()
+        assert [entry.uid for entry in store.instances(collection)] == [first, last]
+        with store.write() as transaction:
+            transaction.retire_collection(collection)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="collection .* is retired"):
+                transaction.publish(first, _version_graph("new"), expected=1)
+
+
 def test_catalog_collections_keep_id_name_and_declared_order_separate(
     tmp_path: Path,
 ) -> None:
@@ -890,6 +1310,7 @@ def test_catalog_collections_keep_id_name_and_declared_order_separate(
                 "create_collection",
                 "create_collection",
             ],
+            "versions": [],
         }
         assert [entry.name for entry in store.collections()] == [
             "first",
@@ -987,11 +1408,11 @@ def test_collection_undo_is_additive_reversible_and_stale_safe(tmp_path: Path) -
         with store.write() as transaction:
             first = transaction.create_collection("first")
             create_receipt = transaction.commit()
-        undo_create = store.undo(create_receipt.commit_seq)
+        undo_create = store.undo(_commit_seq(create_receipt))
         assert undo_create.kind == "undo"
         assert store.collections() == ()
         assert store.collections(include_retired=True)[0].uid == first
-        redo_create = store.undo(undo_create.commit_seq)
+        redo_create = store.undo(_commit_seq(undo_create))
         assert redo_create.operations == ("restore_collection",)
         assert store.collections()[0].uid == first
 
@@ -1001,14 +1422,14 @@ def test_collection_undo_is_additive_reversible_and_stale_safe(tmp_path: Path) -
         with store.write() as transaction:
             other = transaction.create_collection("other")
             transaction.commit()
-        undo_rename = store.undo(rename_receipt.commit_seq)
+        undo_rename = store.undo(_commit_seq(rename_receipt))
         assert undo_rename.operations == ("rename_collection",)
         assert store.collections()[0].name == "first"
         with store.write() as transaction:
             transaction.rename_collection(first, "latest")
             transaction.commit()
         with pytest.raises(tgdb.StaleVersion, match="touched the same"):
-            store.undo(undo_rename.commit_seq)
+            store.undo(_commit_seq(undo_rename))
         assert any(entry.uid == other for entry in store.collections())
 
         with pytest.raises(TypeError, match="integer"):
@@ -1043,7 +1464,7 @@ def test_undo_rename_refuses_when_the_original_name_was_reassigned(
             transaction.rename_collection(second, "first")
             transaction.commit()
         with pytest.raises(tgdb.StaleVersion, match="no longer available"):
-            store.undo(renamed.commit_seq)
+            store.undo(_commit_seq(renamed))
         assert [entry.name for entry in store.collections()] == ["renamed", "first"]
         assert store._connection.execute("SELECT count(*) FROM commits").fetchone() == (
             3,
@@ -1062,7 +1483,7 @@ def test_undo_rename_refuses_when_the_original_name_was_reassigned(
             transaction.rename(second, "first")
             transaction.commit()
         with pytest.raises(tgdb.StaleVersion, match="no longer available"):
-            store.undo(renamed.commit_seq)
+            store.undo(_commit_seq(renamed))
         assert [entry.name for entry in store.instances()] == ["renamed", "first"]
         assert store._connection.execute("SELECT count(*) FROM commits").fetchone() == (
             3,
@@ -1118,7 +1539,7 @@ def test_instance_catalog_operations_are_ordered_scoped_and_undoable(
         retired = store.instances("first", include_retired=True)[1]
         assert retired.retired is True
         assert retired.retired_commit == retired_receipt.commit_seq
-        undo_retire = store.undo(retired_receipt.commit_seq)
+        undo_retire = store.undo(_commit_seq(retired_receipt))
         assert undo_retire.operations == ("restore_instance",)
         assert store.instances("first", include_retired=True)[1].retired is False
         with store.write() as transaction:
@@ -1490,6 +1911,24 @@ def test_catalog_listing_wraps_database_errors(tmp_path: Path) -> None:
     store.close()
 
 
+def test_version_reads_wrap_database_errors(tmp_path: Path) -> None:
+    """Version and history reads keep SQLite failures in the store taxonomy."""
+    store = tgdb.TgdbStore.create(tmp_path / "store")
+    with store.write() as transaction:
+        collection = transaction.create_collection("collection")
+        transaction.create_instance(collection, "sample", _version_graph())
+        transaction.commit()
+    wrapped = store._connection
+    store._connection = _FailingConnection(  # type: ignore[assignment]
+        wrapped, "SELECT v.seq", sqlite3.DatabaseError("read failed")
+    )
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot read instance version"):
+        store.get("sample")
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot read instance history"):
+        store.history("sample")
+    store.close()
+
+
 @pytest.mark.parametrize("statement", ("BEGIN", "COMMIT"))
 def test_catalog_busy_errors_use_the_specific_refusal(
     tmp_path: Path, statement: str
@@ -1539,6 +1978,8 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "TgdbError",
         "TgdbLimits",
         "TgdbStore",
+        "VersionChange",
+        "VersionHandle",
         "WriteTransaction",
     ]
 

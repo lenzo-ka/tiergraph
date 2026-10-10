@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tiergraph import RefusalStage
+from tiergraph import Graph, NamespaceDeclaration, RefusalStage, dump_bytes
 from tiergraph.cli import build_parser, main
 
 
@@ -38,7 +38,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 3\n" in plain
+    assert "schema_version: 4\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -50,7 +50,7 @@ def test_tgdb_init_and_info_plain_and_json(
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 3,
+        "schema_version": 4,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -249,6 +249,201 @@ def test_tgdb_plain_lists_escape_names_and_hexadecimal_names_remain_addressable(
     assert capsys.readouterr().out == "committed 2: rename\n"
 
 
+def test_tgdb_add_publish_get_and_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The version CLI stores, retrieves, and lists complete graph documents."""
+    path = tmp_path / "corpus.tgdb"
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    output = tmp_path / "output.json"
+    first.write_bytes(dump_bytes(Graph((), (), ())))
+    second.write_bytes(
+        dump_bytes(Graph((NamespaceDeclaration("n", "urn:second"),), (), ()))
+    )
+    uid = "55" * 16
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(path), "collection"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "add",
+                str(path),
+                "collection",
+                "sample",
+                str(first),
+                "--uid",
+                uid,
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == (
+        f"created instance 'sample' {uid} version 1 in commit 2\n"
+    )
+    assert main(["tgdb", "history", str(path), "sample"]) == 0
+    columns = capsys.readouterr().out.rstrip("\n").split("\t")
+    assert columns[0:2] == ["1", "2"]
+    assert len(columns[2]) == len(columns[3]) == len(columns[4]) == 64
+    assert columns[5:] == ["-", "-"]
+    assert (
+        main(
+            [
+                "tgdb",
+                "get",
+                str(path),
+                uid,
+                "--seq",
+                "1",
+                "-o",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == ""
+    assert output.read_bytes() == first.read_bytes()
+
+    catalog = path / "catalog.sqlite3"
+    catalog_bytes = catalog.read_bytes()
+    assert (
+        main(
+            [
+                "tgdb",
+                "get",
+                str(path),
+                uid,
+                "-o",
+                str(catalog),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "output path must be outside the tgdb store" in captured.err
+    assert catalog.read_bytes() == catalog_bytes
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(path),
+                "sample",
+                str(second),
+                "--expected",
+                "1",
+                "--annotations",
+                '{"stage":"draft","iteration":1,"fields":{"pass":2}}',
+                "--stage",
+                "final",
+                "--iteration",
+                "3",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "published 'sample' version 2 in commit 3\n"
+    assert main(["tgdb", "history", str(path), "sample", "--json"]) == 0
+    history = json.loads(capsys.readouterr().out)
+    assert [version["seq"] for version in history] == [1, 2]
+    assert history[1]["stage"] == "final"
+    assert history[1]["iteration"] == 3
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(path),
+                "sample",
+                str(second),
+                "--expected",
+                "2",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "unchanged 'sample' at version 2\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(path),
+                "sample",
+                str(second),
+                "--expected",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert "expected version 1 but head is version 2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ["tgdb", "publish", "store", "item", "graph.json", "--expected", "0"],
+        ["tgdb", "get", "store", "item", "--seq", "0"],
+        [
+            "tgdb",
+            "publish",
+            "store",
+            "item",
+            "graph.json",
+            "--expected",
+            "1",
+            "--annotations",
+            "[]",
+        ],
+        [
+            "tgdb",
+            "publish",
+            "store",
+            "item",
+            "graph.json",
+            "--expected",
+            "1",
+            "--annotations",
+            '{"unknown":1}',
+        ],
+        [
+            "tgdb",
+            "publish",
+            "store",
+            "item",
+            "graph.json",
+            "--expected",
+            "1",
+            "--annotations",
+            '{"iteration":true}',
+        ],
+        [
+            "tgdb",
+            "publish",
+            "store",
+            "item",
+            "graph.json",
+            "--expected",
+            "1",
+            "--annotations",
+            "{",
+        ],
+    ),
+)
+def test_tgdb_version_syntax_refuses_as_usage(arguments: list[str]) -> None:
+    """Version sequences and annotations are checked by argparse."""
+    with pytest.raises(SystemExit) as caught:
+        build_parser().parse_args(arguments)
+    assert caught.value.code == 2
+
+
 @pytest.mark.parametrize(
     "arguments",
     (
@@ -276,3 +471,10 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     assert "Create a named collection" in help_text
     assert "--position N" in help_text
     assert "--uid HEX" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "publish", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Byte-identical documents" in help_text
+    assert "--expected SEQ" in help_text
+    assert "--annotations JSON" in help_text

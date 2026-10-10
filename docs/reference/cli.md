@@ -381,18 +381,22 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,get,history,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,get,history,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
     collection          manage ordered collections
     list                list instances
+    add                 add a graph instance
+    publish             publish a graph version
+    get                 write a stored graph version
+    history             list stored graph versions
     rename              rename an instance
     move                move an instance
     retire              retire an instance
@@ -536,6 +540,126 @@ options:
 
 Examples:
   $ tiergraph tgdb list corpus.tgdb --collection recordings
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb add`
+
+```text
+usage: tiergraph tgdb add [-h] [--uid HEX] [--position N]
+                          STORE COLLECTION NAME GRAPH
+
+Create an ordered instance and store its complete initial graph.
+
+positional arguments:
+  STORE         store directory
+  COLLECTION    collection name
+  NAME          unique instance name
+  GRAPH         graph document
+
+options:
+  -h, --help    show this help message and exit
+  --uid HEX     caller-supplied 128-bit id
+  --position N  declared insertion position (default: append)
+
+Examples:
+  $ tiergraph tgdb add corpus.tgdb recordings sample graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb publish`
+
+```text
+usage: tiergraph tgdb publish [-h] --expected SEQ [--collection NAME]
+                              [--stage NAME] [--iteration N]
+                              [--annotations JSON]
+                              STORE INSTANCE GRAPH
+
+Append a complete graph when the expected instance version is current. Byte-identical documents are reported without writing a version.
+
+positional arguments:
+  STORE               store directory
+  INSTANCE            instance name or id
+  GRAPH               graph document
+
+options:
+  -h, --help          show this help message and exit
+  --expected SEQ      required current version sequence
+  --collection NAME   instance collection
+  --stage NAME        version stage
+  --iteration N       version iteration
+  --annotations JSON  EditAnnotations JSON object; --stage and --iteration
+                      override it
+
+Examples:
+  $ tiergraph tgdb publish corpus.tgdb sample revised.json --expected 1
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb get`
+
+```text
+usage: tiergraph tgdb get [-h] [--collection NAME] [--seq N|head] [-o FILE]
+                          STORE INSTANCE
+
+Load and write one verified complete graph version.
+
+positional arguments:
+  STORE                 store directory
+  INSTANCE              instance name or id
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     instance collection
+  --seq N|head          version sequence (default: head)
+  -o FILE, --output FILE
+                        output file (default: -)
+
+Examples:
+  $ tiergraph tgdb get corpus.tgdb sample -o graph.json
+  $ tiergraph tgdb get corpus.tgdb sample --seq 1 -o graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb history`
+
+```text
+usage: tiergraph tgdb history [-h] [--collection NAME] [--json] STORE INSTANCE
+
+List an instance's retained versions in append order.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+
+options:
+  -h, --help         show this help message and exit
+  --collection NAME  instance collection
+  --json             emit structured JSON
+
+Examples:
+  $ tiergraph tgdb history corpus.tgdb sample
+  $ tiergraph tgdb history corpus.tgdb sample --json
 
 Exit codes:
   0  success

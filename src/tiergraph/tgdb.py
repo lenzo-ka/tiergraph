@@ -14,18 +14,21 @@ import re
 import secrets
 import sqlite3
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Literal, Self, cast
 
 from tiergraph.blob import BlobRef, VerifiedReader
+from tiergraph.core import Graph
 from tiergraph.edit import EditAnnotations
+from tiergraph.equivalence import EquivalenceView, fingerprint
 from tiergraph.schema import Refusal, RefusalStage
+from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _LAYOUT_VERSION = 1
 _INDEX_VERSION = 1
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
@@ -169,19 +172,87 @@ class InstanceInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class CommitReceipt:
-    """Identify one durable catalog commit and its ordered operation kinds."""
+class VersionChange:
+    """Describe one version written or skipped by a write transaction."""
 
-    commit_seq: int
+    instance_uid: bytes
+    name: str
+    seq: int
+    graph_digest: str
+    status: Literal["created", "published", "unchanged"]
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible description in stable field order."""
+        return {
+            "instance_uid": self.instance_uid.hex(),
+            "name": self.name,
+            "seq": self.seq,
+            "graph_digest": self.graph_digest,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CommitReceipt:
+    """Report a durable commit or version attempts that were all unchanged."""
+
+    commit_seq: int | None
     kind: str
     operations: tuple[str, ...]
+    versions: tuple[VersionChange, ...] = ()
 
-    def to_data(self) -> dict[str, int | str | list[str]]:
+    def to_data(
+        self,
+    ) -> dict[str, int | str | None | list[str] | list[dict[str, str | int]]]:
         """Return a JSON-compatible receipt in stable field order."""
         return {
             "commit_seq": self.commit_seq,
             "kind": self.kind,
             "operations": list(self.operations),
+            "versions": [version.to_data() for version in self.versions],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VersionHandle:
+    """Name one immutable stored graph version without loading its document.
+
+    Handles are returned by :meth:`TgdbStore.get` and :meth:`TgdbStore.history`;
+    callers do not construct them directly.
+    """
+
+    collection: str
+    instance_uid: bytes
+    name: str
+    position: int
+    seq: int
+    commit_seq: int
+    graph_digest: str
+    functional: str
+    identified: str
+    stage: str | None
+    iteration: int | None
+    _store: TgdbStore = field(repr=False, compare=False)
+
+    def load(self) -> Graph:
+        """Load and validate this version through one verified object read."""
+        with self._store._open_object(self.graph_digest) as source:
+            return loads(source.read())
+
+    def to_data(self) -> dict[str, str | int | None]:
+        """Return a JSON-compatible description without loading the graph."""
+        return {
+            "collection": self.collection,
+            "instance_uid": self.instance_uid.hex(),
+            "name": self.name,
+            "position": self.position,
+            "seq": self.seq,
+            "commit_seq": self.commit_seq,
+            "graph_digest": self.graph_digest,
+            "functional": self.functional,
+            "identified": self.identified,
+            "stage": self.stage,
+            "iteration": self.iteration,
         }
 
 
@@ -421,12 +492,58 @@ class TgdbStore:
         except sqlite3.DatabaseError as error:
             raise StoreCorrupt(f"cannot list instances: {error}") from error
 
+    def get(
+        self,
+        instance: bytes | str,
+        *,
+        collection: bytes | str | None = None,
+        seq: int | Literal["head"] = "head",
+    ) -> VersionHandle:
+        """Return one immutable version handle without loading graph content."""
+        self._require_open()
+        self._require_current_schema()
+        row = _resolve_instance(self._connection, instance, collection=collection)
+        if seq != "head":
+            _validate_version_seq(seq)
+        try:
+            version = _version_row(
+                self._connection,
+                row[0],
+                head_version=row[7] if seq == "head" else None,
+                seq=None if seq == "head" else seq,
+            )
+            if version is not None:
+                return _version_handle(self, row, version)
+        except sqlite3.DatabaseError as error:
+            raise StoreCorrupt(f"cannot read instance version: {error}") from error
+        selected = "head" if seq == "head" else f"version {seq}"
+        raise TgdbError(f"instance {row[3]!r} has no {selected}")
+
+    def history(
+        self,
+        instance: bytes | str,
+        *,
+        collection: bytes | str | None = None,
+    ) -> tuple[VersionHandle, ...]:
+        """Return an instance's retained versions in append order without loading."""
+        self._require_open()
+        self._require_current_schema()
+        row = _resolve_instance(self._connection, instance, collection=collection)
+        try:
+            versions = self._connection.execute(
+                _VERSION_SELECT + " WHERE v.instance_id = ? ORDER BY v.seq",
+                (row[0],),
+            ).fetchall()
+            return tuple(_version_handle(self, row, version) for version in versions)
+        except sqlite3.DatabaseError as error:
+            raise StoreCorrupt(f"cannot read instance history: {error}") from error
+
     def write(
         self,
         *,
         annotations: EditAnnotations | None = None,
     ) -> WriteTransaction:
-        """Open an explicit catalog transaction that commits only on request."""
+        """Open an explicit store transaction that commits only on request."""
         self._require_writable()
         if self._writer is not None:
             raise TgdbError("a write transaction is already active")
@@ -478,6 +595,38 @@ class TgdbStore:
             ):
                 _action_touches(_decode_action(forward))
                 _action_touches(_decode_action(inverse))
+            invalid_head = self._connection.execute(
+                "SELECT i.uid FROM instances AS i "
+                "LEFT JOIN versions AS v ON v.id = i.head_version "
+                "WHERE (i.head_version IS NOT NULL AND v.id IS NULL) "
+                "OR (v.id IS NOT NULL AND v.instance_id != i.id) LIMIT 1"
+            ).fetchone()
+            if invalid_head is not None:
+                raise StoreCorrupt(
+                    f"instance {cast(bytes, invalid_head[0]).hex()} has an invalid head"
+                )
+            missing_fact = self._connection.execute(
+                "SELECT v.graph_digest FROM versions AS v "
+                "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest "
+                "WHERE f.digest IS NULL LIMIT 1"
+            ).fetchone()
+            if missing_fact is not None:
+                raise StoreCorrupt(
+                    f"version object {missing_fact[0]} has no graph facts"
+                )
+            for fact in self._connection.execute(
+                "SELECT f.digest, f.functional, f.identified, f.size, o.size "
+                "FROM graph_facts AS f JOIN objects AS o ON o.digest = f.digest"
+            ):
+                digest, functional, identified, fact_size, object_size = fact
+                _validate_digest(digest)
+                _validate_fingerprint(functional, "functional", digest)
+                _validate_fingerprint(identified, "identified", digest)
+                if fact_size != object_size:
+                    raise StoreCorrupt(
+                        f"graph facts for object {digest} record size {fact_size} "
+                        f"instead of {object_size}"
+                    )
             rows = self._connection.execute(
                 "SELECT digest, size, residency, data FROM objects"
             )
@@ -676,18 +825,9 @@ class WriteTransaction:
         self._connection = store._connection
         self._active = True
         self._operations: list[str] = []
+        self._versions: list[VersionChange] = []
         self._kind = "catalog"
-        encoded = (
-            None
-            if annotations is None
-            else json.dumps(
-                annotations.to_data(),
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        )
+        encoded = _encode_annotations(annotations)
         try:
             self._connection.execute("BEGIN IMMEDIATE")
             cursor = self._connection.execute(
@@ -778,6 +918,157 @@ class WriteTransaction:
             },
         )
         return collection_uid
+
+    def create_instance(
+        self,
+        collection: bytes | str,
+        name: str,
+        graph: Graph,
+        *,
+        uid: bytes | None = None,
+        position: int | None = None,
+        annotations: EditAnnotations | None = None,
+    ) -> bytes:
+        """Create an ordered instance whose first version is a complete graph."""
+        self._require_active()
+        _validate_name(name)
+        _validate_graph(graph)
+        encoded_annotations = _encode_annotations(annotations)
+        collection_row = _resolve_collection(
+            self._connection, collection, include_retired=False
+        )
+        instance_uid = secrets.token_bytes(_UID_BYTES) if uid is None else uid
+        _validate_uid(instance_uid, "instance uid")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM instances WHERE uid = ?", (instance_uid,)
+            ).fetchone()
+            is not None
+        ):
+            raise TgdbError(f"instance uid {instance_uid.hex()} already exists")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM instances WHERE collection_id = ? AND name = ?",
+                (collection_row[0], name),
+            ).fetchone()
+            is not None
+        ):
+            raise TgdbError(f"instance name {name!r} already exists in its collection")
+        count = cast(
+            int,
+            self._connection.execute(
+                "SELECT count(*) FROM instances WHERE collection_id = ?",
+                (collection_row[0],),
+            ).fetchone()[0],
+        )
+        target = count if position is None else position
+        _validate_position(target, count, allow_end=True)
+        digest = self._store_graph(graph)
+        if target != count:
+            rows = self._connection.execute(
+                "SELECT uid, position FROM instances WHERE collection_id = ? "
+                "AND position >= ? ORDER BY position",
+                (collection_row[0], target),
+            ).fetchall()
+            _set_positions(
+                self._connection,
+                "instances",
+                {uid_value: old_position + 1 for uid_value, old_position in rows},
+            )
+        cursor = self._connection.execute(
+            "INSERT INTO instances(uid, collection_id, name, position, head_version, "
+            "generation, retired_commit) VALUES (?, ?, ?, ?, NULL, 0, NULL)",
+            (instance_uid, collection_row[0], name, target),
+        )
+        instance_id = cast(int, cursor.lastrowid)
+        version_id = self._insert_version(
+            instance_id,
+            seq=1,
+            parent_id=None,
+            graph_digest=digest,
+            transition="initial",
+            reason=None,
+            annotations=annotations,
+            encoded_annotations=encoded_annotations,
+        )
+        self._connection.execute(
+            "UPDATE instances SET head_version = ? WHERE id = ?",
+            (version_id, instance_id),
+        )
+        touch = _touch("instance", instance_uid)
+        self._record(
+            {
+                "action": "create_instance",
+                "collection_uid": collection_row[1].hex(),
+                "name": name,
+                "position": target,
+                "touches": [touch],
+                "uid": instance_uid.hex(),
+            },
+            {
+                "action": "retire_instance",
+                "touches": [touch],
+                "uid": instance_uid.hex(),
+            },
+        )
+        self._kind = "version"
+        self._versions.append(VersionChange(instance_uid, name, 1, digest, "created"))
+        return instance_uid
+
+    def publish(
+        self,
+        instance: bytes | str,
+        graph: Graph,
+        *,
+        expected: int,
+        collection: bytes | str | None = None,
+        annotations: EditAnnotations | None = None,
+    ) -> None:
+        """Append a complete graph version when the expected head is current."""
+        self._require_active()
+        _validate_graph(graph)
+        _validate_version_seq(expected)
+        encoded_annotations = _encode_annotations(annotations)
+        row = _resolve_instance(self._connection, instance, collection=collection)
+        _require_active_instance(self._connection, row)
+        head = _version_row(self._connection, row[0], head_version=row[7], seq=None)
+        if head is None:
+            raise StoreCorrupt(f"instance {row[3]!r} has no stored head version")
+        head_seq = head[0]
+        if head_seq != expected:
+            raise StaleVersion(
+                f"instance {row[3]!r} expected version {expected} but head is "
+                f"version {head_seq}"
+            )
+        document = _graph_document(graph)
+        digest = hashlib.sha256(document).hexdigest()
+        if digest == head[2]:
+            self._versions.append(
+                VersionChange(row[1], row[3], head_seq, digest, "unchanged")
+            )
+            return
+        digest = self._store_graph_document(graph, document)
+        next_seq = head_seq + 1
+        version_id = self._insert_version(
+            row[0],
+            seq=next_seq,
+            parent_id=head[6],
+            graph_digest=digest,
+            transition="snapshot",
+            reason="patch-not-recorded",
+            annotations=annotations,
+            encoded_annotations=encoded_annotations,
+        )
+        self._connection.execute(
+            "UPDATE instances SET head_version = ?, generation = generation + 1 "
+            "WHERE id = ?",
+            (version_id, row[0]),
+        )
+        self._operations.append("publish")
+        self._kind = "version"
+        self._versions.append(
+            VersionChange(row[1], row[3], next_seq, digest, "published")
+        )
 
     def rename_collection(self, collection: bytes | str, name: str) -> None:
         """Change a collection name without changing its identity or position."""
@@ -899,11 +1190,85 @@ class WriteTransaction:
         """Restore a retired instance at its existing declared position."""
         self._change_instance_retirement(instance, collection=collection, retire=False)
 
+    def _store_graph(self, graph: Graph) -> str:
+        """Store one canonical graph document and its small derived facts."""
+        return self._store_graph_document(graph, _graph_document(graph))
+
+    def _store_graph_document(self, graph: Graph, document: bytes) -> str:
+        """Store already serialized graph bytes and their verified fingerprints."""
+        digest = self._store._put_object(io.BytesIO(document))
+        functional = fingerprint(graph, EquivalenceView.FUNCTIONAL)
+        identified = fingerprint(graph, EquivalenceView.IDENTIFIED)
+        self._connection.execute(
+            "INSERT OR IGNORE INTO graph_facts("
+            "digest, format_version, fp_domain, functional, identified, size"
+            ") VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                digest,
+                FORMAT_VERSION,
+                self._store._info.fingerprint_domain,
+                functional,
+                identified,
+                len(document),
+            ),
+        )
+        recorded = self._connection.execute(
+            "SELECT format_version, fp_domain, functional, identified, size "
+            "FROM graph_facts WHERE digest = ?",
+            (digest,),
+        ).fetchone()
+        expected = (
+            FORMAT_VERSION,
+            self._store._info.fingerprint_domain,
+            functional,
+            identified,
+            len(document),
+        )
+        if recorded != expected:
+            raise StoreCorrupt(f"graph facts for object {digest} are inconsistent")
+        return digest
+
+    def _insert_version(
+        self,
+        instance_id: int,
+        *,
+        seq: int,
+        parent_id: int | None,
+        graph_digest: str,
+        transition: Literal["initial", "snapshot"],
+        reason: str | None,
+        annotations: EditAnnotations | None,
+        encoded_annotations: str | None,
+    ) -> int:
+        """Insert one complete document version and return its internal row id."""
+        cursor = self._connection.execute(
+            "INSERT INTO versions("
+            "instance_id, seq, parent_id, commit_seq, graph_digest, patch_digest, "
+            "transition, reason, stage, iteration, annotations"
+            ") VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+            (
+                instance_id,
+                seq,
+                parent_id,
+                self._commit_seq,
+                graph_digest,
+                transition,
+                reason,
+                None if annotations is None else annotations.stage,
+                None if annotations is None else annotations.iteration,
+                encoded_annotations,
+            ),
+        )
+        return cast(int, cursor.lastrowid)
+
     def commit(self) -> CommitReceipt:
-        """Commit all staged catalog changes and return their durable sequence."""
+        """Commit staged changes, or report version no-ops without a commit."""
         self._require_active()
         if not self._operations:
+            versions = tuple(self._versions)
             self.discard()
+            if versions:
+                return CommitReceipt(None, "unchanged", (), versions)
             raise TgdbError("write transaction has no changes")
         try:
             self._connection.execute(
@@ -925,7 +1290,12 @@ class WriteTransaction:
                 self._connection.execute("ROLLBACK")
             self._finish()
             raise StoreCorrupt(f"cannot commit catalog transaction: {error}") from error
-        receipt = CommitReceipt(self._commit_seq, self._kind, tuple(self._operations))
+        receipt = CommitReceipt(
+            self._commit_seq,
+            self._kind,
+            tuple(self._operations),
+            tuple(self._versions),
+        )
         self._finish()
         return receipt
 
@@ -1019,6 +1389,19 @@ class WriteTransaction:
         )
         for later_seq, forward_text in later:
             if touches.intersection(_action_touches(_decode_action(forward_text))):
+                raise StaleVersion(
+                    f"commit {commit_seq} is stale because commit {later_seq} "
+                    "touched the same catalog identity"
+                )
+        later_versions = self._connection.execute(
+            "SELECT v.commit_seq, i.uid FROM versions AS v "
+            "JOIN instances AS i ON i.id = v.instance_id "
+            "WHERE v.commit_seq > ? AND v.commit_seq < ? "
+            "ORDER BY v.commit_seq, v.id",
+            (commit_seq, self._commit_seq),
+        )
+        for later_seq, instance_uid in later_versions:
+            if _touch("instance", instance_uid) in touches:
                 raise StaleVersion(
                     f"commit {commit_seq} is stale because commit {later_seq} "
                     "touched the same catalog identity"
@@ -1237,6 +1620,46 @@ def _validate_position(position: object, count: int, *, allow_end: bool) -> None
         raise ValueError(f"position must be between 0 and {maximum}")
 
 
+def _validate_version_seq(seq: object) -> None:
+    """Require one positive, non-Boolean instance version sequence."""
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        raise TypeError("version sequence must be an integer")
+    if seq <= 0:
+        raise ValueError("version sequence must be positive")
+
+
+def _validate_graph(graph: object) -> None:
+    """Require the immutable graph value accepted by canonical serialization."""
+    if not isinstance(graph, Graph):
+        raise TypeError("graph must be a Graph")
+
+
+def _graph_document(graph: Graph) -> bytes:
+    """Serialize a graph once and refuse bytes its public reader cannot load."""
+    document = dumps(graph).encode("utf-8")
+    if len(document) > MAX_DOCUMENT_BYTES:
+        raise TgdbError(
+            f"graph document size {len(document)} bytes exceeds limit "
+            f"{MAX_DOCUMENT_BYTES}"
+        )
+    return document
+
+
+def _encode_annotations(annotations: EditAnnotations | None) -> str | None:
+    """Encode optional edit metadata in one deterministic catalog spelling."""
+    if annotations is not None and not isinstance(annotations, EditAnnotations):
+        raise TypeError("annotations must be EditAnnotations or None")
+    if annotations is None:
+        return None
+    return json.dumps(
+        annotations.to_data(),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
 def _resolve_collection(
     connection: sqlite3.Connection,
     collection: bytes | str,
@@ -1270,7 +1693,7 @@ def _resolve_instance(
     instance: bytes | str,
     *,
     collection: bytes | str | None,
-) -> tuple[int, bytes, int, str, int, int, int | None]:
+) -> tuple[int, bytes, int, str, int, int, int | None, int | None]:
     """Resolve an instance by global stable id or a possibly scoped name."""
     parameters: list[object] = []
     conditions: list[str] = []
@@ -1291,8 +1714,8 @@ def _resolve_instance(
         conditions.append("collection_id = ?")
         parameters.append(collection_id)
     rows = connection.execute(
-        "SELECT id, uid, collection_id, name, position, generation, retired_commit "
-        "FROM instances WHERE " + " AND ".join(conditions),
+        "SELECT id, uid, collection_id, name, position, generation, retired_commit, "
+        "head_version FROM instances WHERE " + " AND ".join(conditions),
         parameters,
     ).fetchall()
     if not rows:
@@ -1306,7 +1729,85 @@ def _resolve_instance(
         raise TgdbError(
             f"instance name {instance!r} is ambiguous; specify its collection"
         )
-    return cast(tuple[int, bytes, int, str, int, int, int | None], rows[0])
+    return cast(tuple[int, bytes, int, str, int, int, int | None, int | None], rows[0])
+
+
+def _require_active_instance(
+    connection: sqlite3.Connection,
+    row: tuple[int, bytes, int, str, int, int, int | None, int | None],
+) -> None:
+    """Require an instance and its containing collection to be active."""
+    if row[6] is not None:
+        raise TgdbError(f"instance {row[3]!r} is retired")
+    collection = connection.execute(
+        "SELECT name, retired_commit FROM collections WHERE id = ?", (row[2],)
+    ).fetchone()
+    if collection is None:
+        raise StoreCorrupt(f"instance {row[3]!r} has no collection")
+    if collection[1] is not None:
+        raise TgdbError(f"collection {collection[0]!r} is retired")
+
+
+_VERSION_SELECT = (
+    "SELECT v.seq, v.commit_seq, v.graph_digest, f.functional, f.identified, "
+    "v.stage, v.id, v.iteration FROM versions AS v "
+    "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest"
+)
+
+
+def _version_row(
+    connection: sqlite3.Connection,
+    instance_id: int,
+    *,
+    head_version: int | None,
+    seq: int | None,
+) -> tuple[int, int, str, str, str, str | None, int, int | None] | None:
+    """Return one version and its graph facts by head id or declared sequence."""
+    if head_version is not None:
+        condition = "v.id = ? AND v.instance_id = ?"
+        parameters = (head_version, instance_id)
+    elif seq is not None:
+        condition = "v.instance_id = ? AND v.seq = ?"
+        parameters = (instance_id, seq)
+    else:
+        return None
+    row = connection.execute(
+        _VERSION_SELECT + " WHERE " + condition, parameters
+    ).fetchone()
+    return cast(
+        tuple[int, int, str, str, str, str | None, int, int | None] | None,
+        row,
+    )
+
+
+def _version_handle(
+    store: TgdbStore,
+    instance: tuple[int, bytes, int, str, int, int, int | None, int | None],
+    version: tuple[int, int, str, str, str, str | None, int, int | None],
+) -> VersionHandle:
+    """Bind one immutable version row to its verified object loader."""
+    collection = store._connection.execute(
+        "SELECT name FROM collections WHERE id = ?", (instance[2],)
+    ).fetchone()
+    if collection is None:
+        raise StoreCorrupt(f"instance {instance[3]!r} has no collection")
+    _validate_digest(version[2])
+    _validate_fingerprint(version[3], "functional", version[2])
+    _validate_fingerprint(version[4], "identified", version[2])
+    return VersionHandle(
+        collection=cast(str, collection[0]),
+        instance_uid=instance[1],
+        name=instance[3],
+        position=instance[4],
+        seq=version[0],
+        commit_seq=version[1],
+        graph_digest=version[2],
+        functional=version[3],
+        identified=version[4],
+        stage=version[5],
+        iteration=version[7],
+        _store=store,
+    )
 
 
 def _set_positions(
@@ -1388,6 +1889,7 @@ def _action_touches(action: dict[str, object]) -> tuple[str, ...]:
         "rename_collection": "collection",
         "retire_collection": "collection",
         "restore_collection": "collection",
+        "create_instance": "instance",
         "rename_instance": "instance",
         "retire_instance": "instance",
         "restore_instance": "instance",
@@ -1575,12 +2077,58 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "collection_id INTEGER NOT NULL REFERENCES collections(id), "
             "name TEXT NOT NULL CHECK(length(name) > 0), "
             "position INTEGER NOT NULL CHECK(position >= 0), "
-            "head_version INTEGER, "
+            "head_version INTEGER REFERENCES versions(id), "
             "generation INTEGER NOT NULL CHECK(generation >= 0), "
             "retired_commit INTEGER REFERENCES commits(seq), "
             "UNIQUE(collection_id, name), "
             "UNIQUE(collection_id, position)"
             ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE graph_facts("
+            "digest TEXT PRIMARY KEY REFERENCES objects(digest), "
+            "format_version TEXT NOT NULL, "
+            "fp_domain TEXT NOT NULL, "
+            "functional TEXT NOT NULL "
+            "CHECK(length(functional) = 64 AND functional NOT GLOB '*[^0-9a-f]*'), "
+            "identified TEXT NOT NULL "
+            "CHECK(length(identified) = 64 AND identified NOT GLOB '*[^0-9a-f]*'), "
+            "size INTEGER NOT NULL CHECK(size >= 0)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE versions("
+            "id INTEGER PRIMARY KEY, "
+            "instance_id INTEGER NOT NULL REFERENCES instances(id), "
+            "seq INTEGER NOT NULL CHECK(seq > 0), "
+            "parent_id INTEGER REFERENCES versions(id), "
+            "commit_seq INTEGER NOT NULL REFERENCES commits(seq), "
+            "graph_digest TEXT NOT NULL REFERENCES objects(digest), "
+            "patch_digest TEXT REFERENCES objects(digest), "
+            "transition TEXT NOT NULL "
+            "CHECK(transition IN ('initial', 'patch', 'snapshot')), "
+            "reason TEXT, "
+            "stage TEXT, "
+            "iteration INTEGER, "
+            "annotations TEXT, "
+            "UNIQUE(instance_id, seq), "
+            "CHECK((transition = 'initial' AND seq = 1 AND parent_id IS NULL "
+            "AND patch_digest IS NULL) OR transition != 'initial'), "
+            "CHECK((transition = 'snapshot' AND reason IS NOT NULL) OR "
+            "(transition != 'snapshot' AND reason IS NULL))"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE INDEX graph_facts_functional ON graph_facts(functional)"
+        )
+        connection.execute(
+            "CREATE INDEX graph_facts_identified ON graph_facts(identified)"
+        )
+        connection.execute(
+            "CREATE INDEX versions_instance_commit ON versions(instance_id, commit_seq)"
+        )
+        connection.execute(
+            "CREATE INDEX versions_stage_iteration ON versions(stage, iteration)"
         )
         connection.executemany(
             "INSERT INTO store_meta(key, value) VALUES (?, ?)", metadata
@@ -1691,6 +2239,19 @@ def _validate_digest(digest: object) -> None:
         or any(character not in "0123456789abcdef" for character in digest)
     ):
         raise StoreCorrupt(f"object digest {digest!r} is malformed")
+
+
+def _validate_fingerprint(value: object, view: str, digest: str) -> None:
+    """Require one canonical SHA-256 graph fingerprint spelling."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _DIGEST_HEX_LENGTH
+        or not value.isascii()
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise StoreCorrupt(
+            f"graph facts for object {digest} have a malformed {view} fingerprint"
+        )
 
 
 def _validate_object_record(
@@ -1874,5 +2435,7 @@ __all__ = [
     "TgdbError",
     "TgdbLimits",
     "TgdbStore",
+    "VersionChange",
+    "VersionHandle",
     "WriteTransaction",
 ]

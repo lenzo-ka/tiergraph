@@ -13,7 +13,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO, Literal, cast
 from urllib.parse import unquote, urlsplit
 
 import tiergraph
@@ -267,6 +267,108 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         help="include retired instances and collections",
     )
     tgdb_list.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_add = _subcommand(
+        tgdb_subparsers,
+        "add",
+        summary="add a graph instance",
+        description="Create an ordered instance and store its complete initial graph.",
+        examples=("tiergraph tgdb add corpus.tgdb recordings sample graph.json",),
+    )
+    tgdb_add.set_defaults(handler=_handle_tgdb)
+    tgdb_add.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_add.add_argument("collection", metavar="COLLECTION", help="collection name")
+    tgdb_add.add_argument("name", metavar="NAME", help="unique instance name")
+    tgdb_add.add_argument("graph", metavar="GRAPH", help="graph document")
+    tgdb_add.add_argument(
+        "--uid", type=_tgdb_uid, metavar="HEX", help="caller-supplied 128-bit id"
+    )
+    tgdb_add.add_argument(
+        "--position",
+        type=_nonnegative_integer,
+        metavar="N",
+        help="declared insertion position (default: append)",
+    )
+    tgdb_publish = _subcommand(
+        tgdb_subparsers,
+        "publish",
+        summary="publish a graph version",
+        description=(
+            "Append a complete graph when the expected instance version is current. "
+            "Byte-identical documents are reported without writing a version."
+        ),
+        examples=(
+            "tiergraph tgdb publish corpus.tgdb sample revised.json --expected 1",
+        ),
+    )
+    tgdb_publish.set_defaults(handler=_handle_tgdb)
+    tgdb_publish.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_publish.add_argument(
+        "instance", metavar="INSTANCE", help="instance name or id"
+    )
+    tgdb_publish.add_argument("graph", metavar="GRAPH", help="graph document")
+    tgdb_publish.add_argument(
+        "--expected",
+        required=True,
+        type=_positive_integer,
+        metavar="SEQ",
+        help="required current version sequence",
+    )
+    tgdb_publish.add_argument(
+        "--collection", metavar="NAME", help="instance collection"
+    )
+    tgdb_publish.add_argument("--stage", metavar="NAME", help="version stage")
+    tgdb_publish.add_argument(
+        "--iteration", type=int, metavar="N", help="version iteration"
+    )
+    tgdb_publish.add_argument(
+        "--annotations",
+        type=_tgdb_annotations,
+        metavar="JSON",
+        help="EditAnnotations JSON object; --stage and --iteration override it",
+    )
+    tgdb_get = _subcommand(
+        tgdb_subparsers,
+        "get",
+        summary="write a stored graph version",
+        description="Load and write one verified complete graph version.",
+        examples=(
+            "tiergraph tgdb get corpus.tgdb sample -o graph.json",
+            "tiergraph tgdb get corpus.tgdb sample --seq 1 -o graph.json",
+        ),
+    )
+    tgdb_get.set_defaults(handler=_handle_tgdb)
+    tgdb_get.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_get.add_argument("instance", metavar="INSTANCE", help="instance name or id")
+    tgdb_get.add_argument("--collection", metavar="NAME", help="instance collection")
+    tgdb_get.add_argument(
+        "--seq",
+        type=_tgdb_version,
+        default="head",
+        metavar="N|head",
+        help="version sequence (default: head)",
+    )
+    _output_argument(tgdb_get)
+    tgdb_history = _subcommand(
+        tgdb_subparsers,
+        "history",
+        summary="list stored graph versions",
+        description="List an instance's retained versions in append order.",
+        examples=(
+            "tiergraph tgdb history corpus.tgdb sample",
+            "tiergraph tgdb history corpus.tgdb sample --json",
+        ),
+    )
+    tgdb_history.set_defaults(handler=_handle_tgdb)
+    tgdb_history.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_history.add_argument(
+        "instance", metavar="INSTANCE", help="instance name or id"
+    )
+    tgdb_history.add_argument(
+        "--collection", metavar="NAME", help="instance collection"
+    )
+    tgdb_history.add_argument(
+        "--json", action="store_true", help="emit structured JSON"
+    )
     for command in ("rename", "move"):
         subcommand = _subcommand(
             tgdb_subparsers,
@@ -1646,6 +1748,50 @@ def _tgdb_uid(value: str) -> bytes:
     return bytes.fromhex(value)
 
 
+def _tgdb_version(value: str) -> int | Literal["head"]:
+    """Parse a positive version sequence or the explicit head selector."""
+    if value == "head":
+        return "head"
+    return _positive_integer(value)
+
+
+def _tgdb_annotations(value: str) -> tiergraph.EditAnnotations:
+    """Parse one strict EditAnnotations JSON object for version metadata."""
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise argparse.ArgumentTypeError("must be a JSON object") from error
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    allowed = {
+        "author",
+        "reason",
+        "stage",
+        "confidence",
+        "iteration",
+        "tool",
+        "timestamp",
+        "fields",
+    }
+    unknown = set(data) - allowed
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise argparse.ArgumentTypeError(f"unknown annotation fields: {names}")
+    try:
+        return tiergraph.EditAnnotations(
+            author=data.get("author"),
+            reason=data.get("reason"),
+            stage=data.get("stage"),
+            confidence=data.get("confidence"),
+            iteration=data.get("iteration"),
+            tool=data.get("tool"),
+            timestamp=data.get("timestamp"),
+            fields=cast(dict[str, _core.JsonValue], data.get("fields", {})),
+        )
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def _media_type_argument(value: str) -> str:
     """Require the canonical media-type spelling accepted by the blob profile."""
     if _MEDIA_TYPE_TEXT.fullmatch(value) is None:
@@ -1783,8 +1929,10 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             _stdout_text(f"initialized {args.store}\n")
             return 0
         writable = args.tgdb_command in {
+            "add",
             "collection",
             "move",
+            "publish",
             "rename",
             "restore",
             "retire",
@@ -1848,6 +1996,92 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     )
                 else:
                     _stdout_text(f"committed {receipt.commit_seq}: {command}\n")
+                return 0
+            if args.tgdb_command == "add":
+                graph = tiergraph.loads(_read_bytes(args.graph))
+                with store.write() as transaction:
+                    uid = transaction.create_instance(
+                        args.collection,
+                        args.name,
+                        graph,
+                        uid=args.uid,
+                        position=args.position,
+                    )
+                    receipt = transaction.commit()
+                _stdout_text(
+                    f"created instance {args.name!r} {uid.hex()} version 1 in "
+                    f"commit {receipt.commit_seq}\n"
+                )
+                return 0
+            if args.tgdb_command in {"get", "history", "publish"}:
+                names = {
+                    instance.name
+                    for instance in store.instances(
+                        args.collection, include_retired=True
+                    )
+                }
+                selector = _tgdb_selector(args.instance, names=names)
+                if args.tgdb_command == "get":
+                    handle = store.get(
+                        selector, collection=args.collection, seq=args.seq
+                    )
+                    _check_output_outside_store(store.path, args.output)
+                    _write_output("-", args.output, tiergraph.dump_bytes(handle.load()))
+                    return 0
+                if args.tgdb_command == "history":
+                    history = store.history(selector, collection=args.collection)
+                    if args.json:
+                        _stdout_text(
+                            _json_bytes(
+                                [version.to_data() for version in history]
+                            ).decode("utf-8")
+                        )
+                    else:
+                        for version in history:
+                            _stdout_text(
+                                "\t".join(
+                                    _text_report_field(value)
+                                    for value in (
+                                        version.seq,
+                                        version.commit_seq,
+                                        version.graph_digest,
+                                        version.functional,
+                                        version.identified,
+                                        version.stage,
+                                        version.iteration,
+                                    )
+                                )
+                                + "\n"
+                            )
+                    return 0
+                graph = tiergraph.loads(_read_bytes(args.graph))
+                annotations = args.annotations
+                if args.stage is not None or args.iteration is not None:
+                    supplied = tiergraph.EditAnnotations(
+                        stage=args.stage, iteration=args.iteration
+                    )
+                    annotations = (
+                        supplied
+                        if annotations is None
+                        else annotations.merged(supplied)
+                    )
+                with store.write() as transaction:
+                    transaction.publish(
+                        selector,
+                        graph,
+                        expected=args.expected,
+                        collection=args.collection,
+                        annotations=annotations,
+                    )
+                    receipt = transaction.commit()
+                change = receipt.versions[-1]
+                if change.status == "unchanged":
+                    _stdout_text(f"unchanged {change.name!r} at version {change.seq}\n")
+                else:
+                    _stdout_text(
+                        f"published {change.name!r} version {change.seq} in "
+                        f"commit {receipt.commit_seq}\n"
+                    )
                 return 0
             if args.tgdb_command == "list":
                 instances = store.instances(
@@ -4159,6 +4393,14 @@ def _stdout_text(value: str) -> None:
 def _write_output(input_name: str, output_name: str, value: bytes) -> None:
     with _output_stream(input_name, output_name) as stream:
         stream.write(value)
+
+
+def _check_output_outside_store(store_path: Path, output_name: str) -> None:
+    """Refuse an output path that could replace content inside a tgdb store."""
+    if output_name != "-" and Path(output_name).resolve().is_relative_to(
+        store_path.resolve()
+    ):
+        raise ValueError("output path must be outside the tgdb store")
 
 
 @contextmanager

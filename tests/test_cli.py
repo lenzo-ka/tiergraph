@@ -1936,9 +1936,13 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
             needs_collection = (
                 command
                 in {
+                    "add",
                     "collection",
+                    "get",
+                    "history",
                     "list",
                     "move",
+                    "publish",
                     "rename",
                     "restore",
                     "retire",
@@ -1952,6 +1956,13 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     collection_uid = transaction.create_collection("recordings")
                     if command == "collection" and collection_command == "move":
                         transaction.create_collection("other")
+                    transaction.commit()
+            if command in {"get", "history", "publish"}:
+                assert collection_uid is not None
+                with store.write() as transaction:
+                    transaction.create_instance(
+                        collection_uid, "sample", tiergraph.Graph((), (), ())
+                    )
                     transaction.commit()
             if command in {"move", "rename", "restore", "retire"}:
                 assert collection_uid is not None
@@ -2005,6 +2016,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
         (AttributeDeclaration(note, AttributeDomain.ITEM, XsdType.STRING),),
     )
     (directory / "graph.json").write_bytes(tiergraph.dump_bytes(source_graph))
+    (directory / "revised.json").write_bytes(tiergraph.dump_bytes(source_graph))
 
     if arguments[:3] == ["edit", "shift-graph.json", "shift"]:
         children = QualifiedName("urn:path", "children")
@@ -2172,7 +2184,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 97
+    assert len(examples) == 103
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
