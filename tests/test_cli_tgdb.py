@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import sqlite3
 import subprocess
@@ -10,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
+import tiergraph.tgdb as tgdb
 from tiergraph import (
+    BLOB_NAMESPACE,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
@@ -23,12 +27,43 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
+    declare_blob_vocabulary,
     diff,
     dump_bytes,
     patch_dumps,
     patch_loads,
 )
 from tiergraph.cli import _tgdb_index_value, build_parser, main
+
+
+def _cli_blob_graph(payload: bytes) -> Graph:
+    """Return one graph declaring a single external payload."""
+    namespace = "urn:tgdb:cli-blob"
+    blobs = QualifiedName(namespace, "resources")
+
+    def blob_value(local: str, value_type: XsdType, lexical: str) -> AttributeValue:
+        return AttributeValue(QualifiedName(BLOB_NAMESPACE, local), value_type, lexical)
+
+    editor = Graph((), (), ()).edit()
+    declare_blob_vocabulary(editor)
+    editor.declare(NamespaceDeclaration("test", namespace))
+    editor.declare(TierDeclaration(blobs, "Resources"))
+    editor.insert_item(
+        blobs,
+        0,
+        Item(
+            "payload",
+            (
+                blob_value(
+                    "sha256", XsdType.STRING, hashlib.sha256(payload).hexdigest()
+                ),
+                blob_value("size", XsdType.INTEGER, str(len(payload))),
+                blob_value("media-type", XsdType.STRING, "application/octet-stream"),
+                blob_value("schema", XsdType.STRING, "urn:example:binary:v1"),
+            ),
+        ),
+    )
+    return editor.freeze()
 
 
 def test_building_tgdb_help_does_not_import_tgdb_or_sqlite() -> None:
@@ -55,7 +90,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 6\n" in plain
+    assert "schema_version: 7\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -63,11 +98,11 @@ def test_tgdb_init_and_info_plain_and_json(
     report = json.loads(capsys.readouterr().out)
     assert report == {
         "fingerprint_domain": "tiergraph-equivalence/1",
-        "index_version": 3,
+        "index_version": 4,
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 6,
+        "schema_version": 7,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -84,6 +119,139 @@ def test_tgdb_check_reports_structural_and_full_success(
     assert capsys.readouterr().out == "ok: structural check, 0 objects, 0 bytes\n"
     assert main(["tgdb", "check", str(path), "--full"]) == 0
     assert capsys.readouterr().out == "ok: full check, 0 objects, 0 bytes\n"
+
+
+def test_tgdb_blob_commands_queries_and_repack(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """TG9 CLI paths ingest, query, verify, retrieve, and repack payloads."""
+    store = tmp_path / "corpus.tgdb"
+    payload = b"payload bytes"
+    payload_file = tmp_path / "payload.bin"
+    graph_file = tmp_path / "graph.json"
+    output = tmp_path / "copy.bin"
+    digest = hashlib.sha256(payload).hexdigest()
+    payload_file.write_bytes(payload)
+    graph_file.write_bytes(dump_bytes(_cli_blob_graph(payload)))
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(store), "corpus"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "add",
+                str(store),
+                "corpus",
+                "sample",
+                str(graph_file),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "find",
+                str(store),
+                "--uses-blob",
+                digest,
+                "--media-type",
+                "application/octet-stream",
+                "--missing-blob",
+                "--count",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "1\n"
+    assert main(["tgdb", "blob", "put", str(store), str(payload_file)]) == 0
+    assert capsys.readouterr().out == f"{digest}\t{len(payload)}\n"
+    assert main(["tgdb", "find", str(store), "--missing-blob", "--count"]) == 0
+    assert capsys.readouterr().out == "0\n"
+    assert main(["tgdb", "blob", "get", str(store), digest, "-o", str(output)]) == 0
+    assert capsys.readouterr().out == ""
+    assert output.read_bytes() == payload
+    assert main(["tgdb", "blob", "verify", str(store), digest]) == 0
+    assert capsys.readouterr().out == "ok\n"
+    assert main(["tgdb", "blob", "verify", str(store)]) == 0
+    assert capsys.readouterr().out == "ok\n"
+    assert main(["tgdb", "repack", str(store), "--threshold", "0"]) == 0
+    repacked = capsys.readouterr().out
+    assert "threshold 0 bytes" in repacked
+    assert "file" in repacked
+    assert main(["tgdb", "repack", str(store), "--threshold", "0"]) == 0
+    assert capsys.readouterr().out == "unchanged: threshold 0 bytes\n"
+
+    missing = "f" * 64
+    assert main(["tgdb", "blob", "verify", str(store), missing]) == 1
+    assert f"object {missing} is not stored" in capsys.readouterr().err
+    assert (
+        main(
+            [
+                "tgdb",
+                "blob",
+                "get",
+                str(store),
+                missing,
+                "-o",
+                str(tmp_path / "missing.bin"),
+            ]
+        )
+        == 1
+    )
+    assert f"object {missing} is not stored" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("command", "resolver_result", "message"),
+    (
+        ("get", "missing", "is not stored"),
+        ("get", "unverified", "was not fully verified"),
+        ("verify", "missing", "disappeared during verification"),
+        ("verify", "unverified", "was not fully verified"),
+    ),
+)
+def test_tgdb_blob_commands_refuse_resolver_races_and_failed_verification(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    resolver_result: str,
+    message: str,
+) -> None:
+    """Payload reads fail closed if resolution races or verification fails."""
+    payload = b"payload bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    store = tmp_path / "corpus.tgdb"
+    source = tmp_path / "payload.bin"
+    source.write_bytes(payload)
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "blob", "put", str(store), str(source)]) == 0
+    capsys.readouterr()
+
+    class UnverifiedReader(io.BytesIO):
+        @property
+        def verified(self) -> bool:
+            return False
+
+    class BrokenResolver:
+        def open(self, ref: object, href: object) -> io.BytesIO | None:
+            del ref, href
+            if resolver_result == "missing":
+                return None
+            return UnverifiedReader(payload)
+
+    monkeypatch.setattr(tgdb.TgdbStore, "resolver", lambda _store: BrokenResolver())
+    arguments = ["tgdb", "blob", command, str(store), digest]
+    if command == "get":
+        arguments.extend(("-o", str(tmp_path / "copy.bin")))
+    assert main(arguments) == 1
+    assert message in capsys.readouterr().err
 
 
 def test_tgdb_find_and_reindex_expose_tg7_queries(
@@ -1131,6 +1299,7 @@ def test_tgdb_version_syntax_refuses_as_usage(arguments: list[str]) -> None:
         ["tgdb", "undo", "store", "latest"],
         ["tgdb", "revert", "store", "item", "--to", "0", "--expected", "1"],
         ["tgdb", "apply", "store", "item", "patch", "--expected", "0"],
+        ["tgdb", "blob", "get", "store", "ABC", "-o", "payload.bin"],
     ),
 )
 def test_tgdb_catalog_syntax_refuses_as_usage(arguments: list[str]) -> None:
@@ -1175,4 +1344,16 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     help_text = capsys.readouterr().out
     assert "Build an item attribute index" in help_text
     assert "--history" in help_text
+    assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "blob", "put", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Stream one file into the object pool" in help_text
+    assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "repack", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--threshold SIZE" in help_text
     assert "Exit codes:" in help_text
