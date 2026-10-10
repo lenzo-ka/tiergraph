@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,get,history,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,apply,diff,revert,get,history,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,get,history,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,apply,diff,revert,get,history,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -395,6 +395,9 @@ positional arguments:
     list                list instances
     add                 add a graph instance
     publish             publish a graph version
+    apply               apply and publish a patch
+    diff                write an exact patch between versions
+    revert              republish a retained version
     get                 write a stored graph version
     history             list stored graph versions
     rename              rename an instance
@@ -581,7 +584,7 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb publish [-h] --expected SEQ [--collection NAME]
-                              [--stage NAME] [--iteration N]
+                              [--patch PATCH] [--stage NAME] [--iteration N]
                               [--annotations JSON]
                               STORE INSTANCE GRAPH
 
@@ -596,6 +599,7 @@ options:
   -h, --help          show this help message and exit
   --expected SEQ      required current version sequence
   --collection NAME   instance collection
+  --patch PATCH       journal patch from the stored head to GRAPH
   --stage NAME        version stage
   --iteration N       version iteration
   --annotations JSON  EditAnnotations JSON object; --stage and --iteration
@@ -603,6 +607,93 @@ options:
 
 Examples:
   $ tiergraph tgdb publish corpus.tgdb sample revised.json --expected 1
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb apply`
+
+```text
+usage: tiergraph tgdb apply [-h] --expected SEQ [--collection NAME]
+                            STORE INSTANCE PATCH
+
+Apply a fingerprint-guarded patch to the expected current head and publish its exact result.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+  PATCH              patch JSONL file
+
+options:
+  -h, --help         show this help message and exit
+  --expected SEQ     required current version sequence
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb apply corpus.tgdb sample tgdb-change.jsonl --expected 1
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb diff`
+
+```text
+usage: tiergraph tgdb diff [-h] [--collection NAME] [-o FILE]
+                           STORE INSTANCE [A] [B]
+
+Write an exact replayable patch. With no sequence, compare the head's parent to the head; with one, compare it to the head.
+
+positional arguments:
+  STORE                 store directory
+  INSTANCE              instance name or id
+  A                     source version
+  B                     target version
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     instance collection
+  -o FILE, --output FILE
+                        output file (default: -)
+
+Examples:
+  $ tiergraph tgdb diff corpus.tgdb sample -o change.jsonl
+  $ tiergraph tgdb diff corpus.tgdb sample 1 3 -o change.jsonl
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb revert`
+
+```text
+usage: tiergraph tgdb revert [-h] --to SEQ --expected SEQ [--collection NAME]
+                             STORE INSTANCE
+
+Append a new version containing the exact document stored at --to.
+
+positional arguments:
+  STORE              store directory
+  INSTANCE           instance name or id
+
+options:
+  -h, --help         show this help message and exit
+  --to SEQ           retained version to republish
+  --expected SEQ     required current version sequence
+  --collection NAME  instance collection
+
+Examples:
+  $ tiergraph tgdb revert corpus.tgdb sample --to 1 --expected 3
 
 Exit codes:
   0  success

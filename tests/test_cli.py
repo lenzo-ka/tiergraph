@@ -1937,13 +1937,16 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 command
                 in {
                     "add",
+                    "apply",
                     "collection",
+                    "diff",
                     "get",
                     "history",
                     "list",
                     "move",
                     "publish",
                     "rename",
+                    "revert",
                     "restore",
                     "retire",
                     "undo",
@@ -1957,13 +1960,35 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     if command == "collection" and collection_command == "move":
                         transaction.create_collection("other")
                     transaction.commit()
-            if command in {"get", "history", "publish"}:
+            if command in {"apply", "diff", "get", "history", "publish", "revert"}:
                 assert collection_uid is not None
+                initial = tiergraph.Graph((), (), ())
                 with store.write() as transaction:
-                    transaction.create_instance(
-                        collection_uid, "sample", tiergraph.Graph((), (), ())
-                    )
+                    transaction.create_instance(collection_uid, "sample", initial)
                     transaction.commit()
+                if command == "apply":
+                    (directory / "tgdb-change.jsonl").write_text(
+                        tiergraph.patch_dumps(tiergraph.diff(initial, initial)),
+                        encoding="utf-8",
+                    )
+                if command in {"diff", "revert"}:
+                    second_graph = tiergraph.Graph(
+                        (NamespaceDeclaration("second", "urn:help:second"),), (), ()
+                    )
+                    third_graph = tiergraph.Graph(
+                        (
+                            NamespaceDeclaration("second", "urn:help:second"),
+                            NamespaceDeclaration("third", "urn:help:third"),
+                        ),
+                        (),
+                        (),
+                    )
+                    with store.write() as transaction:
+                        transaction.publish("sample", second_graph, expected=1)
+                        transaction.commit()
+                    with store.write() as transaction:
+                        transaction.publish("sample", third_graph, expected=2)
+                        transaction.commit()
             if command in {"move", "rename", "restore", "retire"}:
                 assert collection_uid is not None
                 collection_id = store._connection.execute(
@@ -2184,7 +2209,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 103
+    assert len(examples) == 107
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

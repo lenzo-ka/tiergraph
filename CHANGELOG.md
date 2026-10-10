@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added exact replay-checked tgdb patches, patch application and version diffs,
+  explicit snapshot fallback, retained-version reverts, and additive publish undo.
 - Added tgdb graph versions with canonical document storage, functional and
   identified fingerprints, optimistic publication, unchanged no-ops, history,
   and verified lazy loading.

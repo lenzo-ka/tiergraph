@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -22,11 +23,19 @@ from tiergraph import (
     EditAnnotations,
     EquivalenceView,
     Graph,
+    Item,
+    Journal,
     NamespaceDeclaration,
+    Patch,
+    QualifiedName,
     Refusal,
     RefusalStage,
+    Tier,
+    TierDeclaration,
+    diff,
     dumps,
     fingerprint,
+    patch_dumps,
 )
 from tiergraph.wire import MAX_DOCUMENT_BYTES
 
@@ -932,6 +941,9 @@ def test_versions_store_canonical_documents_facts_history_and_annotations(
                     "seq": 1,
                     "graph_digest": first_digest,
                     "status": "created",
+                    "transition": "initial",
+                    "reason": None,
+                    "difference_view": None,
                 }
             ],
         }
@@ -945,6 +957,9 @@ def test_versions_store_canonical_documents_facts_history_and_annotations(
             "seq": 1,
             "commit_seq": 2,
             "graph_digest": first_digest,
+            "patch_digest": None,
+            "transition": "initial",
+            "reason": None,
             "functional": fingerprint(first_graph, EquivalenceView.FUNCTIONAL),
             "identified": fingerprint(first_graph, EquivalenceView.IDENTIFIED),
             "stage": "seed",
@@ -971,7 +986,9 @@ def test_versions_store_canonical_documents_facts_history_and_annotations(
             published = transaction.commit()
         second_digest = hashlib.sha256(dumps(second_graph).encode()).hexdigest()
         assert published.versions == (
-            tgdb.VersionChange(fixed_uid, "sample", 2, second_digest, "published"),
+            tgdb.VersionChange(
+                fixed_uid, "sample", 2, second_digest, "published", "patch"
+            ),
         )
         assert published.operations == ("publish",)
         history = store.history("sample", collection=collection)
@@ -997,8 +1014,8 @@ def test_versions_store_canonical_documents_facts_history_and_annotations(
             ),
             (
                 1,
-                "snapshot",
-                "patch-not-recorded",
+                "patch",
+                None,
                 json.dumps(
                     second_annotations.to_data(), separators=(",", ":"), sort_keys=True
                 ),
@@ -1052,6 +1069,356 @@ def test_unchanged_publish_checks_expected_and_writes_nothing(tmp_path: Path) ->
             with pytest.raises(tgdb.StaleVersion, match="expected version 2"):
                 transaction.publish(uid, graph, expected=2)
         assert store.history(uid)[0].load() == graph
+
+
+def test_publish_records_an_exact_replayable_patch(tmp_path: Path) -> None:
+    """Automatic publication stores an exact patch that reproduces stored bytes."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(uid, second, expected=1)
+            receipt = transaction.commit()
+
+        change = receipt.versions[0]
+        assert change.transition == "patch"
+        assert change.reason is None
+        head = store.get(uid)
+        assert head.transition == "patch"
+        assert head.reason is None
+        assert head.patch_digest is not None
+        recorded = head.load_patch()
+        assert recorded is not None
+        assert recorded.apply(first) == second
+        assert store.history(uid)[0].load_patch() is None
+        assert store.diff(uid, 1).apply(first) == second
+
+
+def test_checkpointed_journal_patch_is_refused_against_the_stored_head(
+    tmp_path: Path,
+) -> None:
+    """A journal whose retained base advanced cannot masquerade as a head patch."""
+    first = Graph((), (), ())
+    journal = Journal()
+    editor = first.edit(journal=journal)
+    editor.declare(NamespaceDeclaration("a", "urn:a"))
+    journal.checkpoint()
+    editor.declare(NamespaceDeclaration("b", "urn:b"))
+    target = editor.freeze()
+    checkpointed_patch = journal.to_patch()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(
+                tgdb.StaleJournalBase, match="publish without the patch"
+            ):
+                transaction.publish(uid, target, expected=1, patch=checkpointed_patch)
+        assert store.get(uid).seq == 1
+
+
+def test_publish_refuses_a_patch_that_does_not_reproduce_the_graph(
+    tmp_path: Path,
+) -> None:
+    """A valid patch for another target cannot be attached to published bytes."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    third = _version_graph("third")
+    supplied = diff(first, second, EquivalenceView.EXACT)
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="did not reproduce"):
+                transaction.publish(uid, third, expected=1, patch=supplied)
+        assert store.get(uid).seq == 1
+
+
+def test_apply_revert_and_publish_undo_append_exact_versions(tmp_path: Path) -> None:
+    """Patch application, reversion, and undo all append complete documents."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    supplied = diff(first, second, EquivalenceView.EXACT)
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.apply(uid, supplied, expected=1)
+            applied = transaction.commit()
+        assert applied.operations == ("apply",)
+        assert store.get(uid).load() == second
+
+        with store.write() as transaction:
+            transaction.revert(uid, to_seq=1, expected=2)
+            reverted = transaction.commit()
+        assert reverted.operations == ("revert",)
+        assert store.get(uid).load() == first
+        revert_patch = store.get(uid).load_patch()
+        assert revert_patch is not None
+        assert revert_patch.apply(second) == first
+
+        undone = store.undo(_commit_seq(reverted))
+        assert undone.operations == ("republish",)
+        assert store.get(uid).seq == 4
+        assert store.get(uid).load() == second
+        undo_patch = store.get(uid).load_patch()
+        assert undo_patch is not None
+        assert undo_patch.apply(first) == second
+        redone = store.undo(_commit_seq(undone))
+        assert store.get(uid).seq == 5
+        assert store.get(uid).load() == first
+        assert redone.versions[0].transition == "patch"
+
+
+def test_oversize_patch_becomes_a_named_snapshot_and_undo_uses_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Patch size refusal remains visible while snapshot publication stays undoable."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    original = patch_dumps
+
+    def over_limit(_patch: Patch) -> str:
+        raise Refusal(RefusalStage.ENVELOPE, "JSONL patch exceeds its limit")
+
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        monkeypatch.setattr(tgdb, "patch_dumps", over_limit)
+        with store.write() as transaction:
+            transaction.publish(uid, second, expected=1)
+            published = transaction.commit()
+        change = published.versions[0]
+        assert change.transition == "snapshot"
+        assert change.reason == "patch-over-limit"
+        head = store.get(uid)
+        assert head.patch_digest is None
+        assert head.reason == "patch-over-limit"
+
+        monkeypatch.setattr(tgdb, "patch_dumps", original)
+        undone = store.undo(_commit_seq(published))
+        assert undone.versions[0].transition == "snapshot"
+        assert undone.versions[0].reason == "undo-snapshot"
+        assert store.get(uid).load() == first
+
+
+def test_skip_if_equivalent_reports_the_hidden_difference(tmp_path: Path) -> None:
+    """An opt-in equivalence skip reports exact spelling churn without writing."""
+    first = Graph((NamespaceDeclaration("a", "urn:same"),), (), ())
+    second = Graph((NamespaceDeclaration("b", "urn:same"),), (), ())
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(
+                uid,
+                second,
+                expected=1,
+                skip_if_equivalent=EquivalenceView.FUNCTIONAL,
+            )
+            skipped = transaction.commit()
+        assert skipped.commit_seq is None
+        assert skipped.versions[0].status == "skipped"
+        assert skipped.versions[0].difference_view == "exact"
+        assert store.get(uid).seq == 1
+
+    tier_name = QualifiedName("urn:identity", "items")
+    identified_first = Graph(
+        (NamespaceDeclaration("i", "urn:identity"),),
+        (Tier(TierDeclaration(tier_name, "Items"), (Item("first"),)),),
+        (),
+    )
+    identified_second = replace(
+        identified_first,
+        tiers=(replace(identified_first.tiers[0], items=(Item("second"),)),),
+    )
+    with tgdb.TgdbStore.create(tmp_path / "identities") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", identified_first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(
+                uid,
+                identified_second,
+                expected=1,
+                skip_if_equivalent=EquivalenceView.FUNCTIONAL,
+            )
+            skipped = transaction.commit()
+        assert skipped.versions[0].difference_view == "identified"
+
+
+def test_patch_public_methods_refuse_invalid_operands_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Patch publication validates types, bases, replay, targets, and retained ids."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    correct = diff(first, second, EquivalenceView.EXACT)
+    bad_operation = replace(correct.operations[0], base_fingerprint="0" * 64)
+    bad_replay = Patch(
+        correct.base_fingerprint,
+        correct.target_fingerprint,
+        (bad_operation,),
+    )
+    stale = Patch("0" * 64, correct.target_fingerprint, ())
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="patch must"):
+                transaction.apply(uid, object(), expected=1)  # type: ignore[arg-type]
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StaleJournalBase, match="differs"):
+                transaction.apply(uid, stale, expected=1)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="did not replay"):
+                transaction.apply(uid, bad_replay, expected=1)
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="patch must"):
+                transaction.publish(
+                    uid,
+                    second,
+                    expected=1,
+                    patch=object(),  # type: ignore[arg-type]
+                )
+            with pytest.raises(TypeError, match="EquivalenceView"):
+                transaction.publish(
+                    uid,
+                    second,
+                    expected=1,
+                    skip_if_equivalent="functional",  # type: ignore[arg-type]
+                )
+            with pytest.raises(tgdb.TgdbError, match="did not replay"):
+                transaction.publish(uid, second, expected=1, patch=bad_replay)
+            with pytest.raises(tgdb.TgdbError, match="has no version 9"):
+                transaction.revert(uid, to_seq=9, expected=1)
+
+        def invalid_patch(_patch: Patch) -> str:
+            raise Refusal(RefusalStage.VALUE, "cannot encode patch")
+
+        monkeypatch.setattr(tgdb, "patch_dumps", invalid_patch)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="cannot be stored"):
+                transaction.publish(uid, second, expected=1, patch=correct)
+
+
+def test_recorded_patch_and_publish_action_corruption_is_named(tmp_path: Path) -> None:
+    """Malformed patch objects and publish inverses stay behind StoreCorrupt."""
+    first = _version_graph("first")
+    second = _version_graph("second")
+    third = _version_graph("third")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", first)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(uid, second, expected=1)
+            transaction.commit()
+
+        recorded_digest = store.get(uid).patch_digest
+        assert recorded_digest is not None
+        malformed_digest = store._put_object(io.BytesIO(b"{}\n"))
+        store._connection.execute(
+            "UPDATE versions SET patch_digest = ? WHERE seq = 2",
+            (malformed_digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="stored patch .* is malformed"):
+            store.get(uid).load_patch()
+        store._connection.execute(
+            "UPDATE versions SET patch_digest = ? WHERE seq = 2", (recorded_digest,)
+        )
+
+        touch = tgdb._touch("instance", uid)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="instance identity is missing"):
+                transaction._apply_action(
+                    {
+                        "action": "republish",
+                        "patch_digest": None,
+                        "touches": [tgdb._touch("instance", b"z" * 16)],
+                        "uid": (b"z" * 16).hex(),
+                        "version_id": 1,
+                    }
+                )
+            with pytest.raises(tgdb.StoreCorrupt, match="version identity is missing"):
+                transaction._apply_action(
+                    {
+                        "action": "republish",
+                        "patch_digest": None,
+                        "touches": [touch],
+                        "uid": uid.hex(),
+                        "version_id": 999,
+                    }
+                )
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="version operation is malformed"
+            ):
+                tgdb._action_touches(
+                    {
+                        "action": "publish",
+                        "touches": [touch],
+                        "uid": uid.hex(),
+                        "version_id": True,
+                    }
+                )
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="version operation is malformed"
+            ):
+                tgdb._action_touches(
+                    {
+                        "action": "republish",
+                        "touches": [touch],
+                        "uid": uid.hex(),
+                        "version_id": 1,
+                    }
+                )
+
+        wrong = diff(first, third, EquivalenceView.EXACT)
+        wrong_digest = store._put_object(io.BytesIO(patch_dumps(wrong).encode("utf-8")))
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="did not replay"):
+                transaction._apply_action(
+                    {
+                        "action": "republish",
+                        "patch_digest": wrong_digest,
+                        "touches": [touch],
+                        "uid": uid.hex(),
+                        "version_id": 1,
+                    }
+                )
+
+        with store.write() as transaction:
+            transaction.publish(uid, third, expected=2, patch=diff(second, third))
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StoreCorrupt, match="did not reproduce"):
+                transaction._apply_action(
+                    {
+                        "action": "republish",
+                        "patch_digest": wrong_digest,
+                        "touches": [touch],
+                        "uid": uid.hex(),
+                        "version_id": 2,
+                    }
+                )
 
 
 def test_version_creation_and_selection_refuse_invalid_operands(tmp_path: Path) -> None:
@@ -1257,9 +1624,21 @@ def test_version_internal_refusal_edges_are_covered(tmp_path: Path) -> None:
         fake_row = (0, b"x" * 16, 999, "missing", 0, 0, None, None)
         with pytest.raises(tgdb.StoreCorrupt, match="has no collection"):
             tgdb._require_active_instance(store._connection, fake_row)
-        fake_version = (1, 1, "0" * 64, "1" * 64, "2" * 64, None, 1, None)
+        fake_version = (
+            1,
+            1,
+            "0" * 64,
+            "1" * 64,
+            "2" * 64,
+            None,
+            1,
+            None,
+            None,
+            "initial",
+            None,
+        )
         with pytest.raises(tgdb.StoreCorrupt, match="has no collection"):
-            tgdb._version_handle(store, fake_row, fake_version)
+            tgdb._version_handle(store, fake_row, fake_version)  # type: ignore[arg-type]
 
 
 def test_instance_insert_position_and_retired_collection_publish(
