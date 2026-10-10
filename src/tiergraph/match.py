@@ -71,8 +71,10 @@ _MIN_PARTS = 2
 _GATE_MIN_PARTS = 32
 _GATE_DEPTH = 3
 _GATE_FRAGMENT_STATES = 4096
+_REPEAT_VIEW_MIN_OPTIONAL = 32
 # Tests turn the optimization off to compare against the original closure path.
 _GATE_PRUNING = True
+_REPEAT_VIEW = True
 _GUARD_ALWAYS = 0
 _GUARD_START = 1
 _GUARD_END = 2
@@ -437,6 +439,30 @@ class _AtomEdge:
     focus: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _RepeatView:
+    """Describe canonical span-engine exits for one finite repeat."""
+
+    first_cursor: int
+    first_end: int
+    stride: int
+    optional_count: int
+    exit: int
+
+    def next_cursor(self, state: int) -> int | None:
+        """Return the public skip target when *state* is an optional cursor."""
+        if state == self.first_cursor:
+            return self.first_end
+        offset = state - self.first_end
+        if (
+            offset < 0
+            or offset % self.stride
+            or offset // self.stride >= self.optional_count - 1
+        ):
+            return None
+        return state + self.stride
+
+
 type _GateAtoms = int | tuple[int, ...] | None
 type _GateLookahead = tuple[_GateAtoms, ...]
 _GATE_PROBE_ATOMS = 0
@@ -766,6 +792,7 @@ class _NfaBuilder:
         self.predicates: list[Predicate] = []
         self._predicate_indices: dict[Predicate, int] = {}
         self.gate_splits: list[int] | None = None
+        self.repeat_views: list[_RepeatView] = []
 
     def state(self) -> int:
         """Allocate and return one empty NFA state."""
@@ -876,6 +903,24 @@ class _NfaBuilder:
                 else:
                     if node.max is not None:
                         self.epsilon[current.cursor].append(_pack_epsilon(current.end))
+                        optional_count = node.max - node.min
+                        if optional_count >= _REPEAT_VIEW_MIN_OPTIONAL:
+                            stride = _pattern_state_count(node.body)
+                            first_body = current.start + 2
+                            first_cursor = (
+                                current.start
+                                if node.min == 0
+                                else first_body + (node.min - 1) * stride + 1
+                            )
+                            self.repeat_views.append(
+                                _RepeatView(
+                                    first_cursor,
+                                    first_body + node.min * stride + 1,
+                                    stride,
+                                    optional_count,
+                                    current.end,
+                                )
+                            )
                     returned = current.start, current.end
                     frames.pop()
         assert returned is not None
@@ -1374,6 +1419,9 @@ class CompiledPattern:
     atom_edges: tuple[tuple[int, ...], ...]
     predicates: tuple[Predicate, ...]
     _gates: _Gates | None = field(init=False, repr=False, compare=False)
+    _repeat_views: tuple[_RepeatView, ...] = field(
+        init=False, repr=False, compare=False
+    )
 
     if TYPE_CHECKING:
 
@@ -1411,6 +1459,7 @@ class CompiledPattern:
             "_gates",
             _build_gates(self.accept, epsilon, atom_edges, self.predicates),
         )
+        object.__setattr__(self, "_repeat_views", ())
 
     @classmethod
     def _from_builder(
@@ -1422,6 +1471,7 @@ class CompiledPattern:
         atom_edges: tuple[tuple[int, ...], ...],
         predicates: tuple[Predicate, ...],
         gates: _Gates | None,
+        repeat_views: tuple[_RepeatView, ...],
     ) -> CompiledPattern:
         """Construct from an NFA builder that already identified large splits."""
         result = object.__new__(cls)
@@ -1432,6 +1482,7 @@ class CompiledPattern:
         object.__setattr__(result, "atom_edges", atom_edges)
         object.__setattr__(result, "predicates", predicates)
         object.__setattr__(result, "_gates", gates)
+        object.__setattr__(result, "_repeat_views", repeat_views)
         return result
 
     def __eq__(self, other: object) -> bool:
@@ -1527,7 +1578,7 @@ class CompiledPattern:
         length: int,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Return safe successors and targets whose gate tests did work."""
-        edges = self.epsilon[state]
+        edges = self._span_edges(state)
         gate = None if self._gates is None else self._gates.get(state)
         if gate is None or position >= length:
             return edges, ()
@@ -1565,6 +1616,24 @@ class CompiledPattern:
             gate.targets,
         )
 
+    def _span_edges(self, state: int) -> tuple[int, ...]:
+        """Return the private canonical epsilon view for span operations."""
+        edges = self.epsilon[state]
+        if not _REPEAT_VIEW:
+            return edges
+        for repeat in self._repeat_views:
+            skipped = repeat.next_cursor(state)
+            if skipped is None:
+                continue
+            return tuple(
+                _pack_epsilon(repeat.exit)
+                if _epsilon_guard(edge) == _GUARD_ALWAYS
+                and _epsilon_target(edge) == skipped
+                else edge
+                for edge in edges
+            )
+        return edges
+
     def _closure(
         self,
         states: set[int],
@@ -1583,7 +1652,7 @@ class CompiledPattern:
         if nodes is None or truth is None or not self._gates or not _GATE_PRUNING:
             while pending:
                 state = pending.pop()
-                for edge in self.epsilon[state]:
+                for edge in self._span_edges(state):
                     guard = _epsilon_guard(edge)
                     target = _epsilon_target(edge)
                     if guard == _GUARD_END and open_right:
@@ -1634,7 +1703,8 @@ class CompiledPattern:
 
     def _reverse_epsilon(self) -> tuple[tuple[tuple[int, int], ...], ...]:
         reverse: list[list[tuple[int, int]]] = [[] for _ in self.epsilon]
-        for source, edges in enumerate(self.epsilon):
+        for source in range(len(self.epsilon)):
+            edges = self._span_edges(source)
             for edge in edges:
                 reverse[_epsilon_target(edge)].append((source, _epsilon_guard(edge)))
         return tuple(tuple(edges) for edges in reverse)
@@ -1783,7 +1853,7 @@ class CompiledPattern:
             state, phase = pending.pop()
             if state == self.accept and phase:
                 return True
-            for edge in self.epsilon[state]:
+            for edge in self._span_edges(state):
                 next_phase = phase
                 guard = _epsilon_guard(edge)
                 if guard == _GUARD_START and (phase or length or open_left):
@@ -2600,6 +2670,7 @@ def compile_pattern(pattern: Pattern) -> CompiledPattern:
             tuple(builder.predicates),
             () if builder.gate_splits is None else tuple(builder.gate_splits),
         ),
+        tuple(builder.repeat_views),
     )
 
 

@@ -163,6 +163,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reduced span-matching work for large bounded repeats. Budgeted span matching
+  may return a longer `cut-at-budget` prefix, while the public pattern automaton
+  and lattice matching behavior remain unchanged.
 - Indexed sparse exact-equality branches in large pattern alternations while
   preserving scan fallback for unsupported and dense branches. Span matching
   charges each distinct indexed candidate and may return a longer
