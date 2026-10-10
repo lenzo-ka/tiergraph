@@ -577,6 +577,184 @@ def test_tgdb_patch_diff_apply_and_revert_commands(
     ]
 
 
+def test_tgdb_batch_publishes_all_heads_in_one_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The batch manifest publishes its declared entries atomically and in order."""
+    store = tmp_path / "corpus.tgdb"
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_bytes(dump_bytes(Graph((), (), ())))
+    second.write_bytes(
+        dump_bytes(Graph((NamespaceDeclaration("n", "urn:second"),), (), ()))
+    )
+    (tmp_path / "change.jsonl").write_text(
+        patch_dumps(
+            diff(
+                Graph((), (), ()),
+                Graph((NamespaceDeclaration("n", "urn:second"),), (), ()),
+                EquivalenceView.EXACT,
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(store), "collection"]) == 0
+    capsys.readouterr()
+    for name in ("left", "right"):
+        assert (
+            main(
+                [
+                    "tgdb",
+                    "add",
+                    str(store),
+                    "collection",
+                    name,
+                    str(first),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+    manifest = tmp_path / "pass.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "annotations": {"stage": "reconcile", "iteration": 2},
+                "publishes": [
+                    {
+                        "instance": "left",
+                        "graph": "second.json",
+                        "expected": 1,
+                        "annotations": {"stage": "left"},
+                    },
+                    {
+                        "instance": "right",
+                        "collection": "collection",
+                        "graph": "second.json",
+                        "expected": 1,
+                        "patch": "change.jsonl",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["tgdb", "batch", str(store), str(manifest)]) == 0
+    assert capsys.readouterr().out == "committed 4: 2 published, 0 unchanged\n"
+    assert main(["tgdb", "history", str(store), "left", "--json"]) == 0
+    left = json.loads(capsys.readouterr().out)
+    assert left[-1]["commit_seq"] == 4
+    assert left[-1]["stage"] == "left"
+    assert main(["tgdb", "history", str(store), "right", "--json"]) == 0
+    right = json.loads(capsys.readouterr().out)
+    assert right[-1]["commit_seq"] == 4
+
+    assert main(["tgdb", "batch", str(store), str(manifest)]) == 1
+    captured = capsys.readouterr()
+    assert "expected version 1 but head is version 2" in captured.err
+    assert [entry["seq"] for entry in right] == [1, 2]
+
+    unchanged = tmp_path / "unchanged.json"
+    unchanged.write_text(
+        json.dumps(
+            {
+                "publishes": [
+                    {"instance": name, "graph": "second.json", "expected": 2}
+                    for name in ("left", "right")
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["tgdb", "batch", str(store), str(unchanged)]) == 0
+    assert capsys.readouterr().out == "unchanged: 2 instances\n"
+
+    absolute = tmp_path / "absolute.json"
+    absolute.write_text(
+        json.dumps(
+            {
+                "publishes": [
+                    {
+                        "instance": "left",
+                        "graph": str(second.resolve()),
+                        "expected": 2,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["tgdb", "batch", str(store), str(absolute)]) == 1
+    assert "graph path must be relative" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    (
+        ("[]", "must be a JSON object"),
+        ('{"unknown": 1}', "unknown batch manifest fields"),
+        ('{"annotations": []}', "batch annotations must be"),
+        ('{"publishes": []}', "must be a nonempty JSON array"),
+        ('{"publishes": [1]}', "publish 0 must be a JSON object"),
+        (
+            '{"publishes": [{"unknown": 1}]}',
+            "unknown batch publish 0 fields",
+        ),
+        (
+            '{"publishes": [{"instance": "", "graph": "g", "expected": 1}]}',
+            "instance must be a nonempty string",
+        ),
+        (
+            '{"publishes": [{"instance": "x", "graph": 1, "expected": 1}]}',
+            "graph must be a nonempty string",
+        ),
+        (
+            '{"publishes": [{"instance": "x", "graph": "g", "expected": true}]}',
+            "expected must be a positive integer",
+        ),
+        (
+            '{"publishes": [{"instance": "x", "graph": "g", "expected": 1, '
+            '"collection": ""}]}',
+            "collection must be a nonempty string",
+        ),
+        (
+            '{"publishes": [{"instance": "x", "graph": "g", "expected": 1, '
+            '"annotations": []}]}',
+            "annotations must be a JSON object",
+        ),
+    ),
+)
+def test_tgdb_batch_manifest_refusals_are_status_one(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    document: str,
+    message: str,
+) -> None:
+    """Malformed batch data is a checked input refusal, not a partial write."""
+    store = tmp_path / "store"
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    manifest = tmp_path / "pass.json"
+    manifest.write_text(document, encoding="utf-8")
+    assert main(["tgdb", "batch", str(store), str(manifest)]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_tgdb_batch_manifest_refuses_invalid_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Invalid JSON in a batch manifest names the manifest syntax."""
+    store = tmp_path / "store"
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    manifest = tmp_path / "pass.json"
+    manifest.write_text("{", encoding="utf-8")
+    assert main(["tgdb", "batch", str(store), str(manifest)]) == 1
+    assert "batch manifest is not valid JSON" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "arguments",
     (
@@ -672,6 +850,12 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     assert "--expected SEQ" in help_text
     assert "--annotations JSON" in help_text
     assert "--patch PATCH" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "batch", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "one atomic commit" in help_text
+    assert "Manifest shape:" in help_text
     for command in ("apply", "diff", "revert"):
         with pytest.raises(SystemExit) as caught:
             parser.parse_args(["tgdb", command, "--help"])

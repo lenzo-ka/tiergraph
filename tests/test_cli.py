@@ -1938,6 +1938,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 in {
                     "add",
                     "apply",
+                    "batch",
                     "collection",
                     "diff",
                     "get",
@@ -1960,7 +1961,15 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     if command == "collection" and collection_command == "move":
                         transaction.create_collection("other")
                     transaction.commit()
-            if command in {"apply", "diff", "get", "history", "publish", "revert"}:
+            if command in {
+                "apply",
+                "batch",
+                "diff",
+                "get",
+                "history",
+                "publish",
+                "revert",
+            }:
                 assert collection_uid is not None
                 initial = tiergraph.Graph((), (), ())
                 with store.write() as transaction:
@@ -1969,6 +1978,21 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 if command == "apply":
                     (directory / "tgdb-change.jsonl").write_text(
                         tiergraph.patch_dumps(tiergraph.diff(initial, initial)),
+                        encoding="utf-8",
+                    )
+                if command == "batch":
+                    (directory / "pass.json").write_text(
+                        json.dumps(
+                            {
+                                "publishes": [
+                                    {
+                                        "instance": "sample",
+                                        "graph": "graph.json",
+                                        "expected": 1,
+                                    }
+                                ]
+                            }
+                        ),
                         encoding="utf-8",
                     )
                 if command in {"diff", "revert"}:
@@ -2209,7 +2233,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 107
+    assert len(examples) == 108
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

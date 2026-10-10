@@ -776,6 +776,7 @@
       "CollectionInfo",
       "CommitReceipt",
       "InstanceInfo",
+      "Snapshot",
       "SqliteTooOld",
       "StaleJournalBase",
       "StaleVersion",

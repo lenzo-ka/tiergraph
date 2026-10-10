@@ -106,7 +106,7 @@ class StoreBusy(TgdbError):
 
 
 class StaleVersion(TgdbError):
-    """Refuse a write based on an instance version that is no longer current."""
+    """Refuse a write whose instance version or catalog base is no longer current."""
 
 
 class StaleJournalBase(TgdbError):
@@ -367,11 +367,13 @@ class TgdbStore:
         path: Path,
         connection: sqlite3.Connection,
         info: StoreInfo,
+        limits: TgdbLimits,
     ) -> None:
         """Retain a validated connection created by :meth:`create` or :meth:`open`."""
         self._path = path
         self._connection = connection
         self._info = info
+        self._limits = limits
         self._closed = False
         self._writer: WriteTransaction | None = None
 
@@ -403,7 +405,7 @@ class TgdbStore:
                 connection.close()
             _remove_failed_store(root)
             raise
-        return cls(root, connection, info)
+        return cls(root, connection, info, limits)
 
     @classmethod
     def open(
@@ -438,7 +440,7 @@ class TgdbStore:
         except Exception:
             connection.close()
             raise
-        return cls(root, connection, info)
+        return cls(root, connection, info, limits)
 
     @property
     def path(self) -> Path:
@@ -586,6 +588,17 @@ class TgdbStore:
         self._writer = writer
         return writer
 
+    def snapshot(self) -> Snapshot:
+        """Open an independent, stable read transaction over the current catalog.
+
+        The snapshot keeps its own SQLite connection and must be closed promptly;
+        a long-lived snapshot can delay WAL checkpointing. Writers can continue
+        while the snapshot is open, but every snapshot query sees the same heads.
+        """
+        self._require_open()
+        self._require_current_schema()
+        return Snapshot(self._path, self._limits)
+
     def undo(
         self,
         commit_seq: int,
@@ -696,14 +709,22 @@ class TgdbStore:
             object_bytes=object_bytes,
         )
 
-    def _put_object(self, source: BinaryIO) -> str:
+    def _put_object(
+        self,
+        source: BinaryIO,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str:
         """Store one byte stream once and return its SHA-256 content address."""
         self._require_writable()
+        catalog = self._connection if connection is None else connection
         _require_pool_layout(self._path, writable=True)
         prefix, finished = _read_prefix(source, self._info.inline_threshold + 1)
         if finished and len(prefix) <= self._info.inline_threshold:
             digest = hashlib.sha256(prefix).hexdigest()
-            self._record_object(digest, len(prefix), "inline", prefix)
+            self._record_object(
+                digest, len(prefix), "inline", prefix, connection=catalog
+            )
             return digest
 
         staging = self._path / _STAGING_NAME / secrets.token_hex(16)
@@ -726,13 +747,13 @@ class TgdbStore:
                 destination.flush()
                 os.fsync(destination.fileno())
             digest = digest_hash.hexdigest()
-            existing = self._object_record(digest)
+            existing = self._object_record(digest, connection=catalog)
             if existing is not None:
                 _check_recorded_object(self._path, digest, existing, full=True)
                 staging.unlink()
                 return digest
             _publish_object_file(self._path, staging, digest, size)
-            self._record_object(digest, size, "file", None)
+            self._record_object(digest, size, "file", None, connection=catalog)
             return digest
         except Exception:
             if staging_created:
@@ -740,22 +761,32 @@ class TgdbStore:
                     staging.unlink()
             raise
 
-    def _load_patch_digest(self, digest: str) -> Patch:
+    def _load_patch_digest(
+        self,
+        digest: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> Patch:
         """Load one patch object and translate malformed bytes into corruption."""
         try:
-            with self._open_object(digest) as source:
+            with self._open_object(digest, connection=connection) as source:
                 return patch_loads(source.read())
         except Refusal as error:
             raise StoreCorrupt(
                 f"stored patch {digest} is malformed: {error}"
             ) from error
 
-    def _open_object(self, digest: str) -> VerifiedReader:
+    def _open_object(
+        self,
+        digest: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> VerifiedReader:
         """Open one stored object through an EOF-verifying binary reader."""
         self._require_open()
         self._require_current_schema()
         _validate_digest(digest)
-        record = self._object_record(digest)
+        record = self._object_record(digest, connection=connection)
         if record is None:
             raise TgdbError(f"object {digest} is not stored")
         size, residency, data = record
@@ -781,15 +812,18 @@ class TgdbStore:
         size: int,
         residency: Literal["inline", "file"],
         data: bytes | None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         """Publish one object row, joining a caller's transaction when present."""
-        owns_transaction = not self._connection.in_transaction
+        catalog = self._connection if connection is None else connection
+        owns_transaction = not catalog.in_transaction
         if owns_transaction:
-            self._connection.execute("BEGIN IMMEDIATE")
+            catalog.execute("BEGIN IMMEDIATE")
         try:
-            existing = self._object_record(digest)
+            existing = self._object_record(digest, connection=catalog)
             if existing is None:
-                self._connection.execute(
+                catalog.execute(
                     "INSERT INTO objects(digest, size, residency, data) "
                     "VALUES (?, ?, ?, ?)",
                     (digest, size, residency, data),
@@ -802,16 +836,22 @@ class TgdbStore:
                         f"{existing[0]} and {size}"
                     )
             if owns_transaction:
-                self._connection.execute("COMMIT")
+                catalog.execute("COMMIT")
         except Exception:
             if owns_transaction:
-                self._connection.execute("ROLLBACK")
+                catalog.execute("ROLLBACK")
             raise
 
-    def _object_record(self, digest: str) -> tuple[int, str, bytes | None] | None:
+    def _object_record(
+        self,
+        digest: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[int, str, bytes | None] | None:
         """Return one raw object record, or ``None`` when it is absent."""
+        catalog = self._connection if connection is None else connection
         try:
-            row = self._connection.execute(
+            row = catalog.execute(
                 "SELECT size, residency, data FROM objects WHERE digest = ?",
                 (digest,),
             ).fetchone()
@@ -855,42 +895,170 @@ class TgdbStore:
         self.close()
 
 
+class Snapshot:
+    """Hold one stable, explicitly bounded read view of a tgdb catalog.
+
+    A snapshot owns a separate read-only SQLite connection. Version handles
+    obtained from it remain bound to that connection and therefore load only
+    while the snapshot is open.
+    """
+
+    def __init__(self, path: Path, limits: TgdbLimits) -> None:
+        """Open and pin a read transaction at the catalog's current state."""
+        reader = TgdbStore.open(path, mode="ro", limits=limits)
+        try:
+            reader._connection.execute("BEGIN")
+            row = reader._connection.execute(
+                "SELECT coalesce(max(seq), 0) FROM commits"
+            ).fetchone()
+        except Exception:
+            reader.close()
+            raise
+        self._reader = reader
+        self._commit_seq = cast(int, row[0])
+
+    @property
+    def commit_seq(self) -> int:
+        """Return the newest commit visible in this pinned catalog view."""
+        return self._commit_seq
+
+    @property
+    def closed(self) -> bool:
+        """Return whether this snapshot's read transaction has closed."""
+        return self._reader.closed
+
+    def info(self) -> StoreInfo:
+        """Return metadata for the store viewed by this snapshot."""
+        return self._reader.info()
+
+    def collections(
+        self, *, include_retired: bool = False
+    ) -> tuple[CollectionInfo, ...]:
+        """Return collections from the pinned catalog view in declared order."""
+        return self._reader.collections(include_retired=include_retired)
+
+    def instances(
+        self,
+        collection: bytes | str | None = None,
+        *,
+        include_retired: bool = False,
+    ) -> tuple[InstanceInfo, ...]:
+        """Return instances from the pinned catalog view in declared order."""
+        return self._reader.instances(collection, include_retired=include_retired)
+
+    def get(
+        self,
+        instance: bytes | str,
+        *,
+        collection: bytes | str | None = None,
+        seq: int | Literal["head"] = "head",
+    ) -> VersionHandle:
+        """Return one version handle from the pinned catalog view."""
+        return self._reader.get(instance, collection=collection, seq=seq)
+
+    def history(
+        self,
+        instance: bytes | str,
+        *,
+        collection: bytes | str | None = None,
+    ) -> tuple[VersionHandle, ...]:
+        """Return retained versions from the pinned catalog view in append order."""
+        return self._reader.history(instance, collection=collection)
+
+    def diff(
+        self,
+        instance: bytes | str,
+        source: int,
+        target: int | Literal["head"] = "head",
+        *,
+        collection: bytes | str | None = None,
+    ) -> Patch:
+        """Return an exact patch between versions in the pinned catalog view."""
+        return self._reader.diff(instance, source, target, collection=collection)
+
+    def close(self) -> None:
+        """End the read transaction; repeated calls have no effect."""
+        if not self._reader.closed:
+            self._reader._connection.execute("ROLLBACK")
+            self._reader.close()
+
+    def __enter__(self) -> Self:
+        """Return this open snapshot for a bounded context."""
+        if self.closed:
+            raise TgdbError("snapshot is closed")
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the snapshot when its context exits."""
+        self.close()
+
+
 class WriteTransaction:
-    """Apply ordered catalog changes in one explicit SQLite commit."""
+    """Stage ordered changes and publish them in one explicit SQLite commit."""
 
     def __init__(
         self,
         store: TgdbStore,
         annotations: EditAnnotations | None,
     ) -> None:
-        """Acquire the writer lock and assign one commit sequence."""
+        """Stage a metadata view and assign a tentative commit sequence."""
         if annotations is not None and not isinstance(annotations, EditAnnotations):
             raise TypeError("annotations must be EditAnnotations or None")
         self._store = store
-        self._connection = store._connection
+        self._stage_path = (
+            store.path / _STAGING_NAME / f"{secrets.token_hex(16)}.sqlite3"
+        )
         self._active = True
         self._operations: list[str] = []
         self._versions: list[VersionChange] = []
+        self._staged_objects: set[str] = set()
+        self._staged_graphs: set[str] = set()
         self._kind = "catalog"
         encoded = _encode_annotations(annotations)
+        connection: sqlite3.Connection | None = None
         try:
-            self._connection.execute("BEGIN IMMEDIATE")
-            cursor = self._connection.execute(
+            _require_pool_layout(store.path, writable=True)
+            connection = sqlite3.connect(self._stage_path, autocommit=True)
+            connection.execute("PRAGMA trusted_schema = OFF")
+            self._base_commit_seq = _copy_catalog_metadata(
+                store._connection, connection, batch_size=store._limits.batch_size
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
                 "INSERT INTO commits(kind, annotations) VALUES (?, ?)",
                 (self._kind, encoded),
             )
         except sqlite3.OperationalError as error:
-            if self._connection.in_transaction:
-                self._connection.execute("ROLLBACK")
+            if connection is not None:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                connection.close()
+            _remove_staged_catalog(self._stage_path)
             if _sqlite_busy(error):
                 raise StoreBusy(
                     "tgdb catalog remained busy past its timeout"
                 ) from error
             raise StoreCorrupt(f"cannot begin catalog transaction: {error}") from error
         except sqlite3.DatabaseError as error:
-            if self._connection.in_transaction:
-                self._connection.execute("ROLLBACK")
+            if connection is not None:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                connection.close()
+            _remove_staged_catalog(self._stage_path)
             raise StoreCorrupt(f"cannot begin catalog transaction: {error}") from error
+        except Exception:
+            if connection is not None:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                connection.close()
+            _remove_staged_catalog(self._stage_path)
+            raise
+        self._connection = connection
         self._commit_seq = cast(int, cursor.lastrowid)
 
     @property
@@ -1242,7 +1410,7 @@ class WriteTransaction:
             reason = "patch-over-limit"
             patch_digest = None
         else:
-            patch_digest = self._store._put_object(io.BytesIO(patch_document))
+            patch_digest = self._put_object(io.BytesIO(patch_document))
         digest = self._store_graph_document(graph, document)
         next_seq = head_seq + 1
         version_id = self._insert_version(
@@ -1320,8 +1488,30 @@ class WriteTransaction:
 
     def _load_graph_digest(self, digest: str) -> Graph:
         """Load one graph object by its already validated catalog digest."""
-        with self._store._open_object(digest) as source:
+        connection = (
+            self._connection
+            if self._store._object_record(digest, connection=self._connection)
+            is not None
+            else self._store._connection
+        )
+        with self._store._open_object(digest, connection=connection) as source:
             return loads(source.read())
+
+    def _load_patch_digest(self, digest: str) -> Patch:
+        """Load one patch from staged content or the pinned catalog base."""
+        connection = (
+            self._connection
+            if self._store._object_record(digest, connection=self._connection)
+            is not None
+            else self._store._connection
+        )
+        return self._store._load_patch_digest(digest, connection=connection)
+
+    def _put_object(self, source: BinaryIO) -> str:
+        """Stage one object and remember the only row commit may need to copy."""
+        digest = self._store._put_object(source, connection=self._connection)
+        self._staged_objects.add(digest)
+        return digest
 
     def rename_collection(self, collection: bytes | str, name: str) -> None:
         """Change a collection name without changing its identity or position."""
@@ -1449,7 +1639,7 @@ class WriteTransaction:
 
     def _store_graph_document(self, graph: Graph, document: bytes) -> str:
         """Store already serialized graph bytes and their verified fingerprints."""
-        digest = self._store._put_object(io.BytesIO(document))
+        digest = self._put_object(io.BytesIO(document))
         functional = fingerprint(graph, EquivalenceView.FUNCTIONAL)
         identified = fingerprint(graph, EquivalenceView.IDENTIFIED)
         self._connection.execute(
@@ -1479,6 +1669,7 @@ class WriteTransaction:
         )
         if recorded != expected:
             raise StoreCorrupt(f"graph facts for object {digest} are inconsistent")
+        self._staged_graphs.add(digest)
         return digest
 
     def _insert_version(
@@ -1517,7 +1708,7 @@ class WriteTransaction:
         return cast(int, cursor.lastrowid)
 
     def commit(self) -> CommitReceipt:
-        """Commit staged changes, or report version no-ops without a commit."""
+        """Publish every staged change atomically after checking the base view."""
         self._require_active()
         if not self._operations:
             versions = tuple(self._versions)
@@ -1531,9 +1722,27 @@ class WriteTransaction:
                 (self._kind, self._commit_seq),
             )
             self._connection.execute("COMMIT")
+            catalog = self._store._connection
+            catalog.execute("BEGIN IMMEDIATE")
+            _publication_step("locked")
+            current = catalog.execute("SELECT max(seq) FROM commits").fetchone()
+            current_seq = 0 if current is None or current[0] is None else current[0]
+            if current_seq != self._base_commit_seq:
+                raise StaleVersion(
+                    "write transaction is stale because the catalog advanced from "
+                    f"commit {self._base_commit_seq} to commit {current_seq}"
+                )
+            _publish_staged_catalog(
+                self._connection,
+                catalog,
+                self._commit_seq,
+                self._staged_objects,
+                self._staged_graphs,
+            )
+            catalog.execute("COMMIT")
         except sqlite3.OperationalError as error:
-            if self._connection.in_transaction:
-                self._connection.execute("ROLLBACK")
+            if self._store._connection.in_transaction:
+                self._store._connection.execute("ROLLBACK")
             self._finish()
             if _sqlite_busy(error):
                 raise StoreBusy(
@@ -1541,10 +1750,15 @@ class WriteTransaction:
                 ) from error
             raise StoreCorrupt(f"cannot commit catalog transaction: {error}") from error
         except sqlite3.DatabaseError as error:
-            if self._connection.in_transaction:
-                self._connection.execute("ROLLBACK")
+            if self._store._connection.in_transaction:
+                self._store._connection.execute("ROLLBACK")
             self._finish()
             raise StoreCorrupt(f"cannot commit catalog transaction: {error}") from error
+        except Exception:
+            if self._store._connection.in_transaction:
+                self._store._connection.execute("ROLLBACK")
+            self._finish()
+            raise
         receipt = CommitReceipt(
             self._commit_seq,
             self._kind,
@@ -1691,9 +1905,7 @@ class WriteTransaction:
             transition: Literal["patch", "snapshot"] = "snapshot"
             reason: str | None = "undo-snapshot"
             if patch_digest is not None:
-                stored_patch = invert_patch(
-                    self._store._load_patch_digest(patch_digest)
-                )
+                stored_patch = invert_patch(self._load_patch_digest(patch_digest))
                 current_graph = self._load_graph_digest(current[2])
                 target_graph = self._load_graph_digest(target[0])
                 try:
@@ -1708,8 +1920,8 @@ class WriteTransaction:
                         f"recorded inverse patch for instance {instance[3]!r} "
                         "did not reproduce its target"
                     )
-                stored_patch_digest = self._store._put_object(
-                    io.BytesIO(patch_dumps(stored_patch).encode("utf-8"))
+                stored_patch_digest = self._put_object(
+                    io.BytesIO(patch_dumps(stored_patch).encode("utf-8")),
                 )
                 transition = "patch"
                 reason = None
@@ -1890,6 +2102,8 @@ class WriteTransaction:
     def _finish(self) -> None:
         """Release this transaction from its owning store."""
         self._active = False
+        self._connection.close()
+        _remove_staged_catalog(self._stage_path)
         if self._store._writer is self:
             self._store._writer = None
 
@@ -1906,6 +2120,316 @@ class WriteTransaction:
     ) -> None:
         """Discard uncommitted work whenever the context exits."""
         self.discard()
+
+
+def _publication_step(step: str) -> None:
+    """Mark one precommit publication boundary for deterministic fault tests."""
+    _ = step
+
+
+def _copy_catalog_metadata(
+    catalog: sqlite3.Connection,
+    staged: sqlite3.Connection,
+    *,
+    batch_size: int,
+) -> int:
+    """Copy a stable catalog view without copying stored object payloads."""
+    tables = tuple(
+        cast(tuple[str, str], row)
+        for row in catalog.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
+        )
+    )
+    indexes = tuple(
+        cast(str, row[0])
+        for row in catalog.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'index' AND sql IS NOT NULL ORDER BY rowid"
+        )
+    )
+    catalog.execute("SAVEPOINT tgdb_stage_view")
+    try:
+        base = catalog.execute("SELECT coalesce(max(seq), 0) FROM commits").fetchone()
+        for _name, sql in tables:
+            staged.execute(sql)
+        staged.execute("BEGIN")
+        try:
+            for name, _sql in tables:
+                if name == "objects":
+                    continue
+                columns = tuple(
+                    cast(str, row[1])
+                    for row in catalog.execute(f"PRAGMA table_info({name})")
+                )
+                names = ", ".join(columns)
+                placeholders = ", ".join("?" for _column in columns)
+                rows = catalog.execute(f"SELECT {names} FROM {name}")
+                while batch := rows.fetchmany(batch_size):
+                    staged.executemany(
+                        f"INSERT INTO {name}({names}) VALUES ({placeholders})", batch
+                    )
+            staged.execute("COMMIT")
+        except Exception:
+            staged.execute("ROLLBACK")
+            raise
+        for sql in indexes:
+            staged.execute(sql)
+    finally:
+        catalog.execute("ROLLBACK TO tgdb_stage_view")
+        catalog.execute("RELEASE tgdb_stage_view")
+    return cast(int, base[0])
+
+
+def _publish_staged_catalog(
+    staged: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    commit_seq: int,
+    object_digests: set[str],
+    graph_digests: set[str],
+) -> None:
+    """Copy one staged catalog delta into a locked live catalog in dependency order."""
+    commit = staged.execute(
+        "SELECT seq, kind, annotations FROM commits WHERE seq = ?", (commit_seq,)
+    ).fetchone()
+    if commit is None:
+        raise StoreCorrupt("staged commit row is missing")
+    catalog.execute(
+        "INSERT INTO commits(seq, kind, annotations) VALUES (?, ?, ?)", commit
+    )
+    _publication_step("commit-row")
+
+    _copy_selected_rows(
+        staged,
+        catalog,
+        "objects",
+        ("digest", "size", "residency", "data"),
+        "digest",
+        object_digests,
+    )
+    _publication_step("objects")
+
+    _merge_collections(staged, catalog)
+    _merge_instance_shells(staged, catalog)
+    _publication_step("catalog")
+
+    _copy_selected_rows(
+        staged,
+        catalog,
+        "graph_facts",
+        (
+            "digest",
+            "format_version",
+            "fp_domain",
+            "functional",
+            "identified",
+            "size",
+        ),
+        "digest",
+        graph_digests,
+    )
+    _publication_step("derived-rows")
+
+    version_columns = (
+        "id",
+        "instance_id",
+        "seq",
+        "parent_id",
+        "commit_seq",
+        "graph_digest",
+        "patch_digest",
+        "transition",
+        "reason",
+        "stage",
+        "iteration",
+        "annotations",
+    )
+    version_names = ", ".join(version_columns)
+    version_rows = staged.execute(
+        f"SELECT {version_names} FROM versions WHERE commit_seq = ? ORDER BY id",
+        (commit_seq,),
+    ).fetchall()
+    catalog.executemany(
+        f"INSERT INTO versions({version_names}) VALUES ("
+        + ", ".join("?" for _column in version_columns)
+        + ")",
+        version_rows,
+    )
+    _publication_step("versions")
+
+    _merge_instance_heads(staged, catalog)
+    _publication_step("heads")
+
+    rows = staged.execute(
+        "SELECT commit_seq, ordinal, op, forward, inverse FROM commit_ops "
+        "WHERE commit_seq = ? ORDER BY ordinal",
+        (commit_seq,),
+    ).fetchall()
+    catalog.executemany(
+        "INSERT INTO commit_ops(commit_seq, ordinal, op, forward, inverse) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    _publication_step("operations")
+
+
+def _copy_selected_rows(
+    staged: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    table: str,
+    columns: tuple[str, ...],
+    key: str,
+    keys: set[str],
+) -> None:
+    """Copy selected rows absent from the catalog, verifying existing rows."""
+    names = ", ".join(columns)
+    placeholders = ", ".join("?" for _column in columns)
+    key_index = columns.index(key)
+    for selected in sorted(keys):
+        row = staged.execute(
+            f"SELECT {names} FROM {table} WHERE {key} = ?", (selected,)
+        ).fetchone()
+        if row is None:
+            raise StoreCorrupt(f"staged {table} row {selected!r} is missing")
+        existing = catalog.execute(
+            f"SELECT {names} FROM {table} WHERE {key} = ?",
+            (row[key_index],),
+        ).fetchone()
+        if existing is None:
+            catalog.execute(
+                f"INSERT INTO {table}({names}) VALUES ({placeholders})",
+                row,
+            )
+        elif existing != row:
+            raise StoreCorrupt(
+                f"staged {table} row {row[key_index]!r} conflicts with the catalog"
+            )
+
+
+def _remove_staged_catalog(path: Path) -> None:
+    """Remove one closed private staging catalog and its SQLite sidecars."""
+    candidates = (
+        path,
+        Path(f"{path}-journal"),
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+    )
+    for candidate in candidates:
+        with suppress(OSError):
+            candidate.unlink()
+
+
+def _merge_collections(staged: sqlite3.Connection, catalog: sqlite3.Connection) -> None:
+    """Merge collection rows while preserving dense declared positions."""
+    rows = staged.execute(
+        "SELECT id, uid, name, position, retired_commit FROM collections "
+        "ORDER BY position"
+    ).fetchall()
+    existing = {
+        row[0] for row in catalog.execute("SELECT id FROM collections").fetchall()
+    }
+    maximum = catalog.execute(
+        "SELECT coalesce(max(position), -1) FROM collections"
+    ).fetchone()[0]
+    for row_id, uid, _name, _position, _retired_commit in rows:
+        if row_id in existing:
+            catalog.execute(
+                "UPDATE collections SET name = ? WHERE id = ?",
+                (_temporary_name(catalog, "collections", uid), row_id),
+            )
+    for row_id, uid, name, _position, retired_commit in rows:
+        if row_id not in existing:
+            catalog.execute(
+                "INSERT INTO collections(id, uid, name, position, retired_commit) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    row_id,
+                    uid,
+                    _temporary_name(catalog, "collections", uid),
+                    maximum + row_id + 1,
+                    retired_commit,
+                ),
+            )
+        catalog.execute(
+            "UPDATE collections SET name = ?, retired_commit = ? WHERE id = ?",
+            (name, retired_commit, row_id),
+        )
+    _set_positions(catalog, "collections", {row[1]: row[3] for row in rows})
+
+
+def _merge_instance_shells(
+    staged: sqlite3.Connection, catalog: sqlite3.Connection
+) -> None:
+    """Insert instance identities without publishing their staged heads yet."""
+    rows = staged.execute(
+        "SELECT id, uid, collection_id, name, position, retired_commit "
+        "FROM instances ORDER BY collection_id, position"
+    ).fetchall()
+    existing = {row[0] for row in catalog.execute("SELECT id FROM instances")}
+    maxima = {
+        collection_id: maximum
+        for collection_id, maximum in catalog.execute(
+            "SELECT collection_id, max(position) FROM instances GROUP BY collection_id"
+        )
+    }
+    for row_id, uid, _collection_id, _name, _position, _retired_commit in rows:
+        if row_id in existing:
+            catalog.execute(
+                "UPDATE instances SET name = ? WHERE id = ?",
+                (_temporary_name(catalog, "instances", uid), row_id),
+            )
+    for row_id, uid, collection_id, name, _position, retired_commit in rows:
+        if row_id not in existing:
+            catalog.execute(
+                "INSERT INTO instances(id, uid, collection_id, name, position, "
+                "head_version, generation, retired_commit) "
+                "VALUES (?, ?, ?, ?, ?, NULL, 0, ?)",
+                (
+                    row_id,
+                    uid,
+                    collection_id,
+                    _temporary_name(catalog, "instances", uid),
+                    maxima.get(collection_id, -1) + row_id + 1,
+                    retired_commit,
+                ),
+            )
+        catalog.execute(
+            "UPDATE instances SET collection_id = ?, name = ?, "
+            "retired_commit = ? WHERE id = ?",
+            (collection_id, name, retired_commit, row_id),
+        )
+    _set_positions(catalog, "instances", {row[1]: row[4] for row in rows})
+
+
+def _merge_instance_heads(
+    staged: sqlite3.Connection, catalog: sqlite3.Connection
+) -> None:
+    """Publish all staged instance heads and generations together."""
+    rows = staged.execute(
+        "SELECT id, head_version, generation FROM instances ORDER BY id"
+    ).fetchall()
+    catalog.executemany(
+        "UPDATE instances SET head_version = ?, generation = ? WHERE id = ?",
+        ((head, generation, row_id) for row_id, head, generation in rows),
+    )
+
+
+def _temporary_name(
+    catalog: sqlite3.Connection,
+    table: Literal["collections", "instances"],
+    uid: bytes,
+) -> str:
+    """Return a publication-only name absent from the selected catalog table."""
+    prefix = f"staged-{uid.hex()}-"
+    while True:
+        candidate = prefix + secrets.token_hex(16)
+        if (
+            catalog.execute(
+                f"SELECT 1 FROM {table} WHERE name = ?", (candidate,)
+            ).fetchone()
+            is None
+        ):
+            return candidate
 
 
 def _sqlite_busy(error: sqlite3.Error) -> bool:
@@ -2826,6 +3350,7 @@ __all__ = [
     "CollectionInfo",
     "CommitReceipt",
     "InstanceInfo",
+    "Snapshot",
     "SqliteTooOld",
     "StaleJournalBase",
     "StaleVersion",
