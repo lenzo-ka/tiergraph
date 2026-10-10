@@ -13,8 +13,12 @@ import pytest
 from tiergraph import (
     EquivalenceView,
     Graph,
+    Item,
     NamespaceDeclaration,
+    QualifiedName,
     RefusalStage,
+    Tier,
+    TierDeclaration,
     diff,
     dump_bytes,
     patch_dumps,
@@ -47,7 +51,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 4\n" in plain
+    assert "schema_version: 5\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -55,11 +59,11 @@ def test_tgdb_init_and_info_plain_and_json(
     report = json.loads(capsys.readouterr().out)
     assert report == {
         "fingerprint_domain": "tiergraph-equivalence/1",
-        "index_version": 1,
+        "index_version": 2,
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 4,
+        "schema_version": 5,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -76,6 +80,184 @@ def test_tgdb_check_reports_structural_and_full_success(
     assert capsys.readouterr().out == "ok: structural check, 0 objects, 0 bytes\n"
     assert main(["tgdb", "check", str(path), "--full"]) == 0
     assert capsys.readouterr().out == "ok: full check, 0 objects, 0 bytes\n"
+
+
+def test_tgdb_find_and_reindex_expose_tg7_queries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The TG7 commands query tier facts and check or rebuild derived rows."""
+    path = tmp_path / "corpus.tgdb"
+    graph_path = tmp_path / "graph.json"
+    tier = QualifiedName("urn:tgdb:test", "words")
+    graph = Graph(
+        (NamespaceDeclaration("test", "urn:tgdb:test"),),
+        (Tier(TierDeclaration(tier, "Words"), (Item("one"), Item("two"))),),
+        (),
+    )
+    graph_path.write_bytes(dump_bytes(graph))
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(path), "corpus"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "add",
+                str(path),
+                "corpus",
+                "sample",
+                str(graph_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "find",
+                str(path),
+                "--tier",
+                "urn:tgdb:test|words:2:2",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    found = json.loads(capsys.readouterr().out)
+    assert [(entry["collection"], entry["name"], entry["seq"]) for entry in found] == [
+        ("corpus", "sample", 1)
+    ]
+    assert (
+        main(["tgdb", "find", str(path), "--lacks-tier", "urn:x|missing", "--count"])
+        == 0
+    )
+    assert capsys.readouterr().out == "1\n"
+
+    assert main(["tgdb", "reindex", str(path)]) == 0
+    assert capsys.readouterr().out == "checked 1 graphs and 1 tier\n"
+    with sqlite3.connect(path / "catalog.sqlite3", autocommit=True) as connection:
+        connection.execute("UPDATE graph_tiers SET item_count = 9")
+    assert main(["tgdb", "reindex", str(path)]) == 1
+    assert "graph_tiers row" in capsys.readouterr().err
+    assert main(["tgdb", "reindex", str(path), "--rebuild"]) == 0
+    assert capsys.readouterr().out == "rebuilt 1 graphs and 1 tier\n"
+
+    revised = Graph(
+        (NamespaceDeclaration("test", "urn:tgdb:test"),),
+        (
+            Tier(
+                TierDeclaration(tier, "Words"),
+                (Item("one"), Item("two"), Item("three")),
+            ),
+        ),
+        (),
+    )
+    graph_path.write_bytes(dump_bytes(revised))
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(path),
+                "sample",
+                str(graph_path),
+                "--expected",
+                "1",
+                "--stage",
+                "pass",
+                "--iteration",
+                "2",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert main(["tgdb", "find", str(path), "--order-by", "name"]) == 0
+    fields = capsys.readouterr().out.rstrip("\n").split("\t")
+    assert fields[:5] == ["corpus", "0", fields[2], "sample", "2"]
+    assert fields[6:] == ["pass", "2"]
+    exact = fields[5]
+    assert main(["tgdb", "retire", str(path), "sample"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "find",
+                str(path),
+                "--collection",
+                "corpus",
+                "--name",
+                "sample",
+                "--fingerprint",
+                f"exact:{exact}",
+                "--tier",
+                "urn:tgdb:test|words:3",
+                "--lacks-tier",
+                "urn:tgdb:test|missing",
+                "--stage",
+                "pass",
+                "--iteration",
+                "2",
+                "--changed-since",
+                "2",
+                "--changed-view",
+                "exact",
+                "--where",
+                '{"test":"not","arg":{"test":"or","args":[]}}',
+                "--retired",
+                "--count",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {"count": 1}
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    (
+        ("--fingerprint", "exact"),
+        ("--fingerprint", f"near:{'a' * 64}"),
+        ("--fingerprint", "exact:ABC"),
+        ("--tier", "words"),
+        ("--tier", "urn:test|words:2:1"),
+        ("--tier", "|words"),
+        ("--where", '{"test":"maybe"}'),
+    ),
+)
+def test_tgdb_find_refuses_invalid_filter_syntax(option: str, value: str) -> None:
+    """Typed find filters reject malformed command-line spellings as usage."""
+    with pytest.raises(SystemExit) as caught:
+        build_parser().parse_args(["tgdb", "find", "store", option, value])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "arguments,message",
+    (
+        (("--iteration", "2"), "--iteration requires --stage"),
+        (("--changed-view", "exact"), "--changed-view requires --changed-since"),
+    ),
+)
+def test_tgdb_find_dependent_options_require_their_filter(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    arguments: tuple[str, str],
+    message: str,
+) -> None:
+    """A dependent option alone is refused before a query reaches the store."""
+    path = tmp_path / "corpus.tgdb"
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "find", str(path), *arguments]) == 1
+    assert message in capsys.readouterr().err
 
 
 def test_tgdb_refusal_is_a_status_one_staged_diagnostic(

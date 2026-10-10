@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added tgdb per-graph tier indexes, typed head queries, bounded predicate
+  filtering, fixpoint checks, and deterministic index checking and rebuilding.
 - Added atomic multi-instance tgdb batches with content staging, stable reader
   snapshots, stale-base checks, fault-safe publication, and explicit contention.
 - Added exact replay-checked tgdb patches, patch application and version diffs,

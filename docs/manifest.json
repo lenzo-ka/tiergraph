@@ -776,6 +776,8 @@
       "CollectionInfo",
       "CommitReceipt",
       "InstanceInfo",
+      "Query",
+      "ReindexReport",
       "Snapshot",
       "SqliteTooOld",
       "StaleJournalBase",
