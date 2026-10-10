@@ -10,7 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from tiergraph import Graph, NamespaceDeclaration, RefusalStage, dump_bytes
+from tiergraph import (
+    EquivalenceView,
+    Graph,
+    NamespaceDeclaration,
+    RefusalStage,
+    diff,
+    dump_bytes,
+    patch_dumps,
+    patch_loads,
+)
 from tiergraph.cli import build_parser, main
 
 
@@ -287,8 +296,9 @@ def test_tgdb_add_publish_get_and_history(
     assert main(["tgdb", "history", str(path), "sample"]) == 0
     columns = capsys.readouterr().out.rstrip("\n").split("\t")
     assert columns[0:2] == ["1", "2"]
-    assert len(columns[2]) == len(columns[3]) == len(columns[4]) == 64
-    assert columns[5:] == ["-", "-"]
+    assert len(columns[2]) == len(columns[6]) == len(columns[7]) == 64
+    assert columns[3:6] == ["-", "initial", "-"]
+    assert columns[8:] == ["-", "-"]
     assert (
         main(
             [
@@ -386,6 +396,187 @@ def test_tgdb_add_publish_get_and_history(
     assert "expected version 1 but head is version 2" in capsys.readouterr().err
 
 
+def test_tgdb_patch_diff_apply_and_revert_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The commands exchange exact patches and append reverted documents."""
+    path = tmp_path / "corpus.tgdb"
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+    supplied_path = tmp_path / "supplied.jsonl"
+    emitted_path = tmp_path / "emitted.jsonl"
+    first = Graph((), (), ())
+    second = Graph((NamespaceDeclaration("n", "urn:second"),), (), ())
+    first_path.write_bytes(dump_bytes(first))
+    second_path.write_bytes(dump_bytes(second))
+    supplied_path.write_text(
+        patch_dumps(diff(first, second, EquivalenceView.EXACT)), encoding="utf-8"
+    )
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(path), "collection"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "add",
+                str(path),
+                "collection",
+                "sample",
+                str(first_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["tgdb", "diff", str(path), "sample"]) == 1
+    assert "head has no parent version" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(path),
+                "sample",
+                str(second_path),
+                "--expected",
+                "1",
+                "--patch",
+                str(supplied_path),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "published 'sample' version 2 in commit 3\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "diff",
+                str(path),
+                "sample",
+                "-o",
+                str(emitted_path),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == ""
+    assert patch_loads(emitted_path.read_bytes()).apply(first) == second
+
+    catalog = path / "catalog.sqlite3"
+    catalog_bytes = catalog.read_bytes()
+    assert (
+        main(
+            [
+                "tgdb",
+                "diff",
+                str(path),
+                "sample",
+                "-o",
+                str(catalog),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "output path must be outside the tgdb store" in captured.err
+    assert catalog.read_bytes() == catalog_bytes
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "revert",
+                str(path),
+                "sample",
+                "--to",
+                "1",
+                "--expected",
+                "2",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == (
+        "reverted 'sample' to stored version 1 as version 3 in commit 4\n"
+    )
+    assert (
+        main(
+            [
+                "tgdb",
+                "apply",
+                str(path),
+                "sample",
+                str(supplied_path),
+                "--expected",
+                "3",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "published 'sample' version 4 in commit 5\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "diff",
+                str(path),
+                "sample",
+                "4",
+                "4",
+                "-o",
+                str(emitted_path),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == ""
+    assert (
+        main(
+            [
+                "tgdb",
+                "apply",
+                str(path),
+                "sample",
+                str(emitted_path),
+                "--expected",
+                "4",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "unchanged 'sample' at version 4\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "revert",
+                str(path),
+                "sample",
+                "--to",
+                "2",
+                "--expected",
+                "4",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "unchanged 'sample' at version 4\n"
+    assert main(["tgdb", "history", str(path), "sample", "--json"]) == 0
+    history = json.loads(capsys.readouterr().out)
+    assert [version["transition"] for version in history] == [
+        "initial",
+        "patch",
+        "patch",
+        "patch",
+    ]
+
+
 @pytest.mark.parametrize(
     "arguments",
     (
@@ -452,6 +643,8 @@ def test_tgdb_version_syntax_refuses_as_usage(arguments: list[str]) -> None:
         ["tgdb", "collection", "move", "store", "name", "many"],
         ["tgdb", "undo", "store", "0"],
         ["tgdb", "undo", "store", "latest"],
+        ["tgdb", "revert", "store", "item", "--to", "0", "--expected", "1"],
+        ["tgdb", "apply", "store", "item", "patch", "--expected", "0"],
     ),
 )
 def test_tgdb_catalog_syntax_refuses_as_usage(arguments: list[str]) -> None:
@@ -478,3 +671,9 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     assert "Byte-identical documents" in help_text
     assert "--expected SEQ" in help_text
     assert "--annotations JSON" in help_text
+    assert "--patch PATCH" in help_text
+    for command in ("apply", "diff", "revert"):
+        with pytest.raises(SystemExit) as caught:
+            parser.parse_args(["tgdb", command, "--help"])
+        assert caught.value.code == 0
+        assert "Exit codes:" in capsys.readouterr().out

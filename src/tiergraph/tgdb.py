@@ -22,8 +22,10 @@ from typing import BinaryIO, Literal, Self, cast
 
 from tiergraph.blob import BlobRef, VerifiedReader
 from tiergraph.core import Graph
+from tiergraph.diff import diff as graph_diff
 from tiergraph.edit import EditAnnotations
-from tiergraph.equivalence import EquivalenceView, fingerprint
+from tiergraph.equivalence import EquivalenceView, equivalent, fingerprint
+from tiergraph.patch import Patch, invert_patch, patch_dumps, patch_loads
 from tiergraph.schema import Refusal, RefusalStage
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
@@ -179,9 +181,12 @@ class VersionChange:
     name: str
     seq: int
     graph_digest: str
-    status: Literal["created", "published", "unchanged"]
+    status: Literal["created", "published", "unchanged", "skipped"]
+    transition: Literal["initial", "patch", "snapshot"] | None = None
+    reason: str | None = None
+    difference_view: Literal["identified", "exact"] | None = None
 
-    def to_data(self) -> dict[str, str | int]:
+    def to_data(self) -> dict[str, str | int | None]:
         """Return a JSON-compatible description in stable field order."""
         return {
             "instance_uid": self.instance_uid.hex(),
@@ -189,6 +194,9 @@ class VersionChange:
             "seq": self.seq,
             "graph_digest": self.graph_digest,
             "status": self.status,
+            "transition": self.transition,
+            "reason": self.reason,
+            "difference_view": self.difference_view,
         }
 
 
@@ -203,7 +211,7 @@ class CommitReceipt:
 
     def to_data(
         self,
-    ) -> dict[str, int | str | None | list[str] | list[dict[str, str | int]]]:
+    ) -> dict[str, int | str | None | list[str] | list[dict[str, str | int | None]]]:
         """Return a JSON-compatible receipt in stable field order."""
         return {
             "commit_seq": self.commit_seq,
@@ -228,6 +236,9 @@ class VersionHandle:
     seq: int
     commit_seq: int
     graph_digest: str
+    patch_digest: str | None
+    transition: Literal["initial", "patch", "snapshot"]
+    reason: str | None
     functional: str
     identified: str
     stage: str | None
@@ -239,6 +250,12 @@ class VersionHandle:
         with self._store._open_object(self.graph_digest) as source:
             return loads(source.read())
 
+    def load_patch(self) -> Patch | None:
+        """Load this version's verified transition patch when it has one."""
+        if self.patch_digest is None:
+            return None
+        return self._store._load_patch_digest(self.patch_digest)
+
     def to_data(self) -> dict[str, str | int | None]:
         """Return a JSON-compatible description without loading the graph."""
         return {
@@ -249,6 +266,9 @@ class VersionHandle:
             "seq": self.seq,
             "commit_seq": self.commit_seq,
             "graph_digest": self.graph_digest,
+            "patch_digest": self.patch_digest,
+            "transition": self.transition,
+            "reason": self.reason,
             "functional": self.functional,
             "identified": self.identified,
             "stage": self.stage,
@@ -538,6 +558,21 @@ class TgdbStore:
         except sqlite3.DatabaseError as error:
             raise StoreCorrupt(f"cannot read instance history: {error}") from error
 
+    def diff(
+        self,
+        instance: bytes | str,
+        source: int,
+        target: int | Literal["head"] = "head",
+        *,
+        collection: bytes | str | None = None,
+    ) -> Patch:
+        """Return an exact patch between two retained versions of one instance."""
+        source_handle = self.get(instance, collection=collection, seq=source)
+        target_handle = self.get(instance, collection=collection, seq=target)
+        return graph_diff(
+            source_handle.load(), target_handle.load(), EquivalenceView.EXACT
+        )
+
     def write(
         self,
         *,
@@ -704,6 +739,16 @@ class TgdbStore:
                 with suppress(OSError):
                     staging.unlink()
             raise
+
+    def _load_patch_digest(self, digest: str) -> Patch:
+        """Load one patch object and translate malformed bytes into corruption."""
+        try:
+            with self._open_object(digest) as source:
+                return patch_loads(source.read())
+        except Refusal as error:
+            raise StoreCorrupt(
+                f"stored patch {digest} is malformed: {error}"
+            ) from error
 
     def _open_object(self, digest: str) -> VerifiedReader:
         """Open one stored object through an EOF-verifying binary reader."""
@@ -986,6 +1031,7 @@ class WriteTransaction:
             seq=1,
             parent_id=None,
             graph_digest=digest,
+            patch_digest=None,
             transition="initial",
             reason=None,
             annotations=annotations,
@@ -1012,7 +1058,9 @@ class WriteTransaction:
             },
         )
         self._kind = "version"
-        self._versions.append(VersionChange(instance_uid, name, 1, digest, "created"))
+        self._versions.append(
+            VersionChange(instance_uid, name, 1, digest, "created", "initial")
+        )
         return instance_uid
 
     def publish(
@@ -1022,24 +1070,117 @@ class WriteTransaction:
         *,
         expected: int,
         collection: bytes | str | None = None,
+        patch: Patch | None = None,
+        skip_if_equivalent: EquivalenceView | None = None,
         annotations: EditAnnotations | None = None,
     ) -> None:
-        """Append a complete graph version when the expected head is current."""
+        """Append a replay-verified graph version when its expected head is current.
+
+        A supplied journal patch must name the stored head as its identified base.
+        Without one, an exact diff is recorded.  A patch that exceeds the public
+        JSONL limits falls back to a typed snapshot rather than being truncated.
+        """
+        self._publish(
+            "publish",
+            instance,
+            graph,
+            expected=expected,
+            collection=collection,
+            patch=patch,
+            skip_if_equivalent=skip_if_equivalent,
+            annotations=annotations,
+        )
+
+    def apply(
+        self,
+        instance: bytes | str,
+        patch: Patch,
+        *,
+        expected: int,
+        collection: bytes | str | None = None,
+        annotations: EditAnnotations | None = None,
+    ) -> None:
+        """Apply and publish a patch against the checked current instance head."""
+        self._require_active()
+        if not isinstance(patch, Patch):
+            raise TypeError("patch must be a Patch")
+        row = _resolve_instance(self._connection, instance, collection=collection)
+        _require_active_instance(self._connection, row)
+        head = self._checked_head(row, expected)
+        base = self._load_graph_digest(head[2])
+        if patch.base_fingerprint != head[4]:
+            raise StaleJournalBase(
+                f"patch base for instance {row[3]!r} differs from stored head "
+                f"version {head[0]}"
+            )
+        try:
+            target = patch.apply(base)
+        except Refusal as error:
+            raise TgdbError(
+                f"patch for instance {row[3]!r} did not replay: {error}"
+            ) from error
+        self._publish(
+            "apply",
+            row[1],
+            target,
+            expected=expected,
+            patch=patch,
+            annotations=annotations,
+        )
+
+    def revert(
+        self,
+        instance: bytes | str,
+        *,
+        to_seq: int,
+        expected: int,
+        collection: bytes | str | None = None,
+        annotations: EditAnnotations | None = None,
+    ) -> None:
+        """Publish a new version containing one retained version's exact document."""
+        self._require_active()
+        _validate_version_seq(to_seq)
+        row = _resolve_instance(self._connection, instance, collection=collection)
+        _require_active_instance(self._connection, row)
+        self._checked_head(row, expected)
+        target = _version_row(self._connection, row[0], head_version=None, seq=to_seq)
+        if target is None:
+            raise TgdbError(f"instance {row[3]!r} has no version {to_seq}")
+        self._publish(
+            "revert",
+            row[1],
+            self._load_graph_digest(target[2]),
+            expected=expected,
+            annotations=annotations,
+        )
+
+    def _publish(  # noqa: PLR0915 -- refusal order is one atomic contract
+        self,
+        operation: Literal["publish", "apply", "revert"],
+        instance: bytes | str,
+        graph: Graph,
+        *,
+        expected: int,
+        collection: bytes | str | None = None,
+        patch: Patch | None = None,
+        skip_if_equivalent: EquivalenceView | None = None,
+        annotations: EditAnnotations | None = None,
+    ) -> None:
+        """Implement all public version-producing operations in one order."""
         self._require_active()
         _validate_graph(graph)
         _validate_version_seq(expected)
+        if patch is not None and not isinstance(patch, Patch):
+            raise TypeError("patch must be a Patch or None")
+        if skip_if_equivalent is not None and not isinstance(
+            skip_if_equivalent, EquivalenceView
+        ):
+            raise TypeError("skip_if_equivalent must be an EquivalenceView or None")
         encoded_annotations = _encode_annotations(annotations)
         row = _resolve_instance(self._connection, instance, collection=collection)
         _require_active_instance(self._connection, row)
-        head = _version_row(self._connection, row[0], head_version=row[7], seq=None)
-        if head is None:
-            raise StoreCorrupt(f"instance {row[3]!r} has no stored head version")
+        head = self._checked_head(row, expected)
         head_seq = head[0]
-        if head_seq != expected:
-            raise StaleVersion(
-                f"instance {row[3]!r} expected version {expected} but head is "
-                f"version {head_seq}"
-            )
         document = _graph_document(graph)
         digest = hashlib.sha256(document).hexdigest()
         if digest == head[2]:
@@ -1047,6 +1188,61 @@ class WriteTransaction:
                 VersionChange(row[1], row[3], head_seq, digest, "unchanged")
             )
             return
+        head_graph = self._load_graph_digest(head[2])
+        if skip_if_equivalent is not None and equivalent(
+            head_graph, graph, skip_if_equivalent
+        ):
+            difference_view: Literal["identified", "exact"] = (
+                "exact"
+                if equivalent(head_graph, graph, EquivalenceView.IDENTIFIED)
+                else "identified"
+            )
+            self._versions.append(
+                VersionChange(
+                    row[1],
+                    row[3],
+                    head_seq,
+                    digest,
+                    "skipped",
+                    difference_view=difference_view,
+                )
+            )
+            return
+        transition_patch = (
+            graph_diff(head_graph, graph, EquivalenceView.EXACT)
+            if patch is None
+            else patch
+        )
+        if patch is not None and patch.base_fingerprint != head[4]:
+            raise StaleJournalBase(
+                f"patch base for instance {row[3]!r} differs from stored head "
+                f"version {head_seq}; publish without the patch"
+            )
+        try:
+            replayed = transition_patch.apply(head_graph)
+        except Refusal as error:
+            raise TgdbError(
+                f"patch for instance {row[3]!r} did not replay: {error}"
+            ) from error
+        if replayed != graph:
+            raise TgdbError(
+                f"patch for instance {row[3]!r} did not reproduce the published graph"
+            )
+        transition: Literal["patch", "snapshot"] = "patch"
+        reason: str | None = None
+        patch_digest: str | None
+        try:
+            patch_document = patch_dumps(transition_patch).encode("utf-8")
+        except Refusal as error:
+            if error.stage is not RefusalStage.ENVELOPE:
+                raise TgdbError(
+                    f"patch for instance {row[3]!r} cannot be stored: {error}"
+                ) from error
+            transition = "snapshot"
+            reason = "patch-over-limit"
+            patch_digest = None
+        else:
+            patch_digest = self._store._put_object(io.BytesIO(patch_document))
         digest = self._store_graph_document(graph, document)
         next_seq = head_seq + 1
         version_id = self._insert_version(
@@ -1054,8 +1250,9 @@ class WriteTransaction:
             seq=next_seq,
             parent_id=head[6],
             graph_digest=digest,
-            transition="snapshot",
-            reason="patch-not-recorded",
+            patch_digest=patch_digest,
+            transition=transition,
+            reason=reason,
             annotations=annotations,
             encoded_annotations=encoded_annotations,
         )
@@ -1064,11 +1261,67 @@ class WriteTransaction:
             "WHERE id = ?",
             (version_id, row[0]),
         )
-        self._operations.append("publish")
+        touch = _touch("instance", row[1])
+        self._record(
+            {
+                "action": operation,
+                "touches": [touch],
+                "uid": row[1].hex(),
+                "version_id": version_id,
+            },
+            {
+                "action": "republish",
+                "patch_digest": patch_digest,
+                "touches": [touch],
+                "uid": row[1].hex(),
+                "version_id": head[6],
+            },
+        )
         self._kind = "version"
         self._versions.append(
-            VersionChange(row[1], row[3], next_seq, digest, "published")
+            VersionChange(
+                row[1],
+                row[3],
+                next_seq,
+                digest,
+                "published",
+                transition,
+                reason,
+            )
         )
+
+    def _checked_head(
+        self,
+        row: tuple[int, bytes, int, str, int, int, int | None, int | None],
+        expected: int,
+    ) -> tuple[
+        int,
+        int,
+        str,
+        str,
+        str,
+        str | None,
+        int,
+        int | None,
+        str | None,
+        Literal["initial", "patch", "snapshot"],
+        str | None,
+    ]:
+        """Return the current head after checking its public sequence."""
+        head = _version_row(self._connection, row[0], head_version=row[7], seq=None)
+        if head is None:
+            raise StoreCorrupt(f"instance {row[3]!r} has no stored head version")
+        if head[0] != expected:
+            raise StaleVersion(
+                f"instance {row[3]!r} expected version {expected} but head is "
+                f"version {head[0]}"
+            )
+        return head
+
+    def _load_graph_digest(self, digest: str) -> Graph:
+        """Load one graph object by its already validated catalog digest."""
+        with self._store._open_object(digest) as source:
+            return loads(source.read())
 
     def rename_collection(self, collection: bytes | str, name: str) -> None:
         """Change a collection name without changing its identity or position."""
@@ -1235,7 +1488,8 @@ class WriteTransaction:
         seq: int,
         parent_id: int | None,
         graph_digest: str,
-        transition: Literal["initial", "snapshot"],
+        patch_digest: str | None,
+        transition: Literal["initial", "patch", "snapshot"],
         reason: str | None,
         annotations: EditAnnotations | None,
         encoded_annotations: str | None,
@@ -1245,13 +1499,14 @@ class WriteTransaction:
             "INSERT INTO versions("
             "instance_id, seq, parent_id, commit_seq, graph_digest, patch_digest, "
             "transition, reason, stage, iteration, annotations"
-            ") VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 instance_id,
                 seq,
                 parent_id,
                 self._commit_seq,
                 graph_digest,
+                patch_digest,
                 transition,
                 reason,
                 None if annotations is None else annotations.stage,
@@ -1393,19 +1648,6 @@ class WriteTransaction:
                     f"commit {commit_seq} is stale because commit {later_seq} "
                     "touched the same catalog identity"
                 )
-        later_versions = self._connection.execute(
-            "SELECT v.commit_seq, i.uid FROM versions AS v "
-            "JOIN instances AS i ON i.id = v.instance_id "
-            "WHERE v.commit_seq > ? AND v.commit_seq < ? "
-            "ORDER BY v.commit_seq, v.id",
-            (commit_seq, self._commit_seq),
-        )
-        for later_seq, instance_uid in later_versions:
-            if _touch("instance", instance_uid) in touches:
-                raise StaleVersion(
-                    f"commit {commit_seq} is stale because commit {later_seq} "
-                    "touched the same catalog identity"
-                )
         self._kind = "undo"
         for _forward, inverse in reversed(original):
             opposite = self._apply_action(inverse)
@@ -1417,6 +1659,95 @@ class WriteTransaction:
         """Apply one bounded internal action and return its current inverse."""
         kind = action.get("action")
         touches = list(_action_touches(action))
+        if kind == "republish":
+            uid = _action_uid(action)
+            version_id = cast(int, action["version_id"])
+            patch_digest = cast(str | None, action["patch_digest"])
+            row = self._connection.execute(
+                "SELECT id, uid, collection_id, name, position, generation, "
+                "retired_commit, head_version FROM instances WHERE uid = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                raise StoreCorrupt("recorded instance identity is missing")
+            instance = cast(
+                tuple[int, bytes, int, str, int, int, int | None, int | None], row
+            )
+            _require_active_instance(self._connection, instance)
+            current = _version_row(
+                self._connection,
+                instance[0],
+                head_version=instance[7],
+                seq=None,
+            )
+            target = self._connection.execute(
+                "SELECT graph_digest FROM versions WHERE id = ? AND instance_id = ?",
+                (version_id, instance[0]),
+            ).fetchone()
+            if current is None or target is None:
+                raise StoreCorrupt("recorded version identity is missing")
+            stored_patch: Patch | None = None
+            stored_patch_digest: str | None = None
+            transition: Literal["patch", "snapshot"] = "snapshot"
+            reason: str | None = "undo-snapshot"
+            if patch_digest is not None:
+                stored_patch = invert_patch(
+                    self._store._load_patch_digest(patch_digest)
+                )
+                current_graph = self._load_graph_digest(current[2])
+                target_graph = self._load_graph_digest(target[0])
+                try:
+                    replayed = stored_patch.apply(current_graph)
+                except Refusal as error:
+                    raise StoreCorrupt(
+                        f"recorded inverse patch for instance {instance[3]!r} "
+                        f"did not replay: {error}"
+                    ) from error
+                if replayed != target_graph:
+                    raise StoreCorrupt(
+                        f"recorded inverse patch for instance {instance[3]!r} "
+                        "did not reproduce its target"
+                    )
+                stored_patch_digest = self._store._put_object(
+                    io.BytesIO(patch_dumps(stored_patch).encode("utf-8"))
+                )
+                transition = "patch"
+                reason = None
+            next_seq = current[0] + 1
+            new_id = self._insert_version(
+                instance[0],
+                seq=next_seq,
+                parent_id=current[6],
+                graph_digest=target[0],
+                patch_digest=stored_patch_digest,
+                transition=transition,
+                reason=reason,
+                annotations=None,
+                encoded_annotations=None,
+            )
+            self._connection.execute(
+                "UPDATE instances SET head_version = ?, generation = generation + 1 "
+                "WHERE id = ?",
+                (new_id, instance[0]),
+            )
+            self._versions.append(
+                VersionChange(
+                    uid,
+                    instance[3],
+                    next_seq,
+                    target[0],
+                    "published",
+                    transition,
+                    reason,
+                )
+            )
+            return {
+                "action": "republish",
+                "patch_digest": stored_patch_digest,
+                "touches": touches,
+                "uid": uid.hex(),
+                "version_id": current[6],
+            }
         if kind in {"rename_collection", "rename_instance"}:
             uid = _action_uid(action)
             name = action.get("name")
@@ -1750,7 +2081,8 @@ def _require_active_instance(
 
 _VERSION_SELECT = (
     "SELECT v.seq, v.commit_seq, v.graph_digest, f.functional, f.identified, "
-    "v.stage, v.id, v.iteration FROM versions AS v "
+    "v.stage, v.id, v.iteration, v.patch_digest, v.transition, v.reason "
+    "FROM versions AS v "
     "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest"
 )
 
@@ -1761,7 +2093,22 @@ def _version_row(
     *,
     head_version: int | None,
     seq: int | None,
-) -> tuple[int, int, str, str, str, str | None, int, int | None] | None:
+) -> (
+    tuple[
+        int,
+        int,
+        str,
+        str,
+        str,
+        str | None,
+        int,
+        int | None,
+        str | None,
+        Literal["initial", "patch", "snapshot"],
+        str | None,
+    ]
+    | None
+):
     """Return one version and its graph facts by head id or declared sequence."""
     if head_version is not None:
         condition = "v.id = ? AND v.instance_id = ?"
@@ -1775,7 +2122,20 @@ def _version_row(
         _VERSION_SELECT + " WHERE " + condition, parameters
     ).fetchone()
     return cast(
-        tuple[int, int, str, str, str, str | None, int, int | None] | None,
+        tuple[
+            int,
+            int,
+            str,
+            str,
+            str,
+            str | None,
+            int,
+            int | None,
+            str | None,
+            Literal["initial", "patch", "snapshot"],
+            str | None,
+        ]
+        | None,
         row,
     )
 
@@ -1783,7 +2143,19 @@ def _version_row(
 def _version_handle(
     store: TgdbStore,
     instance: tuple[int, bytes, int, str, int, int, int | None, int | None],
-    version: tuple[int, int, str, str, str, str | None, int, int | None],
+    version: tuple[
+        int,
+        int,
+        str,
+        str,
+        str,
+        str | None,
+        int,
+        int | None,
+        str | None,
+        Literal["initial", "patch", "snapshot"],
+        str | None,
+    ],
 ) -> VersionHandle:
     """Bind one immutable version row to its verified object loader."""
     collection = store._connection.execute(
@@ -1794,6 +2166,8 @@ def _version_handle(
     _validate_digest(version[2])
     _validate_fingerprint(version[3], "functional", version[2])
     _validate_fingerprint(version[4], "identified", version[2])
+    if version[8] is not None:
+        _validate_digest(version[8])
     return VersionHandle(
         collection=cast(str, collection[0]),
         instance_uid=instance[1],
@@ -1802,6 +2176,9 @@ def _version_handle(
         seq=version[0],
         commit_seq=version[1],
         graph_digest=version[2],
+        patch_digest=version[8],
+        transition=version[9],
+        reason=version[10],
         functional=version[3],
         identified=version[4],
         stage=version[5],
@@ -1893,11 +2270,32 @@ def _action_touches(action: dict[str, object]) -> tuple[str, ...]:
         "rename_instance": "instance",
         "retire_instance": "instance",
         "restore_instance": "instance",
+        "publish": "instance",
+        "apply": "instance",
+        "revert": "instance",
+        "republish": "instance",
     }
-    identity_kind = identity_kinds.get(cast(str, action.get("action")))
+    action_name = cast(str, action.get("action"))
+    identity_kind = identity_kinds.get(action_name)
     expected: tuple[str, ...]
     if identity_kind is not None:
         expected = (_touch(identity_kind, _action_uid(action)),)
+        if action_name in {"publish", "apply", "revert", "republish"}:
+            version_id = action.get("version_id")
+            if (
+                isinstance(version_id, bool)
+                or not isinstance(version_id, int)
+                or version_id <= 0
+            ):
+                raise StoreCorrupt("recorded version operation is malformed")
+            if action_name == "republish":
+                patch_digest = action.get("patch_digest")
+                if "patch_digest" not in action or (
+                    patch_digest is not None and not isinstance(patch_digest, str)
+                ):
+                    raise StoreCorrupt("recorded version operation is malformed")
+                if isinstance(patch_digest, str):
+                    _validate_digest(patch_digest)
     elif action.get("action") in {
         "set_collection_positions",
         "set_instance_positions",
@@ -2114,8 +2512,11 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "UNIQUE(instance_id, seq), "
             "CHECK((transition = 'initial' AND seq = 1 AND parent_id IS NULL "
             "AND patch_digest IS NULL) OR transition != 'initial'), "
-            "CHECK((transition = 'snapshot' AND reason IS NOT NULL) OR "
-            "(transition != 'snapshot' AND reason IS NULL))"
+            "CHECK((transition = 'initial' AND patch_digest IS NULL "
+            "AND reason IS NULL) OR (transition = 'patch' "
+            "AND patch_digest IS NOT NULL AND reason IS NULL) OR "
+            "(transition = 'snapshot' AND patch_digest IS NULL "
+            "AND reason IS NOT NULL))"
             ") STRICT"
         )
         connection.execute(

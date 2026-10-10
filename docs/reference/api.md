@@ -11591,7 +11591,7 @@ Report a durable commit or version attempts that were all unchanged.
 Method.
 
 ```text
-CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[dict[str, str | int]]]'
+CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[dict[str, str | int | None]]]'
 ```
 
 Return a JSON-compatible receipt in stable field order.
@@ -11817,6 +11817,16 @@ TgdbStore.history(self, instance: 'bytes | str', *, collection: 'bytes | str | N
 
 Return an instance's retained versions in append order without loading.
 
+#### `TgdbStore.diff`
+
+Method.
+
+```text
+TgdbStore.diff(self, instance: 'bytes | str', source: 'int', target: "int | Literal['head']" = 'head', *, collection: 'bytes | str | None' = None) -> 'Patch'
+```
+
+Return an exact patch between two retained versions of one instance.
+
 #### `TgdbStore.write`
 
 Method.
@@ -11854,7 +11864,7 @@ object and compares it with its content address.
 ### `VersionChange`
 
 ```text
-VersionChange(instance_uid: 'bytes', name: 'str', seq: 'int', graph_digest: 'str', status: "Literal['created', 'published', 'unchanged']") -> None
+VersionChange(instance_uid: 'bytes', name: 'str', seq: 'int', graph_digest: 'str', status: "Literal['created', 'published', 'unchanged', 'skipped']", transition: "Literal['initial', 'patch', 'snapshot'] | None" = None, reason: 'str | None' = None, difference_view: "Literal['identified', 'exact'] | None" = None) -> None
 ```
 
 Describe one version written or skipped by a write transaction.
@@ -11864,7 +11874,7 @@ Describe one version written or skipped by a write transaction.
 Method.
 
 ```text
-VersionChange.to_data(self) -> 'dict[str, str | int]'
+VersionChange.to_data(self) -> 'dict[str, str | int | None]'
 ```
 
 Return a JSON-compatible description in stable field order.
@@ -11872,7 +11882,7 @@ Return a JSON-compatible description in stable field order.
 ### `VersionHandle`
 
 ```text
-VersionHandle(collection: 'str', instance_uid: 'bytes', name: 'str', position: 'int', seq: 'int', commit_seq: 'int', graph_digest: 'str', functional: 'str', identified: 'str', stage: 'str | None', iteration: 'int | None') -> None
+VersionHandle(collection: 'str', instance_uid: 'bytes', name: 'str', position: 'int', seq: 'int', commit_seq: 'int', graph_digest: 'str', patch_digest: 'str | None', transition: "Literal['initial', 'patch', 'snapshot']", reason: 'str | None', functional: 'str', identified: 'str', stage: 'str | None', iteration: 'int | None') -> None
 ```
 
 Name one immutable stored graph version without loading its document.
@@ -11889,6 +11899,16 @@ VersionHandle.load(self) -> 'Graph'
 ```
 
 Load and validate this version through one verified object read.
+
+#### `VersionHandle.load_patch`
+
+Method.
+
+```text
+VersionHandle.load_patch(self) -> 'Patch | None'
+```
+
+Load this version's verified transition patch when it has one.
 
 #### `VersionHandle.to_data`
 
@@ -11943,10 +11963,34 @@ Create an ordered instance whose first version is a complete graph.
 Method.
 
 ```text
-WriteTransaction.publish(self, instance: 'bytes | str', graph: 'Graph', *, expected: 'int', collection: 'bytes | str | None' = None, annotations: 'EditAnnotations | None' = None) -> 'None'
+WriteTransaction.publish(self, instance: 'bytes | str', graph: 'Graph', *, expected: 'int', collection: 'bytes | str | None' = None, patch: 'Patch | None' = None, skip_if_equivalent: 'EquivalenceView | None' = None, annotations: 'EditAnnotations | None' = None) -> 'None'
 ```
 
-Append a complete graph version when the expected head is current.
+Append a replay-verified graph version when its expected head is current.
+
+A supplied journal patch must name the stored head as its identified base.
+Without one, an exact diff is recorded.  A patch that exceeds the public
+JSONL limits falls back to a typed snapshot rather than being truncated.
+
+#### `WriteTransaction.apply`
+
+Method.
+
+```text
+WriteTransaction.apply(self, instance: 'bytes | str', patch: 'Patch', *, expected: 'int', collection: 'bytes | str | None' = None, annotations: 'EditAnnotations | None' = None) -> 'None'
+```
+
+Apply and publish a patch against the checked current instance head.
+
+#### `WriteTransaction.revert`
+
+Method.
+
+```text
+WriteTransaction.revert(self, instance: 'bytes | str', *, to_seq: 'int', expected: 'int', collection: 'bytes | str | None' = None, annotations: 'EditAnnotations | None' = None) -> 'None'
+```
+
+Publish a new version containing one retained version's exact document.
 
 #### `WriteTransaction.rename_collection`
 

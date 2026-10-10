@@ -316,6 +316,11 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_publish.add_argument(
         "--collection", metavar="NAME", help="instance collection"
     )
+    tgdb_publish.add_argument(
+        "--patch",
+        metavar="PATCH",
+        help="journal patch from the stored head to GRAPH",
+    )
     tgdb_publish.add_argument("--stage", metavar="NAME", help="version stage")
     tgdb_publish.add_argument(
         "--iteration", type=int, metavar="N", help="version iteration"
@@ -326,6 +331,81 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         metavar="JSON",
         help="EditAnnotations JSON object; --stage and --iteration override it",
     )
+    tgdb_apply = _subcommand(
+        tgdb_subparsers,
+        "apply",
+        summary="apply and publish a patch",
+        description=(
+            "Apply a fingerprint-guarded patch to the expected current head and "
+            "publish its exact result."
+        ),
+        examples=(
+            "tiergraph tgdb apply corpus.tgdb sample tgdb-change.jsonl --expected 1",
+        ),
+    )
+    tgdb_apply.set_defaults(handler=_handle_tgdb)
+    tgdb_apply.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_apply.add_argument("instance", metavar="INSTANCE", help="instance name or id")
+    tgdb_apply.add_argument("patch", metavar="PATCH", help="patch JSONL file")
+    tgdb_apply.add_argument(
+        "--expected",
+        required=True,
+        type=_positive_integer,
+        metavar="SEQ",
+        help="required current version sequence",
+    )
+    tgdb_apply.add_argument("--collection", metavar="NAME", help="instance collection")
+    tgdb_diff = _subcommand(
+        tgdb_subparsers,
+        "diff",
+        summary="write an exact patch between versions",
+        description=(
+            "Write an exact replayable patch. With no sequence, compare the head's "
+            "parent to the head; with one, compare it to the head."
+        ),
+        examples=(
+            "tiergraph tgdb diff corpus.tgdb sample -o change.jsonl",
+            "tiergraph tgdb diff corpus.tgdb sample 1 3 -o change.jsonl",
+        ),
+    )
+    tgdb_diff.set_defaults(handler=_handle_tgdb)
+    tgdb_diff.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_diff.add_argument("instance", metavar="INSTANCE", help="instance name or id")
+    tgdb_diff.add_argument(
+        "a", nargs="?", type=_tgdb_version, metavar="A", help="source version"
+    )
+    tgdb_diff.add_argument(
+        "b", nargs="?", type=_tgdb_version, metavar="B", help="target version"
+    )
+    tgdb_diff.add_argument("--collection", metavar="NAME", help="instance collection")
+    _output_argument(tgdb_diff)
+    tgdb_revert = _subcommand(
+        tgdb_subparsers,
+        "revert",
+        summary="republish a retained version",
+        description=(
+            "Append a new version containing the exact document stored at --to."
+        ),
+        examples=("tiergraph tgdb revert corpus.tgdb sample --to 1 --expected 3",),
+    )
+    tgdb_revert.set_defaults(handler=_handle_tgdb)
+    tgdb_revert.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_revert.add_argument("instance", metavar="INSTANCE", help="instance name or id")
+    tgdb_revert.add_argument(
+        "--to",
+        required=True,
+        type=_positive_integer,
+        metavar="SEQ",
+        help="retained version to republish",
+    )
+    tgdb_revert.add_argument(
+        "--expected",
+        required=True,
+        type=_positive_integer,
+        metavar="SEQ",
+        help="required current version sequence",
+    )
+    tgdb_revert.add_argument("--collection", metavar="NAME", help="instance collection")
     tgdb_get = _subcommand(
         tgdb_subparsers,
         "get",
@@ -1930,10 +2010,12 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             return 0
         writable = args.tgdb_command in {
             "add",
+            "apply",
             "collection",
             "move",
             "publish",
             "rename",
+            "revert",
             "restore",
             "retire",
             "undo",
@@ -2013,7 +2095,14 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     f"commit {receipt.commit_seq}\n"
                 )
                 return 0
-            if args.tgdb_command in {"get", "history", "publish"}:
+            if args.tgdb_command in {
+                "apply",
+                "diff",
+                "get",
+                "history",
+                "publish",
+                "revert",
+            }:
                 names = {
                     instance.name
                     for instance in store.instances(
@@ -2045,6 +2134,9 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                                         version.seq,
                                         version.commit_seq,
                                         version.graph_digest,
+                                        version.patch_digest,
+                                        version.transition,
+                                        version.reason,
                                         version.functional,
                                         version.identified,
                                         version.stage,
@@ -2054,7 +2146,78 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                                 + "\n"
                             )
                     return 0
+                if args.tgdb_command == "diff":
+                    head = store.get(selector, collection=args.collection)
+                    if args.a is None:
+                        if head.seq == 1:
+                            raise tgdb.TgdbError(
+                                f"instance {head.name!r} head has no parent version"
+                            )
+                        source = head.seq - 1
+                        target: int | Literal["head"] = "head"
+                    else:
+                        source = head.seq if args.a == "head" else args.a
+                        target = "head" if args.b is None else args.b
+                    version_patch = store.diff(
+                        selector,
+                        source,
+                        target,
+                        collection=args.collection,
+                    )
+                    _check_output_outside_store(store.path, args.output)
+                    _write_output(
+                        "-",
+                        args.output,
+                        _strict_text_bytes(tiergraph.patch_dumps(version_patch)),
+                    )
+                    return 0
+                if args.tgdb_command == "apply":
+                    version_patch = tiergraph.patch_loads(_read_bytes(args.patch))
+                    with store.write() as transaction:
+                        transaction.apply(
+                            selector,
+                            version_patch,
+                            expected=args.expected,
+                            collection=args.collection,
+                        )
+                        receipt = transaction.commit()
+                    change = receipt.versions[-1]
+                    if change.status == "unchanged":
+                        _stdout_text(
+                            f"unchanged {change.name!r} at version {change.seq}\n"
+                        )
+                    else:
+                        _stdout_text(
+                            f"published {change.name!r} version {change.seq} in "
+                            f"commit {receipt.commit_seq}\n"
+                        )
+                    return 0
+                if args.tgdb_command == "revert":
+                    with store.write() as transaction:
+                        transaction.revert(
+                            selector,
+                            to_seq=args.to,
+                            expected=args.expected,
+                            collection=args.collection,
+                        )
+                        receipt = transaction.commit()
+                    change = receipt.versions[-1]
+                    if change.status == "unchanged":
+                        _stdout_text(
+                            f"unchanged {change.name!r} at version {change.seq}\n"
+                        )
+                    else:
+                        _stdout_text(
+                            f"reverted {change.name!r} to stored version {args.to} as "
+                            f"version {change.seq} in commit {receipt.commit_seq}\n"
+                        )
+                    return 0
                 graph = tiergraph.loads(_read_bytes(args.graph))
+                supplied_patch = (
+                    None
+                    if args.patch is None
+                    else tiergraph.patch_loads(_read_bytes(args.patch))
+                )
                 annotations = args.annotations
                 if args.stage is not None or args.iteration is not None:
                     supplied = tiergraph.EditAnnotations(
@@ -2071,16 +2234,18 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                         graph,
                         expected=args.expected,
                         collection=args.collection,
+                        patch=supplied_patch,
                         annotations=annotations,
                     )
                     receipt = transaction.commit()
                 change = receipt.versions[-1]
-                if change.status == "unchanged":
+                if change.status in {"unchanged", "skipped"}:
                     _stdout_text(f"unchanged {change.name!r} at version {change.seq}\n")
                 else:
+                    detail = f" ({change.reason})" if change.reason is not None else ""
                     _stdout_text(
                         f"published {change.name!r} version {change.seq} in "
-                        f"commit {receipt.commit_seq}\n"
+                        f"commit {receipt.commit_seq}{detail}\n"
                     )
                 return 0
             if args.tgdb_command == "list":
