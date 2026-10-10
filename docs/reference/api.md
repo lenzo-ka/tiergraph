@@ -11579,17 +11579,17 @@ Return a JSON-compatible description in stable field order.
 ### `CommitReceipt`
 
 ```text
-CommitReceipt(commit_seq: 'int', kind: 'str', operations: 'tuple[str, ...]') -> None
+CommitReceipt(commit_seq: 'int | None', kind: 'str', operations: 'tuple[str, ...]', versions: 'tuple[VersionChange, ...]' = ()) -> None
 ```
 
-Identify one durable catalog commit and its ordered operation kinds.
+Report a durable commit or version attempts that were all unchanged.
 
 #### `CommitReceipt.to_data`
 
 Method.
 
 ```text
-CommitReceipt.to_data(self) -> 'dict[str, int | str | list[str]]'
+CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[dict[str, str | int]]]'
 ```
 
 Return a JSON-compatible receipt in stable field order.
@@ -11683,7 +11683,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 3) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 4) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -11795,6 +11795,26 @@ TgdbStore.instances(self, collection: 'bytes | str | None' = None, *, include_re
 
 Return instances in collection and instance declared order.
 
+#### `TgdbStore.get`
+
+Method.
+
+```text
+TgdbStore.get(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None, seq: "int | Literal['head']" = 'head') -> 'VersionHandle'
+```
+
+Return one immutable version handle without loading graph content.
+
+#### `TgdbStore.history`
+
+Method.
+
+```text
+TgdbStore.history(self, instance: 'bytes | str', *, collection: 'bytes | str | None' = None) -> 'tuple[VersionHandle, ...]'
+```
+
+Return an instance's retained versions in append order without loading.
+
 #### `TgdbStore.write`
 
 Method.
@@ -11803,7 +11823,7 @@ Method.
 TgdbStore.write(self, *, annotations: 'EditAnnotations | None' = None) -> 'WriteTransaction'
 ```
 
-Open an explicit catalog transaction that commits only on request.
+Open an explicit store transaction that commits only on request.
 
 #### `TgdbStore.undo`
 
@@ -11828,6 +11848,55 @@ Check the catalog and every recorded object without changing the store.
 A normal check validates SQLite, object records, file placement, residency,
 and byte counts.  A full check additionally hashes every inline and file
 object and compares it with its content address.
+
+### `VersionChange`
+
+```text
+VersionChange(instance_uid: 'bytes', name: 'str', seq: 'int', graph_digest: 'str', status: "Literal['created', 'published', 'unchanged']") -> None
+```
+
+Describe one version written or skipped by a write transaction.
+
+#### `VersionChange.to_data`
+
+Method.
+
+```text
+VersionChange.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible description in stable field order.
+
+### `VersionHandle`
+
+```text
+VersionHandle(collection: 'str', instance_uid: 'bytes', name: 'str', position: 'int', seq: 'int', commit_seq: 'int', graph_digest: 'str', functional: 'str', identified: 'str', stage: 'str | None', iteration: 'int | None') -> None
+```
+
+Name one immutable stored graph version without loading its document.
+
+Handles are returned by :meth:`TgdbStore.get` and :meth:`TgdbStore.history`;
+callers do not construct them directly.
+
+#### `VersionHandle.load`
+
+Method.
+
+```text
+VersionHandle.load(self) -> 'Graph'
+```
+
+Load and validate this version through one verified object read.
+
+#### `VersionHandle.to_data`
+
+Method.
+
+```text
+VersionHandle.to_data(self) -> 'dict[str, str | int | None]'
+```
+
+Return a JSON-compatible description without loading the graph.
 
 ### `WriteTransaction`
 
@@ -11856,6 +11925,26 @@ WriteTransaction.create_collection(self, name: 'str', *, uid: 'bytes | None' = N
 ```
 
 Create a collection with stable identity and declared position.
+
+#### `WriteTransaction.create_instance`
+
+Method.
+
+```text
+WriteTransaction.create_instance(self, collection: 'bytes | str', name: 'str', graph: 'Graph', *, uid: 'bytes | None' = None, position: 'int | None' = None, annotations: 'EditAnnotations | None' = None) -> 'bytes'
+```
+
+Create an ordered instance whose first version is a complete graph.
+
+#### `WriteTransaction.publish`
+
+Method.
+
+```text
+WriteTransaction.publish(self, instance: 'bytes | str', graph: 'Graph', *, expected: 'int', collection: 'bytes | str | None' = None, annotations: 'EditAnnotations | None' = None) -> 'None'
+```
+
+Append a complete graph version when the expected head is current.
 
 #### `WriteTransaction.rename_collection`
 
@@ -11945,7 +12034,7 @@ Method.
 WriteTransaction.commit(self) -> 'CommitReceipt'
 ```
 
-Commit all staged catalog changes and return their durable sequence.
+Commit staged changes, or report version no-ops without a commit.
 
 #### `WriteTransaction.discard`
 
