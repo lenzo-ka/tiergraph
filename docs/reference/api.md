@@ -1092,7 +1092,7 @@ fact.
 ### `ClockBindingChange`
 
 ```text
-ClockBindingChange(previous_boundary: 'BoundaryRef | None', boundary: 'BoundaryRef | None', previous_source: 'RelationEndpointRef | None', source: 'RelationEndpointRef | None', previous_clock_index: 'int | None', clock_index: 'int | None', provisional: 'bool') -> None
+ClockBindingChange(previous_boundary: 'BoundaryRef | None', boundary: 'BoundaryRef | None', previous_source: 'RelationEndpointRef | None', source: 'RelationEndpointRef | None', previous_target: 'DurableBoundaryRef | None', target: 'DurableBoundaryRef | None', previous_clock_index: 'int | None', clock_index: 'int | None', provisional: 'bool') -> None
 ```
 
 Report one binding that a clock-aware structural edit changed.
@@ -1100,10 +1100,11 @@ Report one binding that a clock-aware structural edit changed.
 ``previous_boundary`` and ``boundary`` are the old and new logical tier
 boundaries; either is ``None`` when the binding was inserted or withdrawn.
 ``previous_source`` and ``source`` are their durable anchor forms.
-``previous_clock_index`` and ``clock_index`` are the old and new integral
-clock targets. The final boolean field says that the resulting binding now
-holds a synthesized or collapsed value that needs later realignment; it is
-always false for a withdrawn binding.
+``previous_target`` and ``target`` are the exact old and new durable clock
+targets, while ``previous_clock_index`` and ``clock_index`` are their
+resolved integral positions. The final boolean field says that the
+resulting binding now holds a synthesized or collapsed value that needs
+later realignment; it is always false for a withdrawn binding.
 
 ### `ClockCoordinate`
 

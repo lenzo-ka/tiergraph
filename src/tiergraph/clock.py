@@ -133,16 +133,19 @@ class ClockBindingChange:
     ``previous_boundary`` and ``boundary`` are the old and new logical tier
     boundaries; either is ``None`` when the binding was inserted or withdrawn.
     ``previous_source`` and ``source`` are their durable anchor forms.
-    ``previous_clock_index`` and ``clock_index`` are the old and new integral
-    clock targets. The final boolean field says that the resulting binding now
-    holds a synthesized or collapsed value that needs later realignment; it is
-    always false for a withdrawn binding.
+    ``previous_target`` and ``target`` are the exact old and new durable clock
+    targets, while ``previous_clock_index`` and ``clock_index`` are their
+    resolved integral positions. The final boolean field says that the
+    resulting binding now holds a synthesized or collapsed value that needs
+    later realignment; it is always false for a withdrawn binding.
     """
 
     previous_boundary: BoundaryRef | None
     boundary: BoundaryRef | None
     previous_source: RelationEndpointRef | None
     source: RelationEndpointRef | None
+    previous_target: DurableBoundaryRef | None
+    target: DurableBoundaryRef | None
     previous_clock_index: int | None
     clock_index: int | None
     provisional: bool
@@ -1429,6 +1432,8 @@ class ClockEditor:
                     candidate.resolve_boundary(cast(DurableBoundaryRef, updated.left)),
                     record.relation.left,
                     updated.left,
+                    cast(DurableBoundaryRef, record.relation.right),
+                    cast(DurableBoundaryRef, updated.right),
                     self._graph.resolve_boundary(
                         cast(DurableBoundaryRef, record.relation.right)
                     ).index,
@@ -1701,6 +1706,12 @@ class ClockEditor:
                             boundary,
                             None if template is None else template.relation.left,
                             source,
+                            (
+                                None
+                                if template is None
+                                else cast(DurableBoundaryRef, template.relation.right)
+                            ),
+                            cast(DurableBoundaryRef, relation.right),
                             previous_clock,
                             clock_index,
                             template is None,
@@ -1711,6 +1722,8 @@ class ClockEditor:
                     record.boundary,
                     None,
                     record.relation.left,
+                    None,
+                    cast(DurableBoundaryRef, record.relation.right),
                     None,
                     self._profile.clock_index(record.boundary),
                     None,
@@ -1843,6 +1856,8 @@ class ClockEditor:
                         boundary,
                         None,
                         relation.left,
+                        None,
+                        cast(DurableBoundaryRef, relation.right),
                         None,
                         self._profile.clock_index(boundary),
                         None,
@@ -2021,6 +2036,12 @@ class ClockEditor:
                         boundary,
                         previous_source,
                         source,
+                        (
+                            None
+                            if template is None
+                            else cast(DurableBoundaryRef, template.relation.right)
+                        ),
+                        cast(DurableBoundaryRef, relation.right),
                         previous_clock,
                         clock_index,
                         template_origin is None or template_origin != target_origin,
@@ -2031,6 +2052,8 @@ class ClockEditor:
                 record.boundary,
                 None,
                 record.relation.left,
+                None,
+                cast(DurableBoundaryRef, record.relation.right),
                 None,
                 self._profile.clock_index(record.boundary),
                 None,

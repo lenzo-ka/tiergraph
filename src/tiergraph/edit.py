@@ -472,6 +472,14 @@ def _clock_report_data(report: ClockEditReport) -> dict[str, JsonValue]:
             "source": (
                 None if change.source is None else _endpoint_data(change.source)
             ),
+            "previous_target": (
+                None
+                if change.previous_target is None
+                else _endpoint_data(change.previous_target)
+            ),
+            "target": (
+                None if change.target is None else _endpoint_data(change.target)
+            ),
             "previous_clock_index": change.previous_clock_index,
             "clock_index": change.clock_index,
             "provisional": change.provisional,
@@ -4119,20 +4127,10 @@ def _clock_endpoint_match(
                 return True
             if (
                 link.side == "right"
-                and change.previous_clock_index is not None
-                and change.clock_index is not None
                 and change.previous_source == source_relation.left
                 and change.source == target_relation.left
-                and isinstance(link.value, DurableBoundaryRef)
-                and isinstance(candidate.value, DurableBoundaryRef)
-                and before.resolve_boundary(link.value).index
-                == change.previous_clock_index
-                and after.resolve_boundary(candidate.value).index == change.clock_index
-                and any(
-                    relation.declaration == source_relation.declaration
-                    and relation.right == candidate.value
-                    for relation in before.relations
-                )
+                and change.previous_target == link.value
+                and change.target == candidate.value
             ):
                 return True
     return False

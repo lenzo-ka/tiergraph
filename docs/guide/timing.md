@@ -175,11 +175,13 @@ even when `keep-earlier` leaves every clock binding unchanged.
 every inserted, changed, or withdrawn binding; and `needs_realignment` says the
 result contains durably marked provisional timing. In each
 `ClockBindingChange`, the `previous_boundary`/`boundary`,
-`previous_source`/`source`, and `previous_clock_index`/`clock_index` pairs name
-the old and new logical boundary, durable anchor, and integral clock target.
-Either old or new side is `None` for insertion or withdrawal. `provisional`
-means that this resulting binding now holds a synthesized or collapsed value;
-it is not merely a marker that its boundary lay inside the edited span.
+`previous_source`/`source`, `previous_target`/`target`, and
+`previous_clock_index`/`clock_index` pairs name the old and new logical
+boundary, durable anchor, exact durable clock target, and resolved integral
+clock position. Either old or new side is `None` for insertion or withdrawal.
+`provisional` means that this resulting binding now holds a synthesized or
+collapsed value; it is not merely a marker that its boundary lay inside the
+edited span.
 
 Calling `clock.edit()` without a policy is useful for sessions that edit only
 untimed tiers. A move, swap, insertion, removal, or reparenting operation that
