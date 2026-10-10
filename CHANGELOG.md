@@ -163,6 +163,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Shifts now require containers to be true sisters under a common ordered
+  containment parent, or adjacent root containers, and to meet at a contiguous
+  child-tier seam. The explicit `across_parent=True` form permits a shift
+  between containers under adjacent parent chains, reports every changed
+  ancestor yield, and rebinds each timed container and ancestor boundary to the
+  new child seam. Clock-aware shifts refuse when an affected tier is timed but
+  the child seam is untimed. Run and item swaps are now atomic, dropped
+  sister-boundary values appear in detachment reports, and graph diff recognizes
+  shifts that name either rebinding policy.
 - `FoldDeclaration` now refuses repeated declared roots at construction, and
   `Equals` requires its literal collection to be an actual tuple.
 - Predicate binding now resolves a `Spans` predicate's other tier before

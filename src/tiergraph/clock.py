@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, cast, overload
 if TYPE_CHECKING:
     from tiergraph.blob import BlobProfile
     from tiergraph.edit import ClockJournalEditor, Journal
-    from tiergraph.replacement import DetachedDependency, ReplacementPolicies, Subtree
+    from tiergraph.replacement import (
+        DetachedDependency,
+        DetachmentReport,
+        ReplacementPolicies,
+        Subtree,
+    )
 
 from tiergraph.core import (
     Attribute,
@@ -23,6 +28,7 @@ from tiergraph.core import (
     BipartiteRelationDeclaration,
     BoundaryRef,
     BoundarySide,
+    ContainmentYieldChange,
     Displacement,
     DurableBoundaryRef,
     DurableItemRef,
@@ -963,6 +969,8 @@ class ClockEditor:
         self._policy = policy
         self._reports: list[ClockEditReport] = []
         self._detached_dependencies: tuple[DetachedDependency, ...] = ()
+        self._detached_content: DetachmentReport | None = None
+        self._yield_changes: tuple[ContainmentYieldChange, ...] = ()
 
     @property
     def profile(self) -> ClockProfile:
@@ -1272,8 +1280,9 @@ class ClockEditor:
         direction: ShiftDirection | str,
         containment: QualifiedName,
         policy: ClockRebindingPolicy | str | None = None,
+        across_parent: bool = False,
     ) -> ClockEditor:
-        """Shift a containment boundary without moving either timed item tier."""
+        """Shift containment and bind every moved yield to its new child seam."""
         self._require_active_profile()
         try:
             selected = ShiftDirection(direction)
@@ -1286,15 +1295,40 @@ class ClockEditor:
             raise GraphValidationError(
                 "shift cannot restructure the clock tier in a bound session"
             )
-        sister_index = coordinate.index + (
-            1 if selected is ShiftDirection.RIGHT else -1
-        )
-        shared = BoundaryRef(coordinate.tier, max(coordinate.index, sister_index))
-        stored = shared in self._graph._boundaries_by_ref
         named = self._policy if policy is None else ClockRebindingPolicy(policy)
-        if stored and named is None:
-            # The plain editor provides the stable stored-boundary refusal.
-            self._graph.edit().shift(container, k, selected, containment, None)
+        probe = self._graph.edit()
+        plan = probe._shift_plan(container, k, selected, containment, across_parent)
+        shared = BoundaryRef(coordinate.tier, max(coordinate.index, plan.sister.index))
+        if shared in self._graph._boundaries_by_ref and named is None:
+            self._graph.edit().shift(
+                container,
+                k,
+                selected,
+                containment,
+                None,
+                across_parent,
+            )
+        affected = (shared, *(change.boundary for change in plan.yield_changes))
+        timed = tuple(
+            boundary for boundary in affected if self._profile.is_timed(boundary.tier)
+        )
+        if timed and not self._profile.is_timed(plan.child_boundary.tier):
+            raise GraphValidationError(
+                "shift cannot place a timed container boundary on an untimed "
+                f"child seam {str(plan.child_boundary)!r}"
+            )
+        previous_clock = (
+            self._profile.clock_index(plan.previous_child_boundary) if timed else None
+        )
+        for boundary in timed:
+            boundary_clock = self._profile.clock_index(boundary)
+            if boundary_clock != previous_clock:
+                raise GraphValidationError(
+                    f"shift boundary {str(boundary)!r} is at clock index "
+                    f"{boundary_clock}, but child seam "
+                    f"{str(plan.previous_child_boundary)!r} is at clock index "
+                    f"{previous_clock}; the boundaries do not meet on the common clock"
+                )
         editor = self._graph.edit()
         editor.shift(
             container,
@@ -1302,10 +1336,38 @@ class ClockEditor:
             selected,
             containment,
             "keep-earlier" if named is None else named.value,
+            across_parent,
         )
+        if getattr(self, "_capture_journal_displacement", False):
+            self._journal_displacement = editor.displacement()
         candidate = editor.freeze()
+        if timed:
+            child_records = {
+                record.boundary: record
+                for record in self._binding_records(plan.child_boundary.tier)
+            }
+            child_record = child_records[plan.child_boundary]
+            relations = list(candidate.relations)
+            for boundary in timed:
+                records = {
+                    record.boundary: record
+                    for record in self._binding_records(boundary.tier)
+                }
+                record = records[boundary]
+                relations[record.position] = replace(
+                    relations[record.position], right=child_record.relation.right
+                )
+            candidate = replace(candidate, relations=tuple(relations))
+        try:
+            next_profile = self._profile_for(candidate)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"shift would invalidate the active clock profile: {error}"
+            ) from error
         self._graph = candidate
-        self._profile = self._profile_with_graph(candidate)
+        self._profile = next_profile
+        self._detached_content = editor.last_detachment
+        self._yield_changes = editor.last_yield_changes
         return self
 
     def reparent(

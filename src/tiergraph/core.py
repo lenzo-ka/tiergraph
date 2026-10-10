@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import IntEnum, StrEnum
 from functools import total_ordering
+from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple, Protocol, cast, overload
 
@@ -988,6 +989,23 @@ class BoundaryRef:
     def __str__(self) -> str:
         """Return a compact coordinate spelling for diagnostics."""
         return f"{self.tier}[{self.index}]"
+
+
+@dataclass(frozen=True, slots=True)
+class ContainmentYieldChange:
+    """Report one parent boundary whose descendant yield moved to a new seam."""
+
+    boundary: BoundaryRef
+    previous_yield_boundary: BoundaryRef
+    yield_boundary: BoundaryRef
+
+    def to_data(self) -> dict[str, JsonValue]:
+        """Return the parent boundary and its old and new child-tier seams."""
+        return {
+            "boundary": self.boundary.to_data(),
+            "previous_yield_boundary": self.previous_yield_boundary.to_data(),
+            "yield_boundary": self.yield_boundary.to_data(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -2489,9 +2507,29 @@ class Graph:
         direction: ShiftDirection | str,
         containment: QualifiedName,
         policy: str | None = None,
+        across_parent: bool = False,
     ) -> Graph:
-        """Move edge children to an adjacent sister while retaining identity."""
-        return self.edit().shift(container, k, direction, containment, policy).freeze()
+        """Move edge children to an adjacent sister while retaining identity.
+
+        Set ``across_parent`` only when the adjacent containers have different,
+        adjacent containment parents and that parent-yield change is intended.
+        Use :meth:`Graph.edit` and inspect
+        :attr:`GraphEditor.last_yield_changes` or
+        :attr:`GraphEditor.last_detachment` when the corresponding report is
+        needed.
+        """
+        return (
+            self.edit()
+            .shift(
+                container,
+                k,
+                direction,
+                containment,
+                policy,
+                across_parent,
+            )
+            .freeze()
+        )
 
     def add_relation(
         self,
@@ -2691,6 +2729,18 @@ def _relation_instance_subject(target: EditTarget, polyadic: bool, index: int) -
     return f"relation instance {index}"
 
 
+class _ShiftPlan(NamedTuple):
+    """Carry one fully checked containment-boundary exchange."""
+
+    container: ItemRef
+    sister: ItemRef
+    source_index: int
+    sister_index: int
+    previous_child_boundary: BoundaryRef
+    child_boundary: BoundaryRef
+    yield_changes: tuple[ContainmentYieldChange, ...]
+
+
 class GraphEditor:
     """Carry graph content in mutable form and validate it once at freeze.
 
@@ -2780,6 +2830,11 @@ class GraphEditor:
     def last_detachment(self) -> DetachmentReport | None:
         """Return the report from the most recent abandonment-capable edit."""
         return getattr(self, "_last_detachment", None)
+
+    @property
+    def last_yield_changes(self) -> tuple[ContainmentYieldChange, ...]:
+        """Return parent-yield changes reported by the most recent shift."""
+        return getattr(self, "_last_yield_changes", ())
 
     def declare(
         self, declaration: EditDeclaration, at: int | None = None
@@ -3582,22 +3637,34 @@ class GraphEditor:
         Either run may be empty; an empty run is the boundary with which the
         other run trades places. Both empty is a checked no-op.
         """
-        self._run(first, "item run swap", empty=True)
-        self._run(second, "item run swap", empty=True)
+        return self._swap_runs(first, second, "item run swap")
+
+    def _swap_runs(self, first: ItemRun, second: ItemRun, subject: str) -> GraphEditor:
+        """Validate and apply one run exchange through one atomic restructure."""
+        member = self._run(first, subject, empty=True)
+        self._run(second, subject, empty=True)
         if first.tier != second.tier:
-            raise GraphValidationError("item run swap names different tiers")
+            raise GraphValidationError(f"{subject} names different tiers")
         if first == second:
             return self
         left, right = (
             (first, second) if first.start <= second.start else (second, first)
         )
         if left.stop > right.start:
-            raise GraphValidationError("item run swap ranges overlap")
-        if right.count:
-            self.move_run(right, left.start)
-        if left.count:
-            shifted_left = ItemRun(left.tier, left.start + right.count, left.count)
-            self.move_run(shifted_left, right.stop - left.count)
+            raise GraphValidationError(f"{subject} ranges overlap")
+        order = [
+            *range(left.start),
+            *range(right.start, right.stop),
+            *range(left.stop, right.start),
+            *range(left.start, left.stop),
+            *range(right.stop, len(member.items)),
+        ]
+        self._restructure(
+            member,
+            [member.items[index] for index in order],
+            {old: new for new, old in enumerate(order)},
+            subject,
+        )
         return self
 
     def swap_items(
@@ -3616,9 +3683,11 @@ class GraphEditor:
         if left.index == right.index:
             return self
         lower, upper = sorted((left.index, right.index))
-        self._move_run(ItemRun(left.tier, upper, 1), lower, "item swap")
-        self._move_run(ItemRun(left.tier, lower + 1, 1), upper, "item swap")
-        return self
+        return self._swap_runs(
+            ItemRun(left.tier, lower, 1),
+            ItemRun(left.tier, upper, 1),
+            "item swap",
+        )
 
     def _containment_instances(
         self, containment: QualifiedName
@@ -3647,6 +3716,11 @@ class GraphEditor:
             raise GraphValidationError(
                 f"shift containment {str(containment)!r} is not ordered containment"
             )
+        if not declaration.single_parent:
+            raise GraphValidationError(
+                f"shift containment {str(containment)!r} must declare "
+                "single_parent=True"
+            )
         instances: dict[ItemRef, int] = {}
         for index, instance in enumerate(self._polyadic_relations):
             if instance.declaration != containment:
@@ -3661,6 +3735,242 @@ class GraphEditor:
             )
             instances[source] = index
         return declaration, instances
+
+    @staticmethod
+    def _is_ordered_containment(
+        declaration: SimpleRelationDeclaration
+        | BipartiteRelationDeclaration
+        | PolyadicRelationDeclaration,
+    ) -> bool:
+        """Report whether a declaration has the hierarchy's containment shape."""
+        item_only = (RelationEndpointKind.ITEM,)
+        return (
+            isinstance(declaration, PolyadicRelationDeclaration)
+            and declaration.sources.endpoint_kinds == item_only
+            and declaration.targets.endpoint_kinds == item_only
+            and declaration.sources.maximum == 1
+            and declaration.unique_sources
+            and declaration.single_parent
+            and declaration.acyclic
+        )
+
+    def _containment_parents(
+        self, child: ItemRef
+    ) -> tuple[tuple[QualifiedName, ItemRef], ...]:
+        """Return direct ordered-containment parents of one item."""
+        declarations = {
+            declaration.name
+            for declaration in self._relation_declarations
+            if self._is_ordered_containment(declaration)
+        }
+        parents: list[tuple[QualifiedName, ItemRef]] = []
+        for instance in self._polyadic_relations:
+            if instance.declaration not in declarations or len(instance.sources) != 1:
+                continue
+            if not any(
+                self._resolve_item(cast(ItemRef | DurableItemRef, target)) == child
+                for target in instance.targets
+            ):
+                continue
+            parent = self._resolve_item(
+                cast(ItemRef | DurableItemRef, instance.sources[0])
+            )
+            parents.append((instance.declaration, parent))
+        return tuple(parents)
+
+    @staticmethod
+    def _parent_list(parents: tuple[tuple[QualifiedName, ItemRef], ...]) -> str:
+        """Format direct parents for a stable default-shift refusal."""
+        return ", ".join(str(parent) for _, parent in parents) or "none"
+
+    def _resolved_containment_targets(self, index: int) -> tuple[ItemRef, ...]:
+        """Resolve one containment instance's ordered child sequence."""
+        return tuple(
+            self._resolve_item(cast(ItemRef | DurableItemRef, endpoint))
+            for endpoint in self._polyadic_relations[index].targets
+        )
+
+    def _shift_yield_changes(
+        self,
+        coordinate: ItemRef,
+        sister: ItemRef,
+        selected: ShiftDirection,
+        previous_child_boundary: BoundaryRef,
+        child_boundary: BoundaryRef,
+        across_parent: bool,
+    ) -> tuple[ContainmentYieldChange, ...]:
+        """Validate parent ancestry and describe every changed ancestor yield."""
+        container_parents = self._containment_parents(coordinate)
+        sister_parents = self._containment_parents(sister)
+        common = set(container_parents).intersection(sister_parents)
+        if not across_parent:
+            if common or (not container_parents and not sister_parents):
+                return ()
+            raise GraphValidationError(
+                f"containers {str(coordinate)!r} and {str(sister)!r} do not share "
+                f"a containment parent; {str(coordinate)!r} parents: "
+                f"{self._parent_list(container_parents)}; {str(sister)!r} parents: "
+                f"{self._parent_list(sister_parents)}; use across_parent=True for "
+                "an explicit cross-parent shift"
+            )
+        if common:
+            parent = min(common, key=lambda value: (str(value[0]), str(value[1])))[1]
+            raise GraphValidationError(
+                f"containers {str(coordinate)!r} and {str(sister)!r} already "
+                f"share parent {str(parent)!r}; use the default shift"
+            )
+        if not container_parents and not sister_parents:
+            raise GraphValidationError(
+                f"containers {str(coordinate)!r} and {str(sister)!r} are both "
+                "root containers; use the default shift"
+            )
+        parent_step = 1 if selected is ShiftDirection.RIGHT else -1
+        source_child = coordinate
+        sister_child = sister
+        changes: list[ContainmentYieldChange] = []
+        visited: set[tuple[ItemRef, ItemRef]] = set()
+        while True:
+            pair = (source_child, sister_child)
+            if pair in visited:
+                raise GraphValidationError(
+                    "cross-parent shift found a cycle in the containment ancestry"
+                )
+            visited.add(pair)
+            if len(container_parents) != 1 or len(sister_parents) != 1:
+                raise GraphValidationError(
+                    "cross-parent shift requires one unambiguous parent for each "
+                    f"container in the changed ancestor chain; "
+                    f"{str(source_child)!r} parents: "
+                    f"{self._parent_list(container_parents)}; "
+                    f"{str(sister_child)!r} parents: "
+                    f"{self._parent_list(sister_parents)}"
+                )
+            source_parent = container_parents[0][1]
+            sister_parent = sister_parents[0][1]
+            if (
+                source_parent.tier != sister_parent.tier
+                or sister_parent.index != source_parent.index + parent_step
+            ):
+                raise GraphValidationError(
+                    "cross-parent shift requires adjacent parents in the shift "
+                    f"direction; parents are {str(source_parent)!r} and "
+                    f"{str(sister_parent)!r}"
+                )
+            changes.append(
+                ContainmentYieldChange(
+                    BoundaryRef(
+                        source_parent.tier,
+                        max(source_parent.index, sister_parent.index),
+                    ),
+                    previous_child_boundary,
+                    child_boundary,
+                )
+            )
+            source_child = source_parent
+            sister_child = sister_parent
+            container_parents = self._containment_parents(source_child)
+            sister_parents = self._containment_parents(sister_child)
+            common = set(container_parents).intersection(sister_parents)
+            if common or (not container_parents and not sister_parents):
+                return tuple(changes)
+
+    def _shift_plan(
+        self,
+        container: ItemRef | DurableItemRef,
+        k: int,
+        direction: ShiftDirection | str,
+        containment: QualifiedName,
+        across_parent: bool,
+    ) -> _ShiftPlan:
+        """Validate hierarchy, adjacency, and child seams before a shift writes."""
+        try:
+            selected = ShiftDirection(direction)
+        except ValueError as error:
+            raise GraphValidationError(
+                f"shift direction must be 'left' or 'right', got {direction!r}"
+            ) from error
+        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+            raise GraphValidationError("shift count must be at least 1")
+        if not isinstance(across_parent, bool):
+            raise GraphValidationError("across_parent must be a boolean")
+        coordinate = self._resolve_item(container)
+        member = self._member(coordinate.tier, "shift")
+        sister_position = coordinate.index + (
+            1 if selected is ShiftDirection.RIGHT else -1
+        )
+        if sister_position < 0 or sister_position >= len(member.items):
+            raise GraphValidationError(
+                f"container {str(coordinate)!r} has no {selected.value} sister; "
+                "wrap-around shift is not supported"
+            )
+        sister = ItemRef(coordinate.tier, sister_position)
+        _, instances = self._containment_instances(containment)
+        source_index = instances.get(coordinate)
+        sister_index = instances.get(sister)
+        if source_index is None:
+            raise GraphValidationError(
+                f"container {str(coordinate)!r} has no {str(containment)!r} membership"
+            )
+        if sister_index is None:
+            raise GraphValidationError(
+                f"adjacent sister {str(sister)!r} has no {str(containment)!r} membership"
+            )
+        source_targets = self._resolved_containment_targets(source_index)
+        sister_targets = self._resolved_containment_targets(sister_index)
+        child_count = len(source_targets)
+        if k > child_count:
+            raise GraphValidationError(
+                f"shift count {k} exceeds container child count {child_count}"
+            )
+        if k == child_count:
+            raise GraphValidationError(
+                "shift would empty the container; container merge is not supported"
+            )
+        left_targets, right_targets = (
+            (source_targets, sister_targets)
+            if selected is ShiftDirection.RIGHT
+            else (sister_targets, source_targets)
+        )
+        all_targets = (*left_targets, *right_targets)
+        if (
+            not left_targets
+            or not right_targets
+            or len({target.tier for target in all_targets}) != 1
+            or any(
+                right.index != left.index + 1 for left, right in pairwise(all_targets)
+            )
+        ):
+            raise GraphValidationError(
+                f"containers {str(coordinate)!r} and {str(sister)!r} do not meet "
+                "at a contiguous child-tier seam"
+            )
+        previous_child_boundary = BoundaryRef(
+            right_targets[0].tier, right_targets[0].index
+        )
+        new_child = (
+            source_targets[-k]
+            if selected is ShiftDirection.RIGHT
+            else source_targets[k]
+        )
+        child_boundary = BoundaryRef(new_child.tier, new_child.index)
+
+        yield_changes = self._shift_yield_changes(
+            coordinate,
+            sister,
+            selected,
+            previous_child_boundary,
+            child_boundary,
+            across_parent,
+        )
+        return _ShiftPlan(
+            coordinate,
+            sister,
+            source_index,
+            sister_index,
+            previous_child_boundary,
+            child_boundary,
+            yield_changes,
+        )
 
     def _shared_boundary_is_bound(self, boundary: BoundaryRef) -> bool:
         """Report whether another relation durably names this tier boundary."""
@@ -3714,58 +4024,28 @@ class GraphEditor:
         direction: ShiftDirection | str,
         containment: QualifiedName,
         policy: str | None = None,
+        across_parent: bool = False,
     ) -> GraphEditor:
         """Move edge children across the shared boundary of adjacent sisters.
 
         Right moves the last ``k`` children to the beginning of the right
         sister. Left moves the first ``k`` children to the end of the left
-        sister. The operation changes containment incidence only; child tiers
-        and all their timing remain untouched.
+        sister. By default the containers must have a common containment
+        parent, or both must be root containers. Set ``across_parent`` to
+        require different adjacent parents; :attr:`last_yield_changes` then
+        reports every ancestor boundary whose descendant yield moved. The
+        operation changes containment incidence only; child tiers and all
+        their timing remain untouched.
         """
-        try:
-            selected = ShiftDirection(direction)
-        except ValueError as error:
-            raise GraphValidationError(
-                f"shift direction must be 'left' or 'right', got {direction!r}"
-            ) from error
-        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
-            raise GraphValidationError("shift count must be at least 1")
         if policy not in {None, "keep-earlier", "drop-to-provisional"}:
             raise GraphValidationError(
                 "shift policy must be 'keep-earlier' or 'drop-to-provisional'"
             )
-        coordinate = self._resolve_item(container)
-        member = self._member(coordinate.tier, "shift")
-        sister_position = coordinate.index + (
-            1 if selected is ShiftDirection.RIGHT else -1
+        plan = self._shift_plan(container, k, direction, containment, across_parent)
+        selected = ShiftDirection(direction)
+        shared = BoundaryRef(
+            plan.container.tier, max(plan.container.index, plan.sister.index)
         )
-        if sister_position < 0 or sister_position >= len(member.items):
-            raise GraphValidationError(
-                f"container {str(coordinate)!r} has no {selected.value} sister; "
-                "wrap-around shift is not supported"
-            )
-        sister = ItemRef(coordinate.tier, sister_position)
-        _, instances = self._containment_instances(containment)
-        source_index = instances.get(coordinate)
-        sister_index = instances.get(sister)
-        if source_index is None:
-            raise GraphValidationError(
-                f"container {str(coordinate)!r} has no {str(containment)!r} membership"
-            )
-        if sister_index is None:
-            raise GraphValidationError(
-                f"adjacent sister {str(sister)!r} has no {str(containment)!r} membership"
-            )
-        child_count = len(self._polyadic_relations[source_index].targets)
-        if k > child_count:
-            raise GraphValidationError(
-                f"shift count {k} exceeds container child count {child_count}"
-            )
-        if k == child_count:
-            raise GraphValidationError(
-                "shift would empty the container; container merge is not supported"
-            )
-        shared = BoundaryRef(coordinate.tier, max(coordinate.index, sister.index))
         stored_index = self._boundary_index(shared)
         bound = self._shared_boundary_is_bound(shared)
         if policy is None and stored_index is not None:
@@ -3777,9 +4057,23 @@ class GraphEditor:
                 "shift relocates a durable boundary shared with another tier; "
                 "name a clock policy"
             )
-        self._swap_containment_boundary(source_index, sister_index, k, selected)
+        detached = None
+        if policy == "drop-to-provisional" and stored_index is not None:
+            from tiergraph.replacement import DetachmentReport  # noqa: PLC0415
+
+            boundary = self._boundary_values[stored_index]
+            detached = DetachmentReport(
+                boundary_values=tuple(
+                    (boundary.reference, value) for value in boundary.attributes
+                )
+            )
+        self._swap_containment_boundary(
+            plan.source_index, plan.sister_index, k, selected
+        )
         if policy == "drop-to-provisional" and stored_index is not None:
             del self._boundary_values[stored_index]
+        self._last_detachment = detached
+        self._last_yield_changes = plan.yield_changes
         return self
 
     def add_relation(

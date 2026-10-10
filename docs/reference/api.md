@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 318 top-level `tiergraph` exports exactly once.
+It covers 319 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -984,10 +984,10 @@ Exchange two runs through fixed boundary times under the policy.
 Method.
 
 ```text
-ClockEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None) -> 'ClockEditor'
+ClockEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None, across_parent: 'bool' = False) -> 'ClockEditor'
 ```
 
-Shift a containment boundary without moving either timed item tier.
+Shift containment and bind every moved yield to its new child seam.
 
 #### `ClockEditor.reparent`
 
@@ -1616,6 +1616,24 @@ Displacement.stationary(cls, graph: 'Graph') -> 'Displacement'
 
 Return the displacement of a graph onto itself.
 
+### `ContainmentYieldChange`
+
+```text
+ContainmentYieldChange(boundary: 'BoundaryRef', previous_yield_boundary: 'BoundaryRef', yield_boundary: 'BoundaryRef') -> None
+```
+
+Report one parent boundary whose descendant yield moved to a new seam.
+
+#### `ContainmentYieldChange.to_data`
+
+Method.
+
+```text
+ContainmentYieldChange.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the parent boundary and its old and new child-tier seams.
+
 ### `GraphEditor`
 
 ```text
@@ -1674,6 +1692,16 @@ GraphEditor.last_detachment(self) -> 'DetachmentReport | None'
 ```
 
 Return the report from the most recent abandonment-capable edit.
+
+#### `GraphEditor.last_yield_changes`
+
+Property.
+
+```text
+GraphEditor.last_yield_changes(self) -> 'tuple[ContainmentYieldChange, ...]'
+```
+
+Return parent-yield changes reported by the most recent shift.
 
 #### `GraphEditor.declare`
 
@@ -2060,15 +2088,19 @@ Exchange two items through the ``(1, 1)`` run-swap case.
 Method.
 
 ```text
-GraphEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'GraphEditor'
+GraphEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None, across_parent: 'bool' = False) -> 'GraphEditor'
 ```
 
 Move edge children across the shared boundary of adjacent sisters.
 
 Right moves the last ``k`` children to the beginning of the right
 sister. Left moves the first ``k`` children to the end of the left
-sister. The operation changes containment incidence only; child tiers
-and all their timing remain untouched.
+sister. By default the containers must have a common containment
+parent, or both must be root containers. Set ``across_parent`` to
+require different adjacent parents; :attr:`last_yield_changes` then
+reports every ancestor boundary whose descendant yield moved. The
+operation changes containment incidence only; child tiers and all
+their timing remain untouched.
 
 #### `GraphEditor.add_relation`
 
@@ -2666,10 +2698,10 @@ Swap two items and record the same swap as inverse.
 Method.
 
 ```text
-JournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'JournalEditor'
+JournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None, across_parent: 'bool' = False) -> 'JournalEditor'
 ```
 
-Shift edge children and record the opposite sister shift as inverse.
+Shift children and record the opposite sister shift as inverse.
 
 #### `JournalEditor.add_relation`
 
@@ -2892,10 +2924,10 @@ Swap two items under the named rebinding policy.
 Method.
 
 ```text
-ClockJournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None) -> 'ClockJournalEditor'
+ClockJournalEditor.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'ClockRebindingPolicy | str | None' = None, across_parent: 'bool' = False) -> 'ClockJournalEditor'
 ```
 
-Shift containment without moving either timed tier.
+Shift containment and rebind moved yields to existing child times.
 
 #### `ClockJournalEditor.reparent`
 
@@ -2976,7 +3008,7 @@ Describe the inverse without exposing retained Python values.
 ### `EditReport`
 
 ```text
-EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = (), detached_content: 'DetachmentReport | None' = None, correspondence: 'SubtreeCorrespondence | None' = None) -> None
+EditReport(operation: 'str', touched_items: 'tuple[ItemRef, ...]', touched_boundaries: 'tuple[BoundaryRef, ...]', touched_relations: 'tuple[RelationTouch, ...]', detached_references: 'tuple[LayerSubject, ...]', displacement: 'Displacement', annotations: 'EditAnnotations', clock_reports: 'tuple[ClockEditReport, ...]' = (), detached_dependencies: 'tuple[DetachedDependency, ...]' = (), pruned_orphans: 'tuple[PrunedFact, ...]' = (), detached_content: 'DetachmentReport | None' = None, correspondence: 'SubtreeCorrespondence | None' = None, yield_changes: 'tuple[ContainmentYieldChange, ...]' = ()) -> None
 ```
 
 Describe the content one recorded operation touched.
@@ -5840,10 +5872,17 @@ Return a new graph with two items of one tier exchanged.
 Method.
 
 ```text
-Graph.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None) -> 'Graph'
+Graph.shift(self, container: 'ItemRef | DurableItemRef', k: 'int', direction: 'ShiftDirection | str', containment: 'QualifiedName', policy: 'str | None' = None, across_parent: 'bool' = False) -> 'Graph'
 ```
 
 Move edge children to an adjacent sister while retaining identity.
+
+Set ``across_parent`` only when the adjacent containers have different,
+adjacent containment parents and that parent-yield change is intended.
+Use :meth:`Graph.edit` and inspect
+:attr:`GraphEditor.last_yield_changes` or
+:attr:`GraphEditor.last_detachment` when the corresponding report is
+needed.
 
 #### `Graph.add_relation`
 
