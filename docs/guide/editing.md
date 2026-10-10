@@ -28,12 +28,14 @@ method returns.
 Pass `check_links=True` to `graph.edit()` to audit every edit against a complete
 before-and-after link ledger. The check covers relation endpoints, facts,
 layers, boundary values, attributes, blob attachments, and nested-graph
-references. It applies to plain and journaled graph editors. Clock-aware
-editors do not currently expose this diagnostic:
+references. It applies to plain and journaled graph editors, clock-aware
+editors, and `commit_path()`.
 
 Use `base.edit(check_links=True)` for a plain checked session, or
 `base.edit(journal=Journal(), check_links=True)` when the journal record is also
-part of the account.
+part of the account. Use `profile.edit(check_links=True)` for a checked clock
+session, and pass `check_links=True` to `commit_path()` to audit its complete
+derived-edit report.
 
 Each link from the edited region must be carried unchanged, re-pointed through
 the edit correspondence, or named with its content in a detachment report. A
@@ -812,13 +814,14 @@ subjects, and layer, seal, and other carrier-value atoms. It ignores item order,
 endpoint incidence, and fact attachment. Small unmatched atom sets use
 minimum-cost assignment over direct one-atom transitions and
 delete-then-insert paths. Large unmatched sets avoid cubic assignment and use
-their unavoidable atom count at the least declared transition cost. This makes
-the result sound but deliberately weak for rewiring and reordering:
+their unavoidable atom count at the least declared transition cost. Realized
+primitive edits and generated graph cases exercise the resulting lower bound,
+which is deliberately weak for rewiring and reordering:
 `set_endpoints`, moves, and swaps can project to zero. A partial cost table also
 uses zero for the general lower bound rather than requiring costs unrelated to
 the realized upper-bound script.
 An opaque `value_substitution` callback does not expose the global triangle
-information needed for a sound comparison, so general-graph value substitutions
+information needed for this comparison, so general-graph value substitutions
 relax to zero when a custom callback is active. Exact ordered-tier distance
 still uses the callback directly.
 

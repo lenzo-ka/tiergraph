@@ -156,6 +156,11 @@ through them. When two anchors resolve to the same boundary, the binding that
 occurred earlier in the relation order wins; every changed, inserted, or
 dropped binding appears in the operation report.
 
+A containment shift binds each moved timed yield to its new child seam. It does
+not require a session-wide rebinding policy when the affected boundaries already
+meet on the common clock. Its `SHIFT` report uses `keep-earlier` to name that
+seam behavior and lists the exact old and new binding endpoints.
+
 `drop-to-provisional` collapses the affected boundaries onto their earlier
 clock position. Its report sets `needs_realignment`, and the graph carries a
 tier fact with the same meaning so the requirement survives serialization.

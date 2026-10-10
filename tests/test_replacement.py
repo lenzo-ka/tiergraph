@@ -609,6 +609,13 @@ def test_identity_correspondence_is_linear_through_apply_and_journal() -> None:
         for targets in effective.identity_correspondence.values()
         for target in targets
     }
+    functional_target = effective.items[source][1]
+    assert (
+        direct.graph._tiers_by_name[functional_target.tier]
+        .items[functional_target.index]
+        .durable_id
+        == "new-leaf-1"
+    )
     report_data = journal.records[0].to_data()["report"]
     assert isinstance(report_data, dict)
     assert report_data["correspondence"] == effective.to_data()
@@ -640,7 +647,6 @@ def test_identity_correspondence_preserves_or_refuses_donor_ids() -> None:
             Subtree(case.alternative, ItemRef(case.root, 0)),
             policies,
         )
-
     donor = replace(
         case.alternative,
         tiers=tuple(
@@ -756,6 +762,165 @@ def test_identity_correspondence_preserves_or_refuses_donor_ids() -> None:
         drop_crossings(case, policies),
     )
     assert anonymous_result.graph._tiers_by_name[case.leaf].items[0].durable_id is None
+
+
+def test_checked_identity_carries_keep_durable_links_and_fact_subjects() -> None:
+    """Identified targets retain durable endpoint and fact reference spellings."""
+    case = fixture("speech")
+    relations = list(case.graph.relations)
+    relations[-1] = replace(relations[-1], right=DurableItemRef("middle-0"))
+    graph = replace(case.graph, relations=tuple(relations))
+    donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.middle
+            else tier
+            for tier in case.alternative.tiers
+        ),
+    )
+    source = ItemRef(case.middle, 0)
+    target = ItemRef(case.middle, 0)
+    correspondence = SubtreeCorrespondence(
+        {source: (target,)},
+        {source: (target,)},
+    )
+    policies = ReplacementPolicies(
+        ReplacementAction.DROP,
+        correspondence=correspondence,
+        relations={
+            case.link: ReplacementAction.FOLLOW,
+            case.group: ReplacementAction.DROP,
+        },
+        layers={case.layer: ReplacementAction.FOLLOW},
+    )
+
+    results = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        editor = (
+            graph.edit(journal=journal, check_links=True)
+            if journal is not None
+            else graph.edit(check_links=True)
+        )
+        editor.replace_subtree(
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(donor, ItemRef(case.root, 0)),
+            policies,
+        )
+        results.append(editor.freeze())
+
+    assert results[0] == results[1]
+    result = results[0]
+    link = next(
+        relation for relation in result.relations if relation.durable_id == "link"
+    )
+    assert link.right == DurableItemRef("middle-0")
+    assert result.resolve_item(link.right) == ItemRef(case.middle, 0)
+    fact = next(
+        fact
+        for layer in result.layers
+        if layer.name == case.layer
+        for fact in layer.facts
+        if fact.subject == DurableItemRef("middle-0")
+    )
+    assert isinstance(fact.subject, DurableItemRef)
+    assert result.resolve_item(fact.subject) == ItemRef(case.middle, 0)
+
+
+def test_identity_split_preserves_every_durable_endpoint_and_fact_image() -> None:
+    """A split keeps its fresh images alongside the durable identity image."""
+    case = fixture("speech")
+    split_group = QualifiedName(case.group.namespace, "split-group")
+    side = RelationSideDeclaration(
+        (RelationEndpointKind.ITEM,), (case.leaf,), maximum=None
+    )
+    split_value = AttributeValue(case.note, XsdType.STRING, "split")
+    graph = replace(
+        case.graph,
+        relation_declarations=(
+            *case.graph.relation_declarations,
+            PolyadicRelationDeclaration(split_group, side, side),
+        ),
+        polyadic_relations=(
+            *case.graph.polyadic_relations,
+            PolyadicRelationInstance(
+                split_group,
+                (ItemRef(case.leaf, 3),),
+                (DurableItemRef("leaf-0"),),
+                "split-link",
+            ),
+        ),
+        layers=(
+            replace(
+                case.graph.layers[0],
+                facts=(
+                    *case.graph.layers[0].facts,
+                    LayerFact(DurableItemRef("leaf-0"), split_value),
+                ),
+            ),
+        ),
+    )
+    donor = replace(
+        case.alternative,
+        tiers=tuple(
+            replace(
+                tier,
+                items=(replace(tier.items[0], durable_id=None), *tier.items[1:]),
+            )
+            if tier.declaration.name == case.leaf
+            else tier
+            for tier in case.alternative.tiers
+        ),
+    )
+    source = ItemRef(case.leaf, 0)
+    identity = ItemRef(case.leaf, 0)
+    fresh = ItemRef(case.leaf, 1)
+    policies = ReplacementPolicies(
+        ReplacementAction.DROP,
+        correspondence=SubtreeCorrespondence(
+            {source: (identity, fresh)},
+            {source: (identity,)},
+        ),
+        relations={
+            case.link: ReplacementAction.DROP,
+            case.group: ReplacementAction.DROP,
+            split_group: ReplacementAction.SPLIT,
+        },
+        layers={case.layer: ReplacementAction.SPLIT},
+    )
+
+    results = []
+    for journaled in (False, True):
+        journal = Journal() if journaled else None
+        editor = (
+            graph.edit(journal=journal, check_links=True)
+            if journal is not None
+            else graph.edit(check_links=True)
+        )
+        editor.replace_subtree(
+            DurableItemRef("root"),
+            case.containment,
+            Subtree(donor, ItemRef(case.root, 0)),
+            policies,
+        )
+        results.append(editor.freeze())
+
+    assert results[0] == results[1]
+    result = results[0]
+    relation = next(
+        relation
+        for relation in result.polyadic_relations
+        if relation.durable_id == "split-link"
+    )
+    assert relation.targets == (DurableItemRef("leaf-0"), fresh)
+    layer = next(layer for layer in result.layers if layer.name == case.layer)
+    assert LayerFact(DurableItemRef("leaf-0"), split_value) in layer.facts
+    assert LayerFact(fresh, split_value) in layer.facts
 
 
 def test_identity_correspondence_refuses_splits_and_merges() -> None:
@@ -2172,6 +2337,35 @@ def test_source_dependency_translation_handles_every_coordinate_carrier() -> Non
         )
         == dependencies
     )
+    positional_boundary = DetachedDependency(
+        "polyadic_endpoints",
+        0,
+        declaration=case.group,
+        endpoint=BoundaryRef(case.leaf, 0),  # type: ignore[arg-type]
+        endpoint_side="sources",
+        endpoint_index=0,
+    )
+    with pytest.raises(AssertionError, match="positional boundary"):
+        replacement._source_dependencies(
+            graph,
+            graph,
+            graph.edit().displacement(),
+            (positional_boundary,),
+        )
+
+
+def test_relation_construction_refuses_a_positional_boundary_endpoint() -> None:
+    """Only durable boundary references belong to relation endpoint values."""
+    case = fixture("speech")
+    malformed = replace(
+        case.graph.relations[0],
+        left=BoundaryRef(case.root, 0),  # type: ignore[arg-type]
+    )
+    with pytest.raises(GraphValidationError, match="positional boundary"):
+        replace(
+            case.graph,
+            relations=(malformed, *case.graph.relations[1:]),
+        )
 
 
 def test_replacement_guards_policy_shapes_and_protected_layers() -> None:

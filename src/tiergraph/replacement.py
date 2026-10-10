@@ -701,6 +701,10 @@ def _source_dependencies(
             result.append(replace(dependency, index=inverse_polyadic[dependency.index]))
         elif dependency.carrier == "polyadic_endpoints":
             endpoint = dependency.endpoint
+            if isinstance(endpoint, BoundaryRef):
+                raise AssertionError(
+                    "relation endpoints cannot contain positional boundary references"
+                )
             if isinstance(endpoint, ItemRef):
                 endpoint = inverse_items[endpoint]
             result.append(
@@ -1243,6 +1247,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             correspondence,
             item_images,
             crossing_policy,
+            identity_correspondence=identity_correspondence,
         )
         if binary_carried is None:
             detached.append(
@@ -1267,6 +1272,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             correspondence,
             item_images,
             crossing_policy,
+            identity_correspondence=identity_correspondence,
         )
         if polyadic_carried is None:
             detached.append(
@@ -1409,6 +1415,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             old_runs,
             insertions,
             new_runs,
+            identity_correspondence=identity_correspondence,
         )
         is_relation_subject = isinstance(
             fact.subject,
@@ -1493,6 +1500,7 @@ def _replace_subtree(  # noqa: PLR0915 -- one atomic dependency-ordered edit
             old_runs,
             insertions,
             new_runs,
+            identity_correspondence=identity_correspondence,
         )
         if subjects and any(
             LayerFact(subject, fact.value) not in candidate_facts[layer_name]
@@ -1761,6 +1769,7 @@ def _crossing_targets(
     target: Graph,
     endpoint: RelationEndpointRef,
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
+    identity_correspondence: Mapping[ItemRef, tuple[ItemRef, ...]] | None = None,
 ) -> tuple[RelationEndpointRef, ...]:
     """Resolve one inside endpoint through an old-to-new hole alignment."""
     if isinstance(endpoint, DurableBoundaryRef):
@@ -1776,7 +1785,18 @@ def _crossing_targets(
                 DurableBoundaryRef(DurableItemRef(item.durable_id), endpoint.side)
             )
         return tuple(result)
-    return correspondence.get(source.resolve_item(endpoint), ())
+    coordinate = source.resolve_item(endpoint)
+    targets = correspondence.get(coordinate, ())
+    if (
+        isinstance(endpoint, DurableItemRef)
+        and identity_correspondence is not None
+        and coordinate in identity_correspondence
+    ):
+        identity_targets = identity_correspondence[coordinate]
+        return tuple(
+            endpoint if target in identity_targets else target for target in targets
+        )
+    return targets
 
 
 def _crossing_refusal(
@@ -1857,6 +1877,8 @@ def _carry_binary_relation(
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
     item_images: Mapping[ItemRef, ItemRef],
     failure_policy: ReplacementAction | None,
+    *,
+    identity_correspondence: Mapping[ItemRef, tuple[ItemRef, ...]] | None = None,
 ) -> RelationInstance | None:
     """Carry one binary crossing or apply its explicit DROP fallback."""
     sides: list[RelationEndpointRef] = []
@@ -1864,7 +1886,13 @@ def _carry_binary_relation(
         if not _endpoint_touches(source, endpoint, descendants):
             sides.append(_remap_unaffected_endpoint(endpoint, item_images))
             continue
-        targets = _crossing_targets(source, target, endpoint, correspondence)
+        targets = _crossing_targets(
+            source,
+            target,
+            endpoint,
+            correspondence,
+            identity_correspondence,
+        )
         if len(targets) != 1:
             if failure_policy is ReplacementAction.DROP:
                 return None
@@ -1891,6 +1919,8 @@ def _carry_polyadic_relation(
     correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
     item_images: Mapping[ItemRef, ItemRef],
     failure_policy: ReplacementAction | None,
+    *,
+    identity_correspondence: Mapping[ItemRef, tuple[ItemRef, ...]] | None = None,
 ) -> tuple[
     PolyadicRelationInstance | None,
     tuple[DetachedDependency, ...],
@@ -1907,7 +1937,13 @@ def _carry_polyadic_relation(
             if not _endpoint_touches(source, endpoint, descendants):
                 result.append(_remap_unaffected_endpoint(endpoint, item_images))
                 continue
-            targets = _crossing_targets(source, target, endpoint, correspondence)
+            targets = _crossing_targets(
+                source,
+                target,
+                endpoint,
+                correspondence,
+                identity_correspondence,
+            )
             if not targets:
                 if failure_policy is ReplacementAction.DROP:
                     return None
@@ -2106,6 +2142,8 @@ def _fact_subjects(
     old_runs: Mapping[QualifiedName, tuple[int, ...]],
     insertions: Mapping[QualifiedName, int],
     new_runs: Mapping[QualifiedName, tuple[int, ...]],
+    *,
+    identity_correspondence: Mapping[ItemRef, tuple[ItemRef, ...]] | None = None,
 ) -> tuple[LayerSubject, ...]:
     relation_subject = isinstance(
         subject,
@@ -2117,8 +2155,24 @@ def _fact_subjects(
     if _abandons(action) and not relation_subject:
         return ()
     targets: tuple[LayerSubject, ...]
-    if isinstance(subject, ItemRef | DurableItemRef):
+    if isinstance(subject, ItemRef):
         targets = correspondence.get(graph.resolve_item(subject), ())
+    elif isinstance(subject, DurableItemRef):
+        coordinate = graph.resolve_item(subject)
+        item_images = correspondence.get(coordinate, ())
+        identity_targets = (
+            ()
+            if identity_correspondence is None
+            else identity_correspondence.get(coordinate, ())
+        )
+        targets = (
+            (subject,)
+            if action is ReplacementAction.FOLLOW and identity_targets
+            else tuple(
+                subject if target in identity_targets else target
+                for target in item_images
+            )
+        )
     elif isinstance(subject, BoundaryRef | DurableBoundaryRef):
         targets = _boundary_correspondence(
             graph.resolve_boundary(subject),
@@ -2141,11 +2195,11 @@ def _fact_subjects(
             for index, relation in enumerate(graph.relations)
             if relation.durable_id == subject.durable_id
         )
-        images = binary.get(old, ())
+        relation_images = binary.get(old, ())
         targets = (
             (subject,)
-            if len(images) == 1
-            else tuple(RelationInstanceRef(index) for index in images)
+            if len(relation_images) == 1
+            else tuple(RelationInstanceRef(index) for index in relation_images)
         )
     elif isinstance(subject, DurablePolyadicRef):
         old = next(
@@ -2153,11 +2207,11 @@ def _fact_subjects(
             for index, relation in enumerate(graph.polyadic_relations)
             if relation.durable_id == subject.durable_id
         )
-        images = polyadic.get(old, ())
+        relation_images = polyadic.get(old, ())
         targets = (
             (subject,)
-            if len(images) == 1
-            else tuple(PolyadicInstanceRef(index) for index in images)
+            if len(relation_images) == 1
+            else tuple(PolyadicInstanceRef(index) for index in relation_images)
         )
     else:
         targets = ()

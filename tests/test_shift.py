@@ -19,6 +19,7 @@ from tiergraph import (
     BoundaryRef,
     BoundarySide,
     ClockProfile,
+    ClockRebindingPolicy,
     ContainmentYieldChange,
     CostTable,
     DurableBoundaryRef,
@@ -1008,6 +1009,16 @@ def test_clock_bound_container_shift_needs_no_rebinding_policy() -> None:
     assert {relation.right for relation in result.relations} <= {
         relation.right for relation in bound.relations
     }
+
+    unchanged, reports = profile.edit()._rebind_shift_boundaries(
+        bound,
+        (BoundaryRef(PHRASE, 1),),
+        BoundaryRef(PHRASE, 1),
+        ClockRebindingPolicy.KEEP_EARLIER,
+    )
+    assert unchanged == bound
+    assert len(reports) == 1
+    assert reports[0].changes == ()
 
     journal = Journal()
     recorded = profile.edit(journal=journal)

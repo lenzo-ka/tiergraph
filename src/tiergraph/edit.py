@@ -2146,10 +2146,14 @@ class Journal:
         profile: ClockProfile,
         rebinding: ClockRebindingPolicy | str | None,
         blob: BlobProfile | None,
+        *,
+        check_links: bool = False,
     ) -> ClockJournalEditor:
         if self._editor is not None:
             raise GraphValidationError("journal is already attached to an editor")
-        editor = ClockJournalEditor(profile, rebinding, self, blob=blob)
+        editor = ClockJournalEditor(
+            profile, rebinding, self, blob=blob, check_links=check_links
+        )
         self._editor = editor
         return editor
 
@@ -3795,22 +3799,24 @@ def _detachment_has_link(
             dependency.carrier == carrier and dependency.index == index
             for dependency in report.dependencies
         )
-        if endpoint_reported or relation_reported:
+        if endpoint_reported:
+            return True
+        if displacement is None:
+            displacement = _displacement_between(before, after)
+        if _relation_image(before, after, carrier, index, displacement) is not None:
+            return False
+        if relation_reported:
             return True
         if any(
             dependency.carrier == "polyadic_endpoints" and dependency.index == index
             for dependency in report.dependencies
         ):
             return False
-        if displacement is None:
-            displacement = _displacement_between(before, after)
         mapping = (
             displacement.polyadic_relations
             if carrier == "polyadic_relations"
             else displacement.relations
         )
-        if index in mapping:
-            return False
         surviving = (
             after.polyadic_relations
             if carrier == "polyadic_relations"
@@ -3863,7 +3869,13 @@ def _detachment_has_link(
 
 def _ledger_context(
     before: Graph, after: Graph, record: object
-) -> tuple[Displacement, SubtreeCorrespondence | None, DetachmentReport | None]:
+) -> tuple[
+    Displacement,
+    SubtreeCorrespondence | None,
+    DetachmentReport | None,
+    str | None,
+    tuple[ClockEditReport, ...],
+]:
     """Resolve one journal or result account into its ledger inputs."""
     if isinstance(record, JournalRecord):
         try:
@@ -3881,6 +3893,8 @@ def _ledger_context(
             journal_report.displacement,
             journal_report.correspondence,
             journal_report.detached_content,
+            journal_report.operation,
+            journal_report.clock_reports,
         )
     report = record if isinstance(record, EditReport) else None
     if (
@@ -3889,10 +3903,22 @@ def _ledger_context(
         and isinstance(record[1], Displacement)
         and isinstance(record[2], SubtreeCorrespondence | None)
     ):
-        return record[1], record[2], _reported_detachment(record)
+        return record[1], record[2], _reported_detachment(record), None, ()
     if report is not None:
-        return report.displacement, report.correspondence, report.detached_content
-    return _displacement_between(before, after), None, _reported_detachment(record)
+        return (
+            report.displacement,
+            report.correspondence,
+            report.detached_content,
+            report.operation,
+            report.clock_reports,
+        )
+    return (
+        _displacement_between(before, after),
+        None,
+        _reported_detachment(record),
+        None,
+        (),
+    )
 
 
 def _link_positions_match(
@@ -3908,7 +3934,87 @@ def _link_positions_match(
     return candidate.position is not None and candidate.position > previous
 
 
-def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedger:
+def _shift_endpoint_match(
+    link: _LinkSnapshot,
+    candidate: _LinkSnapshot,
+    before: Graph,
+    after: Graph,
+    values: tuple[object, ...],
+) -> bool:
+    """Recognize an ordered-containment endpoint moved by a sister shift."""
+    if (
+        link.kind != "endpoint"
+        or candidate.kind != "endpoint"
+        or link.carrier != candidate.carrier
+        or link.carrier != "polyadic_relations"
+        or link.side != candidate.side
+    ):
+        return False
+    _, source_index = cast(tuple[str, int], link.owner)
+    _, target_index = cast(tuple[str, int], candidate.owner)
+    source_relation = _relation_at(before, link.carrier, source_index)
+    target_relation = _relation_at(after, candidate.carrier, target_index)
+    if source_relation.declaration != target_relation.declaration:
+        return False
+    return candidate.value in values
+
+
+def _clock_endpoint_match(
+    link: _LinkSnapshot,
+    candidate: _LinkSnapshot,
+    before: Graph,
+    after: Graph,
+    owners: tuple[object, ...],
+    reports: tuple[ClockEditReport, ...],
+) -> bool:
+    """Match an endpoint re-pointing named by a clock binding report."""
+    if (
+        link.kind != "endpoint"
+        or candidate.kind != "endpoint"
+        or link.carrier != "relations"
+        or candidate.carrier != "relations"
+        or candidate.owner not in owners
+        or link.side != candidate.side
+    ):
+        return False
+    _, source_index = cast(tuple[str, int], link.owner)
+    _, target_index = cast(tuple[str, int], candidate.owner)
+    source_relation = before.relations[source_index]
+    target_relation = after.relations[target_index]
+    if source_relation.declaration != target_relation.declaration:
+        return False
+    for report in reports:
+        for change in report.changes:
+            if (
+                link.side == "left"
+                and change.previous_source == link.value
+                and change.source == candidate.value
+            ):
+                return True
+            if (
+                link.side == "right"
+                and change.previous_clock_index is not None
+                and change.clock_index is not None
+                and change.previous_source == source_relation.left
+                and change.source == target_relation.left
+                and isinstance(link.value, DurableBoundaryRef)
+                and isinstance(candidate.value, DurableBoundaryRef)
+                and before.resolve_boundary(link.value).index
+                == change.previous_clock_index
+                and after.resolve_boundary(candidate.value).index == change.clock_index
+            ):
+                return True
+    return False
+
+
+def link_ledger(
+    before: Graph,
+    after: Graph,
+    record: object = None,
+    *,
+    operation: str | None = None,
+    clock_reports: tuple[ClockEditReport, ...] = (),
+) -> _LinkLedger:
     """Balance the complete before/after link diff against one edit account.
 
     A journal record verifies its exact inverse and accounts withdrawals through
@@ -3917,7 +4023,16 @@ def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedg
     """
     if not isinstance(before, Graph) or not isinstance(after, Graph):
         raise TypeError("link ledger requires before and after Graph values")
-    displacement, correspondence, detachment = _ledger_context(before, after, record)
+    (
+        displacement,
+        correspondence,
+        detachment,
+        reported_operation,
+        reported_clock_reports,
+    ) = _ledger_context(before, after, record)
+    operation = reported_operation if operation is None else operation
+    if not clock_reports:
+        clock_reports = reported_clock_reports
 
     source = _graph_links(before)
     target = _graph_links(after)
@@ -3976,6 +4091,34 @@ def link_ledger(before: Graph, after: Graph, record: object = None) -> _LinkLedg
                 None,
             )
         )
+        if match is None and not reported_drop and operation == "shift":
+            match = next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(target)
+                    if index not in used
+                    and _shift_endpoint_match(link, candidate, before, after, values)
+                    and _link_positions_match(link, candidate, endpoint_positions)
+                ),
+                None,
+            )
+        if match is None and not reported_drop and clock_reports:
+            match = next(
+                (
+                    (index, candidate)
+                    for index, candidate in enumerate(target)
+                    if index not in used
+                    and _clock_endpoint_match(
+                        link,
+                        candidate,
+                        before,
+                        after,
+                        owners,
+                        clock_reports,
+                    )
+                ),
+                None,
+            )
         if match is None:
             dropped.append(link)
             if not reported_drop:
@@ -4017,9 +4160,10 @@ class ClockJournalEditor(_JournalEditorBase):
         journal: Journal,
         *,
         blob: BlobProfile | None = None,
+        check_links: bool = False,
     ) -> None:
         probe = ClockEditor(profile, rebinding, blob=blob)
-        super().__init__(profile.graph, journal)
+        super().__init__(profile.graph, journal, check_links=check_links)
         self._profile_template = profile
         self._blob_profile = blob
         self._profile = profile
@@ -4130,7 +4274,11 @@ class ClockJournalEditor(_JournalEditorBase):
             after_clock_active=active,
             detached_dependencies=native._detached_dependencies,
             detached_content=native._detached_content,
-            correspondence=correspondence,
+            correspondence=(
+                getattr(native, "_link_correspondence", None)
+                if correspondence is None
+                else correspondence
+            ),
             yield_changes=native._yield_changes,
         )
         self._profile_active = active
