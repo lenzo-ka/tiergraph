@@ -409,6 +409,37 @@ def _insertion_positions(before: Sequence[Item], after: Sequence[Item]) -> range
     return range(len(before) - suffix, prefix + 1)
 
 
+def _changed_survivor_merge_placements(
+    before: Sequence[Item], after: Sequence[Item], tier: QualifiedName
+) -> tuple[tuple[ItemRef, ItemRef, ItemRef, int], ...]:
+    """Return adjacent merge placements around one changed survivor item."""
+    if len(before) != len(after) + 1 or not after:
+        return ()
+    prefix = 0
+    while prefix < len(after) and before[prefix] == after[prefix]:
+        prefix += 1
+    suffix = 0
+    while suffix < len(after) and before[-suffix - 1] == after[-suffix - 1]:
+        suffix += 1
+
+    placements: list[tuple[ItemRef, ItemRef, ItemRef, int]] = []
+    right_survivor_removal = prefix
+    if (
+        right_survivor_removal + 1 < len(before)
+        and suffix >= len(after) - right_survivor_removal - 1
+    ):
+        first = ItemRef(tier, right_survivor_removal)
+        second = ItemRef(tier, right_survivor_removal + 1)
+        placements.append((first, second, second, right_survivor_removal))
+
+    left_survivor_removal = len(after) - suffix
+    if left_survivor_removal > 0 and prefix >= left_survivor_removal - 1:
+        first = ItemRef(tier, left_survivor_removal - 1)
+        second = ItemRef(tier, left_survivor_removal)
+        placements.append((first, second, first, left_survivor_removal))
+    return tuple(placements)
+
+
 def _before_insertion(
     item: ItemRef, tier: QualifiedName, insertion: int
 ) -> ItemRef | None:
@@ -648,25 +679,12 @@ def _regroup_patch(  # noqa: PLR0915 -- derives and verifies both regroup direct
     before_items = source.tiers[changed_tier].items
     after_items = target.tiers[changed_tier].items
     merge_candidates: list[tuple[ItemRef, ItemRef, ItemRef, QualifiedName]] = []
-    for removal in _insertion_positions(after_items, before_items):
-        merge_placements: list[tuple[ItemRef, ItemRef, ItemRef]] = []
-        if removal > 0:
-            merge_placements.append(
-                (
-                    ItemRef(tier, removal - 1),
-                    ItemRef(tier, removal),
-                    ItemRef(tier, removal - 1),
-                )
-            )
-        if removal + 1 < len(before_items):
-            merge_placements.append(
-                (
-                    ItemRef(tier, removal),
-                    ItemRef(tier, removal + 1),
-                    ItemRef(tier, removal + 1),
-                )
-            )
-        for first, second, survivor in merge_placements:
+
+    def add_merge_candidates(
+        placements: Sequence[tuple[ItemRef, ItemRef, ItemRef, int]],
+    ) -> None:
+        """Append placements whose containment memberships explain the target."""
+        for first, second, survivor, removal in placements:
             survivor_after = ItemRef(tier, survivor.index - (survivor.index > removal))
             for containment, source_instances, target_instances in memberships:
                 left_membership = source_instances.get(first)
@@ -695,8 +713,33 @@ def _regroup_patch(  # noqa: PLR0915 -- derives and verifies both regroup direct
                     or (*left_children, *right_children) != target_children
                 ):
                     continue
-                merge_candidate = (first, second, survivor, containment)
-                merge_candidates.append(merge_candidate)
+                merge_candidates.append((first, second, survivor, containment))
+
+    exact_placements: list[tuple[ItemRef, ItemRef, ItemRef, int]] = []
+    for removal in _insertion_positions(after_items, before_items):
+        if removal > 0:
+            exact_placements.append(
+                (
+                    ItemRef(tier, removal - 1),
+                    ItemRef(tier, removal),
+                    ItemRef(tier, removal - 1),
+                    removal,
+                )
+            )
+        if removal + 1 < len(before_items):
+            exact_placements.append(
+                (
+                    ItemRef(tier, removal),
+                    ItemRef(tier, removal + 1),
+                    ItemRef(tier, removal + 1),
+                    removal,
+                )
+            )
+    add_merge_candidates(exact_placements)
+    if not merge_candidates:
+        add_merge_candidates(
+            _changed_survivor_merge_placements(before_items, after_items, tier)
+        )
     for first, second, survivor, containment in merge_candidates:
         for named_drops in (False, True):
             policies = (

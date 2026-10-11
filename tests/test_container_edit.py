@@ -13,6 +13,7 @@ from tests.test_shift import (
     CLOCK_BINDING,
     PHRASE,
     PHRASE_WORDS,
+    PROVENANCE_LAYER,
     SEGMENT,
     SOURCE_LAYER,
     SOURCE_OFFSET,
@@ -42,6 +43,7 @@ from tiergraph import (
     CostTable,
     DurableBoundaryRef,
     DurableItemRef,
+    DurablePolyadicRef,
     Graph,
     GraphValidationError,
     Item,
@@ -72,7 +74,7 @@ from tiergraph import (
     price_patch,
     split_container,
 )
-from tiergraph.container_edit import _merge_outcome, _split_outcome
+from tiergraph.container_edit import _merge_outcome, _RegroupOutcome, _split_outcome
 from tiergraph.distance import _atom_multiset_lower_bound
 from tiergraph.edit import _operation, _OperationPair, link_ledger
 from tiergraph.equivalence import EquivalenceView
@@ -85,8 +87,9 @@ def _durable_ids(graph: Graph, tier: QualifiedName) -> list[str | None]:
 
 
 def _cross_tier_phrase_link(*targets: str) -> tuple[Graph, QualifiedName]:
-    """Add a third phrase and one Token-to-Phrase polyadic link."""
+    """Add a third phrase and one annotated Token-to-Phrase polyadic link."""
     relation = name("token-phrases")
+    provenance_name = name("relation-provenance")
     source = hierarchy()
     tiers = tuple(
         replace(tier, items=(*tier.items, Item("p2")))
@@ -115,7 +118,35 @@ def _cross_tier_phrase_link(*targets: str) -> tuple[Graph, QualifiedName]:
         source,
         tiers=tiers,
         relation_declarations=(*source.relation_declarations, declaration),
+        attribute_declarations=(
+            AttributeDeclaration(
+                SOURCE_OFFSET, AttributeDomain.RELATION_INSTANCE, XsdType.INTEGER
+            ),
+            AttributeDeclaration(
+                provenance_name, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
+            ),
+        ),
         polyadic_relations=(utterance, *source.polyadic_relations[1:], linked),
+        layers=(
+            Layer(
+                SOURCE_LAYER,
+                (
+                    LayerFact(
+                        DurablePolyadicRef("token-phrases-0"),
+                        AttributeValue(SOURCE_OFFSET, XsdType.INTEGER, "12"),
+                    ),
+                ),
+            ),
+            Layer(
+                PROVENANCE_LAYER,
+                (
+                    LayerFact(
+                        DurablePolyadicRef("token-phrases-0"),
+                        AttributeValue(provenance_name, XsdType.STRING, "fixture"),
+                    ),
+                ),
+            ),
+        ),
     )
     return graph, relation
 
@@ -217,12 +248,15 @@ def test_merge_and_restoring_split_are_exact_for_either_survivor(survivor: str) 
 def test_merge_repoints_a_cross_tier_polyadic_target() -> None:
     """A departing target is re-pointed without losing a separate target."""
     graph, relation = _cross_tier_phrase_link("p1", "p2")
-    merged = graph.merge_containers(
+    journal = Journal()
+    editor = graph.edit(journal=journal)
+    editor.merge_containers(
         DurableItemRef("p0"),
         DurableItemRef("p1"),
         DurableItemRef("p0"),
         PHRASE_WORDS,
     )
+    merged = editor.freeze()
     linked = next(
         instance
         for instance in merged.polyadic_relations
@@ -246,6 +280,7 @@ def test_merge_repoints_a_cross_tier_polyadic_target() -> None:
         for instance in graph.polyadic_relations
         if instance.declaration not in unaffected
     )
+    assert journal.to_patch().invert().apply(merged) == graph
 
 
 def test_merge_refuses_collapsing_distinct_polyadic_targets() -> None:
@@ -316,6 +351,8 @@ def test_checked_merge_refuses_a_lost_noncontainment_sister_target() -> None:
             for instance in graph.polyadic_relations
             if instance.declaration != relation
         ),
+        attribute_declarations=(),
+        layers=(),
     )
     outcome = _merge_outcome(
         base,
@@ -351,58 +388,33 @@ def test_checked_editor_invokes_the_link_ledger_for_merge_loss(
     journaled: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Plain and journaled checked editors refuse an unreported merge loss."""
-    graph, relation = _cross_tier_phrase_link("p0", "p1")
-    base = replace(
-        graph,
-        relation_declarations=tuple(
-            declaration
-            for declaration in graph.relation_declarations
-            if declaration.name != relation
-        ),
-        polyadic_relations=tuple(
-            instance
-            for instance in graph.polyadic_relations
-            if instance.declaration != relation
-        ),
-    )
-    outcome = _merge_outcome(
-        base,
-        DurableItemRef("p0"),
-        DurableItemRef("p1"),
-        DurableItemRef("p0"),
-        PHRASE_WORDS,
-    )
-    lost = replace(
-        outcome.graph,
-        relation_declarations=graph.relation_declarations,
-        polyadic_relations=(
-            *outcome.graph.polyadic_relations,
-            PolyadicRelationInstance(
-                relation,
-                (DurableItemRef("t0"),),
-                (DurableItemRef("p0"),),
-                "token-phrases-0",
-            ),
-        ),
-    )
+    graph, relation = _cross_tier_phrase_link("p1", "p2")
+    actual_merge_outcome = _merge_outcome
 
-    def reject_loss(
-        _before: Graph,
-        _after: Graph,
-        _record: object = None,
-        *,
-        operation: str | None = None,
-        clock_reports: object = (),
-    ) -> object:
-        del clock_reports
-        return link_ledger(
-            graph,
-            lost,
-            (outcome.report, outcome.displacement, outcome.correspondence),
-            operation=operation,
+    def lose_unreported_target(
+        source: Graph,
+        first: ItemRef | DurableItemRef,
+        second: ItemRef | DurableItemRef,
+        survivor: ItemRef | DurableItemRef,
+        containment_name: QualifiedName,
+        policies: RegroupPolicies | None = None,
+    ) -> _RegroupOutcome:
+        outcome = actual_merge_outcome(
+            source, first, second, survivor, containment_name, policies
+        )
+        relations = tuple(
+            replace(instance, targets=instance.targets[:-1])
+            if instance.declaration == relation
+            else instance
+            for instance in outcome.graph.polyadic_relations
+        )
+        return replace(
+            outcome, graph=replace(outcome.graph, polyadic_relations=relations)
         )
 
-    monkeypatch.setattr("tiergraph.edit.link_ledger", reject_loss)
+    monkeypatch.setattr(
+        "tiergraph.container_edit._merge_outcome", lose_unreported_target
+    )
     editor = (
         graph.edit(journal=Journal(), check_links=True)
         if journaled
@@ -414,9 +426,51 @@ def test_checked_editor_invokes_the_link_ledger_for_merge_loss(
             DurableItemRef("p1"),
             DurableItemRef("p0"),
             PHRASE_WORDS,
-            RegroupPolicies(relations={relation: ReplacementAction.DROP}),
         )
     assert editor.freeze() == graph
+
+
+def test_diff_prices_merge_with_carried_content_and_named_seam_drop() -> None:
+    """A changed survivor does not hide its adjacent named-drop merge."""
+    source = rich_content().set_attribute(
+        DurableItemRef("p1"),
+        AttributeValue(SOURCE_OFFSET, XsdType.INTEGER, "7"),
+    )
+    seam_name = name("carried-content-seam")
+    seam_value = AttributeValue(seam_name, XsdType.STRING, "drop")
+    seam_layer = LayerName(seam_name.namespace, "carried-content-seams")
+    source = replace(
+        source,
+        attribute_declarations=(
+            *source.attribute_declarations,
+            AttributeDeclaration(seam_name, AttributeDomain.BOUNDARY, XsdType.STRING),
+        ),
+        layers=(
+            *source.layers,
+            Layer(
+                seam_layer,
+                (LayerFact(BoundaryRef(PHRASE, 1), seam_value),),
+            ),
+        ),
+    )
+    target = source.merge_containers(
+        DurableItemRef("p0"),
+        DurableItemRef("p1"),
+        DurableItemRef("p0"),
+        PHRASE_WORDS,
+        RegroupPolicies(seam_content=ReplacementAction.DROP),
+    )
+    patch = diff(source, target, EquivalenceView.EXACT)
+    assert len(patch.operations) == 1
+    opcode = patch.operations[0].opcode
+    assert isinstance(opcode, DeltaOpcode)
+    assert opcode.operation == "merge_containers"
+    assert patch.apply(source) == target
+    assert patch.invert().apply(target) == source
+    costs = CostTable()
+    assert price_patch(patch, costs, source) == costs.operation(
+        "merge_containers", PHRASE
+    )
 
 
 def test_diff_prices_named_drop_merges_as_one_regroup_edit() -> None:
@@ -494,7 +548,7 @@ def test_diff_prices_named_drop_merges_as_one_regroup_edit() -> None:
 def test_diff_default_merge_skips_drop_policy_derivation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An ordinary merge does not scan the graph for unused drop policies."""
+    """An ordinary merge does not run unused fallback or drop-policy scans."""
     source = hierarchy()
     target = source.merge_containers(
         DurableItemRef("p0"),
@@ -508,6 +562,11 @@ def test_diff_default_merge_skips_drop_policy_derivation(
 
     monkeypatch.setattr(
         import_module("tiergraph.diff"), "_merge_policies", unexpected_derivation
+    )
+    monkeypatch.setattr(
+        import_module("tiergraph.diff"),
+        "_changed_survivor_merge_placements",
+        unexpected_derivation,
     )
     patch = diff(source, target, EquivalenceView.EXACT)
     assert len(patch.operations) == 1
