@@ -669,6 +669,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         help="declared blob media type; repeatable",
     )
     tgdb_find.add_argument(
+        "--column",
+        action="append",
+        type=_tgdb_column_filter,
+        metavar="NAME[=VALUE|:MIN:MAX]",
+        help="required blob column, equality, or numeric range; repeatable",
+    )
+    tgdb_find.add_argument(
         "--missing-blob",
         action="store_true",
         help="require an active head with a declared payload absent from the store",
@@ -896,6 +903,79 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     index_list.set_defaults(handler=_handle_tgdb)
     index_list.add_argument("store", metavar="STORE", help="store directory")
     index_list.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_column = _subcommand(
+        tgdb_subparsers,
+        "column",
+        summary="manage declared blob metadata columns",
+        description=(
+            "Declare, list, or drop ordered typed columns derived from blob-item "
+            "attributes in stored graph documents."
+        ),
+        examples=("tiergraph tgdb column list corpus.tgdb",),
+    )
+    column_commands = tgdb_column.add_subparsers(
+        dest="tgdb_column_command", required=True
+    )
+    column_declare = _subcommand(
+        column_commands,
+        "declare",
+        summary="declare a blob metadata column",
+        description=(
+            "Build one typed blob-item attribute column in one commit without "
+            "opening payloads. MEDIA_TYPE is type/subtype or type/*. ATTRIBUTE "
+            "uses NAMESPACE|LOCAL."
+        ),
+        examples=(
+            "tiergraph tgdb column declare corpus.tgdb duration "
+            "audio/* urn:example:audio|duration decimal",
+        ),
+    )
+    column_declare.set_defaults(handler=_handle_tgdb)
+    column_declare.add_argument("store", metavar="STORE", help="store directory")
+    column_declare.add_argument("name", metavar="NAME", help="unique column name")
+    column_declare.add_argument(
+        "media_type",
+        type=_column_media_type_argument,
+        metavar="MEDIA_TYPE",
+        help="exact media type or type/* family",
+    )
+    column_declare.add_argument(
+        "attribute",
+        type=_qualified_spelling,
+        metavar="ATTRIBUTE",
+        help="blob-item attribute as NAMESPACE|LOCAL",
+    )
+    column_declare.add_argument(
+        "value_type",
+        choices=tuple(
+            member.value for member in (*tiergraph.XsdType, *tiergraph.JsonType)
+        ),
+        metavar="TYPE",
+        help="declared graph attribute value type",
+    )
+    column_drop = _subcommand(
+        column_commands,
+        "drop",
+        summary="drop a blob metadata column",
+        description="Drop one declaration and its rebuildable metadata rows.",
+        examples=("tiergraph tgdb column drop corpus.tgdb duration",),
+    )
+    column_drop.set_defaults(handler=_handle_tgdb)
+    column_drop.add_argument("store", metavar="STORE", help="store directory")
+    column_drop.add_argument("name", metavar="NAME", help="declared column name")
+    column_list = _subcommand(
+        column_commands,
+        "list",
+        summary="list blob metadata columns",
+        description="List blob columns in declared order without opening graphs.",
+        examples=(
+            "tiergraph tgdb column list corpus.tgdb",
+            "tiergraph tgdb column list corpus.tgdb --json",
+        ),
+    )
+    column_list.set_defaults(handler=_handle_tgdb)
+    column_list.add_argument("store", metavar="STORE", help="store directory")
+    column_list.add_argument("--json", action="store_true", help="emit structured JSON")
     for command in ("rename", "move"):
         subcommand = _subcommand(
             tgdb_subparsers,
@@ -2406,6 +2486,16 @@ def _tgdb_index_filter(value: str) -> _TgdbIndexFilter:
     return name, cast(_TgdbIndexScalar, scalar), None, None
 
 
+def _tgdb_column_filter(value: str) -> _TgdbIndexFilter:
+    """Parse one blob-column presence, equality, or numeric-range filter."""
+    try:
+        return _tgdb_index_filter(value)
+    except argparse.ArgumentTypeError as error:
+        raise argparse.ArgumentTypeError(
+            str(error).replace("index", "column")
+        ) from error
+
+
 def _tgdb_index_value(
     attribute: tiergraph.QualifiedName, value: _TgdbIndexScalar
 ) -> tiergraph.AttributeValue:
@@ -2583,6 +2673,13 @@ def _media_type_argument(value: str) -> str:
     return value
 
 
+def _column_media_type_argument(value: str) -> str:
+    """Require an exact media type or a lowercase type family."""
+    if value.endswith("/*") and _MEDIA_TYPE_TEXT.fullmatch(value[:-1] + "x"):
+        return value
+    return _media_type_argument(value)
+
+
 def _file_output_argument(value: str) -> str:
     """Require a retractable filesystem destination for verified bytes."""
     if value == "-":
@@ -2716,6 +2813,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 "add",
                 "apply",
                 "batch",
+                "column",
                 "collection",
                 "import",
                 "index",
@@ -2732,6 +2830,9 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 and args.tgdb_collection_command in {"export", "list"}
             )
             and not (args.tgdb_command == "index" and args.tgdb_index_command == "list")
+            and not (
+                args.tgdb_command == "column" and args.tgdb_column_command == "list"
+            )
         )
         writable = writable or (args.tgdb_command == "reindex" and args.rebuild)
         writable = writable or args.tgdb_command == "repack"
@@ -2916,6 +3017,48 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     receipt = transaction.commit()
                 _stdout_text(
                     f"committed {receipt.commit_seq}: {command} index {args.name!r}\n"
+                )
+                return 0
+            if args.tgdb_command == "column":
+                command = args.tgdb_column_command
+                if command == "list":
+                    columns = store.columns()
+                    if args.json:
+                        _stdout_text(
+                            _json_bytes(
+                                [column.to_data() for column in columns]
+                            ).decode("utf-8")
+                        )
+                    else:
+                        for column in columns:
+                            _stdout_text(
+                                "\t".join(
+                                    _text_report_field(value)
+                                    for value in (
+                                        column.position,
+                                        column.name,
+                                        column.media_type,
+                                        f"{column.attribute.namespace}|"
+                                        f"{column.attribute.local_name}",
+                                        column.value_type,
+                                    )
+                                )
+                                + "\n"
+                            )
+                    return 0
+                with store.write() as transaction:
+                    if command == "declare":
+                        transaction.declare_column(
+                            args.name,
+                            args.media_type,
+                            args.attribute,
+                            args.value_type,
+                        )
+                    else:
+                        transaction.drop_column(args.name)
+                    receipt = transaction.commit()
+                _stdout_text(
+                    f"committed {receipt.commit_seq}: {command} column {args.name!r}\n"
                 )
                 return 0
             if args.tgdb_command == "collection":
@@ -3268,6 +3411,30 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     query = query.uses_blob(digest)
                 for media_type in args.media_type or ():
                     query = query.blob_media_type(media_type)
+                column_info: dict[str, tgdb.ColumnInfo] | None = None
+                for name, scalar, minimum, maximum in args.column or ():
+                    if column_info is None:
+                        column_info = {
+                            column.name: column for column in store.columns()
+                        }
+                    column_declaration = column_info.get(name)
+                    if column_declaration is None:
+                        raise tgdb.TgdbError(f"blob column {name!r} is not declared")
+                    if scalar is not None:
+                        try:
+                            tgdb._column_query_value(
+                                column_declaration.value_type, scalar
+                            )
+                        except (TypeError, ValueError) as error:
+                            raise tgdb.TgdbError(
+                                f"blob column {name!r}: {error}"
+                            ) from error
+                    query = query.blob_column(
+                        name,
+                        equals=scalar,
+                        minimum=minimum,
+                        maximum=maximum,
+                    )
                 if args.missing_blob:
                     query = query.missing_blob()
                 if args.stage is not None:

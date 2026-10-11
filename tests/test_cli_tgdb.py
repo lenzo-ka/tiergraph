@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import io
 import json
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import tiergraph.cli as cli
 import tiergraph.tgdb as tgdb
 from tiergraph import (
     BLOB_NAMESPACE,
@@ -40,6 +42,7 @@ def _cli_blob_graph(payload: bytes) -> Graph:
     """Return one graph declaring a single external payload."""
     namespace = "urn:tgdb:cli-blob"
     blobs = QualifiedName(namespace, "resources")
+    duration = QualifiedName(namespace, "duration")
 
     def blob_value(local: str, value_type: XsdType, lexical: str) -> AttributeValue:
         return AttributeValue(QualifiedName(BLOB_NAMESPACE, local), value_type, lexical)
@@ -48,6 +51,9 @@ def _cli_blob_graph(payload: bytes) -> Graph:
     declare_blob_vocabulary(editor)
     editor.declare(NamespaceDeclaration("test", namespace))
     editor.declare(TierDeclaration(blobs, "Resources"))
+    editor.declare(
+        AttributeDeclaration(duration, AttributeDomain.ITEM, XsdType.DECIMAL)
+    )
     editor.insert_item(
         blobs,
         0,
@@ -60,6 +66,7 @@ def _cli_blob_graph(payload: bytes) -> Graph:
                 blob_value("size", XsdType.INTEGER, str(len(payload))),
                 blob_value("media-type", XsdType.STRING, "application/octet-stream"),
                 blob_value("schema", XsdType.STRING, "urn:example:binary:v1"),
+                AttributeValue(duration, XsdType.DECIMAL, "2.5"),
             ),
         ),
     )
@@ -90,7 +97,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 7\n" in plain
+    assert "schema_version: 8\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -98,11 +105,11 @@ def test_tgdb_init_and_info_plain_and_json(
     report = json.loads(capsys.readouterr().out)
     assert report == {
         "fingerprint_domain": "tiergraph-equivalence/1",
-        "index_version": 4,
+        "index_version": 5,
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 7,
+        "schema_version": 8,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -204,6 +211,111 @@ def test_tgdb_blob_commands_queries_and_repack(
         == 1
     )
     assert f"object {missing} is not stored" in capsys.readouterr().err
+
+
+def test_tgdb_column_commands_and_find_filter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The TG11 shell declares, lists, queries, and drops blob columns."""
+    store = tmp_path / "corpus.tgdb"
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_bytes(dump_bytes(_cli_blob_graph(b"payload")))
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(store), "corpus"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "add", str(store), "corpus", "sample", str(graph_path)]) == 0
+    capsys.readouterr()
+
+    assert main(["tgdb", "column", "list", str(store), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert (
+        main(
+            [
+                "tgdb",
+                "column",
+                "declare",
+                str(store),
+                "duration",
+                "application/*",
+                "urn:tgdb:cli-blob|duration",
+                "decimal",
+            ]
+        )
+        == 0
+    )
+    assert "declare column 'duration'" in capsys.readouterr().out
+    assert main(["tgdb", "column", "list", str(store)]) == 0
+    assert capsys.readouterr().out.endswith(
+        "0\tduration\tapplication/*\turn:tgdb:cli-blob|duration\tdecimal\n"
+    )
+    assert main(["tgdb", "column", "list", str(store), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "name": "duration",
+            "position": 0,
+            "media_type": "application/*",
+            "attribute": "urn:tgdb:cli-blob|duration",
+            "value_type": "decimal",
+        }
+    ]
+    for column_filter in ("duration", "duration=2.5", "duration=:2:3"):
+        assert (
+            main(
+                [
+                    "tgdb",
+                    "find",
+                    str(store),
+                    "--column",
+                    column_filter,
+                    "--count",
+                ]
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == "1\n"
+    assert (
+        main(
+            [
+                "tgdb",
+                "find",
+                str(store),
+                "--column",
+                "duration",
+                "--column",
+                "duration=2.5",
+                "--count",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "1\n"
+    for column_filter in ('duration="wrong"', "duration=true"):
+        assert (
+            main(
+                [
+                    "tgdb",
+                    "find",
+                    str(store),
+                    "--column",
+                    column_filter,
+                    "--count",
+                ]
+            )
+            == 1
+        )
+        error = capsys.readouterr().err
+        assert "blob column 'duration'" in error
+        assert "Traceback" not in error
+    assert main(["tgdb", "column", "drop", str(store), "duration"]) == 0
+    assert "drop column 'duration'" in capsys.readouterr().out
+    assert main(["tgdb", "find", str(store), "--column", "duration"]) == 1
+    assert "not declared" in capsys.readouterr().err
+    assert cli._column_media_type_argument("application/octet-stream") == (
+        "application/octet-stream"
+    )
+    with pytest.raises(argparse.ArgumentTypeError, match="column"):
+        cli._tgdb_column_filter("=1")
 
 
 @pytest.mark.parametrize(

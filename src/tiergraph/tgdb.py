@@ -39,9 +39,12 @@ from tiergraph.blob import (
 from tiergraph.core import (
     Attribute,
     AttributeValue,
+    DurableItemRef,
     Graph,
     ItemRef,
     JsonAttributeValue,
+    JsonType,
+    JsonValue,
     QualifiedName,
     XsdType,
 )
@@ -55,9 +58,9 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 _LAYOUT_VERSION = 1
-_INDEX_VERSION = 4
+_INDEX_VERSION = 5
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -229,6 +232,27 @@ class IndexInfo:
             "tier": _qname_spelling(self.tier),
             "attribute": _qname_spelling(self.attribute),
             "history": self.history,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnInfo:
+    """Describe one declared blob metadata column in catalog order."""
+
+    name: str
+    position: int
+    media_type: str
+    attribute: QualifiedName
+    value_type: str
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible description in stable field order."""
+        return {
+            "name": self.name,
+            "position": self.position,
+            "media_type": self.media_type,
+            "attribute": _qname_spelling(self.attribute),
+            "value_type": self.value_type,
         }
 
 
@@ -496,6 +520,15 @@ class _BlobMediaTypeClause:
 
 
 @dataclass(frozen=True, slots=True)
+class _BlobColumnClause:
+    name: str
+    equals: object | None
+    minimum: Decimal | int | None
+    maximum: Decimal | int | None
+    source: Literal["declared", "inspected"] | None
+
+
+@dataclass(frozen=True, slots=True)
 class _MissingBlobClause:
     pass
 
@@ -510,6 +543,7 @@ type _QueryClause = (
     | _ChangedSinceClause
     | _UsesBlobClause
     | _BlobMediaTypeClause
+    | _BlobColumnClause
     | _MissingBlobClause
 )
 
@@ -676,6 +710,36 @@ class Query:
         return replace(
             self,
             _clauses=(*self._clauses, _BlobMediaTypeClause(media_type)),
+        )
+
+    def blob_column(
+        self,
+        column: str,
+        *,
+        equals: object | None = None,
+        minimum: Decimal | int | None = None,
+        maximum: Decimal | int | None = None,
+        source: Literal["declared", "inspected"] | None = None,
+    ) -> Query:
+        """Restrict results by one declared blob metadata column.
+
+        Omitting equality and bounds tests for presence. Equality is converted
+        through the column's declared type when the query runs. Inclusive
+        numeric bounds apply only to integer and decimal columns. ``source``
+        distinguishes base-item declarations from values carried by layers.
+        """
+        _validate_name(column)
+        _validate_numeric_bounds(minimum, maximum)
+        if equals is not None and (minimum is not None or maximum is not None):
+            raise ValueError("blob-column equality and numeric ranges are exclusive")
+        if source not in {None, "declared", "inspected"}:
+            raise ValueError("source must be 'declared', 'inspected', or None")
+        return replace(
+            self,
+            _clauses=(
+                *self._clauses,
+                _BlobColumnClause(column, equals, minimum, maximum, source),
+            ),
         )
 
     def missing_blob(self) -> Query:
@@ -943,6 +1007,28 @@ class TgdbStore:
             )
         except (sqlite3.DatabaseError, TypeError, ValueError) as error:
             raise StoreCorrupt(f"cannot list declared indexes: {error}") from error
+
+    def columns(self) -> tuple[ColumnInfo, ...]:
+        """Return declared blob metadata columns in their declared order."""
+        self._require_open()
+        self._require_current_schema()
+        try:
+            rows = self._connection.execute(
+                "SELECT name, position, media_type, attribute, value_type "
+                "FROM declared_columns ORDER BY position"
+            )
+            return tuple(
+                ColumnInfo(
+                    name,
+                    position,
+                    media_type,
+                    _qname_from_text(attribute),
+                    value_type,
+                )
+                for name, position, media_type, attribute, value_type in rows
+            )
+        except (sqlite3.DatabaseError, TypeError, ValueError) as error:
+            raise StoreCorrupt(f"cannot list declared columns: {error}") from error
 
     def get(
         self,
@@ -1258,8 +1344,7 @@ class TgdbStore:
                 raise StoreCorrupt(
                     f"graph_tiers rows for object {incomplete_tiers[0]} are incomplete"
                 )
-            _require_complete_blob_indexes(self._connection)
-            _require_complete_item_indexes(self._connection)
+            _require_complete_derived_indexes(self._connection)
             for fact in self._connection.execute(
                 "SELECT f.digest, f.functional, f.identified, f.size, o.size "
                 "FROM graph_facts AS f JOIN objects AS o ON o.digest = f.digest"
@@ -1327,6 +1412,8 @@ class TgdbStore:
             expected_tiers,
             expected_blobs,
             expected_attachments,
+            expected_metadata,
+            expected_metadata_counts,
             expected_item_counts,
             expected_items,
         ) = _derive_indexes(self)
@@ -1344,6 +1431,8 @@ class TgdbStore:
                         "stored graph set changed while derived indexes were rebuilt"
                     )
                 self._connection.execute("DELETE FROM attachments")
+                self._connection.execute("DELETE FROM blob_metadata")
+                self._connection.execute("DELETE FROM blob_metadata_counts")
                 self._connection.execute("DELETE FROM blob_items")
                 self._connection.execute("DELETE FROM graph_tiers")
                 self._connection.execute("DELETE FROM item_index")
@@ -1373,6 +1462,18 @@ class TgdbStore:
                     "blob_tier, blob_position, span_unit, span_offset, "
                     "span_length, span_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     expected_attachments,
+                )
+                self._connection.executemany(
+                    "INSERT INTO blob_metadata("
+                    "graph_digest, tier, position, column, value_text, "
+                    "value_num, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    expected_metadata,
+                )
+                self._connection.executemany(
+                    "INSERT INTO blob_metadata_counts("
+                    "graph_digest, column, row_count, row_digest) "
+                    "VALUES (?, ?, ?, ?)",
+                    expected_metadata_counts,
                 )
                 self._connection.executemany(
                     "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
@@ -1419,6 +1520,8 @@ class TgdbStore:
                 expected_tiers,
                 expected_blobs,
                 expected_attachments,
+                expected_metadata,
+                expected_metadata_counts,
                 expected_item_counts,
                 expected_items,
             )
@@ -2950,6 +3053,133 @@ class WriteTransaction:
             )
         self._indexes_changed = True
 
+    def declare_column(
+        self,
+        name: str,
+        media_type: str,
+        attribute: QualifiedName,
+        value_type: str,
+    ) -> None:
+        """Declare and build one ordered blob-item metadata column.
+
+        ``media_type`` is an exact lowercase media type or a ``type/*`` family.
+        Values come only from stored graph content; declaring a column never
+        opens a payload or runs an inspector.
+        """
+        self._require_active()
+        _validate_name(name)
+        _validate_column_media_type(media_type)
+        if not isinstance(attribute, QualifiedName):
+            raise TypeError("attribute must be a QualifiedName")
+        _validate_column_value_type(value_type)
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_columns WHERE name = ?", (name,)
+            ).fetchone()
+            is not None
+        ):
+            raise TgdbError(f"blob column {name!r} is already declared")
+        position = cast(
+            int,
+            self._connection.execute(
+                "SELECT coalesce(max(position) + 1, 0) FROM declared_columns"
+            ).fetchone()[0],
+        )
+        self._declare_column(name, position, media_type, attribute, value_type)
+        action = _column_action(
+            "declare_column", name, position, media_type, attribute, value_type
+        )
+        self._record(action, _drop_column_action(name))
+
+    def drop_column(self, name: str) -> None:
+        """Drop one declared blob column and its rebuildable metadata rows."""
+        self._require_active()
+        _validate_name(name)
+        row = self._connection.execute(
+            "SELECT position, media_type, attribute, value_type "
+            "FROM declared_columns WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            raise TgdbError(f"blob column {name!r} is not declared")
+        position, media_type, attribute_text, value_type = row
+        self._connection.execute("DELETE FROM blob_metadata WHERE column = ?", (name,))
+        self._connection.execute(
+            "DELETE FROM blob_metadata_counts WHERE column = ?", (name,)
+        )
+        self._connection.execute("DELETE FROM declared_columns WHERE name = ?", (name,))
+        self._indexes_changed = True
+        self._record(
+            _drop_column_action(name),
+            _column_action(
+                "declare_column",
+                name,
+                position,
+                media_type,
+                _qname_from_text(attribute_text),
+                value_type,
+            ),
+        )
+
+    def _declare_column(
+        self,
+        name: str,
+        position: int,
+        media_type: str,
+        attribute: QualifiedName,
+        value_type: str,
+    ) -> None:
+        """Insert and fully populate one validated blob-column declaration."""
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_columns WHERE name = ?", (name,)
+            ).fetchone()
+            is not None
+        ):
+            raise StaleVersion(f"blob column {name!r} is already declared")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM declared_columns WHERE position = ?", (position,)
+            ).fetchone()
+            is not None
+        ):
+            raise StaleVersion(
+                f"declared blob column position {position} is no longer available"
+            )
+        declaration = ((name, media_type, _qname_text(attribute), value_type),)
+        derived: list[tuple[str, tuple[_BlobMetadataRow, ...]]] = []
+        for (digest,) in self._connection.execute(
+            "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+        ):
+            graph = self._load_graph_digest(digest)
+            try:
+                blob_rows, _attachments = _blob_index_rows(graph, digest)
+                rows = _blob_metadata_rows(graph, digest, blob_rows, declaration)
+            except ValueError as error:
+                raise TgdbError(
+                    f"cannot index blob column {name!r} for graph {digest}: {error}"
+                ) from error
+            derived.append((digest, rows))
+        self._connection.execute(
+            "INSERT INTO declared_columns("
+            "name, position, media_type, attribute, value_type) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, position, media_type, _qname_text(attribute), value_type),
+        )
+        for digest, rows in derived:
+            self._connection.executemany(
+                "INSERT INTO blob_metadata_counts("
+                "graph_digest, column, row_count, row_digest) VALUES (?, ?, ?, ?)",
+                _blob_metadata_count_rows(digest, declaration, rows),
+            )
+            self._connection.executemany(
+                "INSERT INTO blob_metadata("
+                "graph_digest, tier, position, column, value_text, value_num, "
+                "source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+        self._indexes_changed = True
+
     def _store_graph(self, graph: Graph) -> str:
         """Store one canonical graph document and its small derived facts."""
         return self._store_graph_document(graph, _graph_document(graph))
@@ -3016,13 +3246,14 @@ class WriteTransaction:
         )
         if recorded_tiers != tier_rows:
             raise StoreCorrupt(f"graph tiers for object {digest} are inconsistent")
-        self._index_blobs(digest, blob_rows, attachment_rows)
+        self._index_blobs(graph, digest, blob_rows, attachment_rows)
         self._index_graph(graph, digest)
         self._staged_graphs.add(digest)
         return digest
 
     def _index_blobs(
         self,
+        graph: Graph,
         digest: str,
         blob_rows: tuple[_BlobItemRow, ...],
         attachment_rows: tuple[_AttachmentRow, ...],
@@ -3033,6 +3264,12 @@ class WriteTransaction:
         )
         self._connection.execute(
             "DELETE FROM blob_items WHERE graph_digest = ?", (digest,)
+        )
+        self._connection.execute(
+            "DELETE FROM blob_metadata WHERE graph_digest = ?", (digest,)
+        )
+        self._connection.execute(
+            "DELETE FROM blob_metadata_counts WHERE graph_digest = ?", (digest,)
         )
         self._connection.executemany(
             "INSERT INTO blob_items("
@@ -3046,6 +3283,30 @@ class WriteTransaction:
             "blob_position, span_unit, span_offset, span_length, span_path) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             attachment_rows,
+        )
+        declarations = tuple(
+            cast(tuple[str, str, str, str], row)
+            for row in self._connection.execute(
+                "SELECT name, media_type, attribute, value_type "
+                "FROM declared_columns ORDER BY position"
+            )
+        )
+        try:
+            metadata_rows = _blob_metadata_rows(graph, digest, blob_rows, declarations)
+        except ValueError as error:
+            raise TgdbError(
+                f"cannot index blob metadata for graph {digest}: {error}"
+            ) from error
+        self._connection.executemany(
+            "INSERT INTO blob_metadata("
+            "graph_digest, tier, position, column, value_text, value_num, "
+            "source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            metadata_rows,
+        )
+        self._connection.executemany(
+            "INSERT INTO blob_metadata_counts("
+            "graph_digest, column, row_count, row_digest) VALUES (?, ?, ?, ?)",
+            _blob_metadata_count_rows(digest, declarations, metadata_rows),
         )
 
     def _index_graph(self, graph: Graph, digest: str) -> None:
@@ -3326,6 +3587,42 @@ class WriteTransaction:
                 _qname_from_text(tier_text),
                 _qname_from_text(attribute_text),
                 bool(history),
+            )
+        if kind == "declare_column":
+            name, position, media_type, attribute, value_type = _column_action_data(
+                action
+            )
+            self._declare_column(name, position, media_type, attribute, value_type)
+            return _drop_column_action(name)
+        if kind == "drop_column":
+            column_name = action.get("name")
+            _validate_name(column_name)
+            column_name = cast(str, column_name)
+            row = self._connection.execute(
+                "SELECT position, media_type, attribute, value_type "
+                "FROM declared_columns WHERE name = ?",
+                (column_name,),
+            ).fetchone()
+            if row is None:
+                raise StaleVersion(f"blob column {column_name!r} is no longer declared")
+            position, media_type, attribute_text, value_type = row
+            self._connection.execute(
+                "DELETE FROM blob_metadata WHERE column = ?", (column_name,)
+            )
+            self._connection.execute(
+                "DELETE FROM blob_metadata_counts WHERE column = ?", (column_name,)
+            )
+            self._connection.execute(
+                "DELETE FROM declared_columns WHERE name = ?", (column_name,)
+            )
+            self._indexes_changed = True
+            return _column_action(
+                "declare_column",
+                column_name,
+                position,
+                media_type,
+                _qname_from_text(attribute_text),
+                value_type,
             )
         if kind == "republish":
             uid = _action_uid(action)
@@ -3844,6 +4141,24 @@ def _copy_blob_indexes(
             ),
             "ordinal",
         ),
+        (
+            "blob_metadata",
+            (
+                "graph_digest",
+                "tier",
+                "position",
+                "column",
+                "value_text",
+                "value_num",
+                "source",
+            ),
+            "tier, position, column",
+        ),
+        (
+            "blob_metadata_counts",
+            ("graph_digest", "column", "row_count", "row_digest"),
+            "column",
+        ),
     )
     for digest in sorted(digests):
         for table, columns, order in tables:
@@ -3939,6 +4254,22 @@ def _replace_declared_indexes(
         "value_text, value_num, value_digest FROM item_index "
         "ORDER BY graph_digest, index_name, item_position"
     ).fetchall()
+    columns = staged.execute(
+        "SELECT name, position, media_type, attribute, value_type "
+        "FROM declared_columns ORDER BY position"
+    ).fetchall()
+    metadata = staged.execute(
+        "SELECT graph_digest, tier, position, column, value_text, value_num, "
+        "source FROM blob_metadata "
+        "ORDER BY graph_digest, tier, position, column"
+    ).fetchall()
+    metadata_counts = staged.execute(
+        "SELECT graph_digest, column, row_count, row_digest "
+        "FROM blob_metadata_counts ORDER BY graph_digest, column"
+    ).fetchall()
+    catalog.execute("DELETE FROM blob_metadata")
+    catalog.execute("DELETE FROM blob_metadata_counts")
+    catalog.execute("DELETE FROM declared_columns")
     catalog.execute("DELETE FROM item_index")
     catalog.execute("DELETE FROM item_index_counts")
     catalog.execute("DELETE FROM declared_indexes")
@@ -3961,6 +4292,22 @@ def _replace_declared_indexes(
         "graph_digest, index_name, tier_position, item_position, value_type, "
         "value_text, value_num, value_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         items,
+    )
+    catalog.executemany(
+        "INSERT INTO declared_columns("
+        "name, position, media_type, attribute, value_type) VALUES (?, ?, ?, ?, ?)",
+        columns,
+    )
+    catalog.executemany(
+        "INSERT INTO blob_metadata_counts("
+        "graph_digest, column, row_count, row_digest) VALUES (?, ?, ?, ?)",
+        metadata_counts,
+    )
+    catalog.executemany(
+        "INSERT INTO blob_metadata("
+        "graph_digest, tier, position, column, value_text, value_num, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        metadata,
     )
 
 
@@ -4560,6 +4907,84 @@ def _validate_numeric_bounds(minimum: object, maximum: object) -> None:
         raise ValueError("maximum must be at least minimum")
 
 
+def _validate_column_media_type(value: object) -> None:
+    """Require an exact lowercase media type or a lowercase type family."""
+    if not isinstance(value, str):
+        raise TypeError("media_type must be a string")
+    if _MEDIA_TYPE.fullmatch(value) is not None:
+        return
+    major, separator, subtype = value.partition("/")
+    if separator and subtype == "*" and _MEDIA_TYPE.fullmatch(f"{major}/x") is not None:
+        return
+    raise ValueError("media_type must be a canonical lowercase type/subtype or type/*")
+
+
+def _validate_column_value_type(value: object) -> None:
+    """Require one public scalar or structured attribute value type spelling."""
+    allowed = {member.value for member in XsdType} | {
+        member.value for member in JsonType
+    }
+    if not isinstance(value, str):
+        raise TypeError("value_type must be a string")
+    if value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"value_type must be one of: {choices}")
+
+
+def _media_type_matches(declaration: str, actual: str) -> bool:
+    """Return whether an exact or family declaration selects a media type."""
+    return declaration == actual or (
+        declaration.endswith("/*") and actual.startswith(declaration.removesuffix("*"))
+    )
+
+
+_COLUMN_QUERY_NAME = QualifiedName("urn:tiergraph:tgdb:query", "value")
+
+
+def _column_query_value(value_type: str, value: object) -> tuple[str, str | None]:
+    """Encode one native equality value through a column's declared type."""
+    try:
+        if value_type == JsonType.JSON.value:
+            attribute: Attribute = JsonAttributeValue(
+                _COLUMN_QUERY_NAME, cast(JsonValue, value)
+            )
+        else:
+            scalar_type = XsdType(value_type)
+            if scalar_type is XsdType.STRING:
+                if not isinstance(value, str):
+                    raise TypeError("string column equality requires a string")
+                lexical = value
+            elif scalar_type is XsdType.BOOLEAN:
+                if not isinstance(value, bool):
+                    raise TypeError("boolean column equality requires a boolean")
+                lexical = str(value).lower()
+            elif scalar_type is XsdType.INTEGER:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise TypeError("integer column equality requires an integer")
+                lexical = str(value)
+            elif scalar_type is XsdType.DECIMAL:
+                if isinstance(value, bool) or not isinstance(value, int | Decimal):
+                    raise TypeError(
+                        "decimal column equality requires an integer or Decimal"
+                    )
+                lexical = str(value)
+            else:
+                if isinstance(value, bool) or not isinstance(
+                    value, int | float | Decimal
+                ):
+                    raise TypeError(
+                        "double column equality requires an integer, float, or Decimal"
+                    )
+                lexical = str(value)
+            attribute = AttributeValue(_COLUMN_QUERY_NAME, scalar_type, lexical)
+    except ValueError as error:
+        raise ValueError(
+            f"column equality is not a valid {value_type} value: {error}"
+        ) from error
+    _actual_type, value_text, value_num, _digest = _index_value(attribute)
+    return value_text, value_num
+
+
 def _validate_query_run(
     query: object,
     order_by: object,
@@ -4649,7 +5074,9 @@ def _numeric_sort_key(value: Decimal) -> str:
 
 
 def _query_sql(  # noqa: PLR0915 -- each typed clause stays visibly parameterized
-    query: Query, order_by: str | None
+    query: Query,
+    order_by: str | None,
+    column_types: Mapping[str, str] | None = None,
 ) -> tuple[str, list[object]]:
     """Compile one typed query into internal SQL and bound parameters."""
     conditions: list[str] = []
@@ -4743,6 +5170,34 @@ def _query_sql(  # noqa: PLR0915 -- each typed clause stays visibly parameterize
                 "WHERE bi.graph_digest = v.graph_digest AND bi.media_type = ?)"
             )
             parameters.append(clause.media_type)
+        elif isinstance(clause, _BlobColumnClause):
+            metadata_conditions = [
+                "bm.graph_digest = v.graph_digest",
+                "bm.column = ?",
+            ]
+            metadata_parameters: list[object] = [clause.name]
+            if clause.equals is not None:
+                assert column_types is not None
+                value_text, _value_num = _column_query_value(
+                    column_types[clause.name], clause.equals
+                )
+                metadata_conditions.append("bm.value_text = ?")
+                metadata_parameters.append(value_text)
+            if clause.minimum is not None:
+                metadata_conditions.append("bm.value_num >= ?")
+                metadata_parameters.append(_numeric_sort_key(Decimal(clause.minimum)))
+            if clause.maximum is not None:
+                metadata_conditions.append("bm.value_num <= ?")
+                metadata_parameters.append(_numeric_sort_key(Decimal(clause.maximum)))
+            if clause.source is not None:
+                metadata_conditions.append("bm.source = ?")
+                metadata_parameters.append(clause.source)
+            conditions.append(
+                "EXISTS (SELECT 1 FROM blob_metadata AS bm WHERE "
+                + " AND ".join(metadata_conditions)
+                + ")"
+            )
+            parameters.extend(metadata_parameters)
         elif isinstance(clause, _MissingBlobClause):
             conditions.append(
                 "EXISTS (SELECT 1 FROM blob_items AS bi "
@@ -4911,7 +5366,86 @@ def _require_complete_blob_indexes(connection: sqlite3.Connection) -> None:
             )
 
 
-def _query_rows(
+def _require_complete_blob_metadata(
+    connection: sqlite3.Connection,
+    *,
+    column_name: str | None = None,
+    heads_only: bool = False,
+) -> None:
+    """Refuse missing, unexpected, or drifted blob-metadata rows."""
+    if heads_only:
+        expected_query = (
+            "SELECT DISTINCT v.graph_digest, d.name FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version "
+            "JOIN declared_columns AS d ON (? IS NULL OR d.name = ?) "
+            "ORDER BY v.graph_digest, d.name"
+        )
+        selected = (
+            "EXISTS (SELECT 1 FROM instances AS i "
+            "JOIN versions AS v ON v.id = i.head_version "
+            "WHERE v.graph_digest = {alias}.graph_digest)"
+        )
+    else:
+        expected_query = (
+            "SELECT v.graph_digest, d.name FROM ("
+            "SELECT DISTINCT graph_digest FROM versions"
+            ") AS v JOIN declared_columns AS d ON (? IS NULL OR d.name = ?) "
+            "ORDER BY v.graph_digest, d.name"
+        )
+        selected = "1"
+    parameters = (column_name, column_name)
+    expected = {
+        (cast(str, row[0]), cast(str, row[1]))
+        for row in connection.execute(expected_query, parameters)
+    }
+    counts = {
+        (cast(str, row[0]), cast(str, row[1])): (cast(int, row[2]), cast(str, row[3]))
+        for row in connection.execute(
+            "SELECT c.graph_digest, c.column, c.row_count, c.row_digest "
+            "FROM blob_metadata_counts AS c WHERE (? IS NULL OR c.column = ?) "
+            f"AND {selected.format(alias='c')} "
+            "ORDER BY c.graph_digest, c.column",
+            parameters,
+        )
+    }
+    grouped: dict[tuple[str, str], list[_BlobMetadataRow]] = {}
+    metadata_rows = connection.execute(
+        "SELECT m.graph_digest, m.tier, m.position, m.column, m.value_text, "
+        "m.value_num, m.source FROM blob_metadata AS m "
+        "WHERE (? IS NULL OR m.column = ?) "
+        f"AND {selected.format(alias='m')} "
+        "ORDER BY m.graph_digest, m.column, m.tier, m.position",
+        parameters,
+    )
+    for row in metadata_rows:
+        metadata = cast(_BlobMetadataRow, row)
+        grouped.setdefault((metadata[0], metadata[3]), []).append(metadata)
+    for key in sorted(expected):
+        recorded = counts.pop(key, None)
+        if recorded is None:
+            raise StoreCorrupt(f"blob_metadata_counts row {key!r} is missing")
+        rows = tuple(grouped.pop(key, ()))
+        actual = (len(rows), _blob_metadata_row_digest(rows))
+        if recorded != actual:
+            raise StoreCorrupt(
+                f"blob_metadata rows for {key!r} are incomplete or drifted"
+            )
+    if counts:
+        key = next(iter(counts))
+        raise StoreCorrupt(f"blob_metadata_counts row {key!r} is unexpected")
+    if grouped:
+        key = next(iter(grouped))
+        raise StoreCorrupt(f"blob_metadata rows for {key!r} are unexpected")
+
+
+def _require_complete_derived_indexes(connection: sqlite3.Connection) -> None:
+    """Refuse incomplete queryable derived rows without opening documents."""
+    _require_complete_blob_indexes(connection)
+    _require_complete_blob_metadata(connection)
+    _require_complete_item_indexes(connection)
+
+
+def _query_rows(  # noqa: PLR0915 -- typed query guards stay beside execution
     store: TgdbStore,
     query: Query,
     *,
@@ -4921,6 +5455,8 @@ def _query_rows(
 ) -> Iterator[VersionHandle]:
     """Execute validated query SQL and post-filter its bounded row stream."""
     checked_indexes: set[str] = set()
+    column_types: dict[str, str] = {}
+    checked_columns: set[str] = set()
     for clause in query._clauses:
         if not isinstance(clause, _IndexClause):
             continue
@@ -4940,6 +5476,30 @@ def _query_rows(
                 store._connection, index_name=clause.name, heads_only=True
             )
             checked_indexes.add(clause.name)
+    for clause in query._clauses:
+        if not isinstance(clause, _BlobColumnClause):
+            continue
+        declaration = store._connection.execute(
+            "SELECT value_type FROM declared_columns WHERE name = ?", (clause.name,)
+        ).fetchone()
+        if declaration is None:
+            raise TgdbError(f"blob column {clause.name!r} is not declared")
+        value_type = cast(str, declaration[0])
+        if (
+            clause.minimum is not None or clause.maximum is not None
+        ) and value_type not in {
+            XsdType.INTEGER.value,
+            XsdType.DECIMAL.value,
+        }:
+            raise TgdbError(f"blob column {clause.name!r} is not integer or decimal")
+        if clause.equals is not None:
+            _column_query_value(value_type, clause.equals)
+        column_types[clause.name] = value_type
+        if clause.name not in checked_columns:
+            _require_complete_blob_metadata(
+                store._connection, column_name=clause.name, heads_only=True
+            )
+            checked_columns.add(clause.name)
     needs_facts = any(
         isinstance(clause, _ChangedSinceClause)
         or (
@@ -4968,11 +5528,19 @@ def _query_rows(
                 f"graph_tiers rows for object {incomplete[0]} are incomplete"
             )
     if any(
-        isinstance(clause, (_UsesBlobClause, _BlobMediaTypeClause, _MissingBlobClause))
+        isinstance(
+            clause,
+            (
+                _UsesBlobClause,
+                _BlobMediaTypeClause,
+                _BlobColumnClause,
+                _MissingBlobClause,
+            ),
+        )
         for clause in query._clauses
     ):
         _require_complete_blob_indexes(store._connection)
-    statement, parameters = _query_sql(query, order_by)
+    statement, parameters = _query_sql(query, order_by, column_types)
     cursor = store._connection.execute(statement, parameters)
     compiled = tuple(
         _predicate.compile_predicate(predicate) for predicate in query._predicates
@@ -5038,6 +5606,16 @@ def _query_rows(
 type _ItemIndexRow = tuple[str, str, int, int, str, str, str | None, str]
 type _ItemIndexCountRow = tuple[str, str, int]
 type _BlobItemRow = tuple[str, str, int, str, str, int, str, str | None]
+type _BlobMetadataRow = tuple[
+    str,
+    str,
+    int,
+    str,
+    str,
+    str | None,
+    Literal["declared", "inspected"],
+]
+type _BlobMetadataCountRow = tuple[str, str, int, str]
 type _AttachmentRow = tuple[
     str,
     int,
@@ -5111,6 +5689,105 @@ def _blob_index_rows(
             )
     attachment_rows.sort(key=lambda row: row[1])
     return tuple(blob_rows), tuple(attachment_rows)
+
+
+def _blob_metadata_rows(
+    graph: Graph,
+    digest: str,
+    blob_rows: tuple[_BlobItemRow, ...],
+    declarations: tuple[tuple[str, str, str, str], ...],
+) -> tuple[_BlobMetadataRow, ...]:
+    """Derive declared blob columns from graph values without payload reads."""
+    if not declarations or not blob_rows:
+        return ()
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    rows: list[_BlobMetadataRow] = []
+    for blob_row in blob_rows:
+        tier_name = _qname_from_text(blob_row[1])
+        item_ref = ItemRef(tier_name, blob_row[2])
+        item = tiers[tier_name].items[item_ref.index]
+        base_values = {attribute.name: attribute for attribute in item.attributes}
+        inspected: dict[QualifiedName, list[Attribute]] = {}
+        for layer in graph.layers:
+            for fact in layer.facts:
+                if not isinstance(fact.subject, ItemRef | DurableItemRef):
+                    continue
+                if graph.resolve_item(fact.subject) == item_ref:
+                    inspected.setdefault(fact.value.name, []).append(fact.value)
+        for column, media_type, attribute_text, value_type in declarations:
+            if not _media_type_matches(media_type, blob_row[6]):
+                continue
+            attribute_name = _qname_from_text(attribute_text)
+            value = base_values.get(attribute_name)
+            source: Literal["declared", "inspected"]
+            if value is not None:
+                source = "declared"
+            else:
+                readings = inspected.get(attribute_name, [])
+                if not readings:
+                    continue
+                indexed = {_index_value(reading)[:3] for reading in readings}
+                if len(indexed) != 1:
+                    raise ValueError(
+                        f"blob item {item_ref} has conflicting inspected readings "
+                        f"for column {column!r}"
+                    )
+                value = readings[0]
+                source = "inspected"
+            actual_type, value_text, value_num, _value_digest = _index_value(value)
+            if actual_type != value_type:
+                raise ValueError(
+                    f"blob item {item_ref} column {column!r} requires "
+                    f"{value_type}, not {actual_type}"
+                )
+            rows.append(
+                (
+                    digest,
+                    blob_row[1],
+                    blob_row[2],
+                    column,
+                    value_text,
+                    value_num,
+                    source,
+                )
+            )
+    return tuple(rows)
+
+
+def _blob_metadata_row_digest(rows: tuple[_BlobMetadataRow, ...]) -> str:
+    """Hash one column's ordered derived rows for drift detection."""
+    data = [
+        [tier, position, value_text, value_num, source]
+        for _digest, tier, position, _column, value_text, value_num, source in sorted(
+            rows, key=lambda row: (row[1], row[2])
+        )
+    ]
+    encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _blob_metadata_count_rows(
+    digest: str,
+    declarations: tuple[tuple[str, str, str, str], ...],
+    rows: tuple[_BlobMetadataRow, ...],
+) -> tuple[_BlobMetadataCountRow, ...]:
+    """Record each declared column's row count and content digest."""
+    grouped: dict[str, list[_BlobMetadataRow]] = {
+        name: [] for name, _media_type, _attribute, _value_type in declarations
+    }
+    for row in rows:
+        grouped[row[3]].append(row)
+    return tuple(
+        (
+            digest,
+            name,
+            len(grouped[name]),
+            _blob_metadata_row_digest(tuple(grouped[name])),
+        )
+        for name, _media_type, _attribute, _value_type in declarations
+    )
 
 
 def _subject_text(graph: Graph, reference: ItemRef) -> str:
@@ -5209,6 +5886,8 @@ def _derive_indexes(
     tuple[tuple[str, int, str, int], ...],
     tuple[_BlobItemRow, ...],
     tuple[_AttachmentRow, ...],
+    tuple[_BlobMetadataRow, ...],
+    tuple[_BlobMetadataCountRow, ...],
     tuple[_ItemIndexCountRow, ...],
     tuple[_ItemIndexRow, ...],
 ]:
@@ -5226,6 +5905,8 @@ def _derive_indexes(
     tiers: list[tuple[str, int, str, int]] = []
     blobs: list[_BlobItemRow] = []
     attachments: list[_AttachmentRow] = []
+    metadata: list[_BlobMetadataRow] = []
+    metadata_counts: list[_BlobMetadataCountRow] = []
     item_counts: list[_ItemIndexCountRow] = []
     items: list[_ItemIndexRow] = []
     declarations = tuple(
@@ -5233,6 +5914,13 @@ def _derive_indexes(
         for row in store._connection.execute(
             "SELECT name, tier, attribute, history FROM declared_indexes "
             "ORDER BY position"
+        )
+    )
+    column_declarations = tuple(
+        cast(tuple[str, str, str, str], row)
+        for row in store._connection.execute(
+            "SELECT name, media_type, attribute, value_type "
+            "FROM declared_columns ORDER BY position"
         )
     )
     head_digests = {
@@ -5265,6 +5953,18 @@ def _derive_indexes(
             ) from error
         blobs.extend(blob_rows)
         attachments.extend(attachment_rows)
+        try:
+            metadata_rows = _blob_metadata_rows(
+                graph, digest, blob_rows, column_declarations
+            )
+        except ValueError as error:
+            raise StoreCorrupt(
+                f"cannot reindex blob metadata for graph object {digest}: {error}"
+            ) from error
+        metadata.extend(metadata_rows)
+        metadata_counts.extend(
+            _blob_metadata_count_rows(digest, column_declarations, metadata_rows)
+        )
         facts[digest] = (
             digest,
             FORMAT_VERSION,
@@ -5289,6 +5989,8 @@ def _derive_indexes(
         tuple(tiers),
         tuple(blobs),
         tuple(attachments),
+        tuple(metadata),
+        tuple(metadata_counts),
         tuple(item_counts),
         tuple(items),
     )
@@ -5300,6 +6002,8 @@ def _compare_derived_indexes(  # noqa: PLR0915 -- each derived table stays expli
     expected_tiers: tuple[tuple[str, int, str, int], ...],
     expected_blobs: tuple[_BlobItemRow, ...],
     expected_attachments: tuple[_AttachmentRow, ...],
+    expected_metadata: tuple[_BlobMetadataRow, ...],
+    expected_metadata_counts: tuple[_BlobMetadataCountRow, ...],
     expected_item_counts: tuple[_ItemIndexCountRow, ...],
     expected_items: tuple[_ItemIndexRow, ...],
 ) -> None:
@@ -5390,6 +6094,63 @@ def _compare_derived_indexes(  # noqa: PLR0915 -- each derived table stays expli
     if actual_attachments:
         attachment_key = next(iter(actual_attachments))
         raise StoreCorrupt(f"attachments row {attachment_key!r} is unexpected")
+    actual_metadata_counts = {
+        (cast(str, row[0]), cast(str, row[1])): cast(_BlobMetadataCountRow, row)
+        for row in connection.execute(
+            "SELECT graph_digest, column, row_count, row_digest "
+            "FROM blob_metadata_counts ORDER BY graph_digest, column"
+        )
+    }
+    for metadata_count_expected in expected_metadata_counts:
+        metadata_count_key = (
+            metadata_count_expected[0],
+            metadata_count_expected[1],
+        )
+        metadata_count_actual = actual_metadata_counts.pop(metadata_count_key, None)
+        if metadata_count_actual is None:
+            raise StoreCorrupt(
+                f"blob_metadata_counts row {metadata_count_key!r} is missing"
+            )
+        if metadata_count_actual != metadata_count_expected:
+            raise StoreCorrupt(
+                f"blob_metadata_counts row {metadata_count_key!r} "
+                "differs from its document"
+            )
+    if actual_metadata_counts:
+        metadata_count_key = next(iter(actual_metadata_counts))
+        raise StoreCorrupt(
+            f"blob_metadata_counts row {metadata_count_key!r} is unexpected"
+        )
+    actual_metadata = {
+        (
+            cast(str, row[0]),
+            cast(str, row[1]),
+            cast(int, row[2]),
+            cast(str, row[3]),
+        ): cast(_BlobMetadataRow, row)
+        for row in connection.execute(
+            "SELECT graph_digest, tier, position, column, value_text, "
+            "value_num, source FROM blob_metadata "
+            "ORDER BY graph_digest, tier, position, column"
+        )
+    }
+    for metadata_expected in expected_metadata:
+        metadata_key = (
+            metadata_expected[0],
+            metadata_expected[1],
+            metadata_expected[2],
+            metadata_expected[3],
+        )
+        metadata_actual = actual_metadata.pop(metadata_key, None)
+        if metadata_actual is None:
+            raise StoreCorrupt(f"blob_metadata row {metadata_key!r} is missing")
+        if metadata_actual != metadata_expected:
+            raise StoreCorrupt(
+                f"blob_metadata row {metadata_key!r} differs from its document"
+            )
+    if actual_metadata:
+        metadata_key = next(iter(actual_metadata))
+        raise StoreCorrupt(f"blob_metadata row {metadata_key!r} is unexpected")
     actual_item_counts = {
         (cast(str, row[0]), cast(str, row[1])): cast(_ItemIndexCountRow, row)
         for row in connection.execute(
@@ -5636,6 +6397,65 @@ def _index_action_data(
         raise StoreCorrupt("recorded item index names are malformed") from error
 
 
+def _column_touch(name: str) -> str:
+    """Return one stable staleness key for a declared blob column."""
+    return f"column:{name}"
+
+
+def _column_action(
+    action: Literal["declare_column"],
+    name: str,
+    position: int,
+    media_type: str,
+    attribute: QualifiedName,
+    value_type: str,
+) -> dict[str, object]:
+    """Build one complete blob-column action for replay and undo."""
+    return {
+        "action": action,
+        "attribute": _qname_text(attribute),
+        "media_type": media_type,
+        "name": name,
+        "position": position,
+        "touches": [_column_touch(name)],
+        "value_type": value_type,
+    }
+
+
+def _drop_column_action(name: str) -> dict[str, object]:
+    """Build one stable blob-column removal action."""
+    return {
+        "action": "drop_column",
+        "name": name,
+        "touches": [_column_touch(name)],
+    }
+
+
+def _column_action_data(
+    action: dict[str, object],
+) -> tuple[str, int, str, QualifiedName, str]:
+    """Validate and decode one recorded blob-column declaration."""
+    name = action.get("name")
+    position = action.get("position")
+    media_type = action.get("media_type")
+    attribute = action.get("attribute")
+    value_type = action.get("value_type")
+    _validate_name(name)
+    if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+        raise StoreCorrupt("recorded blob column position is malformed")
+    if not isinstance(media_type, str) or not isinstance(attribute, str):
+        raise StoreCorrupt("recorded blob column names are malformed")
+    if not isinstance(value_type, str):
+        raise StoreCorrupt("recorded blob column value type is malformed")
+    try:
+        _validate_column_media_type(media_type)
+        _validate_column_value_type(value_type)
+        qualified = _qname_from_text(attribute)
+    except (TypeError, ValueError) as error:
+        raise StoreCorrupt("recorded blob column declaration is malformed") from error
+    return cast(str, name), position, media_type, qualified, value_type
+
+
 def _name_action(
     kind: Literal["collection", "instance"], uid: bytes, name: str
 ) -> dict[str, object]:
@@ -5674,7 +6494,9 @@ def _action_uid(action: dict[str, object]) -> bytes:
     return _uid_from_hex(value)
 
 
-def _action_touches(action: dict[str, object]) -> tuple[str, ...]:
+def _action_touches(  # noqa: PLR0915 -- action validation is one ledger contract
+    action: dict[str, object],
+) -> tuple[str, ...]:
     """Read and validate one operation's complete ordered staleness keys."""
     value = action.get("touches")
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
@@ -5705,6 +6527,18 @@ def _action_touches(action: dict[str, object]) -> tuple[str, ...]:
         if action_name == "declare_index":
             _index_action_data(action)
         if touches != index_expected:
+            raise StoreCorrupt("recorded catalog touches do not match its operation")
+        return touches
+    if action_name in {"declare_column", "drop_column"}:
+        name = action.get("name")
+        try:
+            _validate_name(name)
+        except (TypeError, ValueError) as error:
+            raise StoreCorrupt("recorded blob column name is malformed") from error
+        column_expected = (_column_touch(cast(str, name)),)
+        if action_name == "declare_column":
+            _column_action_data(action)
+        if touches != column_expected:
             raise StoreCorrupt("recorded catalog touches do not match its operation")
         return touches
     identity_kind = identity_kinds.get(action_name)
@@ -5923,6 +6757,15 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             ") STRICT"
         )
         connection.execute(
+            "CREATE TABLE declared_columns("
+            "name TEXT PRIMARY KEY CHECK(length(name) > 0), "
+            "position INTEGER NOT NULL UNIQUE CHECK(position >= 0), "
+            "media_type TEXT NOT NULL CHECK(length(media_type) > 0), "
+            "attribute TEXT NOT NULL CHECK(length(attribute) > 0), "
+            "value_type TEXT NOT NULL CHECK(length(value_type) > 0)"
+            ") STRICT"
+        )
+        connection.execute(
             "CREATE TABLE graph_facts("
             "digest TEXT PRIMARY KEY REFERENCES objects(digest), "
             "format_version TEXT NOT NULL, "
@@ -5982,6 +6825,34 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "AND span_unit IS NOT NULL AND span_path IS NULL)), "
             "CHECK(span_path IS NULL OR (span_unit IS NULL "
             "AND span_offset IS NULL AND span_length IS NULL))"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE blob_metadata("
+            "graph_digest TEXT NOT NULL, "
+            "tier TEXT NOT NULL, "
+            "position INTEGER NOT NULL CHECK(position >= 0), "
+            "column TEXT NOT NULL REFERENCES declared_columns(name) "
+            "ON DELETE CASCADE, "
+            "value_text TEXT NOT NULL, "
+            "value_num TEXT, "
+            "source TEXT NOT NULL CHECK(source IN ('declared', 'inspected')), "
+            "PRIMARY KEY(graph_digest, tier, position, column), "
+            "FOREIGN KEY(graph_digest, tier, position) "
+            "REFERENCES blob_items(graph_digest, tier, position) ON DELETE CASCADE"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE blob_metadata_counts("
+            "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+            "ON DELETE CASCADE, "
+            "column TEXT NOT NULL REFERENCES declared_columns(name) "
+            "ON DELETE CASCADE, "
+            "row_count INTEGER NOT NULL CHECK(row_count >= 0), "
+            "row_digest TEXT NOT NULL "
+            "CHECK(length(row_digest) = 64 AND "
+            "row_digest NOT GLOB '*[^0-9a-f]*'), "
+            "PRIMARY KEY(graph_digest, column)"
             ") STRICT"
         )
         connection.execute(
@@ -6049,6 +6920,12 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
         connection.execute("CREATE INDEX blob_items_sha256 ON blob_items(sha256)")
         connection.execute(
             "CREATE INDEX blob_items_durable_id ON blob_items(durable_id)"
+        )
+        connection.execute(
+            "CREATE INDEX blob_metadata_value_text ON blob_metadata(column, value_text)"
+        )
+        connection.execute(
+            "CREATE INDEX blob_metadata_value_num ON blob_metadata(column, value_num)"
         )
         connection.execute(
             "CREATE INDEX item_index_value_digest "
@@ -6364,6 +7241,7 @@ def _check_recorded_object(
 __all__ = [
     "CheckReport",
     "CollectionInfo",
+    "ColumnInfo",
     "CommitReceipt",
     "IndexInfo",
     "InstanceInfo",

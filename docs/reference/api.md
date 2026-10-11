@@ -11753,6 +11753,24 @@ CollectionInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
 
 Return a JSON-compatible description in stable field order.
 
+### `ColumnInfo`
+
+```text
+ColumnInfo(name: 'str', position: 'int', media_type: 'str', attribute: 'QualifiedName', value_type: 'str') -> None
+```
+
+Describe one declared blob metadata column in catalog order.
+
+#### `ColumnInfo.to_data`
+
+Method.
+
+```text
+ColumnInfo.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible description in stable field order.
+
 ### `CommitReceipt`
 
 ```text
@@ -11947,6 +11965,21 @@ Query.blob_media_type(self, media_type: 'str') -> 'Query'
 ```
 
 Restrict results to graphs declaring one exact lowercase media type.
+
+#### `Query.blob_column`
+
+Method.
+
+```text
+Query.blob_column(self, column: 'str', *, equals: 'object | None' = None, minimum: 'Decimal | int | None' = None, maximum: 'Decimal | int | None' = None, source: "Literal['declared', 'inspected'] | None" = None) -> 'Query'
+```
+
+Restrict results by one declared blob metadata column.
+
+Omitting equality and bounds tests for presence. Equality is converted
+through the column's declared type when the query runs. Inclusive
+numeric bounds apply only to integer and decimal columns. ``source``
+distinguishes base-item declarations from values carried by layers.
 
 #### `Query.missing_blob`
 
@@ -12200,7 +12233,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 7) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 8) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12321,6 +12354,16 @@ TgdbStore.indexes(self) -> 'tuple[IndexInfo, ...]'
 ```
 
 Return declared item indexes in their declared order.
+
+#### `TgdbStore.columns`
+
+Method.
+
+```text
+TgdbStore.columns(self) -> 'tuple[ColumnInfo, ...]'
+```
+
+Return declared blob metadata columns in their declared order.
 
 #### `TgdbStore.get`
 
@@ -12766,6 +12809,30 @@ WriteTransaction.drop_index(self, name: 'str') -> 'None'
 ```
 
 Drop one declared item index and its rebuildable value rows.
+
+#### `WriteTransaction.declare_column`
+
+Method.
+
+```text
+WriteTransaction.declare_column(self, name: 'str', media_type: 'str', attribute: 'QualifiedName', value_type: 'str') -> 'None'
+```
+
+Declare and build one ordered blob-item metadata column.
+
+``media_type`` is an exact lowercase media type or a ``type/*`` family.
+Values come only from stored graph content; declaring a column never
+opens a payload or runs an inspector.
+
+#### `WriteTransaction.drop_column`
+
+Method.
+
+```text
+WriteTransaction.drop_column(self, name: 'str') -> 'None'
+```
+
+Drop one declared blob column and its rebuildable metadata rows.
 
 #### `WriteTransaction.commit`
 

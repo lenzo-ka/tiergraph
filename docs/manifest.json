@@ -774,6 +774,7 @@
     "tiergraph.tgdb": [
       "CheckReport",
       "CollectionInfo",
+      "ColumnInfo",
       "CommitReceipt",
       "IndexInfo",
       "InstanceInfo",

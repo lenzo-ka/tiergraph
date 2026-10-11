@@ -29,6 +29,7 @@ from tiergraph import (
     BipartiteRelationDeclaration,
     BlobRef,
     Bundle,
+    DocumentRef,
     DurableItemRef,
     EditAnnotations,
     EquivalenceView,
@@ -38,6 +39,8 @@ from tiergraph import (
     Journal,
     JsonAttributeValue,
     JsonType,
+    LayerFact,
+    LayerName,
     MappingResolver,
     NamespaceDeclaration,
     Patch,
@@ -300,6 +303,39 @@ def _blob_graph() -> tuple[Graph, dict[str, bytes]]:
     return editor.freeze(), payloads
 
 
+def _blob_column_graph() -> Graph:
+    """Return a blob graph with declared and inspected typed metadata."""
+    graph, _payloads = _blob_graph()
+    namespace = "urn:tgdb:blob-test"
+    duration = QualifiedName(namespace, "duration")
+    channels = QualifiedName(namespace, "channels")
+    note = QualifiedName(namespace, "note")
+    inspector = LayerName(namespace, "example-inspector")
+    return (
+        graph.declare(
+            AttributeDeclaration(duration, AttributeDomain.ITEM, XsdType.DECIMAL)
+        )
+        .declare(AttributeDeclaration(channels, AttributeDomain.ITEM, XsdType.INTEGER))
+        .declare(AttributeDeclaration(note, AttributeDomain.DOCUMENT, XsdType.STRING))
+        .set_attribute(
+            DurableItemRef("audio"),
+            AttributeValue(duration, XsdType.DECIMAL, "2.50"),
+        )
+        .add_layer(inspector)
+        .put_fact(
+            inspector,
+            LayerFact(
+                DurableItemRef("audio"),
+                AttributeValue(channels, XsdType.INTEGER, "2"),
+            ),
+        )
+        .put_fact(
+            inspector,
+            LayerFact(DocumentRef(), AttributeValue(note, XsdType.STRING, "ignored")),
+        )
+    )
+
+
 def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
     """Return the durable sequence from a receipt known to record a commit."""
     assert receipt.commit_seq is not None
@@ -331,9 +367,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 7,
+        "schema_version": 8,
         "layout_version": 1,
-        "index_version": 4,
+        "index_version": 5,
         "inline_threshold": 1234,
         "fingerprint_domain": "tiergraph-equivalence/1",
         "mode": "rw",
@@ -341,7 +377,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (7,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (8,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -368,6 +404,15 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     ).fetchone() == (1,)
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'item_index'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'declared_columns'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'blob_metadata'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'blob_metadata_counts'"
     ).fetchone() == (1,)
     assert (store.path / "objects" / "sha256").is_dir()
     assert (store.path / "staging").is_dir()
@@ -532,12 +577,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 8)
+    _set_pragma(path, "user_version", 9)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 8
-    assert caught.value.supported == 7
-    assert "8" in str(caught.value) and "7" in str(caught.value)
+    assert caught.value.found == 9
+    assert caught.value.supported == 8
+    assert "9" in str(caught.value) and "8" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -554,7 +599,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 7"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 8"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -1489,7 +1534,7 @@ def test_reindex_detects_repairs_and_versions_derived_rows(tmp_path: Path) -> No
         with pytest.raises(tgdb.StoreCorrupt, match="index version is stale"):
             store.reindex()
         store.reindex(rebuild=True)
-        assert store.info().index_version == 4
+        assert store.info().index_version == 5
 
     with tgdb.TgdbStore.open(tmp_path / "store") as readonly:
         with pytest.raises(tgdb.TgdbError, match="read-only"):
@@ -2107,15 +2152,21 @@ def test_query_and_reindex_internal_failures_keep_store_taxonomy(
         tuple[tuple[str, int, str, int], ...],
         tuple[tgdb._BlobItemRow, ...],
         tuple[tgdb._AttachmentRow, ...],
+        tuple[tgdb._BlobMetadataRow, ...],
+        tuple[tgdb._BlobMetadataCountRow, ...],
         tuple[tgdb._ItemIndexCountRow, ...],
         tuple[tgdb._ItemIndexRow, ...],
     ]:
-        facts, tiers, blobs, attachments, counts, items = original_derive(selected)
+        facts, tiers, blobs, attachments, metadata, metadata_counts, counts, items = (
+            original_derive(selected)
+        )
         return (
             {"0" * 64: next(iter(facts.values()))},
             tiers,
             blobs,
             attachments,
+            metadata,
+            metadata_counts,
             counts,
             items,
         )
@@ -4299,6 +4350,474 @@ def test_blob_seam_indexes_order_ids_spans_and_missing_payloads(
         store.reindex(rebuild=True)
 
 
+def test_blob_columns_index_declared_and_inspected_graph_metadata_lazily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blob columns retain source and answer equality and ranges without payloads."""
+    graph = _blob_column_graph()
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    channels = QualifiedName("urn:tgdb:blob-test", "channels")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.declare_column(
+                "channels", "audio/x.example", channels, XsdType.INTEGER.value
+            )
+            receipt = transaction.commit()
+        assert receipt.operations == ("declare_column", "declare_column")
+        assert store.columns() == (
+            tgdb.ColumnInfo("duration", 0, "audio/*", duration, XsdType.DECIMAL.value),
+            tgdb.ColumnInfo(
+                "channels", 1, "audio/x.example", channels, XsdType.INTEGER.value
+            ),
+        )
+        assert [column.to_data() for column in store.columns()] == [
+            {
+                "name": "duration",
+                "position": 0,
+                "media_type": "audio/*",
+                "attribute": "urn:tgdb:blob-test|duration",
+                "value_type": "decimal",
+            },
+            {
+                "name": "channels",
+                "position": 1,
+                "media_type": "audio/x.example",
+                "attribute": "urn:tgdb:blob-test|channels",
+                "value_type": "integer",
+            },
+        ]
+        digest = store.get("sample").graph_digest
+        assert store._connection.execute(
+            "SELECT column, value_text, source FROM blob_metadata "
+            "WHERE graph_digest = ? ORDER BY column",
+            (digest,),
+        ).fetchall() == [
+            ("channels", "2", "inspected"),
+            ("duration", "2.5", "declared"),
+        ]
+
+        def opened(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("blob-column query opened graph or payload bytes")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(tgdb.TgdbStore, "_open_object", opened)
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all().blob_column(
+                        "duration",
+                        equals=Decimal("2.50"),
+                        source="declared",
+                    )
+                )
+            ] == ["sample"]
+            assert (
+                store.query(
+                    tgdb.Query.all().blob_column("duration", source="inspected")
+                )
+                == []
+            )
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all().blob_column(
+                        "duration", minimum=2, maximum=Decimal("3")
+                    )
+                )
+            ] == ["sample"]
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all().blob_column("channels", equals=2)
+                )
+            ] == ["sample"]
+            assert [
+                handle.name
+                for handle in store.query(
+                    tgdb.Query.all()
+                    .blob_column("duration")
+                    .blob_column("duration", equals=Decimal("2.5"))
+                )
+            ] == ["sample"]
+
+
+def test_blob_column_declarations_drop_undo_reindex_and_refuse_ambiguity(
+    tmp_path: Path,
+) -> None:
+    """Column declarations are reversible and derived rows remain checkable."""
+    graph = _blob_column_graph()
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    channels = QualifiedName("urn:tgdb:blob-test", "channels")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            declared = transaction.commit()
+        assert store.reindex() == tgdb.ReindexReport(False, 1, 2)
+        digest = store.get("sample").graph_digest
+        store._connection.execute(
+            "UPDATE blob_metadata SET value_text = '9.0' WHERE column = 'duration'"
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="incomplete or drifted"):
+            store.query(tgdb.Query.all().blob_column("duration"))
+        with pytest.raises(tgdb.StoreCorrupt, match="incomplete or drifted"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_metadata row .* differs"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        undone = store.undo(_commit_seq(declared))
+        assert undone.operations == ("drop_column",)
+        assert store.columns() == ()
+        assert store._connection.execute(
+            "SELECT count(*) FROM blob_metadata"
+        ).fetchone() == (0,)
+
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.drop_column("duration")
+            dropped = transaction.commit()
+        restored = store.undo(_commit_seq(dropped))
+        assert restored.operations == ("declare_column",)
+        assert store.columns()[0].name == "duration"
+        assert store._connection.execute(
+            "SELECT value_text FROM blob_metadata WHERE graph_digest = ?",
+            (digest,),
+        ).fetchone() == ("2.5",)
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="already declared"):
+                transaction.declare_column(
+                    "duration", "audio/*", duration, XsdType.DECIMAL.value
+                )
+            with pytest.raises(tgdb.TgdbError, match="not declared"):
+                transaction.drop_column("missing")
+            with pytest.raises(tgdb.TgdbError, match="requires integer"):
+                transaction.declare_column(
+                    "wrong", "audio/*", duration, XsdType.INTEGER.value
+                )
+            transaction.discard()
+
+        absent = QualifiedName("urn:tgdb:blob-test", "absent")
+        with store.write() as transaction:
+            transaction.declare_column(
+                "empty", "audio/*", absent, XsdType.INTEGER.value
+            )
+            with pytest.raises(tgdb.TgdbError, match="requires integer"):
+                transaction.declare_column(
+                    "wrong", "audio/*", duration, XsdType.INTEGER.value
+                )
+            transaction.commit()
+        assert [column.name for column in store.columns()] == ["duration", "empty"]
+
+        inspector = LayerName("urn:tgdb:blob-test", "other-inspector")
+        ambiguous = graph.add_layer(inspector).put_fact(
+            inspector,
+            LayerFact(
+                DurableItemRef("audio"),
+                AttributeValue(channels, XsdType.INTEGER, "3"),
+            ),
+        )
+        with store.write() as transaction:
+            transaction.create_instance(collection, "ambiguous", ambiguous)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="conflicting inspected"):
+                transaction.declare_column(
+                    "channels", "audio/*", channels, XsdType.INTEGER.value
+                )
+            transaction.discard()
+
+
+def test_blob_column_query_and_declaration_validation(tmp_path: Path) -> None:
+    """Blob-column APIs reject untyped, contradictory, and unsupported inputs."""
+    query = tgdb.Query.all()
+    with pytest.raises(ValueError, match="exclusive"):
+        query.blob_column("duration", equals=2, minimum=1)
+    with pytest.raises(ValueError, match="source"):
+        query.blob_column("duration", source=cast(Any, "unknown"))
+    with pytest.raises(TypeError, match="minimum"):
+        query.blob_column("duration", minimum=cast(Any, "one"))
+
+    graph = _blob_column_graph()
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(ValueError, match="type/subtype"):
+                transaction.declare_column("bad", "Audio/WAV", duration, "decimal")
+            with pytest.raises(TypeError, match="QualifiedName"):
+                transaction.declare_column(
+                    "bad", "audio/*", cast(Any, "duration"), "decimal"
+                )
+            with pytest.raises(ValueError, match="value_type"):
+                transaction.declare_column("bad", "audio/*", duration, "number")
+            transaction.discard()
+        with pytest.raises(tgdb.TgdbError, match="not declared"):
+            store.query(tgdb.Query.all().blob_column("missing"))
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.commit()
+        with pytest.raises(TypeError, match="Decimal"):
+            store.query(tgdb.Query.all().blob_column("duration", equals="2.5"))
+        with pytest.raises(tgdb.TgdbError, match="not integer or decimal"):
+            with store.write() as transaction:
+                transaction.drop_column("duration")
+                transaction.declare_column(
+                    "duration",
+                    "audio/*",
+                    QualifiedName("urn:tgdb:blob-test", "absent"),
+                    XsdType.STRING.value,
+                )
+                transaction.commit()
+            store.query(tgdb.Query.all().blob_column("duration", minimum=1))
+
+
+def test_blob_column_internal_edges_are_typed_and_atomic(tmp_path: Path) -> None:
+    """Column replay, conversion, and staged indexing refuse malformed input."""
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    absent = QualifiedName("urn:tgdb:blob-test", "absent")
+    graph = _blob_column_graph()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.commit()
+
+        wrapped = store._connection
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped,
+            "SELECT name, position, media_type",
+            sqlite3.DatabaseError("broken"),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot list declared columns"):
+            store.columns()
+        store._connection = wrapped
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StaleVersion, match="already declared"):
+                transaction._declare_column(
+                    "duration", 1, "audio/*", duration, XsdType.DECIMAL.value
+                )
+            with pytest.raises(tgdb.StaleVersion, match="position 0"):
+                transaction._declare_column(
+                    "other", 0, "audio/*", duration, XsdType.DECIMAL.value
+                )
+            with pytest.raises(tgdb.StaleVersion, match="no longer declared"):
+                transaction._apply_action(
+                    {
+                        "action": "drop_column",
+                        "name": "missing",
+                        "touches": ["column:missing"],
+                    }
+                )
+            transaction.discard()
+
+        with store.write() as transaction:
+            transaction.declare_column(
+                "mismatch", "audio/*", absent, XsdType.INTEGER.value
+            )
+            transaction.commit()
+        mismatch = graph.declare(
+            AttributeDeclaration(absent, AttributeDomain.ITEM, XsdType.STRING)
+        ).set_attribute(
+            DurableItemRef("audio"),
+            AttributeValue(absent, XsdType.STRING, "wrong"),
+        )
+        with pytest.raises(tgdb.TgdbError, match="cannot index blob metadata"):
+            with store.write() as transaction:
+                transaction.publish("sample", mismatch, expected=1)
+
+    with pytest.raises(TypeError, match="media_type"):
+        tgdb._validate_column_media_type(1)
+    with pytest.raises(TypeError, match="value_type"):
+        tgdb._validate_column_value_type(1)
+    assert tgdb._column_query_value(XsdType.STRING.value, "word") == ("word", None)
+    assert tgdb._column_query_value(XsdType.BOOLEAN.value, True) == ("true", None)
+    assert tgdb._column_query_value(XsdType.INTEGER.value, 2)[0] == "2"
+    assert tgdb._column_query_value(XsdType.DOUBLE.value, 1.5)[1] is None
+    assert tgdb._column_query_value(JsonType.JSON.value, {"b": 2, "a": [True]}) == (
+        '{"a":[true],"b":2}',
+        None,
+    )
+    for value_type, value, message in (
+        (XsdType.STRING.value, 1, "string"),
+        (XsdType.BOOLEAN.value, 1, "boolean"),
+        (XsdType.INTEGER.value, True, "integer"),
+        (XsdType.DOUBLE.value, object(), "double"),
+    ):
+        with pytest.raises(TypeError, match=message):
+            tgdb._column_query_value(value_type, value)
+    with pytest.raises(ValueError, match="not a valid double"):
+        tgdb._column_query_value(XsdType.DOUBLE.value, float("nan"))
+
+    valid = tgdb._column_action(
+        "declare_column",
+        "duration",
+        0,
+        "audio/*",
+        duration,
+        XsdType.DECIMAL.value,
+    )
+    corruptions = (
+        ({**valid, "position": True}, "position"),
+        ({**valid, "media_type": 1}, "names"),
+        ({**valid, "value_type": 1}, "value type"),
+        ({**valid, "media_type": "Audio/WAV"}, "declaration"),
+        ({**valid, "attribute": "{}"}, "declaration"),
+        ({**valid, "name": ""}, "name"),
+        ({**valid, "touches": ["column:other"]}, "touches"),
+    )
+    for action, message in corruptions:
+        with pytest.raises(tgdb.StoreCorrupt, match=message):
+            tgdb._action_touches(action)
+
+
+def test_blob_column_reindex_detects_missing_unexpected_and_derivation_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reindex validates every metadata row and translates derivation failures."""
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    absent = QualifiedName("urn:tgdb:blob-test", "absent")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _blob_column_graph())
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.declare_column(
+                "absent", "audio/*", absent, XsdType.INTEGER.value
+            )
+            transaction.commit()
+        digest = store.get("sample").graph_digest
+        store._connection.execute("DELETE FROM blob_metadata WHERE column = 'duration'")
+        with pytest.raises(tgdb.StoreCorrupt, match="incomplete or drifted"):
+            store.query(tgdb.Query.all().blob_column("duration"))
+        with pytest.raises(tgdb.StoreCorrupt, match="incomplete or drifted"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_metadata row .* missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        store._connection.execute(
+            "DELETE FROM blob_metadata_counts WHERE column = 'duration'"
+        )
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="blob_metadata_counts row .* missing"
+        ):
+            store.query(tgdb.Query.all().blob_column("duration"))
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="blob_metadata_counts row .* missing"
+        ):
+            store.check()
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="blob_metadata_counts row .* missing"
+        ):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        store._connection.execute(
+            "UPDATE blob_metadata_counts SET row_count = row_count + 1 "
+            "WHERE column = 'duration'"
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="incomplete or drifted"):
+            store.query(tgdb.Query.all().blob_column("duration"))
+        with pytest.raises(
+            tgdb.StoreCorrupt, match="blob_metadata_counts row .* differs"
+        ):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        orphan = "0" * 64
+        empty_digest = tgdb._blob_metadata_row_digest(())
+        store._connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            store._connection.execute(
+                "INSERT INTO blob_metadata_counts("
+                "graph_digest, column, row_count, row_digest) "
+                "VALUES (?, 'duration', 0, ?)",
+                (orphan, empty_digest),
+            )
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="blob_metadata_counts row .* unexpected"
+            ):
+                tgdb._require_complete_blob_metadata(store._connection)
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="blob_metadata_counts row .* unexpected"
+            ):
+                store.reindex()
+            store._connection.execute(
+                "DELETE FROM blob_metadata_counts WHERE graph_digest = ?", (orphan,)
+            )
+            store._connection.execute(
+                "INSERT INTO blob_metadata("
+                "graph_digest, tier, position, column, value_text, value_num, source) "
+                "VALUES (?, 'orphan', 0, 'duration', '1', NULL, 'declared')",
+                (orphan,),
+            )
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="blob_metadata rows .* unexpected"
+            ):
+                tgdb._require_complete_blob_metadata(store._connection)
+            store._connection.execute(
+                "DELETE FROM blob_metadata WHERE graph_digest = ?", (orphan,)
+            )
+        finally:
+            store._connection.execute("PRAGMA foreign_keys = ON")
+
+        tier, position = store._connection.execute(
+            "SELECT tier, position FROM blob_items WHERE graph_digest = ?",
+            (digest,),
+        ).fetchone()
+        store._connection.execute(
+            "INSERT INTO blob_metadata(graph_digest, tier, position, column, "
+            "value_text, value_num, source) VALUES (?, ?, ?, 'absent', '1', ?, "
+            "'declared')",
+            (digest, tier, position, tgdb._numeric_sort_key(Decimal(1))),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_metadata row .* unexpected"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                tgdb,
+                "_blob_metadata_rows",
+                lambda *_arguments: (_ for _ in ()).throw(ValueError("broken")),
+            )
+            with pytest.raises(tgdb.StoreCorrupt, match="cannot reindex blob metadata"):
+                store.reindex()
+
+
 def test_blob_put_validation_and_repack_preserve_content_identity(
     tmp_path: Path,
 ) -> None:
@@ -4589,6 +5108,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
     assert tgdb.__all__ == [
         "CheckReport",
         "CollectionInfo",
+        "ColumnInfo",
         "CommitReceipt",
         "IndexInfo",
         "InstanceInfo",
