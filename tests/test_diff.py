@@ -249,7 +249,24 @@ def test_regroup_coordinate_mapping_handles_changed_and_other_tiers() -> None:
     """Candidate coordinate maps cover insertions, removals, and exclusions."""
     tier = QualifiedName("urn:diff:mapping", "items")
     other = QualifiedName("urn:diff:mapping", "other")
+    first = Item("first")
+    second = Item("second")
     assert tuple(diff_module._insertion_positions((Item(),), (Item(),))) == ()
+    assert diff_module._changed_survivor_merge_placements((first,), (), tier) == ()
+    assert diff_module._changed_survivor_merge_placements(
+        (first, second), (first,), tier
+    ) == ((ItemRef(tier, 0), ItemRef(tier, 1), ItemRef(tier, 0), 1),)
+    assert diff_module._changed_survivor_merge_placements(
+        (first, second), (second,), tier
+    ) == ((ItemRef(tier, 0), ItemRef(tier, 1), ItemRef(tier, 1), 0),)
+    assert (
+        diff_module._changed_survivor_merge_placements(
+            (first, second, Item("third")),
+            (Item("changed-first"), Item("changed-second")),
+            tier,
+        )
+        == ()
+    )
     assert diff_module._before_insertion(ItemRef(other, 2), tier, 1) == ItemRef(
         other, 2
     )
