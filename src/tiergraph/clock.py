@@ -1863,6 +1863,7 @@ class ClockEditor:
     ) -> ClockEditor:
         """Replace descendants while explicitly reconciling every timed tier."""
         from tiergraph.replacement import (  # noqa: PLC0415
+            DetachmentReport,
             _containment_names,
             _replace_subtree,
             _shape,
@@ -1895,28 +1896,22 @@ class ClockEditor:
         )
         candidate = outcome.graph
         new_by_tier = _descendant_indexes(frozenset(outcome.new_items.values()))
-        candidate, reports, detached_dependencies, dropped_detached = (
-            self._replacement_bindings(
-                candidate,
-                timed,
-                old_by_tier,
-                new_by_tier,
-                outcome.correspondence.items,
-                records,
-                detached,
-                outcome.detached,
-            )
+        candidate, reports, dropped_detached = self._replacement_bindings(
+            candidate,
+            timed,
+            old_by_tier,
+            new_by_tier,
+            outcome.correspondence.items,
+            records,
+            detached,
         )
-        if outcome.report is None or not dropped_detached:
-            detached_content = outcome.report
-        else:
-            detached_content, detached_dependencies = _complete_replacement_report(
-                self._graph,
-                unbound,
-                unbinding,
-                outcome.report,
-                dropped_detached,
-            )
+        detached_content, detached_dependencies = _complete_replacement_report(
+            self._graph,
+            unbound,
+            unbinding,
+            cast(DetachmentReport, outcome.report),
+            dropped_detached,
+        )
         next_profile = self._profile_for(candidate)
         self._graph = candidate
         self._profile = next_profile
@@ -1935,11 +1930,9 @@ class ClockEditor:
         correspondence: Mapping[ItemRef, tuple[ItemRef, ...]],
         records: tuple[_BindingRecord, ...],
         detached: tuple[_DetachedRelationFact, ...],
-        detached_dependencies: tuple[DetachedDependency, ...],
     ) -> tuple[
         Graph,
         tuple[ClockEditReport, ...],
-        tuple[DetachedDependency, ...],
         tuple[_DetachedRelationFact, ...],
     ]:
         """Rebuild all affected binding sets after one multi-tier replacement."""
@@ -2069,21 +2062,6 @@ class ClockEditor:
         dropped_detached = tuple(
             held for held in detached if held.position not in original_to_final
         )
-        if dropped_detached:
-            from tiergraph.replacement import DetachedDependency  # noqa: PLC0415
-
-            detached_dependencies = (
-                *detached_dependencies,
-                *(
-                    DetachedDependency(
-                        "layer",
-                        held.fact_index,
-                        layer=held.layer,
-                        subject=held.fact.subject,
-                    )
-                    for held in dropped_detached
-                ),
-            )
         layers = _rebuilt_layers(
             graph.layers,
             {index: index for index in range(len(graph.relations))},
@@ -2094,7 +2072,7 @@ class ClockEditor:
         for report in reports:
             if report.needs_realignment:
                 result = _record_needs_realignment(result, report.tier)
-        return result, tuple(reports), detached_dependencies, dropped_detached
+        return result, tuple(reports), dropped_detached
 
     def undeclare_with_contents(
         self, target: str | QualifiedName | EditDeclaration
