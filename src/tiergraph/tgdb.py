@@ -63,7 +63,7 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 _LAYOUT_VERSION = 1
 _INDEX_VERSION = 6
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
@@ -657,6 +657,191 @@ class RepackReport:
             "inline_objects": self.inline_objects,
             "file_objects": self.file_objects,
             "moved_bytes": self.moved_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PinInfo:
+    """Describe one explicitly retained content object."""
+
+    digest: str
+    reason: str
+    commit_seq: int
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible description in stable field order."""
+        return {
+            "digest": self.digest,
+            "reason": self.reason,
+            "commit_seq": self.commit_seq,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PrunedVersion:
+    """Describe one historical version selected for explicit pruning."""
+
+    instance_uid: bytes
+    collection: str
+    name: str
+    seq: int
+    commit_seq: int
+    graph_digest: str
+    patch_digest: str | None
+
+    def to_data(self) -> dict[str, str | int | None]:
+        """Return a JSON-compatible description in selection order."""
+        return {
+            "instance_uid": self.instance_uid.hex(),
+            "collection": self.collection,
+            "name": self.name,
+            "seq": self.seq,
+            "commit_seq": self.commit_seq,
+            "graph_digest": self.graph_digest,
+            "patch_digest": self.patch_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PruneReport:
+    """Report historical versions selected or deleted by explicit pruning."""
+
+    deleted: bool
+    commit_seq: int | None
+    versions: tuple[PrunedVersion, ...]
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible destructive-maintenance report."""
+        return {
+            "destructive": True,
+            "deleted": self.deleted,
+            "commit_seq": self.commit_seq,
+            "version_count": len(self.versions),
+            "versions": [version.to_data() for version in self.versions],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PurgedInstance:
+    """Describe one retired instance selected for permanent removal."""
+
+    uid: bytes
+    collection: str
+    name: str
+    position: int
+    versions: int
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible description in declared order."""
+        return {
+            "uid": self.uid.hex(),
+            "collection": self.collection,
+            "name": self.name,
+            "position": self.position,
+            "versions": self.versions,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PurgeReport:
+    """Report retired instances selected or deleted by explicit purging."""
+
+    deleted: bool
+    commit_seq: int | None
+    instances: tuple[PurgedInstance, ...]
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible destructive-maintenance report."""
+        return {
+            "destructive": True,
+            "deleted": self.deleted,
+            "commit_seq": self.commit_seq,
+            "instance_count": len(self.instances),
+            "version_count": sum(instance.versions for instance in self.instances),
+            "instances": [instance.to_data() for instance in self.instances],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class GarbageObject:
+    """Describe one unreachable catalog object in catalog insertion order."""
+
+    digest: str
+    size: int
+    residency: Literal["inline", "file"]
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible object description."""
+        return {
+            "digest": self.digest,
+            "size": self.size,
+            "residency": self.residency,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class OrphanFile:
+    """Describe one digest-derived object file with no catalog row."""
+
+    digest: str
+    size: int
+
+    def to_data(self) -> dict[str, str | int]:
+        """Return a JSON-compatible orphan description."""
+        return {"digest": self.digest, "size": self.size}
+
+
+@dataclass(frozen=True, slots=True)
+class GcReport:
+    """Report unreachable objects and unrecorded files from explicit GC."""
+
+    deleted: bool
+    unreachable: tuple[GarbageObject, ...]
+    orphan_files: tuple[OrphanFile, ...]
+    staging_leftovers: tuple[str, ...]
+
+    @property
+    def unreachable_inline_bytes(self) -> int:
+        """Return bytes held by unreachable inline catalog objects."""
+        return sum(item.size for item in self.unreachable if item.residency == "inline")
+
+    @property
+    def unreachable_file_bytes(self) -> int:
+        """Return bytes held by unreachable file catalog objects."""
+        return sum(item.size for item in self.unreachable if item.residency == "file")
+
+    @property
+    def orphan_file_bytes(self) -> int:
+        """Return bytes held by digest-derived files without catalog rows."""
+        return sum(item.size for item in self.orphan_files)
+
+    @property
+    def reclaimable_bytes(self) -> int:
+        """Return bytes named by unreachable rows and orphan files."""
+        return (
+            self.unreachable_inline_bytes
+            + self.unreachable_file_bytes
+            + self.orphan_file_bytes
+        )
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible report in deterministic order."""
+        inline = sum(item.residency == "inline" for item in self.unreachable)
+        files = len(self.unreachable) - inline
+        return {
+            "deleted": self.deleted,
+            "unreachable_objects": len(self.unreachable),
+            "unreachable_inline": inline,
+            "unreachable_inline_bytes": self.unreachable_inline_bytes,
+            "unreachable_file": files,
+            "unreachable_file_bytes": self.unreachable_file_bytes,
+            "orphan_files": len(self.orphan_files),
+            "orphan_file_bytes": self.orphan_file_bytes,
+            "staging_leftovers": len(self.staging_leftovers),
+            "reclaimable_bytes": self.reclaimable_bytes,
+            "objects": [item.to_data() for item in self.unreachable],
+            "orphans": [item.to_data() for item in self.orphan_files],
+            "staging": list(self.staging_leftovers),
         }
 
 
@@ -1629,7 +1814,204 @@ class TgdbStore:
             transaction._undo(commit_seq)
             return transaction.commit()
 
-    def check(self, *, full: bool = False) -> CheckReport:
+    def pins(self) -> tuple[PinInfo, ...]:
+        """Return explicitly retained objects in pin commit and insertion order."""
+        self._require_open()
+        self._require_current_schema()
+        try:
+            return tuple(
+                PinInfo(*row)
+                for row in self._connection.execute(
+                    "SELECT digest, reason, commit_seq FROM pins "
+                    "ORDER BY commit_seq, rowid"
+                )
+            )
+        except sqlite3.DatabaseError as error:
+            raise StoreCorrupt(f"cannot list tgdb pins: {error}") from error
+
+    def prune(
+        self,
+        instances: Iterable[bytes | str],
+        *,
+        collection: bytes | str | None = None,
+        keep: int | None = None,
+        before_commit: int | None = None,
+        delete: bool = False,
+    ) -> PruneReport:
+        """Select or delete old versions without ever selecting a current head.
+
+        Exactly one retention boundary is required. ``keep`` retains the newest
+        number of versions per named instance. ``before_commit`` selects versions
+        published before that catalog commit. The default is a nonmutating report;
+        ``delete=True`` permanently removes the reported version rows. Content
+        bytes remain until a later :meth:`gc` call.
+        """
+        if (keep is None) == (before_commit is None):
+            raise ValueError("exactly one of keep or before_commit is required")
+        if keep is not None and (
+            isinstance(keep, bool) or not isinstance(keep, int) or keep <= 0
+        ):
+            raise ValueError("keep must be a positive integer")
+        if before_commit is not None and (
+            isinstance(before_commit, bool)
+            or not isinstance(before_commit, int)
+            or before_commit <= 0
+        ):
+            raise ValueError("before_commit must be a positive integer")
+        if not isinstance(delete, bool):
+            raise TypeError("delete must be a boolean")
+        self._require_open()
+        self._require_current_schema()
+        selectors = tuple(instances)
+        if not selectors:
+            raise ValueError("instances must not be empty")
+        candidates = _prune_candidates(
+            self._connection,
+            selectors,
+            collection=collection,
+            keep=keep,
+            before_commit=before_commit,
+        )
+        if not delete or not candidates:
+            return PruneReport(False, None, candidates)
+        self._require_writable()
+        if self._writer is not None:
+            raise TgdbError("cannot prune during a write transaction")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            locked = _prune_candidates(
+                self._connection,
+                selectors,
+                collection=collection,
+                keep=keep,
+                before_commit=before_commit,
+            )
+            if locked != candidates:
+                raise StaleVersion("prune selection changed before deletion")
+            commit_seq = _retention_commit(
+                self._connection,
+                "prune",
+                tuple(_touch("instance", item.instance_uid) for item in locked),
+            )
+            _delete_versions(self._connection, locked)
+            self._connection.execute("COMMIT")
+        except sqlite3.OperationalError as error:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            if _sqlite_busy(error):
+                raise StoreBusy("tgdb catalog remained busy while pruning") from error
+            raise StoreCorrupt(f"cannot prune tgdb history: {error}") from error
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            raise
+        return PruneReport(True, commit_seq, locked)
+
+    def purge_retired(self, *, delete: bool = False) -> PurgeReport:
+        """Select or permanently remove every retired instance and its history.
+
+        The default only reports candidates. Deletion removes catalog rows but
+        leaves content bytes for a later explicit :meth:`gc` call.
+        """
+        if not isinstance(delete, bool):
+            raise TypeError("delete must be a boolean")
+        self._require_open()
+        self._require_current_schema()
+        candidates = _purge_candidates(self._connection)
+        if not delete or not candidates:
+            return PurgeReport(False, None, candidates)
+        self._require_writable()
+        if self._writer is not None:
+            raise TgdbError("cannot purge retired instances during a write transaction")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            locked = _purge_candidates(self._connection)
+            if locked != candidates:
+                raise StaleVersion("retired-instance selection changed before deletion")
+            commit_seq = _retention_commit(
+                self._connection,
+                "purge-retired",
+                _purge_touch_keys(self._connection, locked),
+            )
+            _delete_retired_instances(self._connection, locked)
+            self._connection.execute("COMMIT")
+        except sqlite3.OperationalError as error:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            if _sqlite_busy(error):
+                raise StoreBusy(
+                    "tgdb catalog remained busy while purging retired instances"
+                ) from error
+            raise StoreCorrupt(f"cannot purge retired instances: {error}") from error
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            raise
+        return PurgeReport(True, commit_seq, locked)
+
+    def gc(self, *, delete: bool = False) -> GcReport:
+        """Report or delete unreachable objects and unrecorded pool files.
+
+        Reachability starts at retained graph and patch versions, inspected
+        attached graphs, and explicit pins, then follows blob references through
+        every reachable graph whose facts have been indexed. The default is
+        read-only. Deletion recomputes reachability while holding the writer
+        transaction, removes catalog rows first, commits, and only then unlinks
+        files while holding a second writer transaction.
+        """
+        if not isinstance(delete, bool):
+            raise TypeError("delete must be a boolean")
+        self._require_open()
+        self._require_current_schema()
+        _require_pool_layout(self._path, writable=delete)
+        if not delete:
+            return _gc_report(self._connection, self._path, deleted=False)
+        self._require_writable()
+        if self._writer is not None:
+            raise TgdbError("cannot collect garbage during a write transaction")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            report = _gc_report(self._connection, self._path, deleted=True)
+            digests = tuple(item.digest for item in report.unreachable)
+            if digests:
+                self._connection.executemany(
+                    "DELETE FROM graph_facts WHERE digest = ?",
+                    ((item,) for item in digests),
+                )
+                self._connection.executemany(
+                    "DELETE FROM objects WHERE digest = ?",
+                    ((item,) for item in digests),
+                )
+            self._connection.execute("COMMIT")
+        except sqlite3.OperationalError as error:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            if _sqlite_busy(error):
+                raise StoreBusy(
+                    "tgdb catalog remained busy during garbage collection"
+                ) from error
+            raise StoreCorrupt(f"cannot collect tgdb garbage: {error}") from error
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            raise
+        file_names = tuple(
+            item.digest for item in report.unreachable if item.residency == "file"
+        ) + tuple(item.digest for item in report.orphan_files)
+        failed = _unlink_garbage(
+            self._connection,
+            self._path,
+            file_names,
+            report.staging_leftovers,
+        )
+        if failed:
+            raise TgdbError(
+                "garbage collection deleted catalog rows but could not remove: "
+                + ", ".join(failed)
+            )
+        return report
+
+    def check(self, *, full: bool = False) -> CheckReport:  # noqa: PLR0915
         """Check the catalog and every recorded object without changing the store.
 
         A normal check validates SQLite, object records, file placement, residency,
@@ -1658,6 +2040,7 @@ class TgdbStore:
             ):
                 _action_touches(_decode_action(forward))
                 _action_touches(_decode_action(inverse))
+            _check_pins(self._connection)
             invalid_head = self._connection.execute(
                 "SELECT i.uid FROM instances AS i "
                 "LEFT JOIN versions AS v ON v.id = i.head_version "
@@ -2875,6 +3258,42 @@ class WriteTransaction:
             self._kind = "blob"
         return ref
 
+    def pin(self, digest: str, *, reason: str) -> None:
+        """Keep one stored object reachable until an explicit unpin commit."""
+        self._require_active()
+        _validate_digest(digest)
+        _validate_pin_reason(reason)
+        if (
+            self._store._object_record(digest, connection=self._connection) is None
+            and self._store._object_record(digest) is None
+        ):
+            raise TgdbError(f"object {digest} is not stored")
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM pins WHERE digest = ?", (digest,)
+            ).fetchone()
+            is not None
+        ):
+            raise TgdbError(f"object {digest} is already pinned")
+        self._connection.execute(
+            "INSERT INTO pins(digest, reason, commit_seq) VALUES (?, ?, ?)",
+            (digest, reason, self._commit_seq),
+        )
+        self._record(_pin_action("pin", digest, reason), _pin_action("unpin", digest))
+
+    def unpin(self, digest: str) -> None:
+        """Release one explicit object pin without deleting its bytes."""
+        self._require_active()
+        _validate_digest(digest)
+        row = self._connection.execute(
+            "SELECT reason FROM pins WHERE digest = ?", (digest,)
+        ).fetchone()
+        if row is None:
+            raise TgdbError(f"object {digest} is not pinned")
+        reason = cast(str, row[0])
+        self._connection.execute("DELETE FROM pins WHERE digest = ?", (digest,))
+        self._record(_pin_action("unpin", digest), _pin_action("pin", digest, reason))
+
     def import_bundle(
         self,
         source: BinaryIO,
@@ -3754,6 +4173,11 @@ class WriteTransaction:
             catalog = self._store._connection
             catalog.execute("BEGIN IMMEDIATE")
             _publication_step("locked")
+            for digest in self._staged_objects:
+                record = self._store._object_record(digest, connection=self._connection)
+                if record is None:
+                    raise StoreCorrupt(f"staged object {digest} is missing")
+                _check_recorded_object(self._store.path, digest, record, full=False)
             current = catalog.execute("SELECT max(seq) FROM commits").fetchone()
             current_seq = 0 if current is None or current[0] is None else current[0]
             if current_seq != self._base_commit_seq:
@@ -3904,6 +4328,8 @@ class WriteTransaction:
         """Apply one bounded internal action and return its current inverse."""
         kind = action.get("action")
         touches = list(_action_touches(action))
+        if kind == "retention_barrier":
+            raise TgdbError("retention commits cannot be undone")
         if kind == "declare_index":
             name, position, tier, attribute, history = _index_action_data(action)
             self._declare_index(name, position, tier, attribute, history)
@@ -3974,6 +4400,31 @@ class WriteTransaction:
                 _qname_from_text(attribute_text),
                 value_type,
             )
+        if kind in {"pin", "unpin"}:
+            digest, pin_reason = _pin_action_data(action)
+            row = self._connection.execute(
+                "SELECT reason FROM pins WHERE digest = ?", (digest,)
+            ).fetchone()
+            if kind == "pin":
+                if row is not None:
+                    raise StaleVersion(f"object {digest} is already pinned")
+                if (
+                    self._store._object_record(digest, connection=self._connection)
+                    is None
+                    and self._store._object_record(digest) is None
+                ):
+                    raise StaleVersion(f"object {digest} is no longer stored")
+                assert pin_reason is not None
+                self._connection.execute(
+                    "INSERT INTO pins(digest, reason, commit_seq) VALUES (?, ?, ?)",
+                    (digest, pin_reason, self._commit_seq),
+                )
+                return _pin_action("unpin", digest)
+            if row is None:
+                raise StaleVersion(f"object {digest} is no longer pinned")
+            prior_reason = cast(str, row[0])
+            self._connection.execute("DELETE FROM pins WHERE digest = ?", (digest,))
+            return _pin_action("pin", digest, prior_reason)
         if kind == "republish":
             uid = _action_uid(action)
             version_id = cast(int, action["version_id"])
@@ -4318,6 +4769,7 @@ def _publish_staged_catalog(
 
     _merge_collections(staged, catalog)
     _merge_instance_shells(staged, catalog)
+    _replace_pins(staged, catalog)
     _publication_step("catalog")
 
     _copy_selected_rows(
@@ -4797,6 +5249,17 @@ def _merge_instance_heads(
     )
 
 
+def _replace_pins(staged: sqlite3.Connection, catalog: sqlite3.Connection) -> None:
+    """Replace the small explicit pin set from the checked staged view."""
+    catalog.execute("DELETE FROM pins")
+    catalog.executemany(
+        "INSERT INTO pins(digest, reason, commit_seq) VALUES (?, ?, ?)",
+        staged.execute(
+            "SELECT digest, reason, commit_seq FROM pins ORDER BY commit_seq, rowid"
+        ),
+    )
+
+
 def _temporary_name(
     catalog: sqlite3.Connection,
     table: Literal["collections", "instances"],
@@ -4823,6 +5286,336 @@ def _sqlite_busy(error: sqlite3.Error) -> bool:
     }
 
 
+def _prune_candidates(
+    connection: sqlite3.Connection,
+    selectors: tuple[bytes | str, ...],
+    *,
+    collection: bytes | str | None,
+    keep: int | None,
+    before_commit: int | None,
+) -> tuple[PrunedVersion, ...]:
+    """Return prune candidates in caller instance and version order."""
+    selected: list[PrunedVersion] = []
+    seen: set[bytes] = set()
+    for selector in selectors:
+        instance = _resolve_instance(connection, selector, collection=collection)
+        uid = instance[1]
+        if uid in seen:
+            raise ValueError(f"instance {instance[3]!r} was selected more than once")
+        seen.add(uid)
+        collection_name = cast(
+            str,
+            connection.execute(
+                "SELECT name FROM collections WHERE id = ?", (instance[2],)
+            ).fetchone()[0],
+        )
+        rows = connection.execute(
+            "SELECT id, seq, commit_seq, graph_digest, patch_digest "
+            "FROM versions WHERE instance_id = ? ORDER BY seq",
+            (instance[0],),
+        ).fetchall()
+        if keep is not None:
+            rows = rows[: max(0, len(rows) - keep)]
+        else:
+            assert before_commit is not None
+            rows = [row for row in rows if row[2] < before_commit]
+        selected.extend(
+            PrunedVersion(
+                uid,
+                collection_name,
+                instance[3],
+                seq,
+                commit_seq,
+                graph_digest,
+                patch_digest,
+            )
+            for row_id, seq, commit_seq, graph_digest, patch_digest in rows
+            if row_id != instance[7]
+        )
+    return tuple(selected)
+
+
+def _purge_candidates(
+    connection: sqlite3.Connection,
+) -> tuple[PurgedInstance, ...]:
+    """Return retired instances in declared collection and instance order."""
+    return tuple(
+        PurgedInstance(uid, collection, name, position, versions)
+        for uid, collection, name, position, versions in connection.execute(
+            "SELECT i.uid, c.name, i.name, i.position, count(v.id) "
+            "FROM instances AS i JOIN collections AS c ON c.id = i.collection_id "
+            "LEFT JOIN versions AS v ON v.instance_id = i.id "
+            "WHERE i.retired_commit IS NOT NULL GROUP BY i.id "
+            "ORDER BY c.position, i.position"
+        )
+    )
+
+
+def _retention_commit(
+    connection: sqlite3.Connection, kind: str, touches: tuple[str, ...]
+) -> int:
+    """Record one non-undoable retention barrier and return its sequence."""
+    action: dict[str, object] = {
+        "action": "retention_barrier",
+        "touches": list(dict.fromkeys(touches)),
+    }
+    _action_touches(action)
+    cursor = connection.execute(
+        "INSERT INTO commits(kind, annotations) VALUES (?, NULL)", (kind,)
+    )
+    commit_seq = cast(int, cursor.lastrowid)
+    encoded = _encode_action(action)
+    connection.execute(
+        "INSERT INTO commit_ops(commit_seq, ordinal, op, forward, inverse) "
+        "VALUES (?, 0, 'retention_barrier', ?, ?)",
+        (commit_seq, encoded, encoded),
+    )
+    return commit_seq
+
+
+def _purge_touch_keys(
+    connection: sqlite3.Connection, instances: tuple[PurgedInstance, ...]
+) -> tuple[str, ...]:
+    """Name purged and order-compacted identities for stale-undo checks."""
+    collections = tuple(dict.fromkeys(item.collection for item in instances))
+    touches: list[str] = []
+    for collection in collections:
+        touches.extend(
+            _touch("instance", cast(bytes, row[0]))
+            for row in connection.execute(
+                "SELECT i.uid FROM instances AS i JOIN collections AS c "
+                "ON c.id = i.collection_id WHERE c.name = ? ORDER BY i.position",
+                (collection,),
+            )
+        )
+    return tuple(touches)
+
+
+def _delete_versions(
+    connection: sqlite3.Connection, versions: tuple[PrunedVersion, ...]
+) -> None:
+    """Delete one locked prune selection and discard now-unneeded graph facts."""
+    ids = tuple(
+        cast(int, row[0])
+        for version in versions
+        if (
+            row := connection.execute(
+                "SELECT v.id FROM versions AS v JOIN instances AS i "
+                "ON i.id = v.instance_id WHERE i.uid = ? AND v.seq = ?",
+                (version.instance_uid, version.seq),
+            ).fetchone()
+        )
+        is not None
+    )
+    if len(ids) != len(versions):
+        raise StaleVersion("prune selection changed before deletion")
+    connection.executemany(
+        "UPDATE versions SET parent_id = NULL WHERE parent_id = ?",
+        ((item,) for item in ids),
+    )
+    connection.executemany(
+        "DELETE FROM versions WHERE id = ?", ((item,) for item in ids)
+    )
+    _drop_unretained_graph_facts(connection)
+
+
+def _delete_retired_instances(
+    connection: sqlite3.Connection, instances: tuple[PurgedInstance, ...]
+) -> None:
+    """Delete one locked retired selection and compact each affected order."""
+    rows = tuple(
+        cast(tuple[int, int], row)
+        for instance in instances
+        if (
+            row := connection.execute(
+                "SELECT id, collection_id FROM instances "
+                "WHERE uid = ? AND retired_commit IS NOT NULL",
+                (instance.uid,),
+            ).fetchone()
+        )
+        is not None
+    )
+    if len(rows) != len(instances):
+        raise StaleVersion("retired-instance selection changed before deletion")
+    instance_ids = tuple(row[0] for row in rows)
+    collection_ids = tuple(dict.fromkeys(row[1] for row in rows))
+    connection.executemany(
+        "UPDATE instances SET head_version = NULL WHERE id = ?",
+        ((item,) for item in instance_ids),
+    )
+    connection.executemany(
+        "DELETE FROM versions WHERE instance_id = ?", ((item,) for item in instance_ids)
+    )
+    connection.executemany(
+        "DELETE FROM instances WHERE id = ?", ((item,) for item in instance_ids)
+    )
+    for collection_id in collection_ids:
+        ordered = tuple(
+            cast(bytes, row[0])
+            for row in connection.execute(
+                "SELECT uid FROM instances WHERE collection_id = ? ORDER BY position",
+                (collection_id,),
+            )
+        )
+        if ordered:
+            target = {uid: position for position, uid in enumerate(ordered)}
+            _set_positions(connection, "instances", target)
+    _drop_unretained_graph_facts(connection)
+
+
+def _drop_unretained_graph_facts(connection: sqlite3.Connection) -> None:
+    """Drop derived rows for documents no retained or inspected graph names."""
+    connection.execute(
+        "DELETE FROM graph_facts WHERE NOT EXISTS ("
+        "SELECT 1 FROM versions WHERE graph_digest = graph_facts.digest"
+        ") AND NOT EXISTS ("
+        "SELECT 1 FROM inspections WHERE digest = graph_facts.digest "
+        "AND inspector = ? AND inspector_version = ?"
+        ")",
+        (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
+    )
+
+
+def _reachable_digests(connection: sqlite3.Connection) -> set[str]:
+    """Compute the transitive retained object set from catalog roots."""
+    _check_pins(connection)
+    return {
+        cast(str, row[0])
+        for row in connection.execute(
+            "WITH RECURSIVE reachable(digest) AS ("
+            "SELECT graph_digest FROM versions "
+            "UNION SELECT patch_digest FROM versions WHERE patch_digest IS NOT NULL "
+            "UNION SELECT digest FROM pins "
+            "UNION SELECT digest FROM inspections WHERE inspector = ? "
+            "AND inspector_version = ? "
+            "UNION SELECT bi.sha256 FROM blob_items AS bi "
+            "JOIN reachable AS r ON r.digest = bi.graph_digest"
+            ") SELECT digest FROM reachable",
+            (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
+        )
+    }
+
+
+def _unlink_garbage(
+    connection: sqlite3.Connection,
+    root: Path,
+    object_digests: tuple[str, ...],
+    staging_names: tuple[str, ...],
+) -> list[str]:
+    """Unlink still-unrecorded files while excluding concurrent publications."""
+    failed: list[str] = []
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        for digest in object_digests:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM objects WHERE digest = ?", (digest,)
+                ).fetchone()
+                is not None
+            ):
+                continue
+            path = _object_path(root, digest)
+            try:
+                path.unlink()
+                _fsync_directory(path.parent)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                failed.append(digest)
+        for name in staging_names:
+            path = root / _STAGING_NAME / name
+            try:
+                path.unlink()
+                _fsync_directory(path.parent)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                failed.append(f"staging/{name}")
+        connection.execute("COMMIT")
+    except sqlite3.OperationalError as error:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        if _sqlite_busy(error):
+            raise StoreBusy(
+                "tgdb catalog remained busy during garbage collection cleanup"
+            ) from error
+        raise StoreCorrupt(f"cannot clean up tgdb garbage: {error}") from error
+    except Exception:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    return failed
+
+
+def _check_pins(connection: sqlite3.Connection) -> None:
+    """Require every explicit pin to name one present object with a valid reason."""
+    for digest, reason, present in connection.execute(
+        "SELECT p.digest, p.reason, o.digest IS NOT NULL FROM pins AS p "
+        "LEFT JOIN objects AS o ON o.digest = p.digest ORDER BY p.commit_seq, p.rowid"
+    ):
+        _validate_digest(digest)
+        try:
+            _validate_pin_reason(reason)
+        except (TypeError, ValueError) as error:
+            raise StoreCorrupt(
+                f"pin for object {digest} has an invalid reason"
+            ) from error
+        if not present:
+            raise StoreCorrupt(f"pin names absent object {digest}")
+
+
+def _object_pool_files(root: Path) -> tuple[OrphanFile, ...]:
+    """Return every valid digest-derived file in deterministic pool order."""
+    _check_object_tree(root)
+    objects: list[OrphanFile] = []
+    hashes = root / _OBJECTS_NAME / _HASH_NAME
+    for first in sorted(hashes.iterdir(), key=lambda item: item.name):
+        for second in sorted(first.iterdir(), key=lambda item: item.name):
+            objects.extend(
+                OrphanFile(path.name, path.stat().st_size)
+                for path in sorted(second.iterdir(), key=lambda item: item.name)
+            )
+    return tuple(objects)
+
+
+def _staging_leftovers(root: Path) -> tuple[str, ...]:
+    """Return plain staging entries without following substituted paths."""
+    _require_plain_directory(root / _STAGING_NAME, "staging directory")
+    names: list[str] = []
+    for path in sorted((root / _STAGING_NAME).iterdir(), key=lambda item: item.name):
+        if path.is_symlink() or not path.is_file():
+            raise StoreCorrupt(f"staging entry {path.name!r} is not a plain file")
+        names.append(path.name)
+    return tuple(names)
+
+
+def _gc_report(
+    connection: sqlite3.Connection, root: Path, *, deleted: bool
+) -> GcReport:
+    """Build one reachability and unrecorded-file report."""
+    reachable = _reachable_digests(connection)
+    recorded = {
+        cast(str, row[0]) for row in connection.execute("SELECT digest FROM objects")
+    }
+    unreachable = tuple(
+        GarbageObject(digest, size, cast(Literal["inline", "file"], residency))
+        for digest, size, residency in connection.execute(
+            "SELECT digest, size, residency FROM objects ORDER BY rowid"
+        )
+        if digest not in reachable
+    )
+    for item in unreachable:
+        record = connection.execute(
+            "SELECT size, residency, data FROM objects WHERE digest = ?",
+            (item.digest,),
+        ).fetchone()
+        assert record is not None
+        _check_recorded_object(root, item.digest, record, full=False)
+    pool_files = _object_pool_files(root)
+    orphans = tuple(item for item in pool_files if item.digest not in recorded)
+    return GcReport(deleted, unreachable, orphans, _staging_leftovers(root))
+
+
 def _validate_uid(uid: object, description: str) -> None:
     """Require one 128-bit public catalog identity."""
     if not isinstance(uid, bytes) or len(uid) != _UID_BYTES:
@@ -4847,6 +5640,17 @@ def _validate_name(name: object) -> None:
         raise ValueError("catalog name must not be empty")
     if size > _MAX_NAME_BYTES:
         raise ValueError(f"catalog name exceeds {_MAX_NAME_BYTES} UTF-8 bytes")
+
+
+def _validate_pin_reason(reason: object) -> None:
+    """Require a nonempty bounded reason for explicit retention."""
+    if not isinstance(reason, str):
+        raise TypeError("pin reason must be a string")
+    size = len(reason.encode("utf-8"))
+    if size == 0:
+        raise ValueError("pin reason must not be empty")
+    if size > _MAX_NAME_BYTES:
+        raise ValueError(f"pin reason exceeds {_MAX_NAME_BYTES} UTF-8 bytes")
 
 
 def _validate_position(position: object, count: int, *, allow_end: bool) -> None:
@@ -7200,6 +8004,44 @@ def _index_touch(name: str) -> str:
     return f"index:{name}"
 
 
+def _pin_touch(digest: str) -> str:
+    """Return one stable staleness key for an explicit object pin."""
+    return f"pin:{digest}"
+
+
+def _pin_action(
+    action: Literal["pin", "unpin"], digest: str, reason: str | None = None
+) -> dict[str, object]:
+    """Build one reversible explicit-pin operation."""
+    value: dict[str, object] = {
+        "action": action,
+        "digest": digest,
+        "touches": [_pin_touch(digest)],
+    }
+    if reason is not None:
+        value["reason"] = reason
+    return value
+
+
+def _pin_action_data(action: dict[str, object]) -> tuple[str, str | None]:
+    """Validate and decode one recorded explicit-pin operation."""
+    digest = action.get("digest")
+    if not isinstance(digest, str):
+        raise StoreCorrupt("recorded pin digest is malformed")
+    _validate_digest(digest)
+    kind = action.get("action")
+    reason = action.get("reason")
+    if kind == "pin":
+        try:
+            _validate_pin_reason(reason)
+        except (TypeError, ValueError) as error:
+            raise StoreCorrupt("recorded pin reason is malformed") from error
+        return digest, cast(str, reason)
+    if kind == "unpin" and reason is None:
+        return digest, None
+    raise StoreCorrupt("recorded pin operation is malformed")
+
+
 def _index_action(
     action: Literal["declare_index"],
     name: str,
@@ -7378,6 +8220,20 @@ def _action_touches(  # noqa: PLR0915 -- action validation is one ledger contrac
         "republish": "instance",
     }
     action_name = cast(str, action.get("action"))
+    if action_name in {"pin", "unpin"}:
+        digest, _reason = _pin_action_data(action)
+        if touches != (_pin_touch(digest),):
+            raise StoreCorrupt("recorded catalog touches do not match its operation")
+        return touches
+    if action_name == "retention_barrier":
+        if not touches or len(set(touches)) != len(touches):
+            raise StoreCorrupt("recorded retention touches are malformed")
+        for touch in touches:
+            prefix, separator, uid = touch.partition(":")
+            if prefix != "instance" or not separator:
+                raise StoreCorrupt("recorded retention touches are malformed")
+            _uid_from_hex(uid)
+        return touches
     if action_name in {"declare_index", "drop_index"}:
         name = action.get("name")
         try:
@@ -7573,6 +8429,14 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "seq INTEGER PRIMARY KEY, "
             "kind TEXT NOT NULL CHECK(length(kind) > 0), "
             "annotations TEXT"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE pins("
+            "digest TEXT PRIMARY KEY "
+            "CHECK(length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'), "
+            "reason TEXT NOT NULL CHECK(length(reason) > 0), "
+            "commit_seq INTEGER NOT NULL REFERENCES commits(seq)"
             ") STRICT"
         )
         connection.execute(
@@ -8117,12 +8981,20 @@ __all__ = [
     "CollectionInfo",
     "ColumnInfo",
     "CommitReceipt",
+    "GarbageObject",
+    "GcReport",
     "IndexInfo",
     "InspectReport",
     "InspectionFact",
     "InspectionResult",
     "Inspector",
     "InstanceInfo",
+    "OrphanFile",
+    "PinInfo",
+    "PruneReport",
+    "PrunedVersion",
+    "PurgeReport",
+    "PurgedInstance",
     "Query",
     "ReindexReport",
     "RepackReport",

@@ -11789,6 +11789,82 @@ CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[di
 
 Return a JSON-compatible receipt in stable field order.
 
+### `GarbageObject`
+
+```text
+GarbageObject(digest: 'str', size: 'int', residency: "Literal['inline', 'file']") -> None
+```
+
+Describe one unreachable catalog object in catalog insertion order.
+
+#### `GarbageObject.to_data`
+
+Method.
+
+```text
+GarbageObject.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible object description.
+
+### `GcReport`
+
+```text
+GcReport(deleted: 'bool', unreachable: 'tuple[GarbageObject, ...]', orphan_files: 'tuple[OrphanFile, ...]', staging_leftovers: 'tuple[str, ...]') -> None
+```
+
+Report unreachable objects and unrecorded files from explicit GC.
+
+#### `GcReport.unreachable_inline_bytes`
+
+Property.
+
+```text
+GcReport.unreachable_inline_bytes(self) -> 'int'
+```
+
+Return bytes held by unreachable inline catalog objects.
+
+#### `GcReport.unreachable_file_bytes`
+
+Property.
+
+```text
+GcReport.unreachable_file_bytes(self) -> 'int'
+```
+
+Return bytes held by unreachable file catalog objects.
+
+#### `GcReport.orphan_file_bytes`
+
+Property.
+
+```text
+GcReport.orphan_file_bytes(self) -> 'int'
+```
+
+Return bytes held by digest-derived files without catalog rows.
+
+#### `GcReport.reclaimable_bytes`
+
+Property.
+
+```text
+GcReport.reclaimable_bytes(self) -> 'int'
+```
+
+Return bytes named by unreachable rows and orphan files.
+
+#### `GcReport.to_data`
+
+Method.
+
+```text
+GcReport.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible report in deterministic order.
+
 ### `IndexInfo`
 
 ```text
@@ -11913,6 +11989,114 @@ InstanceInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
 ```
 
 Return a JSON-compatible description in stable field order.
+
+### `OrphanFile`
+
+```text
+OrphanFile(digest: 'str', size: 'int') -> None
+```
+
+Describe one digest-derived object file with no catalog row.
+
+#### `OrphanFile.to_data`
+
+Method.
+
+```text
+OrphanFile.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible orphan description.
+
+### `PinInfo`
+
+```text
+PinInfo(digest: 'str', reason: 'str', commit_seq: 'int') -> None
+```
+
+Describe one explicitly retained content object.
+
+#### `PinInfo.to_data`
+
+Method.
+
+```text
+PinInfo.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible description in stable field order.
+
+### `PruneReport`
+
+```text
+PruneReport(deleted: 'bool', commit_seq: 'int | None', versions: 'tuple[PrunedVersion, ...]') -> None
+```
+
+Report historical versions selected or deleted by explicit pruning.
+
+#### `PruneReport.to_data`
+
+Method.
+
+```text
+PruneReport.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible destructive-maintenance report.
+
+### `PrunedVersion`
+
+```text
+PrunedVersion(instance_uid: 'bytes', collection: 'str', name: 'str', seq: 'int', commit_seq: 'int', graph_digest: 'str', patch_digest: 'str | None') -> None
+```
+
+Describe one historical version selected for explicit pruning.
+
+#### `PrunedVersion.to_data`
+
+Method.
+
+```text
+PrunedVersion.to_data(self) -> 'dict[str, str | int | None]'
+```
+
+Return a JSON-compatible description in selection order.
+
+### `PurgeReport`
+
+```text
+PurgeReport(deleted: 'bool', commit_seq: 'int | None', instances: 'tuple[PurgedInstance, ...]') -> None
+```
+
+Report retired instances selected or deleted by explicit purging.
+
+#### `PurgeReport.to_data`
+
+Method.
+
+```text
+PurgeReport.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible destructive-maintenance report.
+
+### `PurgedInstance`
+
+```text
+PurgedInstance(uid: 'bytes', collection: 'str', name: 'str', position: 'int', versions: 'int') -> None
+```
+
+Describe one retired instance selected for permanent removal.
+
+#### `PurgedInstance.to_data`
+
+Method.
+
+```text
+PurgedInstance.to_data(self) -> 'dict[str, str | int]'
+```
+
+Return a JSON-compatible description in declared order.
 
 ### `Query`
 
@@ -12312,7 +12496,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 9) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 10) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12593,6 +12777,62 @@ TgdbStore.undo(self, commit_seq: 'int', *, annotations: 'EditAnnotations | None'
 
 Apply a commit's recorded inverses unless a later commit touched its rows.
 
+#### `TgdbStore.pins`
+
+Method.
+
+```text
+TgdbStore.pins(self) -> 'tuple[PinInfo, ...]'
+```
+
+Return explicitly retained objects in pin commit and insertion order.
+
+#### `TgdbStore.prune`
+
+Method.
+
+```text
+TgdbStore.prune(self, instances: 'Iterable[bytes | str]', *, collection: 'bytes | str | None' = None, keep: 'int | None' = None, before_commit: 'int | None' = None, delete: 'bool' = False) -> 'PruneReport'
+```
+
+Select or delete old versions without ever selecting a current head.
+
+Exactly one retention boundary is required. ``keep`` retains the newest
+number of versions per named instance. ``before_commit`` selects versions
+published before that catalog commit. The default is a nonmutating report;
+``delete=True`` permanently removes the reported version rows. Content
+bytes remain until a later :meth:`gc` call.
+
+#### `TgdbStore.purge_retired`
+
+Method.
+
+```text
+TgdbStore.purge_retired(self, *, delete: 'bool' = False) -> 'PurgeReport'
+```
+
+Select or permanently remove every retired instance and its history.
+
+The default only reports candidates. Deletion removes catalog rows but
+leaves content bytes for a later explicit :meth:`gc` call.
+
+#### `TgdbStore.gc`
+
+Method.
+
+```text
+TgdbStore.gc(self, *, delete: 'bool' = False) -> 'GcReport'
+```
+
+Report or delete unreachable objects and unrecorded pool files.
+
+Reachability starts at retained graph and patch versions, inspected
+attached graphs, and explicit pins, then follows blob references through
+every reachable graph whose facts have been indexed. The default is
+read-only. Deletion recomputes reachability while holding the writer
+transaction, removes catalog rows first, commits, and only then unlinks
+files while holding a second writer transaction.
+
 #### `TgdbStore.check`
 
 Method.
@@ -12781,6 +13021,26 @@ Memory use is bounded by the store's inline threshold plus one read
 chunk. A mismatching ``expected`` identity refuses the transaction.
 Payload interpretation remains in graph blob items, never in the
 shared object row.
+
+#### `WriteTransaction.pin`
+
+Method.
+
+```text
+WriteTransaction.pin(self, digest: 'str', *, reason: 'str') -> 'None'
+```
+
+Keep one stored object reachable until an explicit unpin commit.
+
+#### `WriteTransaction.unpin`
+
+Method.
+
+```text
+WriteTransaction.unpin(self, digest: 'str') -> 'None'
+```
+
+Release one explicit object pin without deleting its bytes.
 
 #### `WriteTransaction.import_bundle`
 

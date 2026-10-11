@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,blob,index,column,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,blob,index,column,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -407,6 +407,9 @@ positional arguments:
     inspect             inspect stored payloads explicitly
     reindex             check or rebuild derived indexes
     repack              change object residency
+    prune               prune retained history explicitly
+    purge-retired       purge retired instances explicitly
+    gc                  report or delete unreachable objects
     blob                store and read payload bytes
     index               manage declared item indexes
     column              manage declared blob metadata columns
@@ -1016,21 +1019,113 @@ Exit codes:
   3  I/O failure or undecodable input
 ```
 
+### `tiergraph tgdb prune`
+
+```text
+usage: tiergraph tgdb prune [-h] [--collection NAME]
+                            (--keep N | --before-commit COMMIT) [--delete]
+                            [--json]
+                            STORE INSTANCE [INSTANCE ...]
+
+Report historical versions selected by one retention boundary. Nothing is removed unless --delete is explicit, and current heads are never selected.
+
+positional arguments:
+  STORE                 store directory
+  INSTANCE              instance name or id
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     collection for every named instance
+  --keep N              retain the newest N versions of every instance
+  --before-commit COMMIT
+                        select non-head versions older than this commit
+  --delete              permanently delete selected versions
+  --json                emit structured JSON
+
+This is a destructive maintenance command when --delete is used.
+
+Examples:
+  $ tiergraph tgdb prune corpus.tgdb sample --keep 2
+  $ tiergraph tgdb prune corpus.tgdb sample --before-commit 20 --delete
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb purge-retired`
+
+```text
+usage: tiergraph tgdb purge-retired [-h] [--delete] [--json] STORE
+
+Report retired instances and their retained history. Nothing is removed unless --delete is explicit.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --delete    permanently delete retired instances
+  --json      emit structured JSON
+
+This is a destructive maintenance command when --delete is used.
+
+Examples:
+  $ tiergraph tgdb purge-retired corpus.tgdb
+  $ tiergraph tgdb purge-retired corpus.tgdb --delete
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb gc`
+
+```text
+usage: tiergraph tgdb gc [-h] [--delete] [--json] STORE
+
+Report unreachable catalog objects, digest-derived orphan files, and staging leftovers. Nothing is removed unless --delete is explicit.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --delete    delete the recomputed garbage set
+  --json      emit structured JSON
+
+Examples:
+  $ tiergraph tgdb gc corpus.tgdb
+  $ tiergraph tgdb gc corpus.tgdb --delete --json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
 ### `tiergraph tgdb blob`
 
 ```text
-usage: tiergraph tgdb blob [-h] {put,get,verify} ...
+usage: tiergraph tgdb blob [-h] {put,get,verify,pin,unpin} ...
 
-Put, get, or verify content-addressed payload bytes in a tgdb store.
+Put, get, verify, pin, or unpin content-addressed payload bytes in a tgdb store.
 
 positional arguments:
-  {put,get,verify}
-    put             store a payload
-    get             write a stored payload
-    verify          verify stored payloads
+  {put,get,verify,pin,unpin}
+    put                 store a payload
+    get                 write a stored payload
+    verify              verify stored payloads
+    pin                 retain a stored payload explicitly
+    unpin               release an explicit payload pin
 
 options:
-  -h, --help        show this help message and exit
+  -h, --help            show this help message and exit
 
 Examples:
   $ tiergraph tgdb blob verify corpus.tgdb

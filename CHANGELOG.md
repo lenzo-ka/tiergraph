@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added explicit tgdb history pruning, retired-instance purging, reversible
+  payload pins, and inspection-aware reachability-based garbage collection with
+  dry-run reports.
 - Added explicit tgdb payload inspectors with ordered content-keyed facts,
   optional publication as typed layer metadata, and bounded nested graph indexing.
 - Added ordered, typed tgdb blob metadata columns with declared and inspected

@@ -810,12 +810,92 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         metavar="SIZE",
         help="new largest inline object size in bytes",
     )
+    tgdb_prune = _subcommand(
+        tgdb_subparsers,
+        "prune",
+        summary="prune retained history explicitly",
+        description=(
+            "Report historical versions selected by one retention boundary. "
+            "Nothing is removed unless --delete is explicit, and current heads "
+            "are never selected."
+        ),
+        details="This is a destructive maintenance command when --delete is used.\n\n",
+        examples=(
+            "tiergraph tgdb prune corpus.tgdb sample --keep 2",
+            "tiergraph tgdb prune corpus.tgdb sample --before-commit 20 --delete",
+        ),
+    )
+    tgdb_prune.set_defaults(handler=_handle_tgdb)
+    tgdb_prune.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_prune.add_argument(
+        "instance", nargs="+", metavar="INSTANCE", help="instance name or id"
+    )
+    tgdb_prune.add_argument(
+        "--collection", metavar="NAME", help="collection for every named instance"
+    )
+    prune_boundary = tgdb_prune.add_mutually_exclusive_group(required=True)
+    prune_boundary.add_argument(
+        "--keep",
+        type=_positive_integer,
+        metavar="N",
+        help="retain the newest N versions of every instance",
+    )
+    prune_boundary.add_argument(
+        "--before-commit",
+        type=_positive_integer,
+        metavar="COMMIT",
+        help="select non-head versions older than this commit",
+    )
+    tgdb_prune.add_argument(
+        "--delete", action="store_true", help="permanently delete selected versions"
+    )
+    tgdb_prune.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_purge = _subcommand(
+        tgdb_subparsers,
+        "purge-retired",
+        summary="purge retired instances explicitly",
+        description=(
+            "Report retired instances and their retained history. Nothing is "
+            "removed unless --delete is explicit."
+        ),
+        details="This is a destructive maintenance command when --delete is used.\n\n",
+        examples=(
+            "tiergraph tgdb purge-retired corpus.tgdb",
+            "tiergraph tgdb purge-retired corpus.tgdb --delete",
+        ),
+    )
+    tgdb_purge.set_defaults(handler=_handle_tgdb)
+    tgdb_purge.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_purge.add_argument(
+        "--delete", action="store_true", help="permanently delete retired instances"
+    )
+    tgdb_purge.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_gc = _subcommand(
+        tgdb_subparsers,
+        "gc",
+        summary="report or delete unreachable objects",
+        description=(
+            "Report unreachable catalog objects, digest-derived orphan files, and "
+            "staging leftovers. Nothing is removed unless --delete is explicit."
+        ),
+        examples=(
+            "tiergraph tgdb gc corpus.tgdb",
+            "tiergraph tgdb gc corpus.tgdb --delete --json",
+        ),
+    )
+    tgdb_gc.set_defaults(handler=_handle_tgdb)
+    tgdb_gc.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_gc.add_argument(
+        "--delete", action="store_true", help="delete the recomputed garbage set"
+    )
+    tgdb_gc.add_argument("--json", action="store_true", help="emit structured JSON")
     tgdb_blob = _subcommand(
         tgdb_subparsers,
         "blob",
         summary="store and read payload bytes",
         description=(
-            "Put, get, or verify content-addressed payload bytes in a tgdb store."
+            "Put, get, verify, pin, or unpin content-addressed payload bytes in a "
+            "tgdb store."
         ),
         examples=("tiergraph tgdb blob verify corpus.tgdb",),
     )
@@ -880,6 +960,40 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         type=_tgdb_sha256,
         metavar="SHA256",
         help="payload digest; omission verifies every stored object",
+    )
+    tgdb_blob_pin = _subcommand(
+        tgdb_blob_commands,
+        "pin",
+        summary="retain a stored payload explicitly",
+        description="Keep one stored object reachable until an explicit unpin commit.",
+        examples=(
+            "tiergraph tgdb blob pin corpus.tgdb "
+            "eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7 "
+            "--reason pending-import",
+        ),
+    )
+    tgdb_blob_pin.set_defaults(handler=_handle_tgdb)
+    tgdb_blob_pin.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_blob_pin.add_argument(
+        "sha256", type=_tgdb_sha256, metavar="SHA256", help="payload digest"
+    )
+    tgdb_blob_pin.add_argument(
+        "--reason", required=True, metavar="TEXT", help="nonempty retention reason"
+    )
+    tgdb_blob_unpin = _subcommand(
+        tgdb_blob_commands,
+        "unpin",
+        summary="release an explicit payload pin",
+        description="Release one pin without deleting the stored object.",
+        examples=(
+            "tiergraph tgdb blob unpin corpus.tgdb "
+            "eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7",
+        ),
+    )
+    tgdb_blob_unpin.set_defaults(handler=_handle_tgdb)
+    tgdb_blob_unpin.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_blob_unpin.add_argument(
+        "sha256", type=_tgdb_sha256, metavar="SHA256", help="payload digest"
     )
     tgdb_index = _subcommand(
         tgdb_subparsers,
@@ -2884,7 +2998,11 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
         writable = writable or (args.tgdb_command == "reindex" and args.rebuild)
         writable = writable or args.tgdb_command == "repack"
         writable = writable or (
-            args.tgdb_command == "blob" and args.tgdb_blob_command == "put"
+            args.tgdb_command in {"gc", "prune", "purge-retired"} and args.delete
+        )
+        writable = writable or (
+            args.tgdb_command == "blob"
+            and args.tgdb_blob_command in {"pin", "put", "unpin"}
         )
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
             if args.tgdb_command == "inspect":
@@ -2944,6 +3062,72 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                         f"{repack_report.file_objects} file\n"
                     )
                 return 0
+            if args.tgdb_command == "prune":
+                names = {
+                    instance.name
+                    for instance in store.instances(
+                        args.collection, include_retired=True
+                    )
+                }
+                selectors = tuple(
+                    _tgdb_selector(instance, names=names) for instance in args.instance
+                )
+                prune_report = store.prune(
+                    selectors,
+                    collection=args.collection,
+                    keep=args.keep,
+                    before_commit=args.before_commit,
+                    delete=args.delete,
+                )
+                if args.json:
+                    _stdout_text(_json_bytes(prune_report.to_data()).decode("utf-8"))
+                elif prune_report.deleted:
+                    _stdout_text(
+                        f"deleted {len(prune_report.versions)} versions in commit "
+                        f"{prune_report.commit_seq}\n"
+                    )
+                else:
+                    _stdout_text(
+                        f"dry run: {len(prune_report.versions)} versions selected; "
+                        "--delete is destructive\n"
+                    )
+                return 0
+            if args.tgdb_command == "purge-retired":
+                purge_report = store.purge_retired(delete=args.delete)
+                if args.json:
+                    _stdout_text(_json_bytes(purge_report.to_data()).decode("utf-8"))
+                elif purge_report.deleted:
+                    _stdout_text(
+                        f"deleted {len(purge_report.instances)} retired instances "
+                        f"in commit {purge_report.commit_seq}\n"
+                    )
+                else:
+                    _stdout_text(
+                        f"dry run: {len(purge_report.instances)} retired instances "
+                        "selected; --delete is destructive\n"
+                    )
+                return 0
+            if args.tgdb_command == "gc":
+                gc_report = store.gc(delete=args.delete)
+                if args.json:
+                    _stdout_text(_json_bytes(gc_report.to_data()).decode("utf-8"))
+                else:
+                    action = "deleted" if gc_report.deleted else "dry run"
+                    inline = sum(
+                        item.residency == "inline" for item in gc_report.unreachable
+                    )
+                    files = len(gc_report.unreachable) - inline
+                    _stdout_text(
+                        f"{action}: {inline} unreachable inline objects "
+                        f"({gc_report.unreachable_inline_bytes} bytes), "
+                        f"{files} unreachable file objects "
+                        f"({gc_report.unreachable_file_bytes} bytes), "
+                        f"{len(gc_report.orphan_files)} orphan files "
+                        f"({gc_report.orphan_file_bytes} bytes), "
+                        f"{len(gc_report.staging_leftovers)} staging leftovers, "
+                        f"{gc_report.reclaimable_bytes} bytes reclaimable\n"
+                    )
+                return 0
             if args.tgdb_command == "blob":
                 command = args.tgdb_blob_command
                 if command == "put":
@@ -2952,6 +3136,17 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                             ref = transaction.put_blob(payload_source)
                             transaction.commit()
                     _stdout_text(f"{ref.sha256}\t{ref.size}\n")
+                    return 0
+                if command in {"pin", "unpin"}:
+                    with store.write() as transaction:
+                        if command == "pin":
+                            transaction.pin(args.sha256, reason=args.reason)
+                        else:
+                            transaction.unpin(args.sha256)
+                        receipt = transaction.commit()
+                    _stdout_text(
+                        f"committed {receipt.commit_seq}: {command} {args.sha256}\n"
+                    )
                     return 0
                 resolver = store.resolver()
                 if command == "get":
