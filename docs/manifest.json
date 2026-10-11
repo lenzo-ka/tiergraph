@@ -784,6 +784,7 @@
       "InspectionResult",
       "Inspector",
       "InstanceInfo",
+      "MigrationReport",
       "OrphanFile",
       "PinInfo",
       "PruneReport",

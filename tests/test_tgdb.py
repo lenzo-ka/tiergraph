@@ -643,6 +643,430 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
         tgdb.TgdbStore.open(path, mode="rw")
 
 
+def test_migrate_orders_every_schema_step_and_keeps_original_catalog(
+    tmp_path: Path,
+) -> None:
+    """A version-one catalog moves atomically to current after a kept backup."""
+    path = _created(tmp_path)
+    sentinel_digest = hashlib.sha256(b"untouched").hexdigest()
+    sentinel = _object_path(path, sentinel_digest)
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"untouched")
+    with closing(
+        sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
+    ) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        tables = tuple(
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' "
+                "AND name != 'store_meta' ORDER BY name"
+            )
+        )
+        for table in tables:
+            connection.execute(f'DROP TABLE "{table}"')
+        connection.execute(
+            "UPDATE store_meta SET value = '1' WHERE key = 'index_version'"
+        )
+        connection.execute("PRAGMA user_version = 1")
+
+    with tgdb.TgdbStore.open(path) as store:
+        version_one_backup = tmp_path / "version-one-backup"
+        store.backup(version_one_backup)
+        with tgdb.TgdbStore.open(version_one_backup) as copied:
+            assert copied.info().schema_version == 1
+        report = store.migrate()
+        assert report.to_data() == {
+            "previous_version": 1,
+            "schema_version": 10,
+            "migrated_versions": list(range(2, 11)),
+            "backup": str(path / "catalog.pre-1.sqlite3"),
+            "reindex_required": True,
+        }
+        defaults = {
+            row[1]: row[4]
+            for row in store._connection.execute("PRAGMA table_info(graph_facts)")
+        }
+        assert defaults == {
+            "digest": None,
+            "format_version": None,
+            "fp_domain": None,
+            "functional": None,
+            "identified": None,
+            "size": None,
+            "tier_count": "0",
+            "blob_count": "0",
+            "attachment_count": "0",
+        }
+        assert store.info().schema_version == 10
+        with pytest.raises(tgdb.TgdbError, match="read-only"):
+            store.reindex(rebuild=True)
+
+    assert sentinel.read_bytes() == b"untouched"
+    with closing(
+        sqlite3.connect(path / "catalog.pre-1.sqlite3", autocommit=True)
+    ) as original:
+        assert original.execute("PRAGMA user_version").fetchone() == (1,)
+        assert original.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
+        ).fetchall() == [("store_meta",)]
+    with tgdb.TgdbStore.open(path, mode="rw") as store:
+        assert store.reindex(rebuild=True).rebuilt is True
+        assert store.check().objects == 0
+
+    fresh = tmp_path / "fresh"
+    with tgdb.TgdbStore.create(fresh) as store:
+        fresh_defaults = {
+            row[1]: row[4]
+            for row in store._connection.execute("PRAGMA table_info(graph_facts)")
+        }
+    assert fresh_defaults == defaults
+
+
+def test_migrate_schema_three_preserves_versionless_instances(tmp_path: Path) -> None:
+    """The schema-three table rebuild adds the head foreign key without data loss."""
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(path) as store:
+        with store.write() as transaction:
+            collection_uid = transaction.create_collection("corpus")
+            transaction.commit()
+        instance_uid = _seed_instance(store, collection_uid, "sample", 0)
+    with closing(
+        sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
+    ) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        retained = {
+            "store_meta",
+            "objects",
+            "commits",
+            "commit_ops",
+            "collections",
+            "instances",
+        }
+        tables = tuple(
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
+            )
+            if row[0] not in retained
+        )
+        for table in tables:
+            connection.execute(f'DROP TABLE "{table}"')
+        connection.execute("ALTER TABLE instances RENAME TO instances_current")
+        connection.execute(
+            "CREATE TABLE instances("
+            "id INTEGER PRIMARY KEY, "
+            "uid BLOB NOT NULL UNIQUE CHECK(length(uid) = 16), "
+            "collection_id INTEGER NOT NULL REFERENCES collections(id), "
+            "name TEXT NOT NULL CHECK(length(name) > 0), "
+            "position INTEGER NOT NULL CHECK(position >= 0), "
+            "head_version INTEGER, "
+            "generation INTEGER NOT NULL CHECK(generation >= 0), "
+            "retired_commit INTEGER REFERENCES commits(seq), "
+            "UNIQUE(collection_id, name), UNIQUE(collection_id, position)) STRICT"
+        )
+        connection.execute("INSERT INTO instances SELECT * FROM instances_current")
+        connection.execute("DROP TABLE instances_current")
+        connection.execute(
+            "UPDATE store_meta SET value = '1' WHERE key = 'index_version'"
+        )
+        connection.execute("PRAGMA user_version = 3")
+
+    with tgdb.TgdbStore.open(path) as store:
+        report = store.migrate()
+        assert report.migrated_versions == tuple(range(4, 11))
+        assert store.instances() == (
+            tgdb.InstanceInfo(
+                instance_uid,
+                collection_uid,
+                "corpus",
+                "sample",
+                0,
+                0,
+                None,
+            ),
+        )
+        foreign_keys = {
+            (row[2], row[3], row[4])
+            for row in store._connection.execute("PRAGMA foreign_key_list(instances)")
+        }
+        assert ("versions", "head_version", "id") in foreign_keys
+
+
+def test_migrate_current_missing_path_existing_backup_and_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No-op, unsupported, collision, and failed migrations remain explicit."""
+    path = _created(tmp_path)
+    with tgdb.TgdbStore.open(path, mode="rw") as store:
+        report = store.migrate()
+        assert report == tgdb.MigrationReport(10, 10, (), None, False)
+        tgdb._migration_3_to_4(store._connection)
+        tgdb._migration_4_to_5(store._connection)
+        tgdb._migration_6_to_7(store._connection)
+
+    _set_pragma(path, "user_version", 7)
+    with tgdb.TgdbStore.open(path) as store:
+        report = store.migrate()
+        assert report.reindex_required is True
+    (path / "catalog.pre-7.sqlite3").unlink()
+
+    _set_pragma(path, "user_version", 0)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.TgdbError, match="no migration path"):
+            store.migrate()
+
+    _set_pragma(path, "user_version", 9)
+    backup = path / "catalog.pre-9.sqlite3"
+    backup.write_bytes(b"kept")
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.TgdbError, match="already exists"):
+            store.migrate()
+    backup.unlink()
+
+    original_migration = tgdb._MIGRATIONS[9]
+
+    def fail_migration(connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TABLE rolled_back(value INTEGER) STRICT")
+        raise sqlite3.DatabaseError("migration failed")
+
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, fail_migration)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.StoreCorrupt, match="migration failed"):
+            store.migrate()
+    assert backup.is_file()
+    with closing(
+        sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
+    ) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_schema WHERE name = 'rolled_back'"
+            ).fetchone()
+            is None
+        )
+    backup.unlink()
+
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, original_migration)
+    with tgdb.TgdbStore.open(path, limits=tgdb.TgdbLimits(busy_timeout_ms=0)) as store:
+        with closing(
+            sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
+        ) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            with pytest.raises(tgdb.StoreBusy, match="busy while migrating"):
+                store.migrate()
+            blocker.execute("ROLLBACK")
+    backup.unlink()
+
+    def unexpected_migration(connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TABLE still_rolled_back(value INTEGER) STRICT")
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, unexpected_migration)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(RuntimeError, match="unexpected"):
+            store.migrate()
+    backup.unlink()
+
+    def unexpected_without_transaction(connection: sqlite3.Connection) -> None:
+        connection.execute("ROLLBACK")
+        raise RuntimeError("outside transaction")
+
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, unexpected_without_transaction)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(RuntimeError, match="outside transaction"):
+            store.migrate()
+    backup.unlink()
+
+    def invalid_foreign_key(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "INSERT INTO pins(digest, reason, commit_seq) VALUES (?, 'bad', 999)",
+            ("0" * 64,),
+        )
+
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, invalid_foreign_key)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.StoreCorrupt, match="foreign-key violation"):
+            store.migrate()
+    backup.unlink()
+    monkeypatch.setitem(tgdb._MIGRATIONS, 9, original_migration)
+
+    def failed_backup(source: sqlite3.Connection, destination: Path) -> None:
+        del source, destination
+        raise RuntimeError("backup failed")
+
+    monkeypatch.setattr(tgdb, "_backup_catalog", failed_backup)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(RuntimeError, match="backup failed"):
+            store.migrate()
+
+
+def test_migrate_maps_connection_and_backup_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migration failures stay typed and remove unpublished backup files."""
+    path = _created(tmp_path)
+    _set_pragma(path, "user_version", 9)
+    original_connect = tgdb._connect
+    original_sqlite_busy = tgdb._sqlite_busy
+
+    def failed_connect(
+        catalog: Path,
+        mode: Literal["ro", "rw"],
+        limits: tgdb.TgdbLimits,
+        *,
+        create: bool = False,
+    ) -> sqlite3.Connection:
+        if mode == "rw":
+            raise sqlite3.OperationalError("unable to open database file")
+        return original_connect(catalog, mode, limits, create=create)
+
+    monkeypatch.setattr(tgdb, "_connect", failed_connect)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.StoreCorrupt, match="unable to open database file"):
+            store.migrate()
+    (path / "catalog.pre-9.sqlite3").unlink()
+    monkeypatch.setattr(tgdb, "_sqlite_busy", lambda error: True)
+    with tgdb.TgdbStore.open(path) as store:
+        with pytest.raises(tgdb.StoreBusy, match="busy while migrating"):
+            store.migrate()
+    (path / "catalog.pre-9.sqlite3").unlink()
+    monkeypatch.setattr(tgdb, "_connect", original_connect)
+    monkeypatch.setattr(tgdb, "_sqlite_busy", original_sqlite_busy)
+
+    def failed_sqlite_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        del args, kwargs
+        raise sqlite3.OperationalError("backup open failed")
+
+    with tgdb.TgdbStore.open(path) as store:
+        monkeypatch.setattr(sqlite3, "connect", failed_sqlite_connect)
+        with pytest.raises(tgdb.TgdbError, match="backup open failed"):
+            store.migrate()
+        monkeypatch.setattr(tgdb, "_sqlite_busy", lambda error: True)
+        with pytest.raises(tgdb.StoreBusy, match="busy while backing up"):
+            store.migrate()
+    assert not (path / "catalog.pre-9.sqlite3").exists()
+    assert not tuple(path.glob(".catalog.pre-9.sqlite3.*.tmp"))
+
+
+def test_backup_includes_wal_state_file_objects_and_full_history(
+    tmp_path: Path,
+) -> None:
+    """A whole-store backup is openable without SQLite sidecars."""
+    path = tmp_path / "store"
+    destination = tmp_path / "backup"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        store._connection.execute("PRAGMA wal_autocheckpoint = 0")
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            uid = transaction.create_instance(
+                "corpus", "sample", _version_graph("backup")
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.rename(uid, "renamed")
+            transaction.commit()
+        assert (path / "catalog.sqlite3-wal").stat().st_size > 0
+        handle = store.get(uid)
+        store.backup(destination)
+
+    assert not (destination / "catalog.sqlite3-wal").exists()
+    assert not (destination / "catalog.sqlite3-shm").exists()
+    assert list((destination / "staging").iterdir()) == []
+    assert _object_path(destination, handle.graph_digest).is_file()
+    with tgdb.TgdbStore.open(destination) as copied:
+        assert copied.collections() == (
+            tgdb.CollectionInfo(collection, "corpus", 0, None),
+        )
+        assert copied.get(uid).name == "renamed"
+        assert copied.get(uid).load() == _version_graph("backup")
+        assert len(copied.history(uid)) == 1
+
+
+def test_backup_refuses_unsafe_targets_active_writes_and_corrupt_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backup never replaces a path, nests, races a writer, or copies bad bytes."""
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            transaction.create_collection("corpus")
+            transaction.create_instance("corpus", "sample", _version_graph())
+            receipt = transaction.commit()
+        digest = receipt.versions[0].graph_digest
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        with pytest.raises(tgdb.TgdbError, match="already exists"):
+            store.backup(existing)
+        with pytest.raises(tgdb.TgdbError, match="parent .* plain directory"):
+            store.backup(tmp_path / "missing" / "backup")
+        with pytest.raises(tgdb.TgdbError, match="outside the source"):
+            store.backup(path / "nested")
+        with store.write():
+            with pytest.raises(tgdb.TgdbError, match="write transaction"):
+                store.backup(tmp_path / "active")
+            with pytest.raises(tgdb.TgdbError, match="write transaction"):
+                store.migrate()
+
+        original_mkdir = Path.mkdir
+
+        def raced_mkdir(
+            selected: Path,
+            mode: int = 0o777,
+            parents: bool = False,
+            exist_ok: bool = False,
+        ) -> None:
+            if selected.name == "raced":
+                raise FileExistsError
+            original_mkdir(selected, mode=mode, parents=parents, exist_ok=exist_ok)
+
+        monkeypatch.setattr(Path, "mkdir", raced_mkdir)
+        with pytest.raises(tgdb.TgdbError, match="already exists"):
+            store.backup(tmp_path / "raced")
+        monkeypatch.undo()
+
+        original_fsync = tgdb._fsync_file
+
+        def failed_fsync(selected: Path) -> None:
+            del selected
+            raise OSError("fsync failed")
+
+        monkeypatch.setattr(tgdb, "_fsync_file", failed_fsync)
+        failed = tmp_path / "failed-copy"
+        with pytest.raises(tgdb.TgdbError, match="fsync failed"):
+            store.backup(failed)
+        assert not failed.exists()
+        monkeypatch.setattr(tgdb, "_fsync_file", original_fsync)
+
+        original_copy = tgdb._copy_object_file
+
+        def failed_copy(
+            source_root: Path, target_root: Path, selected_digest: str, size: int
+        ) -> None:
+            del source_root, selected_digest, size
+            assert not (target_root / "catalog.sqlite3").exists()
+            raise OSError("copy failed")
+
+        monkeypatch.setattr(tgdb, "_copy_object_file", failed_copy)
+        unpublished = tmp_path / "unpublished-copy"
+        with pytest.raises(tgdb.TgdbError, match="copy failed"):
+            store.backup(unpublished)
+        assert not unpublished.exists()
+        monkeypatch.setattr(tgdb, "_copy_object_file", original_copy)
+
+        _object_path(path, digest).write_bytes(b"x" * len(dumps(Graph((), (), ()))))
+        destination = tmp_path / "corrupt-copy"
+        with pytest.raises(tgdb.StoreCorrupt, match="changed while"):
+            store.backup(destination)
+        assert not destination.exists()
+        with pytest.raises(tgdb.StoreCorrupt, match="malformed recorded size"):
+            tgdb._copy_object_file(path, tmp_path, digest, True)
+
+
 def test_sqlite_floor_names_found_and_required_versions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -6598,6 +7022,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "InspectionResult",
         "Inspector",
         "InstanceInfo",
+        "MigrationReport",
         "OrphanFile",
         "PinInfo",
         "PruneReport",

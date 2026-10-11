@@ -889,6 +889,37 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         "--delete", action="store_true", help="delete the recomputed garbage set"
     )
     tgdb_gc.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_backup = _subcommand(
+        tgdb_subparsers,
+        "backup",
+        summary="back up a store",
+        description=(
+            "Copy a consistent catalog and every referenced file object to a new "
+            "store directory. Committed write-ahead-log state is included."
+        ),
+        examples=("tiergraph tgdb backup corpus.tgdb corpus-backup.tgdb",),
+    )
+    tgdb_backup.set_defaults(handler=_handle_tgdb)
+    tgdb_backup.add_argument("store", metavar="STORE", help="source store directory")
+    tgdb_backup.add_argument(
+        "destination", metavar="DEST", help="new backup store directory"
+    )
+    tgdb_migrate = _subcommand(
+        tgdb_subparsers,
+        "migrate",
+        summary="migrate an older catalog",
+        description=(
+            "Retain a pre-migration catalog backup, then apply every required "
+            "schema migration in order in one transaction. Stored documents and "
+            "payload objects are not rewritten."
+        ),
+        examples=("tiergraph tgdb migrate corpus.tgdb",),
+    )
+    tgdb_migrate.set_defaults(handler=_handle_tgdb)
+    tgdb_migrate.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_migrate.add_argument(
+        "--json", action="store_true", help="emit the structured migration report"
+    )
     tgdb_blob = _subcommand(
         tgdb_subparsers,
         "blob",
@@ -3005,6 +3036,38 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             and args.tgdb_blob_command in {"pin", "put", "unpin"}
         )
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
+            if args.tgdb_command == "backup":
+                store.backup(args.destination)
+                _stdout_text(f"backed up {args.store} to {args.destination}\n")
+                return 0
+            if args.tgdb_command == "migrate":
+                migration_report = store.migrate()
+                if args.json:
+                    _stdout_text(
+                        _json_bytes(migration_report.to_data()).decode("utf-8")
+                    )
+                elif migration_report.backup is None:
+                    detail = (
+                        "; rebuild derived indexes"
+                        if migration_report.reindex_required
+                        else ""
+                    )
+                    _stdout_text(
+                        f"already at schema version "
+                        f"{migration_report.schema_version}{detail}\n"
+                    )
+                else:
+                    detail = (
+                        "; rebuild derived indexes"
+                        if migration_report.reindex_required
+                        else ""
+                    )
+                    _stdout_text(
+                        f"migrated schema {migration_report.previous_version} to "
+                        f"{migration_report.schema_version}; backup "
+                        f"{migration_report.backup.name}{detail}\n"
+                    )
+                return 0
             if args.tgdb_command == "inspect":
                 inspect_report = store.inspect(
                     media_type=args.media_type,
