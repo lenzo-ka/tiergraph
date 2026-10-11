@@ -2496,10 +2496,10 @@ def test_clock_replacement_requires_policy_and_marks_provisional_bindings() -> N
 
 
 @pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
-def test_checked_clock_replacement_reports_donor_crossing(
+def test_clock_replacement_reports_donor_crossing_in_both_audit_modes(
     journaled: bool,
 ) -> None:
-    """Checked clock replacement retains a rejected donor link and its fact."""
+    """Replacement reports rejected donor content with or without link checks."""
     graph = test_clock.fixture()
     namespace = test_clock.SEGMENT.namespace
     containment = QualifiedName(namespace, "clock-replacement-contains")
@@ -2582,25 +2582,42 @@ def test_checked_clock_replacement_reports_donor_crossing(
         test_clock.RATE,
         test_clock.UNIT,
     )
-    journal = Journal()
     subtree = Subtree(donor, ItemRef(test_clock.SEGMENT, 0))
     correspondence = SubtreeCorrespondence(
         {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
         {ItemRef(test_clock.SEGMENT, 1): (ItemRef(test_clock.SEGMENT, 1),)},
     )
     policies = ReplacementPolicies(correspondence=correspondence)
-    if journaled:
-        editor = profile.edit("keep-earlier", journal=journal, check_links=True)
-        editor.replace_subtree(
-            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+    reports = []
+    results = []
+    for check_links in (False, True):
+        journal = Journal()
+        if journaled:
+            journaled_editor = profile.edit(
+                "keep-earlier", journal=journal, check_links=check_links
+            )
+            journaled_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+            )
+            result = journaled_editor.freeze()
+            report = journal.records[0].report.detached_content
+            assert journal.to_patch().invert().apply(result) == graph
+        else:
+            plain_editor = profile.edit("keep-earlier", check_links=check_links)
+            plain_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+            )
+            result = plain_editor.freeze()
+            report = plain_editor.last_detachment
+        reports.append(report)
+        results.append(result)
+        assert donor_link not in result.relations
+        assert all(
+            donor_fact not in output_layer.facts for output_layer in result.layers
         )
-        report = journal.records[0].report.detached_content
-    else:
-        plain = profile.edit("keep-earlier", check_links=True)
-        plain.replace_subtree(
-            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
-        )
-        report = plain.last_detachment
+    assert reports[0] == reports[1]
+    assert results[0] == results[1]
+    report = reports[0]
     assert report is not None
     assert report.donor_relations == ((RelationInstanceRef(1), donor_link),)
     assert report.donor_facts == ((layer, donor_fact),)
@@ -2721,11 +2738,11 @@ def _clock_crossing_replacement(
 
 @pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
 @pytest.mark.parametrize("cross_tier", (False, True), ids=("same-tier", "cross-tier"))
-def test_checked_clock_replacement_carries_a_crossing(
+def test_clock_replacement_carries_a_crossing_in_both_audit_modes(
     journaled: bool,
     cross_tier: bool,
 ) -> None:
-    """Checked clock replacement carries a corresponding link and its fact."""
+    """Clock replacement carries the same link and fact under either audit mode."""
     (
         profile,
         containment,
@@ -2737,33 +2754,41 @@ def test_checked_clock_replacement_carries_a_crossing(
         containment_fact,
         fact,
     ) = _clock_crossing_replacement(cross_tier=cross_tier)
-    journal = Journal()
-    if journaled:
-        journaled_editor = profile.edit(
-            "keep-earlier", journal=journal, check_links=True
-        )
-        journaled_editor.replace_subtree(
-            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
-        )
-        result = journaled_editor.freeze()
-        report = journal.records[0].report.detached_content
-    else:
-        plain_editor = profile.edit("keep-earlier", check_links=True)
-        plain_editor.replace_subtree(
-            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
-        )
-        result = plain_editor.freeze()
-        report = plain_editor.last_detachment
-    assert crossing in result.relations
-    assert Layer(layer, (fact,)) in result.layers
+    reports = []
+    results = []
+    for check_links in (False, True):
+        journal = Journal()
+        if journaled:
+            journaled_editor = profile.edit(
+                "keep-earlier", journal=journal, check_links=check_links
+            )
+            journaled_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+            )
+            report = journal.records[0].report.detached_content
+            result = journaled_editor.freeze()
+        else:
+            plain_editor = profile.edit("keep-earlier", check_links=check_links)
+            plain_editor.replace_subtree(
+                ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+            )
+            report = plain_editor.last_detachment
+            result = plain_editor.freeze()
+        reports.append(report)
+        results.append(result)
+        assert crossing in result.relations
+        assert Layer(layer, (fact,)) in result.layers
+    assert reports[0] == reports[1]
+    assert results[0] == results[1]
+    report = reports[0]
     assert report is not None
     assert report.relations == ((RelationInstanceRef(3), containment_relation),)
     assert report.facts == ((layer, containment_fact),)
     assert all(relation != crossing for _, relation in report.relations)
 
 
-def test_clock_replacement_reports_source_coordinates_without_link_check() -> None:
-    """Clock replacement reports source coordinates without link checking."""
+def test_clock_replacement_reports_source_coordinates_in_both_audit_modes() -> None:
+    """Plain and journaled reports keep source coordinates under either audit."""
     (
         profile,
         containment,
@@ -2775,13 +2800,34 @@ def test_clock_replacement_reports_source_coordinates_without_link_check() -> No
         containment_fact,
         _,
     ) = _clock_crossing_replacement()
-    editor = profile.edit("keep-earlier")
-
-    editor.replace_subtree(
-        ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
-    )
-
-    report = editor.last_detachment
+    reports = []
+    dependencies = []
+    for check_links in (False, True):
+        plain = profile.edit("keep-earlier", check_links=check_links)
+        plain.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        plain_report = plain.last_detachment
+        assert plain_report is not None
+        journal = Journal()
+        journaled = profile.edit(
+            "keep-earlier", journal=journal, check_links=check_links
+        )
+        journaled.replace_subtree(
+            ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+        )
+        journal_report = journal.records[0].report.detached_content
+        assert journal_report is not None
+        assert plain.freeze() == journaled.freeze()
+        assert plain_report == journal_report
+        assert (
+            plain_report.dependencies == journal.records[0].report.detached_dependencies
+        )
+        reports.append(plain_report)
+        dependencies.append(journal.records[0].report.detached_dependencies)
+    assert reports[0] == reports[1]
+    assert dependencies[0] == dependencies[1]
+    report = reports[0]
     assert report is not None
     assert report.relations == ((RelationInstanceRef(3), containment_relation),)
     assert report.facts == ((layer, containment_fact),)
@@ -2894,6 +2940,110 @@ def test_clock_correspondence_retains_matching_internal_timing() -> None:
     )
     after = editor.profile
     assert after.clock_index(BoundaryRef(test_clock.SEGMENT, 2)) == old_end
+    assert not editor.reports[-1].needs_realignment
+
+
+def test_clock_replacement_keeps_each_template_with_its_clock_target() -> None:
+    """Every retained binding template keeps the target from the same origin."""
+    original = test_clock.fixture()
+    base = replace(
+        original,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(Item(f"clock-{index}") for index in range(6)),
+            )
+            if tier.declaration.name == test_clock.CLOCK
+            else replace(
+                tier,
+                items=tuple(Item(f"segment-{index}") for index in range(4)),
+            )
+            for tier in original.tiers
+        ),
+        relations=(),
+    )
+    base = replace(
+        base,
+        relations=tuple(
+            RelationInstance(
+                test_clock.BINDING,
+                anchored_boundary(base, BoundaryRef(test_clock.SEGMENT, source)),
+                anchored_boundary(base, BoundaryRef(test_clock.CLOCK, target)),
+                f"binding-{source}",
+            )
+            for source, target in enumerate((1, 2, 3, 4, 5))
+        ),
+    )
+    contains = QualifiedName(test_clock.SEGMENT.namespace, "paired-contains")
+    containment = BipartiteRelationDeclaration(
+        contains,
+        test_clock.SEGMENT_TYPE,
+        test_clock.SEGMENT_TYPE,
+        single_parent=True,
+        acyclic=True,
+    )
+    relations = tuple(
+        RelationInstance(
+            contains,
+            ItemRef(test_clock.SEGMENT, 0),
+            ItemRef(test_clock.SEGMENT, index),
+        )
+        for index in (1, 2, 3)
+    )
+    graph = replace(
+        base,
+        relation_declarations=(*base.relation_declarations, containment),
+        relations=(*base.relations, *relations),
+    )
+    source = replace(
+        graph,
+        tiers=tuple(
+            replace(
+                tier,
+                items=tuple(Item(f"replacement-{index}") for index in range(4)),
+            )
+            if tier.declaration.name == test_clock.SEGMENT
+            else tier
+            for tier in graph.tiers
+        ),
+        relations=relations,
+    )
+    correspondence = SubtreeCorrespondence(
+        {
+            ItemRef(test_clock.SEGMENT, index): (ItemRef(test_clock.SEGMENT, index),)
+            for index in (1, 2, 3)
+        }
+    )
+    editor = ClockProfile(
+        graph,
+        test_clock.CLOCK,
+        test_clock.BINDING,
+        test_clock.RATE,
+        test_clock.UNIT,
+    ).edit("keep-earlier")
+
+    editor.replace_subtree(
+        DurableItemRef("segment-0"),
+        contains,
+        Subtree(source, ItemRef(test_clock.SEGMENT, 0)),
+        ReplacementPolicies(correspondence=correspondence),
+    )
+
+    result = editor.freeze()
+    targets = {}
+    for relation in result.relations:
+        if relation.declaration != test_clock.BINDING:
+            continue
+        assert relation.durable_id is not None
+        assert isinstance(relation.right, DurableBoundaryRef)
+        targets[relation.durable_id] = result.resolve_boundary(relation.right).index
+    assert targets == {
+        "binding-0": 1,
+        "binding-1": 2,
+        "binding-2": 3,
+        "binding-3": 4,
+        "binding-4": 5,
+    }
     assert not editor.reports[-1].needs_realignment
 
 
