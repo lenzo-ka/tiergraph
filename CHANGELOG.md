@@ -231,6 +231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rebased every clock-aware replacement report to source relation coordinates.
 - Included withdrawn clock-binding facts in public replacement detachment reports.
 - Kept merges that require relation, attribute, layer, or seam drops as one
   semantic diff operation and one regrouping distance edit.

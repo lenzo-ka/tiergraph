@@ -2606,13 +2606,17 @@ def test_checked_clock_replacement_reports_donor_crossing(
     assert report.donor_facts == ((layer, donor_fact),)
 
 
-def _clock_crossing_replacement() -> tuple[
+def _clock_crossing_replacement(
+    *, cross_tier: bool = False
+) -> tuple[
     ClockProfile,
     QualifiedName,
     Subtree,
     ReplacementPolicies,
     RelationInstance,
+    RelationInstance,
     LayerName,
+    LayerFact,
     LayerFact,
 ]:
     """Build one timed replacement with a source-side crossing relation."""
@@ -2624,9 +2628,19 @@ def _clock_crossing_replacement() -> tuple[
     layer = LayerName(namespace, "clock-crossing-source")
     crossing = RelationInstance(
         link,
-        ItemRef(test_clock.SEGMENT, 0),
+        ItemRef(test_clock.CLOCK if cross_tier else test_clock.SEGMENT, 0),
         ItemRef(test_clock.SEGMENT, 1),
         "clock-crossing-link",
+    )
+    containment_relation = RelationInstance(
+        containment,
+        ItemRef(test_clock.SEGMENT, 0),
+        ItemRef(test_clock.SEGMENT, 1),
+    )
+    containment_index = len(graph.relations)
+    containment_fact = LayerFact(
+        RelationInstanceRef(containment_index),
+        AttributeValue(note, XsdType.STRING, "source offset 3"),
     )
     fact = LayerFact(
         DurableRelationRef("clock-crossing-link"),
@@ -2644,16 +2658,14 @@ def _clock_crossing_replacement() -> tuple[
                 acyclic=True,
             ),
             BipartiteRelationDeclaration(
-                link, test_clock.SEGMENT_TYPE, test_clock.SEGMENT_TYPE
+                link,
+                test_clock.CLOCK_TYPE if cross_tier else test_clock.SEGMENT_TYPE,
+                test_clock.SEGMENT_TYPE,
             ),
         ),
         relations=(
             *graph.relations,
-            RelationInstance(
-                containment,
-                ItemRef(test_clock.SEGMENT, 0),
-                ItemRef(test_clock.SEGMENT, 1),
-            ),
+            containment_relation,
             crossing,
         ),
         attribute_declarations=(
@@ -2662,7 +2674,7 @@ def _clock_crossing_replacement() -> tuple[
                 note, AttributeDomain.RELATION_INSTANCE, XsdType.STRING
             ),
         ),
-        layers=(Layer(layer, (fact,)),),
+        layers=(Layer(layer, (containment_fact, fact)),),
     )
     donor = replace(
         graph,
@@ -2699,20 +2711,32 @@ def _clock_crossing_replacement() -> tuple[
         containment,
         Subtree(donor, ItemRef(test_clock.SEGMENT, 0)),
         ReplacementPolicies(correspondence=correspondence),
+        containment_relation,
         crossing,
         layer,
+        containment_fact,
         fact,
     )
 
 
 @pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+@pytest.mark.parametrize("cross_tier", (False, True), ids=("same-tier", "cross-tier"))
 def test_checked_clock_replacement_carries_a_crossing(
     journaled: bool,
+    cross_tier: bool,
 ) -> None:
     """Checked clock replacement carries a corresponding link and its fact."""
-    profile, containment, subtree, policies, crossing, layer, fact = (
-        _clock_crossing_replacement()
-    )
+    (
+        profile,
+        containment,
+        subtree,
+        policies,
+        containment_relation,
+        crossing,
+        layer,
+        containment_fact,
+        fact,
+    ) = _clock_crossing_replacement(cross_tier=cross_tier)
     journal = Journal()
     if journaled:
         journaled_editor = profile.edit(
@@ -2733,21 +2757,54 @@ def test_checked_clock_replacement_carries_a_crossing(
     assert crossing in result.relations
     assert Layer(layer, (fact,)) in result.layers
     assert report is not None
+    assert report.relations == ((RelationInstanceRef(3), containment_relation),)
+    assert report.facts == ((layer, containment_fact),)
     assert all(relation != crossing for _, relation in report.relations)
 
 
+def test_clock_replacement_reports_source_coordinates_without_link_check() -> None:
+    """Clock replacement reports source coordinates without link checking."""
+    (
+        profile,
+        containment,
+        subtree,
+        policies,
+        containment_relation,
+        _,
+        layer,
+        containment_fact,
+        _,
+    ) = _clock_crossing_replacement()
+    editor = profile.edit("keep-earlier")
+
+    editor.replace_subtree(
+        ItemRef(test_clock.SEGMENT, 0), containment, subtree, policies
+    )
+
+    report = editor.last_detachment
+    assert report is not None
+    assert report.relations == ((RelationInstanceRef(3), containment_relation),)
+    assert report.facts == ((layer, containment_fact),)
+
+
 @pytest.mark.parametrize("journaled", (False, True), ids=("plain", "journaled"))
+@pytest.mark.parametrize("cross_tier", (False, True), ids=("same-tier", "cross-tier"))
 def test_checked_clock_replacement_refuses_an_unmatched_crossing(
     journaled: bool,
+    cross_tier: bool,
 ) -> None:
     """Checked clock replacement refuses a crossing without correspondence."""
-    profile, containment, subtree, _, _, _, _ = _clock_crossing_replacement()
+    profile, containment, subtree, _, _, crossing, *_ = _clock_crossing_replacement(
+        cross_tier=cross_tier
+    )
     journal = Journal()
     if journaled:
         journaled_editor = profile.edit(
             "keep-earlier", journal=journal, check_links=True
         )
-        with pytest.raises(GraphValidationError, match="has no correspondence"):
+        with pytest.raises(
+            GraphValidationError, match="has no correspondence"
+        ) as caught:
             journaled_editor.replace_subtree(
                 ItemRef(test_clock.SEGMENT, 0),
                 containment,
@@ -2758,7 +2815,9 @@ def test_checked_clock_replacement_refuses_an_unmatched_crossing(
         assert not journal.records
     else:
         plain_editor = profile.edit("keep-earlier", check_links=True)
-        with pytest.raises(GraphValidationError, match="has no correspondence"):
+        with pytest.raises(
+            GraphValidationError, match="has no correspondence"
+        ) as caught:
             plain_editor.replace_subtree(
                 ItemRef(test_clock.SEGMENT, 0),
                 containment,
@@ -2767,6 +2826,7 @@ def test_checked_clock_replacement_refuses_an_unmatched_crossing(
             )
         assert plain_editor.freeze() == profile.graph
         assert plain_editor.last_detachment is None
+    assert str(crossing.declaration) in str(caught.value)
 
 
 def test_clock_correspondence_retains_matching_internal_timing() -> None:
