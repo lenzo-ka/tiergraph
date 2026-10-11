@@ -777,6 +777,10 @@
       "ColumnInfo",
       "CommitReceipt",
       "IndexInfo",
+      "InspectReport",
+      "InspectionFact",
+      "InspectionResult",
+      "Inspector",
       "InstanceInfo",
       "Query",
       "ReindexReport",
@@ -794,7 +798,8 @@
       "TgdbStore",
       "VersionChange",
       "VersionHandle",
-      "WriteTransaction"
+      "WriteTransaction",
+      "register_inspector"
     ]
   }
 }

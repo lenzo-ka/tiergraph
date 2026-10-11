@@ -15,14 +15,14 @@ import secrets
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from os import PathLike
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO, Literal, Self, cast
+from typing import BinaryIO, Literal, Protocol, Self, cast
 
 from tiergraph import predicate as _predicate
 from tiergraph.blob import (
@@ -38,6 +38,8 @@ from tiergraph.blob import (
 )
 from tiergraph.core import (
     Attribute,
+    AttributeDeclaration,
+    AttributeDomain,
     AttributeValue,
     DurableItemRef,
     Graph,
@@ -45,6 +47,9 @@ from tiergraph.core import (
     JsonAttributeValue,
     JsonType,
     JsonValue,
+    LayerFact,
+    LayerName,
+    NamespaceDeclaration,
     QualifiedName,
     XsdType,
 )
@@ -58,9 +63,9 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 _LAYOUT_VERSION = 1
-_INDEX_VERSION = 5
+_INDEX_VERSION = 6
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -87,6 +92,12 @@ _NUMERIC_EXPONENT_WIDTH = len(str(2 * _NUMERIC_OFFSET))
 _BLOB_MEDIA_TYPE = QualifiedName(BLOB_NAMESPACE, "media-type")
 _BLOB_SCHEMA = QualifiedName(BLOB_NAMESPACE, "schema")
 _BLOB_UNIT = QualifiedName(BLOB_NAMESPACE, "unit")
+_TIERGRAPH_MEDIA_TYPE = "application/vnd.tiergraph+json"
+_TIERGRAPH_INSPECTOR_NAME = "tiergraph-graph"
+_TIERGRAPH_INSPECTOR_VERSION = "1"
+_GRAPH_FACT_NAMESPACE = "urn:tiergraph:tgdb:graph-facts"
+_MAX_INSPECTION_FACTS = 4_096
+_INSPECTION_PAIR_SIZE = 2
 _META_KEYS = frozenset(
     {
         "store_uid",
@@ -256,6 +267,79 @@ class ColumnInfo:
         }
 
 
+class Inspector(Protocol):
+    """Read typed facts from payload bytes for declared media types.
+
+    An inspector returns at most 4,096 ``(key, value)`` tuples in the order
+    they should be stored. Keys are nonempty strings and values are
+    :class:`AttributeValue` instances. The source is a forward-only verified
+    stream; inspectors may read it incrementally but must not seek or mutate
+    it. The store drains the remaining bytes after iteration to verify the
+    payload's size and digest.
+    """
+
+    name: str
+    version: str
+    media_types: tuple[str, ...]
+
+    def inspect(
+        self, ref: BlobRef, source: BinaryIO
+    ) -> Iterable[tuple[str, AttributeValue]]:
+        """Yield bounded typed facts in order while reading forward only."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionFact:
+    """Hold one ordered typed fact emitted by an inspector."""
+
+    key: str
+    value: AttributeValue
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible fact description in stable field order."""
+        return {"key": self.key, "value": self.value.to_data()}
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionResult:
+    """Describe one inspector run over one content-addressed payload."""
+
+    digest: str
+    media_type: str
+    inspector: str
+    inspector_version: str
+    facts: tuple[InspectionFact, ...]
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible result in emitted fact order."""
+        return {
+            "digest": self.digest,
+            "media_type": self.media_type,
+            "inspector": self.inspector,
+            "inspector_version": self.inspector_version,
+            "facts": [fact.to_data() for fact in self.facts],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InspectReport:
+    """Summarize explicit payload inspection and optional graph publication."""
+
+    results: tuple[InspectionResult, ...]
+    changed: int
+    published: CommitReceipt | None = None
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible report in inspection order."""
+        return {
+            "inspected": len(self.results),
+            "changed": self.changed,
+            "results": [result.to_data() for result in self.results],
+            "published": (None if self.published is None else self.published.to_data()),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class VersionChange:
     """Describe one version written or skipped by a write transaction."""
@@ -376,6 +460,118 @@ class TgdbLimits:
                 raise ValueError(f"{name} must be nonnegative")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
+
+
+def _validate_inspector(inspector: object) -> None:
+    """Require the public inspector identity and media declaration contract."""
+    name = getattr(inspector, "name", None)
+    version = getattr(inspector, "version", None)
+    media_types = getattr(inspector, "media_types", None)
+    inspect_method = getattr(inspector, "inspect", None)
+    if not isinstance(name, str) or not name:
+        raise TypeError("inspector name must be a nonempty string")
+    if not isinstance(version, str) or not version:
+        raise TypeError("inspector version must be a nonempty string")
+    if not isinstance(media_types, tuple) or not media_types:
+        raise TypeError("inspector media_types must be a nonempty tuple")
+    for media_type in media_types:
+        if not isinstance(media_type, str) or _MEDIA_TYPE.fullmatch(media_type) is None:
+            raise ValueError(
+                "inspector media_types must contain canonical lowercase types"
+            )
+    if len(set(media_types)) != len(media_types):
+        raise ValueError("inspector media_types must not contain duplicates")
+    if not callable(inspect_method):
+        raise TypeError("inspector inspect must be callable")
+
+
+_INSPECTORS: list[Inspector] = []
+
+
+def register_inspector(inspector: Inspector) -> None:
+    """Register one inspector in explicit media-type selection order.
+
+    Domain packages opt in by importing their inspector and calling this
+    function. Re-registering the same object has no effect; a different
+    inspector with the same public name is refused.
+    """
+    _validate_inspector(inspector)
+    for current in _INSPECTORS:
+        if current is inspector:
+            return
+        if current.name == inspector.name:
+            raise ValueError(f"inspector name {inspector.name!r} is already registered")
+    _INSPECTORS.append(inspector)
+
+
+class _TiergraphInspector:
+    """Inspect canonical tiergraph documents without another decoder."""
+
+    name: str = _TIERGRAPH_INSPECTOR_NAME
+    version: str = _TIERGRAPH_INSPECTOR_VERSION
+    media_types: tuple[str, ...] = (_TIERGRAPH_MEDIA_TYPE,)
+
+    def inspect(
+        self, ref: BlobRef, source: BinaryIO
+    ) -> Iterable[tuple[str, AttributeValue]]:
+        """Return graph identity and shape facts in a stable order."""
+        del ref
+        graph = loads(source.read())
+        blob_rows, attachment_rows = _blob_index_rows(graph, "0" * _DIGEST_HEX_LENGTH)
+        return (
+            (
+                "format-version",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "format-version"),
+                    XsdType.STRING,
+                    FORMAT_VERSION,
+                ),
+            ),
+            (
+                "functional",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "functional"),
+                    XsdType.STRING,
+                    fingerprint(graph, EquivalenceView.FUNCTIONAL),
+                ),
+            ),
+            (
+                "identified",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "identified"),
+                    XsdType.STRING,
+                    fingerprint(graph, EquivalenceView.IDENTIFIED),
+                ),
+            ),
+            (
+                "tier-count",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "tier-count"),
+                    XsdType.INTEGER,
+                    str(len(graph.tiers)),
+                ),
+            ),
+            (
+                "blob-count",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "blob-count"),
+                    XsdType.INTEGER,
+                    str(len(blob_rows)),
+                ),
+            ),
+            (
+                "attachment-count",
+                AttributeValue(
+                    QualifiedName(_GRAPH_FACT_NAMESPACE, "attachment-count"),
+                    XsdType.INTEGER,
+                    str(len(attachment_rows)),
+                ),
+            ),
+        )
+
+
+_TIERGRAPH_INSPECTOR: Inspector = _TiergraphInspector()
+register_inspector(_TIERGRAPH_INSPECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,6 +727,15 @@ class _BlobColumnClause:
 @dataclass(frozen=True, slots=True)
 class _MissingBlobClause:
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _InspectionCandidate:
+    digest: str
+    size: int
+    media_type: str
+    depth: int = 0
+    chain: tuple[str, ...] = ()
 
 
 type _QueryClause = (
@@ -1156,6 +1361,145 @@ class TgdbStore:
         self._require_writable()
         return _StoreSink(self)
 
+    def inspections(
+        self,
+        digest: str,
+        *,
+        inspector: str | None = None,
+    ) -> tuple[InspectionResult, ...]:
+        """Return stored inspection results for one digest in inspector order."""
+        self._require_open()
+        self._require_current_schema()
+        _validate_query_digest(digest, "inspection digest")
+        if inspector is not None:
+            _validate_name(inspector)
+        conditions = "digest = ?"
+        parameters: list[object] = [digest]
+        if inspector is not None:
+            conditions += " AND inspector = ?"
+            parameters.append(inspector)
+        try:
+            rows = self._connection.execute(
+                "SELECT media_type, inspector, inspector_version, ordinal, key, "
+                "value_type, value FROM inspections WHERE "
+                + conditions
+                + " ORDER BY rowid, ordinal",
+                parameters,
+            ).fetchall()
+        except sqlite3.DatabaseError as error:
+            raise StoreCorrupt(
+                f"cannot read inspections for {digest}: {error}"
+            ) from error
+        grouped: list[InspectionResult] = []
+        for (
+            media_type,
+            inspector_name,
+            version,
+            ordinal,
+            key,
+            value_type,
+            value,
+        ) in rows:
+            fact = InspectionFact(
+                cast(str, key),
+                _decode_inspection_value(
+                    cast(str, value_type), cast(str, value), digest
+                ),
+            )
+            if (
+                grouped
+                and grouped[-1].media_type == media_type
+                and grouped[-1].inspector == inspector_name
+                and grouped[-1].inspector_version == version
+            ):
+                previous = grouped[-1]
+                if ordinal != len(previous.facts):
+                    raise StoreCorrupt(
+                        f"inspection rows for {digest} and {inspector_name!r} "
+                        "have noncontiguous ordinals"
+                    )
+                grouped[-1] = replace(previous, facts=(*previous.facts, fact))
+            else:
+                if ordinal != 0:
+                    raise StoreCorrupt(
+                        f"inspection rows for {digest} and {inspector_name!r} "
+                        "do not begin at ordinal zero"
+                    )
+                grouped.append(
+                    InspectionResult(
+                        digest,
+                        cast(str, media_type),
+                        cast(str, inspector_name),
+                        cast(str, version),
+                        (fact,),
+                    )
+                )
+        return tuple(grouped)
+
+    def inspect(
+        self,
+        *,
+        media_type: str | None = None,
+        inspector: str | None = None,
+        digests: Iterable[str] = (),
+    ) -> InspectReport:
+        """Inspect held payloads explicitly and retain their ordered facts.
+
+        Without ``digests``, current active heads supply payloads in declared
+        collection, instance, tier, and item order. Explicit digests retain the
+        caller's order. Attached tiergraph documents are indexed recursively,
+        within :class:`TgdbLimits` ``nesting_depth``. Inspectors never run from
+        any other store operation.
+        """
+        self._require_writable()
+        if self._writer is not None:
+            raise TgdbError("cannot inspect during a write transaction")
+        if media_type is not None:
+            if not isinstance(media_type, str):
+                raise TypeError("media_type must be a string or None")
+            if _MEDIA_TYPE.fullmatch(media_type) is None:
+                raise ValueError(
+                    "media_type must be a canonical lowercase type/subtype"
+                )
+        if inspector is not None:
+            _validate_name(inspector)
+        requested = tuple(digests)
+        for digest in requested:
+            _validate_query_digest(digest, "inspection digest")
+        selected_inspectors = tuple(
+            candidate
+            for candidate in _INSPECTORS
+            if inspector is None or candidate.name == inspector
+        )
+        if inspector is not None and not selected_inspectors:
+            raise TgdbError(f"inspector {inspector!r} is not registered")
+        candidates = list(_inspection_candidates(self, requested))
+        if media_type is not None:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.media_type == media_type
+            ]
+        if requested:
+            found = {candidate.digest for candidate in candidates}
+            missing = next(
+                (digest for digest in requested if digest not in found), None
+            )
+            if missing is not None:
+                raise TgdbError(
+                    f"object {missing} is not a held, referenced payload matching "
+                    "the inspection selection"
+                )
+        results, graphs = _run_inspections(
+            self,
+            candidates,
+            selected_inspectors,
+            media_type=media_type,
+            strict=bool(requested) or media_type is not None,
+        )
+        changed = _store_inspections(self, results, graphs)
+        return InspectReport(results, changed)
+
     def export_bundle(
         self,
         instance: bytes | str,
@@ -1345,6 +1689,7 @@ class TgdbStore:
                     f"graph_tiers rows for object {incomplete_tiers[0]} are incomplete"
                 )
             _require_complete_derived_indexes(self._connection)
+            _check_inspection_rows(self._connection)
             for fact in self._connection.execute(
                 "SELECT f.digest, f.functional, f.identified, f.size, o.size "
                 "FROM graph_facts AS f JOIN objects AS o ON o.digest = f.digest"
@@ -1423,7 +1768,10 @@ class TgdbStore:
                 current = tuple(
                     row[0]
                     for row in self._connection.execute(
-                        "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+                        "SELECT graph_digest FROM versions UNION SELECT digest "
+                        "FROM inspections WHERE inspector = ? AND inspector_version = ? "
+                        "ORDER BY 1",
+                        (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
                     )
                 )
                 if current != tuple(expected_facts):
@@ -3149,7 +3497,9 @@ class WriteTransaction:
         declaration = ((name, media_type, _qname_text(attribute), value_type),)
         derived: list[tuple[str, tuple[_BlobMetadataRow, ...]]] = []
         for (digest,) in self._connection.execute(
-            "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
+            "SELECT graph_digest FROM versions UNION SELECT digest FROM inspections "
+            "WHERE inspector = ? AND inspector_version = ? ORDER BY 1",
+            (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
         ):
             graph = self._load_graph_digest(digest)
             try:
@@ -5342,12 +5692,15 @@ def _require_complete_item_indexes(
 def _require_complete_blob_indexes(connection: sqlite3.Connection) -> None:
     """Refuse incomplete blob-item or attachment derived rows."""
     missing_fact = connection.execute(
-        "SELECT v.graph_digest FROM versions AS v "
-        "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest "
-        "WHERE f.digest IS NULL ORDER BY v.graph_digest LIMIT 1"
+        "SELECT g.digest FROM (SELECT graph_digest AS digest FROM versions "
+        "UNION SELECT digest FROM inspections WHERE inspector = ? "
+        "AND inspector_version = ?) AS g "
+        "LEFT JOIN graph_facts AS f ON f.digest = g.digest "
+        "WHERE f.digest IS NULL ORDER BY g.digest LIMIT 1",
+        (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
     ).fetchone()
     if missing_fact is not None:
-        raise StoreCorrupt(f"version object {missing_fact[0]} has no graph facts")
+        raise StoreCorrupt(f"graph object {missing_fact[0]} has no graph facts")
     for table, count_column in (
         ("blob_items", "blob_count"),
         ("attachments", "attachment_count"),
@@ -5387,10 +5740,9 @@ def _require_complete_blob_metadata(
         )
     else:
         expected_query = (
-            "SELECT v.graph_digest, d.name FROM ("
-            "SELECT DISTINCT graph_digest FROM versions"
-            ") AS v JOIN declared_columns AS d ON (? IS NULL OR d.name = ?) "
-            "ORDER BY v.graph_digest, d.name"
+            "SELECT f.digest, d.name FROM graph_facts AS f "
+            "JOIN declared_columns AS d ON (? IS NULL OR d.name = ?) "
+            "ORDER BY f.digest, d.name"
         )
         selected = "1"
     parameters = (column_name, column_name)
@@ -5629,6 +5981,506 @@ type _AttachmentRow = tuple[
     int | None,
     str | None,
 ]
+
+
+def _inspection_candidates(
+    store: TgdbStore,
+    digests: tuple[str, ...],
+) -> tuple[_InspectionCandidate, ...]:
+    """Select held blob interpretations without sorting presented content."""
+    if digests:
+        selected: list[_InspectionCandidate] = []
+        seen: set[tuple[str, str]] = set()
+        for digest in digests:
+            rows = store._connection.execute(
+                "SELECT bi.size, bi.media_type FROM blob_items AS bi "
+                "JOIN graph_tiers AS gt ON gt.digest = bi.graph_digest "
+                "AND gt.tier = bi.tier JOIN objects AS o ON o.digest = bi.sha256 "
+                "WHERE bi.sha256 = ? ORDER BY gt.position, bi.position",
+                (digest,),
+            )
+            for size, actual_media_type in rows:
+                key = (digest, cast(str, actual_media_type))
+                if key not in seen:
+                    seen.add(key)
+                    selected.append(
+                        _InspectionCandidate(
+                            digest, cast(int, size), cast(str, actual_media_type)
+                        )
+                    )
+        return tuple(selected)
+    rows = store._connection.execute(
+        "SELECT bi.sha256, bi.size, bi.media_type FROM collections AS c "
+        "JOIN instances AS i ON i.collection_id = c.id "
+        "JOIN versions AS v ON v.id = i.head_version "
+        "JOIN blob_items AS bi ON bi.graph_digest = v.graph_digest "
+        "JOIN graph_tiers AS gt ON gt.digest = bi.graph_digest "
+        "AND gt.tier = bi.tier JOIN objects AS o ON o.digest = bi.sha256 "
+        "WHERE c.retired_commit IS NULL AND i.retired_commit IS NULL "
+        "ORDER BY c.position, i.position, gt.position, bi.position"
+    )
+    selected = []
+    seen = set()
+    for digest, size, actual_media_type in rows:
+        key = (cast(str, digest), cast(str, actual_media_type))
+        if key not in seen:
+            seen.add(key)
+            selected.append(
+                _InspectionCandidate(
+                    cast(str, digest), cast(int, size), cast(str, actual_media_type)
+                )
+            )
+    return tuple(selected)
+
+
+def _inspection_facts(
+    inspector: Inspector,
+    ref: BlobRef,
+    source: BinaryIO,
+) -> tuple[InspectionFact, ...]:
+    """Materialize and validate one inspector's bounded ordered output."""
+    facts: list[InspectionFact] = []
+    try:
+        for ordinal, emitted in enumerate(inspector.inspect(ref, source)):
+            if ordinal >= _MAX_INSPECTION_FACTS:
+                raise TgdbError(
+                    f"inspector {inspector.name!r} exceeded "
+                    f"{_MAX_INSPECTION_FACTS} facts for {ref.sha256}"
+                )
+            if not isinstance(emitted, tuple) or len(emitted) != _INSPECTION_PAIR_SIZE:
+                raise TypeError("inspector output must contain (key, value) tuples")
+            key, value = emitted
+            if not isinstance(key, str) or not key:
+                raise TypeError("inspection fact key must be a nonempty string")
+            if not isinstance(value, AttributeValue):
+                raise TypeError("inspection fact value must be an AttributeValue")
+            facts.append(InspectionFact(key, value))
+        source.read()
+        if not isinstance(source, VerifiedReader) or not source.verified:
+            raise ValueError("inspector did not leave a fully verified payload read")
+    except TgdbError:
+        raise
+    except Exception as error:
+        raise TgdbError(
+            f"inspector {inspector.name!r} failed for {ref.sha256}: {error}"
+        ) from error
+    return tuple(facts)
+
+
+def _tiergraph_inspection_facts(graph: Graph) -> tuple[InspectionFact, ...]:
+    """Return the built-in inspector's facts from one already loaded graph."""
+    encoded = dumps(graph).encode()
+    ref = BlobRef(hashlib.sha256(encoded).hexdigest(), len(encoded))
+    return tuple(
+        InspectionFact(key, value)
+        for key, value in _TIERGRAPH_INSPECTOR.inspect(ref, io.BytesIO(encoded))
+    )
+
+
+def _run_inspections(  # noqa: PLR0915 -- selection and nested walk are one contract
+    store: TgdbStore,
+    candidates: list[_InspectionCandidate],
+    inspectors: tuple[Inspector, ...],
+    *,
+    media_type: str | None,
+    strict: bool = False,
+) -> tuple[tuple[InspectionResult, ...], dict[str, tuple[Graph, bytes]]]:
+    """Run selected inspectors and discover nested graph resources in order."""
+    results: list[InspectionResult] = []
+    graphs: dict[str, tuple[Graph, bytes]] = {}
+    visited: set[tuple[str, str, str]] = set()
+    cursor = 0
+    while cursor < len(candidates):
+        candidate = candidates[cursor]
+        cursor += 1
+        matching = tuple(
+            item for item in inspectors if candidate.media_type in item.media_types
+        )
+        if not matching:
+            if strict and not candidate.chain:
+                raise TgdbError(
+                    f"no registered inspector accepts {candidate.media_type!r} "
+                    f"for {candidate.digest}"
+                )
+            continue
+        for selected in matching:
+            visit = (candidate.digest, selected.name, selected.version)
+            if visit in visited:
+                continue
+            visited.add(visit)
+            ref = BlobRef(candidate.digest, candidate.size)
+            graph: Graph | None = None
+            document: bytes | None = None
+            if selected is _TIERGRAPH_INSPECTOR:
+                if candidate.depth > store._limits.nesting_depth:
+                    chain = " -> ".join((*candidate.chain, candidate.digest))
+                    raise TgdbError(
+                        "attached graph nesting exceeds limit "
+                        f"{store._limits.nesting_depth}: {chain}"
+                    )
+                try:
+                    with store._open_object(candidate.digest) as source:
+                        document = source.read()
+                    graph = loads(document)
+                except (Refusal, ValueError) as error:
+                    raise TgdbError(
+                        f"inspector {selected.name!r} failed for "
+                        f"{candidate.digest}: {error}"
+                    ) from error
+                if dumps(graph).encode() != document:
+                    raise TgdbError(
+                        f"inspector {selected.name!r} refused noncanonical "
+                        f"tiergraph document {candidate.digest}"
+                    )
+                facts = _tiergraph_inspection_facts(graph)
+                graphs[candidate.digest] = (graph, document)
+            else:
+                with store._open_object(candidate.digest) as source:
+                    facts = _inspection_facts(selected, ref, cast(BinaryIO, source))
+            results.append(
+                InspectionResult(
+                    candidate.digest,
+                    candidate.media_type,
+                    selected.name,
+                    selected.version,
+                    facts,
+                )
+            )
+            if graph is None:
+                continue
+            blob_rows, _attachment_rows = _blob_index_rows(graph, candidate.digest)
+            for row in blob_rows:
+                nested_digest, nested_size, nested_media = row[4], row[5], row[6]
+                if media_type is not None and nested_media != media_type:
+                    continue
+                if store._object_record(nested_digest) is None:
+                    if any(nested_media in item.media_types for item in inspectors):
+                        chain = " -> ".join(
+                            (*candidate.chain, candidate.digest, nested_digest)
+                        )
+                        raise TgdbError(f"nested payload is not stored: {chain}")
+                    continue
+                nested_depth = candidate.depth + (
+                    1 if nested_media == _TIERGRAPH_MEDIA_TYPE else 0
+                )
+                candidates.append(
+                    _InspectionCandidate(
+                        nested_digest,
+                        nested_size,
+                        nested_media,
+                        nested_depth,
+                        (*candidate.chain, candidate.digest),
+                    )
+                )
+    return tuple(results), graphs
+
+
+def _inspection_value_text(value: AttributeValue) -> str:
+    """Encode one scalar inspection value without losing its qualified name."""
+    return json.dumps(
+        value.to_data(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+
+
+def _decode_inspection_value(
+    value_type: str,
+    encoded: str,
+    digest: str,
+) -> AttributeValue:
+    """Decode and validate one stored scalar inspection value."""
+    try:
+        data = json.loads(encoded)
+        if not isinstance(data, dict) or set(data) != {"name", "value_type", "lexical"}:
+            raise ValueError("value envelope is malformed")
+        name_data = data["name"]
+        if not isinstance(name_data, dict):
+            raise ValueError("qualified name is malformed")
+        value = AttributeValue(
+            QualifiedName(name_data["namespace"], name_data["local_name"]),
+            XsdType(data["value_type"]),
+            data["lexical"],
+        )
+        if value.value_type.value != value_type:
+            raise ValueError("value type column disagrees with the value")
+        return value
+    except (KeyError, TypeError, ValueError) as error:
+        raise StoreCorrupt(
+            f"inspection value for {digest} is malformed: {error}"
+        ) from error
+
+
+def _inspection_rows(
+    result: InspectionResult,
+) -> tuple[tuple[str, str, str, str, int, str, str, str], ...]:
+    """Encode one result as ordered catalog rows."""
+    return tuple(
+        (
+            result.digest,
+            result.media_type,
+            result.inspector,
+            result.inspector_version,
+            ordinal,
+            fact.key,
+            fact.value.value_type.value,
+            _inspection_value_text(fact.value),
+        )
+        for ordinal, fact in enumerate(result.facts)
+    )
+
+
+def _check_inspection_rows(connection: sqlite3.Connection) -> None:
+    """Validate inspection values and contiguous per-inspector ordinals."""
+    previous: tuple[str, str, str] | None = None
+    expected_ordinal = 0
+    rows = connection.execute(
+        "SELECT digest, media_type, inspector, inspector_version, ordinal, key, "
+        "value_type, value FROM inspections "
+        "ORDER BY digest, inspector, inspector_version, ordinal"
+    )
+    for digest, media_type, inspector, version, ordinal, key, value_type, value in rows:
+        group = (cast(str, digest), cast(str, inspector), cast(str, version))
+        if group != previous:
+            previous = group
+            expected_ordinal = 0
+        if ordinal != expected_ordinal:
+            raise StoreCorrupt(
+                f"inspection rows for {digest} and {inspector!r} "
+                "have noncontiguous ordinals"
+            )
+        if not isinstance(media_type, str) or _MEDIA_TYPE.fullmatch(media_type) is None:
+            raise StoreCorrupt(f"inspection row for {digest} has an invalid media type")
+        if not isinstance(key, str) or not key:
+            raise StoreCorrupt(f"inspection row for {digest} has an invalid key")
+        _decode_inspection_value(cast(str, value_type), cast(str, value), digest)
+        expected_ordinal += 1
+
+
+def _index_inspected_graph(
+    store: TgdbStore,
+    graph: Graph,
+    digest: str,
+    document: bytes,
+) -> None:
+    """Write rebuildable small facts for one explicitly inspected graph."""
+    blob_rows, attachment_rows = _blob_index_rows(graph, digest)
+    expected_fact = (
+        digest,
+        FORMAT_VERSION,
+        _FINGERPRINT_DOMAIN,
+        fingerprint(graph, EquivalenceView.FUNCTIONAL),
+        fingerprint(graph, EquivalenceView.IDENTIFIED),
+        len(document),
+        len(graph.tiers),
+        len(blob_rows),
+        len(attachment_rows),
+    )
+    existing = store._connection.execute(
+        "SELECT digest, format_version, fp_domain, functional, identified, size, "
+        "tier_count, blob_count, attachment_count FROM graph_facts WHERE digest = ?",
+        (digest,),
+    ).fetchone()
+    if existing is None:
+        store._connection.execute(
+            "INSERT INTO graph_facts(digest, format_version, fp_domain, functional, "
+            "identified, size, tier_count, blob_count, attachment_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            expected_fact,
+        )
+    elif existing != expected_fact:
+        raise StoreCorrupt(f"graph facts for inspected object {digest} conflict")
+    store._connection.execute(
+        "DELETE FROM attachments WHERE graph_digest = ?", (digest,)
+    )
+    store._connection.execute(
+        "DELETE FROM blob_metadata WHERE graph_digest = ?", (digest,)
+    )
+    store._connection.execute(
+        "DELETE FROM blob_metadata_counts WHERE graph_digest = ?", (digest,)
+    )
+    store._connection.execute(
+        "DELETE FROM blob_items WHERE graph_digest = ?", (digest,)
+    )
+    store._connection.execute("DELETE FROM graph_tiers WHERE digest = ?", (digest,))
+    store._connection.executemany(
+        "INSERT INTO graph_tiers(digest, position, tier, item_count) VALUES (?, ?, ?, ?)",
+        (
+            (digest, position, _qname_text(tier.declaration.name), len(tier.items))
+            for position, tier in enumerate(graph.tiers)
+        ),
+    )
+    store._connection.executemany(
+        "INSERT INTO blob_items(graph_digest, tier, position, durable_id, sha256, "
+        "size, media_type, schema) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        blob_rows,
+    )
+    store._connection.executemany(
+        "INSERT INTO attachments(graph_digest, ordinal, declaration, durable_id, "
+        "subject, blob_tier, blob_position, span_unit, span_offset, span_length, "
+        "span_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        attachment_rows,
+    )
+    declarations = tuple(
+        cast(tuple[str, str, str, str], row)
+        for row in store._connection.execute(
+            "SELECT name, media_type, attribute, value_type "
+            "FROM declared_columns ORDER BY position"
+        )
+    )
+    try:
+        metadata_rows = _blob_metadata_rows(graph, digest, blob_rows, declarations)
+    except ValueError as error:
+        raise TgdbError(
+            f"cannot index blob metadata for graph {digest}: {error}"
+        ) from error
+    store._connection.executemany(
+        "INSERT INTO blob_metadata(graph_digest, tier, position, column, value_text, "
+        "value_num, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        metadata_rows,
+    )
+    store._connection.executemany(
+        "INSERT INTO blob_metadata_counts(graph_digest, column, row_count, row_digest) "
+        "VALUES (?, ?, ?, ?)",
+        _blob_metadata_count_rows(digest, declarations, metadata_rows),
+    )
+
+
+def _store_inspections(
+    store: TgdbStore,
+    results: tuple[InspectionResult, ...],
+    graphs: dict[str, tuple[Graph, bytes]],
+) -> int:
+    """Atomically replace changed inspection records and nested graph facts."""
+    changed = 0
+    try:
+        store._connection.execute("BEGIN IMMEDIATE")
+        for result in results:
+            rows = _inspection_rows(result)
+            existing = tuple(
+                store._connection.execute(
+                    "SELECT digest, media_type, inspector, inspector_version, ordinal, "
+                    "key, value_type, value FROM inspections WHERE digest = ? "
+                    "AND inspector = ? AND inspector_version = ? ORDER BY ordinal",
+                    (result.digest, result.inspector, result.inspector_version),
+                )
+            )
+            if existing != rows:
+                store._connection.execute(
+                    "DELETE FROM inspections WHERE digest = ? AND inspector = ? "
+                    "AND inspector_version = ?",
+                    (result.digest, result.inspector, result.inspector_version),
+                )
+                store._connection.executemany(
+                    "INSERT INTO inspections(digest, media_type, inspector, "
+                    "inspector_version, ordinal, key, value_type, value) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                changed += 1
+        for digest, (graph, document) in graphs.items():
+            _index_inspected_graph(store, graph, digest, document)
+        store._connection.execute("COMMIT")
+    except sqlite3.OperationalError as error:
+        if store._connection.in_transaction:
+            store._connection.execute("ROLLBACK")
+        if _sqlite_busy(error):
+            raise StoreBusy("tgdb catalog remained busy while inspecting") from error
+        raise StoreCorrupt(f"cannot store inspections: {error}") from error
+    except Exception:
+        store._connection.execute("ROLLBACK")
+        raise
+    return changed
+
+
+def _graph_with_inspections(
+    graph: Graph,
+    results: tuple[InspectionResult, ...],
+) -> Graph:
+    """Return a graph carrying matching inspector values as layer facts."""
+    by_payload: dict[tuple[str, str], list[InspectionResult]] = {}
+    for result in results:
+        by_payload.setdefault((result.digest, result.media_type), []).append(result)
+    editor = graph.edit()
+    declarations = {item.name: item for item in graph.attribute_declarations}
+    namespace_uris = {item.namespace for item in graph.namespaces}
+    namespace_prefixes = {item.prefix for item in graph.namespaces}
+    layers = {layer.name for layer in graph.layers}
+    changed = False
+    profile = BlobProfile(graph)
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    for reference, ref in profile.blobs():
+        item = tiers[reference.tier].items[reference.index]
+        values = {attribute.name: attribute for attribute in item.attributes}
+        actual_media = cast(AttributeValue, values[_BLOB_MEDIA_TYPE]).lexical
+        for result in by_payload.get((ref.sha256, actual_media), ()):
+            for fact in result.facts:
+                declaration = declarations.get(fact.value.name)
+                if declaration is None:
+                    if fact.value.name.namespace not in namespace_uris:
+                        prefix = "inspection"
+                        suffix = 2
+                        while prefix in namespace_prefixes:
+                            prefix = f"inspection{suffix}"
+                            suffix += 1
+                        editor.declare(
+                            NamespaceDeclaration(prefix, fact.value.name.namespace)
+                        )
+                        namespace_uris.add(fact.value.name.namespace)
+                        namespace_prefixes.add(prefix)
+                    declaration = AttributeDeclaration(
+                        fact.value.name, AttributeDomain.ITEM, fact.value.value_type
+                    )
+                    editor.declare(declaration)
+                    declarations[fact.value.name] = declaration
+                elif (
+                    declaration.domain is not AttributeDomain.ITEM
+                    or declaration.value_type is not fact.value.value_type
+                ):
+                    raise TgdbError(
+                        f"inspector {result.inspector!r} value "
+                        f"{fact.value.name} conflicts with its graph declaration"
+                    )
+                layer = LayerName(
+                    fact.value.name.namespace,
+                    f"{result.inspector}@{result.inspector_version}",
+                )
+                if layer not in layers:
+                    editor.add_layer(layer)
+                    layers.add(layer)
+                editor.put_fact(
+                    layer,
+                    LayerFact(DurableItemRef(cast(str, item.durable_id)), fact.value),
+                )
+                changed = True
+    return editor.freeze() if changed else graph
+
+
+def _publish_inspections(
+    store: TgdbStore,
+    results: tuple[InspectionResult, ...],
+) -> CommitReceipt | None:
+    """Publish inspector facts into every matching active head in one commit."""
+    handles = store.query(Query.all())
+    if not handles or not results:
+        return None
+    transaction = store.write(annotations=EditAnnotations(stage="inspect"))
+    try:
+        for handle in handles:
+            graph = handle.load()
+            inspected = _graph_with_inspections(graph, results)
+            if inspected != graph:
+                transaction.publish(
+                    handle.instance_uid,
+                    inspected,
+                    expected=handle.seq,
+                    annotations=EditAnnotations(stage="inspect"),
+                )
+        if not transaction._versions:
+            transaction.discard()
+            return None
+        return transaction.commit()
+    except Exception:
+        transaction.discard()
+        raise
 
 
 def _blob_index_rows(
@@ -5893,12 +6745,21 @@ def _derive_indexes(
 ]:
     """Recompute graph, blob, tier, and declared-item derived rows."""
     try:
-        digests = tuple(
+        version_digests = {
             cast(str, row[0])
             for row in store._connection.execute(
                 "SELECT DISTINCT graph_digest FROM versions ORDER BY graph_digest"
             )
-        )
+        }
+        inspected_digests = {
+            cast(str, row[0])
+            for row in store._connection.execute(
+                "SELECT DISTINCT digest FROM inspections WHERE inspector = ? "
+                "AND inspector_version = ?",
+                (_TIERGRAPH_INSPECTOR_NAME, _TIERGRAPH_INSPECTOR_VERSION),
+            )
+        }
+        digests = tuple(sorted(version_digests | inspected_digests))
     except sqlite3.DatabaseError as error:
         raise StoreCorrupt(f"cannot enumerate stored graphs: {error}") from error
     facts: dict[str, tuple[str, str, str, str, str, int, int, int, int]] = {}
@@ -5979,7 +6840,7 @@ def _derive_indexes(
         applicable = tuple(
             (name, tier, attribute)
             for name, tier, attribute, history in declarations
-            if history or digest in head_digests
+            if digest in version_digests and (history or digest in head_digests)
         )
         item_rows = _item_index_rows(graph, digest, applicable)
         item_counts.extend(_item_index_count_rows(digest, applicable, item_rows))
@@ -6766,6 +7627,19 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             ") STRICT"
         )
         connection.execute(
+            "CREATE TABLE inspections("
+            "digest TEXT NOT NULL REFERENCES objects(digest) ON DELETE CASCADE, "
+            "media_type TEXT NOT NULL CHECK(length(media_type) > 0), "
+            "inspector TEXT NOT NULL CHECK(length(inspector) > 0), "
+            "inspector_version TEXT NOT NULL CHECK(length(inspector_version) > 0), "
+            "ordinal INTEGER NOT NULL CHECK(ordinal >= 0), "
+            "key TEXT NOT NULL CHECK(length(key) > 0), "
+            "value_type TEXT NOT NULL CHECK(length(value_type) > 0), "
+            "value TEXT NOT NULL, "
+            "PRIMARY KEY(digest, inspector, inspector_version, ordinal)"
+            ") STRICT"
+        )
+        connection.execute(
             "CREATE TABLE graph_facts("
             "digest TEXT PRIMARY KEY REFERENCES objects(digest), "
             "format_version TEXT NOT NULL, "
@@ -7244,6 +8118,10 @@ __all__ = [
     "ColumnInfo",
     "CommitReceipt",
     "IndexInfo",
+    "InspectReport",
+    "InspectionFact",
+    "InspectionResult",
+    "Inspector",
     "InstanceInfo",
     "Query",
     "ReindexReport",
@@ -7262,4 +8140,5 @@ __all__ = [
     "VersionChange",
     "VersionHandle",
     "WriteTransaction",
+    "register_inspector",
 ]
