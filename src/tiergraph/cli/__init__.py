@@ -161,7 +161,10 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         tgdb_subparsers,
         "collection",
         summary="manage ordered collections",
-        description="Create, list, rename, move, retire, or restore collections.",
+        description=(
+            "Create, list, import, export, rename, move, retire, or restore "
+            "collections."
+        ),
         examples=("tiergraph tgdb collection list corpus.tgdb",),
     )
     collection_commands = tgdb_collection.add_subparsers(
@@ -205,6 +208,48 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     collection_list.add_argument(
         "--json", action="store_true", help="emit structured JSON"
+    )
+    collection_export = _subcommand(
+        collection_commands,
+        "export",
+        summary="export collection heads",
+        description=(
+            "Write one bundle per active instance plus an ordered collection index."
+        ),
+        examples=("tiergraph tgdb collection export corpus.tgdb recordings -o export",),
+    )
+    collection_export.set_defaults(handler=_handle_tgdb)
+    collection_export.add_argument("store", metavar="STORE", help="store directory")
+    collection_export.add_argument(
+        "collection", metavar="COLLECTION", help="collection name"
+    )
+    collection_export.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="DIR",
+        help="new export directory outside the store",
+    )
+    collection_import = _subcommand(
+        collection_commands,
+        "import",
+        summary="import a collection atomically",
+        description=(
+            "Import an ordered collection directory and publish every head in one "
+            "commit."
+        ),
+        examples=("tiergraph tgdb collection import corpus.tgdb export",),
+    )
+    collection_import.set_defaults(handler=_handle_tgdb)
+    collection_import.add_argument("store", metavar="STORE", help="store directory")
+    collection_import.add_argument(
+        "directory", metavar="DIR", help="collection export directory"
+    )
+    collection_import.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="keep unresolved linked payloads as explicit missing content",
     )
     for command, summary, description in (
         ("rename", "rename a collection", "Change a collection name."),
@@ -289,6 +334,82 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         type=_nonnegative_integer,
         metavar="N",
         help="declared insertion position (default: append)",
+    )
+    tgdb_import = _subcommand(
+        tgdb_subparsers,
+        "import",
+        summary="import one bundle",
+        description=(
+            "Validate one bundle and publish its graph and available payloads in a "
+            "single commit."
+        ),
+        examples=(
+            "tiergraph tgdb import corpus.tgdb sample.tgb "
+            "--collection recordings --name sample",
+        ),
+    )
+    tgdb_import.set_defaults(handler=_handle_tgdb)
+    tgdb_import.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_import.add_argument("bundle", metavar="BUNDLE", help="bundle file")
+    tgdb_import.add_argument(
+        "--collection", required=True, metavar="NAME", help="target collection"
+    )
+    tgdb_import.add_argument(
+        "--name", required=True, metavar="NAME", help="target instance name"
+    )
+    tgdb_import.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="keep unresolved linked payloads as explicit missing content",
+    )
+    tgdb_import.add_argument(
+        "--on-conflict",
+        choices=("refuse", "new-version"),
+        default="refuse",
+        help="handling for an existing instance name (default: refuse)",
+    )
+    tgdb_export = _subcommand(
+        tgdb_subparsers,
+        "export",
+        summary="export one bundle",
+        description=(
+            "Write one stored graph version and its selected embedded payloads as "
+            "a deterministic bundle."
+        ),
+        examples=(
+            "tiergraph tgdb export corpus.tgdb sample -o sample.tgb",
+            (
+                "tiergraph tgdb export corpus.tgdb sample --link "
+                "eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7 "
+                "-o sample.tgb"
+            ),
+        ),
+    )
+    tgdb_export.set_defaults(handler=_handle_tgdb)
+    tgdb_export.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_export.add_argument("instance", metavar="INSTANCE", help="instance name or id")
+    tgdb_export.add_argument("--collection", metavar="NAME", help="instance collection")
+    tgdb_export.add_argument(
+        "--seq",
+        type=_positive_integer,
+        metavar="N",
+        help="stored version sequence (default: head)",
+    )
+    tgdb_export.add_argument(
+        "--link",
+        action="append",
+        default=[],
+        type=_tgdb_sha256,
+        metavar="SHA256",
+        help="leave this payload linked; repeatable",
+    )
+    tgdb_export.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="BUNDLE",
+        help="output bundle outside the store",
     )
     tgdb_publish = _subcommand(
         tgdb_subparsers,
@@ -2596,6 +2717,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 "apply",
                 "batch",
                 "collection",
+                "import",
                 "index",
                 "move",
                 "publish",
@@ -2607,7 +2729,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             }
             and not (
                 args.tgdb_command == "collection"
-                and args.tgdb_collection_command == "list"
+                and args.tgdb_collection_command in {"export", "list"}
             )
             and not (args.tgdb_command == "index" and args.tgdb_index_command == "list")
         )
@@ -2711,6 +2833,49 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                             )
                 _stdout_text("ok\n")
                 return 0
+            if args.tgdb_command == "import":
+                with Path(args.bundle).open("rb") as bundle_source:
+                    with store.write() as transaction:
+                        uid = transaction.import_bundle(
+                            bundle_source,
+                            collection=args.collection,
+                            name=args.name,
+                            allow_missing=args.allow_missing,
+                            on_conflict=args.on_conflict,
+                        )
+                        receipt = transaction.commit()
+                change = receipt.versions[-1]
+                if receipt.commit_seq is None:
+                    _stdout_text(
+                        f"unchanged {change.name!r} {uid.hex()} at version "
+                        f"{change.seq}\n"
+                    )
+                else:
+                    _stdout_text(
+                        f"imported {change.name!r} {uid.hex()} version {change.seq} "
+                        f"in commit {receipt.commit_seq}\n"
+                    )
+                return 0
+            if args.tgdb_command == "export":
+                names = {
+                    instance.name
+                    for instance in store.instances(
+                        args.collection, include_retired=True
+                    )
+                }
+                selector = _tgdb_selector(args.instance, names=names)
+                linked = frozenset(args.link)
+                _check_output_outside_store(store.path, args.output)
+                with _output_stream(args.store, args.output) as destination:
+                    store.export_bundle(
+                        selector,
+                        destination,
+                        collection=args.collection,
+                        seq="head" if args.seq is None else args.seq,
+                        embed=lambda ref: ref.sha256 not in linked,
+                    )
+                _stdout_text(f"exported {args.instance!r} to {args.output}\n")
+                return 0
             if args.tgdb_command == "index":
                 command = args.tgdb_index_command
                 if command == "list":
@@ -2778,6 +2943,25 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                                 )
                                 + "\n"
                             )
+                    return 0
+                if command == "export":
+                    _check_output_outside_store(store.path, args.output)
+                    store.export_collection(args.collection, args.output)
+                    _stdout_text(
+                        f"exported collection {args.collection!r} to {args.output}\n"
+                    )
+                    return 0
+                if command == "import":
+                    with store.write() as transaction:
+                        imported = transaction.import_collection(
+                            args.directory,
+                            allow_missing=args.allow_missing,
+                        )
+                        receipt = transaction.commit()
+                    _stdout_text(
+                        f"imported {len(imported)} instances in commit "
+                        f"{receipt.commit_seq}\n"
+                    )
                     return 0
                 with store.write() as transaction:
                     if command == "create":

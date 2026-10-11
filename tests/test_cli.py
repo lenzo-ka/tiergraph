@@ -1934,28 +1934,26 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
             command = arguments[1]
             collection_command = arguments[2] if command == "collection" else None
             index_command = arguments[2] if command == "index" else None
-            needs_collection = (
-                command
-                in {
-                    "add",
-                    "apply",
-                    "batch",
-                    "collection",
-                    "diff",
-                    "find",
-                    "get",
-                    "history",
-                    "list",
-                    "move",
-                    "publish",
-                    "rename",
-                    "revert",
-                    "restore",
-                    "retire",
-                    "undo",
-                }
-                and collection_command != "create"
-            )
+            needs_collection = command in {
+                "add",
+                "apply",
+                "batch",
+                "collection",
+                "diff",
+                "export",
+                "find",
+                "get",
+                "history",
+                "import",
+                "list",
+                "move",
+                "publish",
+                "rename",
+                "revert",
+                "restore",
+                "retire",
+                "undo",
+            } and collection_command not in {"create", "import"}
             collection_uid: bytes | None = None
             if needs_collection:
                 with store.write() as transaction:
@@ -1975,6 +1973,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 "apply",
                 "batch",
                 "diff",
+                "export",
                 "get",
                 "history",
                 "publish",
@@ -2023,6 +2022,19 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                     with store.write() as transaction:
                         transaction.publish("sample", third_graph, expected=2)
                         transaction.commit()
+            if command == "import":
+                with (directory / "sample.tgb").open("w+b") as destination:
+                    tiergraph.write_bundle(
+                        tiergraph.Graph((), (), ()),
+                        destination,
+                        tiergraph.MappingResolver({}),
+                    )
+            if command == "collection" and collection_command == "import":
+                with TgdbStore.create(directory / "source.tgdb") as source_store:
+                    with source_store.write() as transaction:
+                        transaction.create_collection("recordings")
+                        transaction.commit()
+                    source_store.export_collection("recordings", directory / "export")
             if command in {"move", "rename", "restore", "retire"}:
                 assert collection_uid is not None
                 collection_id = store._connection.execute(
@@ -2252,7 +2264,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 124
+    assert len(examples) == 129
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

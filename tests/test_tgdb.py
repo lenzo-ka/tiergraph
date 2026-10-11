@@ -11,11 +11,12 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -27,6 +28,7 @@ from tiergraph import (
     AttributeValue,
     BipartiteRelationDeclaration,
     BlobRef,
+    Bundle,
     DurableItemRef,
     EditAnnotations,
     EquivalenceView,
@@ -36,6 +38,7 @@ from tiergraph import (
     Journal,
     JsonAttributeValue,
     JsonType,
+    MappingResolver,
     NamespaceDeclaration,
     Patch,
     QualifiedName,
@@ -51,6 +54,7 @@ from tiergraph import (
     diff,
     dumps,
     fingerprint,
+    open_bundle,
     patch_dumps,
 )
 from tiergraph.predicate import Cell, Equals
@@ -4630,3 +4634,625 @@ def test_only_tgdb_and_the_cli_import_filesystem_or_sqlite_modules() -> None:
                 imports.append((path.relative_to(root), node.module))
     assert imports
     assert all(path in permitted for path, _module in imports)
+
+
+def test_bundle_round_trip_preserves_graph_assets_modes_and_missing_policy(
+    tmp_path: Path,
+) -> None:
+    """Bundle interchange keeps graph bytes and ordered asset identity exact."""
+    graph, payloads = _blob_graph()
+    metadata_digest = hashlib.sha256(payloads["metadata"]).hexdigest()
+    refs = {
+        label: BlobRef(hashlib.sha256(payload).hexdigest(), len(payload))
+        for label, payload in payloads.items()
+    }
+    hrefs = {refs["metadata"]: "sha256/metadata"}
+    source_path = tmp_path / "source"
+    with tgdb.TgdbStore.create(source_path) as source:
+        with source.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", graph)
+            for payload in payloads.values():
+                transaction.put_blob(io.BytesIO(payload))
+            transaction.commit()
+        source_handle = source.get(uid)
+        encoded = io.BytesIO()
+        source.export_bundle(
+            uid,
+            encoded,
+            embed=lambda ref: ref.sha256 != metadata_digest,
+            hrefs=hrefs,
+        )
+        encoded.seek(0)
+        with open_bundle(encoded) as bundle:
+            assert [asset.id for asset in bundle.assets()] == [
+                "audio",
+                "recording-metadata",
+                "notes",
+                "transcript",
+            ]
+            assert [asset.position for asset in bundle.assets()] == [0, 1, 2, 3]
+            assert [asset.mode for asset in bundle.assets()] == [
+                "embedded",
+                "linked",
+                "linked",
+                "embedded",
+            ]
+
+        with tgdb.TgdbStore.create(tmp_path / "target") as target:
+            with target.write() as transaction:
+                target_collection = transaction.create_collection("collection")
+                encoded.seek(0)
+                imported = transaction.import_bundle(
+                    encoded,
+                    collection=target_collection,
+                    name="sample",
+                    resolver=MappingResolver({metadata_digest: payloads["metadata"]}),
+                )
+                receipt = transaction.commit()
+            assert receipt.commit_seq is not None
+            target_handle = target.get(imported)
+            assert target_handle.graph_digest == source_handle.graph_digest
+            assert target_handle.load() == graph
+            assert target.query(tgdb.Query.all().missing_blob()) == []
+            repeated = io.BytesIO()
+            target.export_bundle(
+                imported,
+                repeated,
+                embed=lambda ref: ref.sha256 != metadata_digest,
+                hrefs=hrefs,
+            )
+            assert repeated.getvalue() == encoded.getvalue()
+            before_commits = target._connection.execute(
+                "SELECT count(*) FROM commits"
+            ).fetchone()
+            with target.write() as transaction:
+                encoded.seek(0)
+                same_uid = transaction.import_bundle(
+                    encoded,
+                    collection=target_collection,
+                    name="sample",
+                    resolver=MappingResolver({metadata_digest: payloads["metadata"]}),
+                    on_conflict="new-version",
+                )
+                unchanged = transaction.commit()
+            assert same_uid == imported
+            assert unchanged.commit_seq is None
+            assert unchanged.operations == ()
+            assert unchanged.versions[-1].status == "unchanged"
+            assert (
+                target._connection.execute("SELECT count(*) FROM commits").fetchone()
+                == before_commits
+            )
+
+    linked = io.BytesIO()
+    changed = io.BytesIO()
+    with tgdb.TgdbStore.open(source_path, mode="rw") as source:
+        source.export_bundle("sample", linked, embed=False)
+        with source.write() as transaction:
+            transaction.publish("sample", _version_graph("changed"), expected=1)
+            transaction.commit()
+        source.export_bundle("sample", changed)
+    with tgdb.TgdbStore.create(tmp_path / "missing") as target:
+        with target.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with target.write() as transaction:
+            linked.seek(0)
+            with pytest.raises(tgdb.TgdbError, match="was not found"):
+                transaction.import_bundle(
+                    linked,
+                    collection=collection,
+                    name="strict",
+                )
+        assert target.instances() == ()
+        assert target._connection.execute(
+            "SELECT count(*) FROM objects"
+        ).fetchone() == (0,)
+        with target.write() as transaction:
+            linked.seek(0)
+            missing_uid = transaction.import_bundle(
+                linked,
+                collection=collection,
+                name="allowed",
+                allow_missing=True,
+            )
+            transaction.commit()
+        assert target.get(missing_uid).load() == graph
+        assert target.query(tgdb.Query.all().missing_blob()) == [
+            target.get(missing_uid)
+        ]
+        with target.write() as transaction:
+            linked.seek(0)
+            with pytest.raises(tgdb.TgdbError, match="was not found"):
+                transaction.import_bundle(
+                    linked,
+                    collection=collection,
+                    name="allowed",
+                    on_conflict="new-version",
+                )
+        with target.write() as transaction:
+            linked.seek(0)
+            with pytest.raises(tgdb.TgdbError, match="already exists"):
+                transaction.import_bundle(
+                    linked,
+                    collection=collection,
+                    name="allowed",
+                    allow_missing=True,
+                )
+        with target.write() as transaction:
+            linked.seek(0)
+            same_uid = transaction.import_bundle(
+                linked,
+                collection=collection,
+                name="allowed",
+                allow_missing=True,
+                on_conflict="new-version",
+            )
+            unchanged = transaction.commit()
+        assert same_uid == missing_uid
+        assert unchanged.commit_seq is None
+        assert unchanged.versions[-1].status == "unchanged"
+        resolved = {
+            hashlib.sha256(payload).hexdigest(): payload
+            for payload in payloads.values()
+        }
+        before_objects = target._connection.execute(
+            "SELECT count(*) FROM objects"
+        ).fetchone()
+        with target.write() as transaction:
+            linked.seek(0)
+            transaction.import_bundle(
+                linked,
+                collection=collection,
+                name="allowed",
+                resolver=MappingResolver(resolved),
+                on_conflict="new-version",
+            )
+            resolved_unchanged = transaction.commit()
+        assert resolved_unchanged.commit_seq is None
+        assert (
+            target._connection.execute("SELECT count(*) FROM objects").fetchone()
+            == before_objects
+        )
+        with pytest.raises(tgdb.TgdbError, match="cannot export bundle"):
+            target.export_bundle("allowed", io.BytesIO())
+        with target.write() as transaction:
+            changed.seek(0)
+            transaction.import_bundle(
+                changed,
+                collection=collection,
+                name="allowed",
+                on_conflict="new-version",
+            )
+            published = transaction.commit()
+        assert published.versions[-1].status == "published"
+        assert target.get(missing_uid).seq == 2
+
+    with tgdb.TgdbStore.create(tmp_path / "held") as target:
+        with target.write() as transaction:
+            collection = transaction.create_collection("collection")
+            for payload in payloads.values():
+                transaction.put_blob(io.BytesIO(payload))
+            linked.seek(0)
+            transaction.import_bundle(
+                linked,
+                collection=collection,
+                name="held",
+            )
+            transaction.commit()
+        assert target.query(tgdb.Query.all().missing_blob()) == []
+
+
+def test_collection_export_import_is_one_ordered_commit(tmp_path: Path) -> None:
+    """A collection directory preserves ids and order in one import commit."""
+    graph, payloads = _blob_graph()
+    export_path = tmp_path / "export"
+    with tgdb.TgdbStore.create(tmp_path / "source") as source:
+        with source.write() as transaction:
+            collection = transaction.create_collection("recordings")
+            first = transaction.create_instance(collection, "first", graph)
+            second = transaction.create_instance(
+                collection, "second", _version_graph("second")
+            )
+            for payload in payloads.values():
+                transaction.put_blob(io.BytesIO(payload))
+            transaction.commit()
+        source.export_collection(collection, export_path)
+        manifest = json.loads((export_path / "collection.json").read_bytes())
+        assert [row["uid"] for row in manifest["instances"]] == [
+            first.hex(),
+            second.hex(),
+        ]
+        assert [row["position"] for row in manifest["instances"]] == [0, 1]
+        with pytest.raises(tgdb.TgdbError, match="already exists"):
+            source.export_collection(collection, export_path)
+
+    with tgdb.TgdbStore.create(tmp_path / "target") as target:
+        second_bundle = export_path / (manifest["instances"][1]["uid"] + ".tgb")
+        saved_second = second_bundle.read_bytes()
+        second_bundle.write_bytes(b"not a bundle")
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="cannot import bundle"):
+                transaction.import_collection(export_path)
+        assert target.collections() == ()
+        assert target.instances() == ()
+        assert target._connection.execute(
+            "SELECT count(*) FROM objects"
+        ).fetchone() == (0,)
+        second_bundle.write_bytes(saved_second)
+        with target.write() as transaction:
+            imported = transaction.import_collection(export_path)
+            receipt = transaction.commit()
+        assert imported == (first, second)
+        assert [item.uid for item in target.instances("recordings")] == [first, second]
+        handles = target.query(tgdb.Query.all("recordings"))
+        assert {handle.commit_seq for handle in handles} == {receipt.commit_seq}
+        assert [handle.name for handle in handles] == ["first", "second"]
+        assert target.collections()[0].uid == bytes.fromhex(
+            manifest["collection"]["uid"]
+        )
+
+
+def test_bundle_import_public_validation_and_collection_index_refusals(
+    tmp_path: Path,
+) -> None:
+    """Bundle controls and the closed collection index refuse malformed input."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.commit()
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="allow_missing"):
+                transaction.import_bundle(
+                    io.BytesIO(),
+                    collection=collection,
+                    name="sample",
+                    allow_missing=cast(bool, 1),
+                )
+            with pytest.raises(ValueError, match="on_conflict"):
+                transaction.import_bundle(
+                    io.BytesIO(),
+                    collection=collection,
+                    name="sample",
+                    on_conflict=cast(Literal["refuse", "new-version"], "replace"),
+                )
+            with pytest.raises(TypeError, match="allow_missing"):
+                transaction.import_collection(
+                    tmp_path,
+                    allow_missing=cast(bool, 1),
+                )
+
+    malformed = tmp_path / "malformed"
+    malformed.mkdir()
+    (malformed / "collection.json").write_text("{}", encoding="utf-8")
+    with tgdb.TgdbStore.create(tmp_path / "other") as store:
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="closed export object"):
+                transaction.import_collection(malformed)
+
+
+def test_bundle_export_and_collection_publication_failures_are_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Export rejects corrupt documents and never leaves a partial directory."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", _version_graph())
+            transaction.commit()
+        original_open = store._open_object
+        monkeypatch.setattr(store, "_open_object", lambda _digest: io.BytesIO(b"{}"))
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot be exported"):
+            store.export_bundle(uid, io.BytesIO())
+        noncanonical = json.dumps(json.loads(dumps(_version_graph()))).encode("utf-8")
+        monkeypatch.setattr(
+            store, "_open_object", lambda _digest: io.BytesIO(noncanonical)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="not canonically encoded"):
+            store.export_bundle(uid, io.BytesIO())
+        monkeypatch.setattr(store, "_open_object", original_open)
+
+        with pytest.raises(tgdb.TgdbError, match="parent .* plain directory"):
+            store.export_collection(collection, tmp_path / "absent" / "export")
+
+        target = tmp_path / "raced"
+        original_index = tgdb._collection_index_bytes
+
+        def create_raced_target(manifest: dict[str, object]) -> bytes:
+            target.mkdir()
+            return original_index(manifest)
+
+        monkeypatch.setattr(tgdb, "_collection_index_bytes", create_raced_target)
+        with pytest.raises(tgdb.TgdbError, match="already exists"):
+            store.export_collection(collection, target)
+        assert not any(path.name.startswith(".raced.") for path in tmp_path.iterdir())
+        target.rmdir()
+        monkeypatch.setattr(tgdb, "_collection_index_bytes", original_index)
+
+        original_link = os.link
+        raced_link = tmp_path / "link-race"
+
+        def create_raced_entry(_source: Path, destination: Path) -> None:
+            Path(destination).write_bytes(b"foreign")
+            raise FileExistsError("raced destination")
+
+        monkeypatch.setattr(os, "link", create_raced_entry)
+        with pytest.raises(tgdb.TgdbError, match="cannot export collection"):
+            store.export_collection(collection, raced_link)
+        foreign = next(raced_link.iterdir())
+        assert foreign.read_bytes() == b"foreign"
+        foreign.unlink()
+        raced_link.rmdir()
+
+        def fail_link(_source: Path, _target: Path) -> None:
+            raise OSError("link fault")
+
+        monkeypatch.setattr(os, "link", fail_link)
+        failed = tmp_path / "failed"
+        with pytest.raises(tgdb.TgdbError, match="link fault"):
+            store.export_collection(collection, failed)
+        assert not failed.exists()
+
+        link_calls = 0
+
+        def fail_second_link(source: Path, destination: Path) -> None:
+            nonlocal link_calls
+            link_calls += 1
+            if link_calls == 2:
+                raise OSError("second link fault")
+            original_link(source, destination)
+
+        monkeypatch.setattr(os, "link", fail_second_link)
+        partial = tmp_path / "partial"
+        with pytest.raises(tgdb.TgdbError, match="second link fault"):
+            store.export_collection(collection, partial)
+        assert not partial.exists()
+
+
+def test_collection_index_closed_schema_and_scalar_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Collection indexes reject unknown, duplicate, malformed, and oversized data."""
+    index = tmp_path / "collection.json"
+    uid = "0" * 32
+    digest = "1" * 64
+
+    def manifest() -> dict[str, object]:
+        return {
+            "tgdb_export": "1",
+            "collection": {"uid": uid, "name": "collection", "position": 0},
+            "instances": [
+                {
+                    "uid": "2" * 32,
+                    "name": "sample",
+                    "position": 0,
+                    "head_digest": digest,
+                    "functional": "3" * 64,
+                }
+            ],
+        }
+
+    with pytest.raises(tgdb.TgdbError, match="not a plain file"):
+        tgdb._read_collection_index(index)
+    index.write_text('{"tgdb_export":"1","tgdb_export":"1"}', encoding="utf-8")
+    with pytest.raises(tgdb.TgdbError, match="duplicate member"):
+        tgdb._read_collection_index(index)
+    index.write_text('{"tgdb_export":NaN}', encoding="utf-8")
+    with pytest.raises(tgdb.TgdbError, match="invalid JSON constant"):
+        tgdb._read_collection_index(index)
+    index.write_bytes(b"\xff")
+    with pytest.raises(tgdb.TgdbError, match="collection index is invalid"):
+        tgdb._read_collection_index(index)
+    index.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(tgdb, "_MAX_COLLECTION_INDEX_BYTES", 1)
+    with pytest.raises(tgdb.TgdbError, match="size .* exceeds"):
+        tgdb._read_collection_index(index)
+    with pytest.raises(tgdb.TgdbError, match="size .* exceeds"):
+        tgdb._collection_index_bytes(manifest())
+    monkeypatch.setattr(tgdb, "_MAX_COLLECTION_INDEX_BYTES", 16 << 20)
+
+    cases: tuple[tuple[dict[str, object], str], ...] = (
+        ({**manifest(), "tgdb_export": "2"}, "version"),
+        ({**manifest(), "collection": {}}, "collection must be a closed"),
+        ({**manifest(), "instances": {}}, "instances must be an array"),
+        (
+            {**manifest(), "instances": [{}]},
+            "instance 0 must be a closed",
+        ),
+    )
+    for value, message in cases:
+        index.write_bytes(tgdb._collection_index_bytes(value))
+        with pytest.raises(tgdb.TgdbError, match=message):
+            tgdb._read_collection_index(index)
+
+    value = manifest()
+    cast(list[dict[str, object]], value["instances"])[0]["position"] = 1
+    index.write_bytes(tgdb._collection_index_bytes(value))
+    with pytest.raises(tgdb.TgdbError, match="positions must be dense"):
+        tgdb._read_collection_index(index)
+
+    for key, message in (("uid", "repeats uid"), ("name", "repeats name")):
+        value = manifest()
+        first = cast(list[dict[str, object]], value["instances"])[0]
+        second = dict(first)
+        second["position"] = 1
+        if key == "uid":
+            second["name"] = "other"
+        else:
+            second["uid"] = "4" * 32
+        cast(list[dict[str, object]], value["instances"]).append(second)
+        index.write_bytes(tgdb._collection_index_bytes(value))
+        with pytest.raises(tgdb.TgdbError, match=message):
+            tgdb._read_collection_index(index)
+
+    for invalid_uid in (None, "0" * 31, "g" * 32):
+        with pytest.raises(tgdb.TgdbError, match="uid"):
+            tgdb._import_uid(invalid_uid, "instance")
+    for invalid_name in (None, "", "x" * 4097):
+        with pytest.raises(tgdb.TgdbError, match="name is invalid"):
+            tgdb._import_name(invalid_name, "instance")
+    for invalid_position in (True, "0", -1):
+        with pytest.raises(tgdb.TgdbError, match="position"):
+            tgdb._import_position(invalid_position, "instance")
+    for invalid_digest in (None, "0" * 63, "é" * 64, "g" * 64):
+        with pytest.raises(tgdb.TgdbError, match="64 lowercase"):
+            tgdb._import_sha256(invalid_digest, "digest")
+
+
+def test_collection_import_directory_and_manifest_mismatch_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Collection import refuses directory drift and manifest-to-bundle mismatch."""
+    source_path = tmp_path / "source"
+    export_path = tmp_path / "export"
+    with tgdb.TgdbStore.create(source_path) as source:
+        with source.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _version_graph())
+            transaction.commit()
+        source.export_collection(collection, export_path)
+
+    with tgdb.TgdbStore.create(tmp_path / "target") as target:
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="not a plain directory"):
+                transaction.import_collection(tmp_path / "absent")
+
+        extra = export_path / "extra"
+        extra.write_bytes(b"")
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="unexpected entries"):
+                transaction.import_collection(export_path)
+        extra.unlink()
+
+        manifest_path = export_path / "collection.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        bundle_name = manifest["instances"][0]["uid"] + ".tgb"
+        bundle_path = export_path / bundle_name
+        saved_bundle = bundle_path.read_bytes()
+        bundle_path.unlink()
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="missing entries"):
+                transaction.import_collection(export_path)
+        bundle_path.symlink_to(manifest_path)
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="not a plain file"):
+                transaction.import_collection(export_path)
+        bundle_path.unlink()
+        bundle_path.write_bytes(saved_bundle)
+
+        original_iterdir = Path.iterdir
+
+        def fail_iterdir(path: Path) -> Iterator[Path]:
+            if path == export_path:
+                raise OSError("list fault")
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="list fault"):
+                transaction.import_collection(export_path)
+        monkeypatch.setattr(Path, "iterdir", original_iterdir)
+
+        for key, replacement, message in (
+            ("head_digest", "f" * 64, "graph digest"),
+            ("functional", "e" * 64, "functional fingerprint"),
+        ):
+            changed = json.loads(json.dumps(manifest))
+            changed["instances"][0][key] = replacement
+            manifest_path.write_bytes(tgdb._collection_index_bytes(changed))
+            with target.write() as transaction:
+                with pytest.raises(tgdb.TgdbError, match=message):
+                    transaction.import_collection(export_path)
+        manifest_path.write_bytes(tgdb._collection_index_bytes(manifest))
+
+        original_document = tgdb._bundle_graph_document
+        monkeypatch.setattr(
+            tgdb,
+            "_bundle_graph_document",
+            lambda _bundle: json.dumps(json.loads(dumps(_version_graph()))).encode(),
+        )
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="not canonically encoded"):
+                transaction.import_collection(export_path)
+        monkeypatch.setattr(tgdb, "_bundle_graph_document", original_document)
+
+        bundle_path.write_bytes(b"not a bundle")
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="cannot import bundle"):
+                transaction.import_collection(export_path)
+
+
+def test_bundle_import_low_level_read_and_head_corruption_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bundle rereads and conflicting heads retain the tgdb refusal taxonomy."""
+
+    ref = BlobRef(hashlib.sha256(b"payload").hexdigest(), len(b"payload"))
+    unverified = VerifiedReader(io.BytesIO(b"payload"), ref)
+    unverified.seek(0)
+    with pytest.raises(ValueError, match="did not verify"):
+        tgdb._verify_payload(unverified)
+
+    class BrokenArchive:
+        def read(self, _name: str) -> bytes:
+            raise OSError("archive read fault")
+
+    class TextArchive:
+        def read(self, _name: str) -> str:
+            return "not bytes"
+
+    class FakeBundle:
+        def __init__(self, archive: object) -> None:
+            self._archive = archive
+
+    with pytest.raises(ValueError, match="archive read fault"):
+        tgdb._bundle_graph_document(cast(Bundle, FakeBundle(BrokenArchive())))
+    with pytest.raises(TypeError, match="did not return bytes"):
+        tgdb._bundle_graph_document(cast(Bundle, FakeBundle(TextArchive())))
+    named = io.BytesIO()
+    named.name = "sample.tgb"
+    assert tgdb._bundle_source_label(named) == "'sample.tgb'"
+
+    export_path = tmp_path / "export"
+    with tgdb.TgdbStore.create(tmp_path / "source") as source:
+        with source.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", _version_graph())
+            transaction.commit()
+        bundle = io.BytesIO()
+        source.export_bundle(uid, bundle)
+        source.export_collection(collection, export_path)
+
+    with tgdb.TgdbStore.create(tmp_path / "target") as target:
+        with target.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "sample", _version_graph("old"))
+            transaction.commit()
+        original_version_row = tgdb._version_row
+        monkeypatch.setattr(tgdb, "_version_row", lambda *_args, **_kwargs: None)
+        with target.write() as transaction:
+            bundle.seek(0)
+            with pytest.raises(tgdb.StoreCorrupt, match="no stored head"):
+                transaction.import_bundle(
+                    bundle,
+                    collection=collection,
+                    name="sample",
+                    on_conflict="new-version",
+                )
+        monkeypatch.setattr(tgdb, "_version_row", original_version_row)
+
+    manifest = json.loads((export_path / "collection.json").read_bytes())
+    bundle_path = export_path / (manifest["instances"][0]["uid"] + ".tgb")
+    original_open = Path.open
+
+    def fail_bundle_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == bundle_path:
+            raise OSError("bundle open fault")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_bundle_open)
+    with tgdb.TgdbStore.create(tmp_path / "open-failure") as target:
+        with target.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="bundle open fault"):
+                transaction.import_collection(export_path)
