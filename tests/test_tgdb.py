@@ -402,7 +402,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 9,
+        "schema_version": 10,
         "layout_version": 1,
         "index_version": 6,
         "inline_threshold": 1234,
@@ -412,7 +412,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (10,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -615,12 +615,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 10)
+    _set_pragma(path, "user_version", 11)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 10
-    assert caught.value.supported == 9
-    assert "10" in str(caught.value) and "9" in str(caught.value)
+    assert caught.value.found == 11
+    assert caught.value.supported == 10
+    assert "11" in str(caught.value) and "10" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -637,7 +637,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 9"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 10"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -5849,7 +5849,10 @@ def test_repack_failures_rollback_or_name_postcommit_cleanup(
             (sqlite3.OperationalError("failed"), tgdb.StoreCorrupt),
             (sqlite3.OperationalError("busy"), tgdb.StoreBusy),
         ):
-            if expected is tgdb.StoreBusy:
+            if (
+                isinstance(error, sqlite3.OperationalError)
+                and expected is tgdb.StoreBusy
+            ):
                 error.sqlite_errorcode = sqlite3.SQLITE_BUSY
             store._connection = _FailingConnection(  # type: ignore[assignment]
                 wrapped, "BEGIN IMMEDIATE", error
@@ -5924,6 +5927,653 @@ def test_repack_failures_rollback_or_name_postcommit_cleanup(
             store.repack(0)
 
 
+def test_pins_are_reversible_commits_and_keep_objects_reachable(
+    tmp_path: Path,
+) -> None:
+    """Pins retain staged payloads, expose reasons, and undo in both directions."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            ref = transaction.put_blob(io.BytesIO(b"pending payload"))
+            transaction.pin(ref.sha256, reason="pending publication")
+            receipt = transaction.commit()
+        assert receipt.operations == ("put_blob", "pin")
+        assert store.pins()[0].to_data() == {
+            "digest": ref.sha256,
+            "reason": "pending publication",
+            "commit_seq": receipt.commit_seq,
+        }
+        assert store.gc().unreachable == ()
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="already pinned"):
+                transaction.pin(ref.sha256, reason="again")
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="not stored"):
+                transaction.pin("0" * 64, reason="missing")
+        with store.write() as transaction:
+            with pytest.raises(ValueError, match="must not be empty"):
+                transaction.pin(ref.sha256, reason="")
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="must be a string"):
+                transaction.pin(ref.sha256, reason=cast(Any, None))
+
+        undone = store.undo(_commit_seq(receipt))
+        assert store.pins() == ()
+        assert [item.digest for item in store.gc().unreachable] == [ref.sha256]
+        store.undo(_commit_seq(undone))
+        assert store.pins()[0].reason == "pending publication"
+        with store.write() as transaction:
+            transaction.unpin(ref.sha256)
+            unpinned = transaction.commit()
+        assert unpinned.operations == ("unpin",)
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="not pinned"):
+                transaction.unpin(ref.sha256)
+
+
+def test_prune_is_dry_run_by_default_never_selects_heads_and_keeps_bytes(
+    tmp_path: Path,
+) -> None:
+    """Pruning removes only named history and leaves content for explicit GC."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            uid = transaction.create_instance(collection, "sample", _version_graph())
+            first = transaction.commit()
+        for name in ("two", "three", "four"):
+            head = store.get(uid)
+            with store.write() as transaction:
+                transaction.publish(uid, _version_graph(name), expected=head.seq)
+                transaction.commit()
+
+        dry = store.prune((uid,), keep=2)
+        assert dry.deleted is False
+        assert dry.commit_seq is None
+        assert [item.seq for item in dry.versions] == [1, 2]
+        assert dry.to_data()["destructive"] is True
+        assert [item.seq for item in store.history(uid)] == [1, 2, 3, 4]
+        assert [item.seq for item in store.prune((uid,), before_commit=3).versions] == [
+            1,
+            2,
+        ]
+
+        deleted = store.prune((uid,), keep=2, delete=True)
+        assert deleted.deleted is True
+        assert deleted.commit_seq is not None
+        assert [item.seq for item in store.history(uid)] == [3, 4]
+        assert store.get(uid).seq == 4
+        assert store._connection.execute(
+            "SELECT parent_id FROM versions WHERE instance_id = "
+            "(SELECT id FROM instances WHERE uid = ?) AND seq = 3",
+            (uid,),
+        ).fetchone() == (None,)
+        assert store.reindex().rebuilt is False
+        assert store.check(full=True).objects > 0
+        assert len(store.gc().unreachable) >= 2
+        with pytest.raises(tgdb.StaleVersion, match="touched the same"):
+            store.undo(_commit_seq(first))
+        with pytest.raises(tgdb.TgdbError, match="cannot be undone"):
+            store.undo(deleted.commit_seq)
+
+        assert store.prune((uid,), keep=10, delete=True).deleted is False
+        for arguments, message in (
+            ({}, "exactly one"),
+            ({"keep": 1, "before_commit": 2}, "exactly one"),
+            ({"keep": 0}, "positive"),
+            ({"keep": True}, "positive"),
+            ({"before_commit": 0}, "positive"),
+        ):
+            with pytest.raises(ValueError, match=message):
+                store.prune((uid,), **arguments)
+        with pytest.raises(ValueError, match="must not be empty"):
+            store.prune((), keep=1)
+        with pytest.raises(ValueError, match="more than once"):
+            store.prune((uid, uid), keep=1)
+        with pytest.raises(TypeError, match="delete must be a boolean"):
+            store.prune((uid,), keep=1, delete=cast(Any, 1))
+        writer = store.write()
+        with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+            store.prune((uid,), keep=1, delete=True)
+        writer.discard()
+
+
+def test_purge_retired_is_explicit_compacts_order_and_preserves_objects(
+    tmp_path: Path,
+) -> None:
+    """Retired instances remain intact until one reported destructive purge."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            first = transaction.create_instance(collection, "first", _version_graph())
+            middle = transaction.create_instance(
+                collection, "middle", _version_graph("middle")
+            )
+            last = transaction.create_instance(collection, "last", _version_graph())
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.retire(middle)
+            retired = transaction.commit()
+
+        dry = store.purge_retired()
+        assert dry.deleted is False
+        assert [item.name for item in dry.instances] == ["middle"]
+        assert dry.instances[0].versions == 1
+        assert dry.to_data()["destructive"] is True
+        assert store.get(middle).seq == 1
+
+        deleted = store.purge_retired(delete=True)
+        assert deleted.deleted is True
+        assert [item.name for item in store.instances()] == ["first", "last"]
+        assert [item.position for item in store.instances()] == [0, 1]
+        assert {item.uid for item in store.instances()} == {first, last}
+        with pytest.raises(tgdb.TgdbError, match="does not exist"):
+            store.get(middle)
+        assert store.gc().unreachable
+        with pytest.raises(tgdb.StaleVersion, match="touched the same"):
+            store.undo(_commit_seq(retired))
+        assert deleted.commit_seq is not None
+        with pytest.raises(tgdb.TgdbError, match="cannot be undone"):
+            store.undo(deleted.commit_seq)
+        assert store.purge_retired(delete=True).deleted is False
+        with pytest.raises(TypeError, match="delete must be a boolean"):
+            store.purge_retired(delete=cast(Any, 1))
+        with store.write() as transaction:
+            transaction.retire(last)
+            transaction.commit()
+        writer = store.write()
+        with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+            store.purge_retired(delete=True)
+        writer.discard()
+
+
+def test_gc_retains_inspected_attached_graphs_after_history_pruning(
+    tmp_path: Path,
+) -> None:
+    """Inspected graph roots and their payloads survive version pruning and GC."""
+    nested_payload = b"nested payload"
+    attached_document = dumps(_single_blob_graph(nested_payload)).encode()
+    attached_digest = hashlib.sha256(attached_document).hexdigest()
+    nested_digest = hashlib.sha256(nested_payload).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            transaction.put_blob(io.BytesIO(nested_payload))
+            transaction.put_blob(io.BytesIO(attached_document))
+            uid = transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(attached_document, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        store.inspect(digests=(attached_digest,))
+        with store.write() as transaction:
+            transaction.publish(uid, _version_graph("replacement"), expected=1)
+            transaction.commit()
+
+        store.prune((uid,), keep=1, delete=True)
+
+        assert store._connection.execute(
+            "SELECT 1 FROM graph_facts WHERE digest = ?", (attached_digest,)
+        ).fetchone() == (1,)
+        assert not {attached_digest, nested_digest} & {
+            item.digest for item in store.gc().unreachable
+        }
+        store.gc(delete=True)
+        assert store.inspections(attached_digest)
+        assert store._object_record(attached_digest) is not None
+        assert store._object_record(nested_digest) is not None
+        store.check(full=True)
+
+
+def test_gc_follows_blob_reachability_and_deletes_rows_before_files(
+    tmp_path: Path,
+) -> None:
+    """GC retains transitive payloads and reports every explicit garbage class."""
+    graph, payloads = _blob_graph()
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=8)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            transaction.create_instance(collection, "sample", graph)
+            for payload in payloads.values():
+                transaction.put_blob(io.BytesIO(payload))
+            transaction.commit()
+        assert store.gc().unreachable == ()
+
+        with store.write() as transaction:
+            inline = transaction.put_blob(io.BytesIO(b"x"))
+            file_ref = transaction.put_blob(io.BytesIO(b"unreachable file payload"))
+            transaction.commit()
+        orphan_payload = b"orphan"
+        orphan_digest = hashlib.sha256(orphan_payload).hexdigest()
+        orphan_path = _object_path(store.path, orphan_digest)
+        orphan_path.parent.mkdir(parents=True, exist_ok=True)
+        orphan_path.write_bytes(orphan_payload)
+        (store.path / "staging" / "leftover").write_bytes(b"staged")
+
+        report = store.gc()
+        assert report.deleted is False
+        assert [item.digest for item in report.unreachable] == [
+            inline.sha256,
+            file_ref.sha256,
+        ]
+        assert [item.residency for item in report.unreachable] == ["inline", "file"]
+        assert report.orphan_files == (
+            tgdb.OrphanFile(orphan_digest, len(orphan_payload)),
+        )
+        assert report.staging_leftovers == ("leftover",)
+        assert report.reclaimable_bytes == (
+            len(b"x") + len(b"unreachable file payload") + len(orphan_payload)
+        )
+        assert report.unreachable_inline_bytes == len(b"x")
+        assert report.unreachable_file_bytes == len(b"unreachable file payload")
+        assert report.orphan_file_bytes == len(orphan_payload)
+        assert report.to_data()["unreachable_inline"] == 1
+        assert report.to_data()["unreachable_file"] == 1
+        assert report.to_data()["unreachable_inline_bytes"] == len(b"x")
+        assert report.to_data()["unreachable_file_bytes"] == len(
+            b"unreachable file payload"
+        )
+        assert report.to_data()["orphan_file_bytes"] == len(orphan_payload)
+
+        deleted = store.gc(delete=True)
+        assert deleted.deleted is True
+        assert store._object_record(inline.sha256) is None
+        assert store._object_record(file_ref.sha256) is None
+        assert not orphan_path.exists()
+        assert not (store.path / "staging" / "leftover").exists()
+        assert store.gc().to_data()["reclaimable_bytes"] == 0
+        assert store.check(full=True).objects > 0
+        with pytest.raises(TypeError, match="delete must be a boolean"):
+            store.gc(delete=cast(Any, 1))
+        writer = store.write()
+        with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+            store.gc(delete=True)
+        writer.discard()
+
+
+def test_gc_rechecks_files_against_concurrent_publication(tmp_path: Path) -> None:
+    """A publication between row deletion and unlink keeps its object file."""
+    payload = b"published during garbage collection"
+    digest = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.commit()
+        wrapped = store._connection
+
+        class InterleavingConnection:
+            """Publish through another handle before the cleanup lock."""
+
+            def __init__(self) -> None:
+                self.begins = 0
+
+            @property
+            def in_transaction(self) -> bool:
+                return wrapped.in_transaction
+
+            def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+                if sql == "BEGIN IMMEDIATE":
+                    self.begins += 1
+                    if self.begins == 2:
+                        with tgdb.TgdbStore.open(path, mode="rw") as concurrent:
+                            with concurrent.write() as transaction:
+                                transaction.put_blob(io.BytesIO(payload))
+                                transaction.commit()
+                return wrapped.execute(sql, parameters)  # type: ignore[arg-type]
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(wrapped, name)
+
+        store._connection = InterleavingConnection()  # type: ignore[assignment]
+        report = store.gc(delete=True)
+        store._connection = wrapped
+
+        assert [item.digest for item in report.unreachable] == [digest]
+        assert store._object_record(digest) is not None
+        assert _object_path(path, digest).is_file()
+        store.check(full=True)
+
+
+def test_publication_refuses_staged_objects_lost_before_catalog_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication cannot create a file row after concurrent cleanup wins."""
+    payload = b"staged payload"
+    with tgdb.TgdbStore.create(
+        tmp_path / "missing-file", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        transaction = store.write()
+        ref = transaction.put_blob(io.BytesIO(payload))
+        target = _object_path(store.path, ref.sha256)
+        original = tgdb._publication_step
+
+        def remove_staged_file(step: str) -> None:
+            if step == "locked":
+                target.unlink()
+            original(step)
+
+        monkeypatch.setattr(tgdb, "_publication_step", remove_staged_file)
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot read object"):
+            transaction.commit()
+        assert store._object_record(ref.sha256) is None
+    monkeypatch.setattr(tgdb, "_publication_step", original)
+
+    with tgdb.TgdbStore.create(tmp_path / "missing-row") as store:
+        transaction = store.write()
+        ref = transaction.put_blob(io.BytesIO(payload))
+        transaction._connection.execute(
+            "DELETE FROM objects WHERE digest = ?", (ref.sha256,)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="staged object .* is missing"):
+            transaction.commit()
+        assert store._object_record(ref.sha256) is None
+
+
+def test_gc_refuses_substituted_staging_and_reports_postcommit_unlink_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GC follows no symlink and leaves a failed unlink as a visible orphan."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            ref = transaction.put_blob(io.BytesIO(b"garbage"))
+            transaction.commit()
+        object_path = _object_path(store.path, ref.sha256)
+        original_unlink = Path.unlink
+
+        def fail_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path == object_path:
+                raise OSError("unlink fault")
+            original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+        with pytest.raises(tgdb.TgdbError, match="deleted catalog rows"):
+            store.gc(delete=True)
+        monkeypatch.setattr(Path, "unlink", original_unlink)
+        assert store._object_record(ref.sha256) is None
+        assert store.gc().orphan_files == (tgdb.OrphanFile(ref.sha256, 7),)
+
+        staging = store.path / "staging"
+        outside = tmp_path / "outside"
+        outside.write_bytes(b"outside")
+        link = staging / "link"
+        link.symlink_to(outside)
+        with pytest.raises(tgdb.StoreCorrupt, match="not a plain file"):
+            store.gc()
+
+
+def test_retention_and_gc_translate_transaction_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Maintenance rolls back stale, busy, catalog, and unexpected failures."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("corpus")
+            uid = transaction.create_instance(collection, "sample", _version_graph())
+            retired_uid = transaction.create_instance(
+                collection, "retired", _version_graph("retired")
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.publish(uid, _version_graph("second"), expected=1)
+            transaction.retire(retired_uid)
+            transaction.put_blob(io.BytesIO(b"garbage"))
+            transaction.commit()
+
+        wrapped = store._connection
+        for operation, statement, expected_message in (
+            (
+                lambda: store.prune((uid,), keep=1, delete=True),
+                "INSERT INTO commits",
+                "prun",
+            ),
+            (
+                lambda: store.purge_retired(delete=True),
+                "INSERT INTO commits",
+                "purg",
+            ),
+            (
+                lambda: store.gc(delete=True),
+                "COMMIT",
+                "garbage",
+            ),
+        ):
+            for error, expected in (
+                (sqlite3.OperationalError("failed"), tgdb.StoreCorrupt),
+                (sqlite3.OperationalError("busy"), tgdb.StoreBusy),
+                (RuntimeError("unexpected"), RuntimeError),
+            ):
+                if (
+                    isinstance(error, sqlite3.OperationalError)
+                    and expected is tgdb.StoreBusy
+                ):
+                    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                store._connection = _FailingConnection(  # type: ignore[assignment]
+                    wrapped, statement, error
+                )
+                with pytest.raises(
+                    expected,
+                    match=expected_message
+                    if expected is not RuntimeError
+                    else "unexpected",
+                ):
+                    operation()
+                store._connection = wrapped
+            for error, expected in (
+                (sqlite3.OperationalError("failed before begin"), tgdb.StoreCorrupt),
+                (RuntimeError("unexpected before begin"), RuntimeError),
+            ):
+                store._connection = _FailingConnection(  # type: ignore[assignment]
+                    wrapped, "BEGIN IMMEDIATE", error
+                )
+                with pytest.raises(
+                    expected,
+                    match=(
+                        expected_message
+                        if expected is not RuntimeError
+                        else "unexpected"
+                    ),
+                ):
+                    operation()
+                store._connection = wrapped
+
+        original_prune = tgdb._prune_candidates
+        prune_calls = 0
+
+        def changed_prune(*args: Any, **kwargs: Any) -> tuple[tgdb.PrunedVersion, ...]:
+            nonlocal prune_calls
+            prune_calls += 1
+            result = original_prune(*args, **kwargs)
+            return result if prune_calls == 1 else ()
+
+        monkeypatch.setattr(tgdb, "_prune_candidates", changed_prune)
+        with pytest.raises(tgdb.StaleVersion, match="selection changed"):
+            store.prune((uid,), keep=1, delete=True)
+        monkeypatch.setattr(tgdb, "_prune_candidates", original_prune)
+
+        original_purge = tgdb._purge_candidates
+        purge_calls = 0
+
+        def changed_purge(*args: Any, **kwargs: Any) -> tuple[tgdb.PurgedInstance, ...]:
+            nonlocal purge_calls
+            purge_calls += 1
+            result = original_purge(*args, **kwargs)
+            return result if purge_calls == 1 else ()
+
+        monkeypatch.setattr(tgdb, "_purge_candidates", changed_purge)
+        with pytest.raises(tgdb.StaleVersion, match="selection changed"):
+            store.purge_retired(delete=True)
+
+
+def test_gc_tolerates_disappearing_files_and_names_staging_unlink_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent absence is harmless while persistent staging failures are named."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "vanish", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            transaction.put_blob(io.BytesIO(b"file garbage"))
+            transaction.commit()
+        (store.path / "staging" / "leftover").write_bytes(b"leftover")
+        original_unlink = Path.unlink
+
+        def vanish(path: Path, *args: Any, **kwargs: Any) -> None:
+            original_unlink(path, *args, **kwargs)
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr(Path, "unlink", vanish)
+        assert store.gc(delete=True).deleted is True
+        monkeypatch.setattr(Path, "unlink", original_unlink)
+        assert store.gc(delete=True).deleted is True
+
+    with tgdb.TgdbStore.create(tmp_path / "staging-failure") as store:
+        leftover = store.path / "staging" / "leftover"
+        leftover.write_bytes(b"leftover")
+
+        def fail_staging(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path == leftover:
+                raise OSError("staging unlink fault")
+            original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_staging)
+        with pytest.raises(tgdb.TgdbError, match="staging/leftover"):
+            store.gc(delete=True)
+
+
+def test_gc_cleanup_translates_lock_and_unexpected_failures(tmp_path: Path) -> None:
+    """Postcommit cleanup retains the store refusal taxonomy."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            transaction.put_blob(io.BytesIO(b"garbage"))
+            transaction.commit()
+        wrapped = store._connection
+        for error, expected, message in (
+            (
+                sqlite3.OperationalError("cleanup failed"),
+                tgdb.StoreCorrupt,
+                "clean up",
+            ),
+            (sqlite3.OperationalError("busy"), tgdb.StoreBusy, "remained busy"),
+            (RuntimeError("unexpected cleanup"), RuntimeError, "unexpected cleanup"),
+        ):
+            if (
+                isinstance(error, sqlite3.OperationalError)
+                and expected is tgdb.StoreBusy
+            ):
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            store._connection = _FailingConnection(  # type: ignore[assignment]
+                wrapped, "SELECT 1 FROM objects", error
+            )
+            with pytest.raises(expected, match=message):
+                store.gc(delete=True)
+            store._connection = wrapped
+        assert store.gc(delete=True).deleted is True
+        for error, expected in (
+            (sqlite3.OperationalError("begin failed"), tgdb.StoreCorrupt),
+            (RuntimeError("unexpected begin"), RuntimeError),
+        ):
+            connection = _FailingConnection(wrapped, "BEGIN IMMEDIATE", error)
+            with pytest.raises(expected):
+                tgdb._unlink_garbage(
+                    cast(sqlite3.Connection, connection),
+                    store.path,
+                    (),
+                    (),
+                )
+
+
+def test_pin_and_retention_internal_records_fail_closed(tmp_path: Path) -> None:
+    """Malformed or stale private records never weaken retention guarantees."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            ref = transaction.put_blob(io.BytesIO(b"payload"))
+            transaction.pin(ref.sha256, reason="held")
+            transaction.commit()
+        wrapped = store._connection
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped,
+            "SELECT digest, reason",
+            sqlite3.DatabaseError("broken pins"),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot list tgdb pins"):
+            store.pins()
+        store._connection = wrapped
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.StaleVersion, match="already pinned"):
+                transaction._apply_action(tgdb._pin_action("pin", ref.sha256, "held"))
+            with pytest.raises(tgdb.StaleVersion, match="no longer stored"):
+                transaction._apply_action(tgdb._pin_action("pin", "0" * 64, "held"))
+            transaction._connection.execute(
+                "DELETE FROM pins WHERE digest = ?", (ref.sha256,)
+            )
+            with pytest.raises(tgdb.StaleVersion, match="no longer pinned"):
+                transaction._apply_action(tgdb._pin_action("unpin", ref.sha256))
+
+        with pytest.raises(ValueError, match="exceeds"):
+            tgdb._validate_pin_reason("x" * 4097)
+        malformed_actions: tuple[dict[str, object], ...] = (
+            {"action": "pin", "digest": None},
+            {"action": "pin", "digest": ref.sha256, "reason": ""},
+            {"action": "unpin", "digest": ref.sha256, "reason": "extra"},
+        )
+        for action in malformed_actions:
+            with pytest.raises(tgdb.StoreCorrupt, match="pin"):
+                tgdb._pin_action_data(action)
+        with pytest.raises(tgdb.StoreCorrupt, match="touches do not match"):
+            tgdb._action_touches(
+                {
+                    "action": "pin",
+                    "digest": ref.sha256,
+                    "reason": "held",
+                    "touches": ["pin:" + "0" * 64],
+                }
+            )
+        for touches in ([], ["instance:bad"], ["other:" + "0" * 32]):
+            with pytest.raises(tgdb.StoreCorrupt, match="recorded"):
+                tgdb._action_touches(
+                    {"action": "retention_barrier", "touches": touches}
+                )
+
+        missing_uid = b"\x00" * 16
+        with pytest.raises(tgdb.StaleVersion, match="prune selection changed"):
+            tgdb._delete_versions(
+                store._connection,
+                (
+                    tgdb.PrunedVersion(
+                        missing_uid, "corpus", "missing", 1, 1, "0" * 64, None
+                    ),
+                ),
+            )
+        with pytest.raises(tgdb.StaleVersion, match="retired-instance selection"):
+            tgdb._delete_retired_instances(
+                store._connection,
+                (tgdb.PurgedInstance(missing_uid, "corpus", "missing", 0, 1),),
+            )
+        store._connection.execute(
+            "UPDATE pins SET reason = ? WHERE digest = ?", ("x" * 4097, ref.sha256)
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="invalid reason"):
+            store.check()
+        store._connection.execute(
+            "UPDATE pins SET reason = 'held' WHERE digest = ?", (ref.sha256,)
+        )
+        store._connection.execute("DELETE FROM objects WHERE digest = ?", (ref.sha256,))
+        with pytest.raises(tgdb.StoreCorrupt, match="pin names absent object"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="pin names absent object"):
+            store.gc()
+
+
 def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
     """Every planned store refusal is catchable through one staged base."""
     for error_type in (
@@ -5940,12 +6590,20 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "CollectionInfo",
         "ColumnInfo",
         "CommitReceipt",
+        "GarbageObject",
+        "GcReport",
         "IndexInfo",
         "InspectReport",
         "InspectionFact",
         "InspectionResult",
         "Inspector",
         "InstanceInfo",
+        "OrphanFile",
+        "PinInfo",
+        "PruneReport",
+        "PrunedVersion",
+        "PurgeReport",
+        "PurgedInstance",
         "Query",
         "ReindexReport",
         "RepackReport",

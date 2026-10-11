@@ -1948,6 +1948,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 "import",
                 "list",
                 "move",
+                "prune",
                 "publish",
                 "rename",
                 "revert",
@@ -1986,6 +1987,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 "export",
                 "get",
                 "history",
+                "prune",
                 "publish",
                 "revert",
             }:
@@ -2078,7 +2080,9 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
 
                 (directory / "payload.bin").write_bytes(PAYLOAD_A)
                 with store.write() as transaction:
-                    transaction.put_blob(io.BytesIO(PAYLOAD_A))
+                    digest = transaction.put_blob(io.BytesIO(PAYLOAD_A))
+                    if arguments[2] == "unpin":
+                        transaction.pin(digest.sha256, reason="help-example")
                     transaction.commit()
     source_graph = _path_graph(directory / "graph.json")
     tier_name = QualifiedName("urn:path", "tokens")
@@ -2274,7 +2278,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 136
+    assert len(examples) == 144
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

@@ -99,7 +99,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 9\n" in plain
+    assert "schema_version: 10\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -111,7 +111,7 @@ def test_tgdb_init_and_info_plain_and_json(
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 9,
+        "schema_version": 10,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -1622,6 +1622,141 @@ def test_tgdb_bundle_and_collection_commands_round_trip(
         assert [item.name for item in imported_store.instances("corpus")] == ["sample"]
 
 
+def test_tgdb_retention_pin_and_gc_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """TG13 CLI maintenance is dry-run by default and explicit when destructive."""
+    store = tmp_path / "corpus.tgdb"
+    payload = tmp_path / "payload.bin"
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    payload.write_bytes(b"pending")
+    digest = hashlib.sha256(b"pending").hexdigest()
+    first.write_bytes(dump_bytes(Graph((), (), ())))
+    second.write_bytes(
+        dump_bytes(Graph((NamespaceDeclaration("n", "urn:second"),), (), ()))
+    )
+    assert main(["tgdb", "init", str(store), "--inline-threshold", "0"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "blob", "put", str(store), str(payload)]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "blob",
+                "pin",
+                str(store),
+                digest,
+                "--reason",
+                "pending-import",
+            ]
+        )
+        == 0
+    )
+    assert f"pin {digest}" in capsys.readouterr().out
+    with tgdb.TgdbStore.open(store) as opened:
+        assert opened.pins()[0].reason == "pending-import"
+    assert main(["tgdb", "blob", "unpin", str(store), digest]) == 0
+    assert f"unpin {digest}" in capsys.readouterr().out
+
+    assert main(["tgdb", "collection", "create", str(store), "corpus"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "add", str(store), "corpus", "sample", str(first)]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(store),
+                "sample",
+                str(second),
+                "--expected",
+                "1",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert main(["tgdb", "prune", str(store), "sample", "--keep", "1"]) == 0
+    assert "dry run: 1 versions selected" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "tgdb",
+                "prune",
+                str(store),
+                "sample",
+                "--keep",
+                "1",
+                "--delete",
+            ]
+        )
+        == 0
+    )
+    assert "deleted 1 versions in commit" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "tgdb",
+                "publish",
+                str(store),
+                "sample",
+                str(first),
+                "--expected",
+                "2",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "prune",
+                str(store),
+                "sample",
+                "--before-commit",
+                "999",
+                "--delete",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    pruned = json.loads(capsys.readouterr().out)
+    assert pruned["deleted"] is True
+    assert pruned["version_count"] == 1
+
+    assert main(["tgdb", "retire", str(store), "sample"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "purge-retired", str(store)]) == 0
+    assert "dry run: 1 retired instances selected" in capsys.readouterr().out
+    assert main(["tgdb", "purge-retired", str(store), "--delete"]) == 0
+    assert "deleted 1 retired instances in commit" in capsys.readouterr().out
+    assert main(["tgdb", "add", str(store), "corpus", "other", str(first)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "retire", str(store), "other"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "purge-retired", str(store), "--delete", "--json"]) == 0
+    purged = json.loads(capsys.readouterr().out)
+    assert purged["deleted"] is True
+    assert purged["instance_count"] == 1
+
+    assert main(["tgdb", "gc", str(store), "--json"]) == 0
+    garbage = json.loads(capsys.readouterr().out)
+    assert garbage["deleted"] is False
+    assert garbage["unreachable_objects"] >= 3
+    assert garbage["unreachable_file_bytes"] > 0
+    assert main(["tgdb", "gc", str(store), "--delete"]) == 0
+    collected = capsys.readouterr().out
+    assert collected.startswith("deleted:")
+    assert "unreachable inline objects" in collected
+    assert "unreachable file objects" in collected
+
+
 def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> None:
     """Every collection command supplies descriptions and option help."""
     parser = build_parser()
@@ -1664,6 +1799,23 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     help_text = capsys.readouterr().out
     assert "Stream one file into the object pool" in help_text
     assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "blob", "pin", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--reason TEXT" in help_text
+    assert "Exit codes:" in help_text
+    for command, option in (
+        ("prune", "--before-commit COMMIT"),
+        ("purge-retired", "--delete"),
+        ("gc", "--delete"),
+    ):
+        with pytest.raises(SystemExit) as caught:
+            parser.parse_args(["tgdb", command, "--help"])
+        assert caught.value.code == 0
+        help_text = capsys.readouterr().out
+        assert option in help_text
+        assert "Exit codes:" in help_text
     with pytest.raises(SystemExit) as caught:
         parser.parse_args(["tgdb", "repack", "--help"])
     assert caught.value.code == 0
