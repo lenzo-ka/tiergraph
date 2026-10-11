@@ -726,6 +726,52 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     )
     tgdb_find.add_argument("--count", action="store_true", help="print only a count")
     tgdb_find.add_argument("--json", action="store_true", help="emit structured JSON")
+    tgdb_inspect = _subcommand(
+        tgdb_subparsers,
+        "inspect",
+        summary="inspect stored payloads explicitly",
+        description=(
+            "Run registered media inspectors over held payloads and retain ordered, "
+            "content-keyed facts. No inspector runs during any other operation."
+        ),
+        details=(
+            "Without SHA256 arguments, active heads supply payloads in declared "
+            "order. --publish writes matching facts to new graph versions in one "
+            "commit with stage inspect.\n\n"
+        ),
+        examples=(
+            "tiergraph tgdb inspect corpus.tgdb --media-type "
+            "application/vnd.tiergraph+json",
+            "tiergraph tgdb inspect corpus.tgdb --inspector tiergraph-graph "
+            "--publish --json",
+        ),
+    )
+    tgdb_inspect.set_defaults(handler=_handle_tgdb)
+    tgdb_inspect.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_inspect.add_argument(
+        "sha256",
+        nargs="*",
+        type=_tgdb_sha256,
+        metavar="SHA256",
+        help="referenced held payload digest; omission selects active heads",
+    )
+    tgdb_inspect.add_argument(
+        "--media-type",
+        type=_media_type_argument,
+        metavar="TYPE",
+        help="inspect only one exact declared media type",
+    )
+    tgdb_inspect.add_argument(
+        "--inspector", metavar="NAME", help="run only one registered inspector"
+    )
+    tgdb_inspect.add_argument(
+        "--publish",
+        action="store_true",
+        help="publish matching values as inspector-sourced layer facts",
+    )
+    tgdb_inspect.add_argument(
+        "--json", action="store_true", help="emit the complete structured report"
+    )
     tgdb_reindex = _subcommand(
         tgdb_subparsers,
         "reindex",
@@ -2817,6 +2863,7 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                 "collection",
                 "import",
                 "index",
+                "inspect",
                 "move",
                 "publish",
                 "rename",
@@ -2840,6 +2887,32 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             args.tgdb_command == "blob" and args.tgdb_blob_command == "put"
         )
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
+            if args.tgdb_command == "inspect":
+                inspect_report = store.inspect(
+                    media_type=args.media_type,
+                    inspector=args.inspector,
+                    digests=args.sha256,
+                )
+                if args.publish:
+                    inspect_report = tgdb.InspectReport(
+                        inspect_report.results,
+                        inspect_report.changed,
+                        tgdb._publish_inspections(store, inspect_report.results),
+                    )
+                if args.json:
+                    _stdout_text(_json_bytes(inspect_report.to_data()).decode("utf-8"))
+                else:
+                    facts = sum(len(result.facts) for result in inspect_report.results)
+                    detail = (
+                        ""
+                        if inspect_report.published is None
+                        else f", commit {inspect_report.published.commit_seq}"
+                    )
+                    _stdout_text(
+                        f"inspected {len(inspect_report.results)} payloads, "
+                        f"{facts} facts, {inspect_report.changed} changed{detail}\n"
+                    )
+                return 0
             if args.tgdb_command == "check":
                 report = store.check(full=args.full)
                 detail = "full" if report.full else "structural"

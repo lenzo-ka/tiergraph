@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -404,6 +404,7 @@ positional arguments:
     get                 write a stored graph version
     history             list stored graph versions
     find                find current graph versions
+    inspect             inspect stored payloads explicitly
     reindex             check or rebuild derived indexes
     repack              change object residency
     blob                store and read payload bytes
@@ -924,6 +925,40 @@ Examples:
   $ tiergraph tgdb find corpus.tgdb --collection recordings
   $ tiergraph tgdb find corpus.tgdb --tier urn:example|words:1 --json
   $ tiergraph tgdb find corpus.tgdb --changed-since 12 --count
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb inspect`
+
+```text
+usage: tiergraph tgdb inspect [-h] [--media-type TYPE] [--inspector NAME]
+                              [--publish] [--json]
+                              STORE [SHA256 ...]
+
+Run registered media inspectors over held payloads and retain ordered, content-keyed facts. No inspector runs during any other operation.
+
+positional arguments:
+  STORE              store directory
+  SHA256             referenced held payload digest; omission selects active
+                     heads
+
+options:
+  -h, --help         show this help message and exit
+  --media-type TYPE  inspect only one exact declared media type
+  --inspector NAME   run only one registered inspector
+  --publish          publish matching values as inspector-sourced layer facts
+  --json             emit the complete structured report
+
+Without SHA256 arguments, active heads supply payloads in declared order. --publish writes matching facts to new graph versions in one commit with stage inspect.
+
+Examples:
+  $ tiergraph tgdb inspect corpus.tgdb --media-type application/vnd.tiergraph+json
+  $ tiergraph tgdb inspect corpus.tgdb --inspector tiergraph-graph --publish --json
 
 Exit codes:
   0  success

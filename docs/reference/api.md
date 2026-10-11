@@ -11807,6 +11807,85 @@ IndexInfo.to_data(self) -> 'dict[str, str | int | bool]'
 
 Return a JSON-compatible description in stable field order.
 
+### `InspectReport`
+
+```text
+InspectReport(results: 'tuple[InspectionResult, ...]', changed: 'int', published: 'CommitReceipt | None' = None) -> None
+```
+
+Summarize explicit payload inspection and optional graph publication.
+
+#### `InspectReport.to_data`
+
+Method.
+
+```text
+InspectReport.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible report in inspection order.
+
+### `InspectionFact`
+
+```text
+InspectionFact(key: 'str', value: 'AttributeValue') -> None
+```
+
+Hold one ordered typed fact emitted by an inspector.
+
+#### `InspectionFact.to_data`
+
+Method.
+
+```text
+InspectionFact.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible fact description in stable field order.
+
+### `InspectionResult`
+
+```text
+InspectionResult(digest: 'str', media_type: 'str', inspector: 'str', inspector_version: 'str', facts: 'tuple[InspectionFact, ...]') -> None
+```
+
+Describe one inspector run over one content-addressed payload.
+
+#### `InspectionResult.to_data`
+
+Method.
+
+```text
+InspectionResult.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible result in emitted fact order.
+
+### `Inspector`
+
+```text
+Inspector(*args, **kwargs)
+```
+
+Read typed facts from payload bytes for declared media types.
+
+An inspector returns at most 4,096 ``(key, value)`` tuples in the order
+they should be stored. Keys are nonempty strings and values are
+:class:`AttributeValue` instances. The source is a forward-only verified
+stream; inspectors may read it incrementally but must not seek or mutate
+it. The store drains the remaining bytes after iteration to verify the
+payload's size and digest.
+
+#### `Inspector.inspect`
+
+Method.
+
+```text
+Inspector.inspect(self, ref: 'BlobRef', source: 'BinaryIO') -> 'Iterable[tuple[str, AttributeValue]]'
+```
+
+Yield bounded typed facts in order while reading forward only.
+
 ### `InstanceInfo`
 
 ```text
@@ -12233,7 +12312,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 8) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 9) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12448,6 +12527,32 @@ TgdbStore.sink(self) -> 'BlobSink'
 ```
 
 Return a sink that verifies and stores one payload per call.
+
+#### `TgdbStore.inspections`
+
+Method.
+
+```text
+TgdbStore.inspections(self, digest: 'str', *, inspector: 'str | None' = None) -> 'tuple[InspectionResult, ...]'
+```
+
+Return stored inspection results for one digest in inspector order.
+
+#### `TgdbStore.inspect`
+
+Method.
+
+```text
+TgdbStore.inspect(self, *, media_type: 'str | None' = None, inspector: 'str | None' = None, digests: 'Iterable[str]' = ()) -> 'InspectReport'
+```
+
+Inspect held payloads explicitly and retain their ordered facts.
+
+Without ``digests``, current active heads supply payloads in declared
+collection, instance, tier, and item order. Explicit digests retain the
+caller's order. Attached tiergraph documents are indexed recursively,
+within :class:`TgdbLimits` ``nesting_depth``. Inspectors never run from
+any other store operation.
 
 #### `TgdbStore.export_bundle`
 
@@ -12853,6 +12958,18 @@ WriteTransaction.discard(self) -> 'None'
 ```
 
 Roll back every change; repeated calls have no effect.
+
+### `register_inspector`
+
+```text
+register_inspector(inspector: 'Inspector') -> 'None'
+```
+
+Register one inspector in explicit media-type selection order.
+
+Domain packages opt in by importing their inspector and calling this
+function. Re-registering the same object has no effect; a different
+inspector with the same public name is refused.
 
 
 ## Companion package

@@ -16,7 +16,7 @@ from contextlib import closing
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, BinaryIO, Literal, cast
 
 import pytest
 
@@ -336,6 +336,41 @@ def _blob_column_graph() -> Graph:
     )
 
 
+def _single_blob_graph(
+    payload: bytes,
+    media_type: str = "application/octet-stream",
+    *,
+    durable_id: str = "payload",
+) -> Graph:
+    """Return one durably identified blob item for inspector tests."""
+    namespace = "urn:tgdb:inspection-test"
+    blobs = QualifiedName(namespace, "resources")
+
+    def blob_value(local: str, value_type: XsdType, lexical: str) -> AttributeValue:
+        return AttributeValue(QualifiedName(BLOB_NAMESPACE, local), value_type, lexical)
+
+    editor = Graph((), (), ()).edit()
+    declare_blob_vocabulary(editor)
+    editor.declare(NamespaceDeclaration("test", namespace))
+    editor.declare(TierDeclaration(blobs, "Resources"))
+    editor.insert_item(
+        blobs,
+        0,
+        Item(
+            durable_id,
+            (
+                blob_value(
+                    "sha256", XsdType.STRING, hashlib.sha256(payload).hexdigest()
+                ),
+                blob_value("size", XsdType.INTEGER, str(len(payload))),
+                blob_value("media-type", XsdType.STRING, media_type),
+                blob_value("schema", XsdType.STRING, "urn:example:inspection:v1"),
+            ),
+        ),
+    )
+    return editor.freeze()
+
+
 def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
     """Return the durable sequence from a receipt known to record a commit."""
     assert receipt.commit_seq is not None
@@ -367,9 +402,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 8,
+        "schema_version": 9,
         "layout_version": 1,
-        "index_version": 5,
+        "index_version": 6,
         "inline_threshold": 1234,
         "fingerprint_domain": "tiergraph-equivalence/1",
         "mode": "rw",
@@ -377,7 +412,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (8,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (9,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -413,6 +448,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     ).fetchone() == (1,)
     assert connection.execute(
         "SELECT strict FROM pragma_table_list WHERE name = 'blob_metadata_counts'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        "SELECT strict FROM pragma_table_list WHERE name = 'inspections'"
     ).fetchone() == (1,)
     assert (store.path / "objects" / "sha256").is_dir()
     assert (store.path / "staging").is_dir()
@@ -577,12 +615,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 9)
+    _set_pragma(path, "user_version", 10)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 9
-    assert caught.value.supported == 8
-    assert "9" in str(caught.value) and "8" in str(caught.value)
+    assert caught.value.found == 10
+    assert caught.value.supported == 9
+    assert "10" in str(caught.value) and "9" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -599,7 +637,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 8"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 9"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -1534,7 +1572,7 @@ def test_reindex_detects_repairs_and_versions_derived_rows(tmp_path: Path) -> No
         with pytest.raises(tgdb.StoreCorrupt, match="index version is stale"):
             store.reindex()
         store.reindex(rebuild=True)
-        assert store.info().index_version == 5
+        assert store.info().index_version == 6
 
     with tgdb.TgdbStore.open(tmp_path / "store") as readonly:
         with pytest.raises(tgdb.TgdbError, match="read-only"):
@@ -4818,6 +4856,798 @@ def test_blob_column_reindex_detects_missing_unexpected_and_derivation_errors(
                 store.reindex()
 
 
+def test_inspector_registry_and_explicit_persistent_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspectors run only on request and retain typed facts in emitted order."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    namespace = "urn:tgdb:inspection-test"
+    sample_count = QualifiedName(namespace, "sample-count")
+    codec = QualifiedName(namespace, "codec")
+
+    class BinaryInspector:
+        name = "binary-metadata"
+        version = "2"
+        media_types: tuple[str, ...] = ("application/octet-stream",)
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def inspect(
+            self, ref: BlobRef, source: BinaryIO
+        ) -> Iterator[tuple[str, AttributeValue]]:
+            self.calls += 1
+            assert source.read(1) == b"p"
+            yield (
+                "sample-count",
+                AttributeValue(sample_count, XsdType.INTEGER, str(ref.size)),
+            )
+            yield "codec", AttributeValue(codec, XsdType.STRING, "raw")
+
+    inspector = BinaryInspector()
+    tgdb.register_inspector(inspector)
+    tgdb.register_inspector(inspector)
+    payload = b"payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection, "sample", _single_blob_graph(payload)
+            )
+            transaction.commit()
+
+        assert store.inspections(digest) == ()
+        assert store.query(tgdb.Query.all().uses_blob(digest))
+        assert inspector.calls == 0
+        report = store.inspect(digests=(digest,), inspector=inspector.name)
+        assert inspector.calls == 1
+        assert report.changed == 1
+        assert report.published is None
+        assert [fact.key for fact in report.results[0].facts] == [
+            "sample-count",
+            "codec",
+        ]
+        assert store.inspections(digest, inspector=inspector.name) == report.results
+        assert store.inspect(digests=(digest,), inspector=inspector.name).changed == 0
+        assert inspector.calls == 2
+        with monkeypatch.context() as scoped:
+            scoped.setattr(tgdb, "_INSPECTORS", [])
+            assert store.inspections(digest, inspector=inspector.name) == report.results
+        assert store.check(full=True).objects == 2
+
+    with pytest.raises(ValueError, match="already registered"):
+        tgdb.register_inspector(BinaryInspector())
+
+
+def test_inspect_publish_adds_layer_facts_and_indexed_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publishing inspected values appends ordinary undoable graph versions."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    duration = QualifiedName("urn:tgdb:inspected-values", "duration")
+    inspected_note = QualifiedName("urn:tgdb:inspection-test", "inspected-note")
+
+    class DurationInspector:
+        name = "duration-reader"
+        version = "1"
+        media_types: tuple[str, ...] = ("application/octet-stream",)
+
+        def inspect(
+            self, ref: BlobRef, source: BinaryIO
+        ) -> Iterator[tuple[str, AttributeValue]]:
+            del ref
+            assert source.read() == b"payload"
+            yield "duration", AttributeValue(duration, XsdType.DECIMAL, "2.50")
+            yield "note", AttributeValue(inspected_note, XsdType.STRING, "checked")
+
+    tgdb.register_inspector(DurationInspector())
+    payload = b"payload"
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(payload).declare(
+                    NamespaceDeclaration("inspection", "urn:example:occupied")
+                ),
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "application/octet-stream", duration, "decimal"
+            )
+            transaction.commit()
+
+        report = store.inspect(inspector="duration-reader")
+        report = tgdb.InspectReport(
+            report.results,
+            report.changed,
+            tgdb._publish_inspections(store, report.results),
+        )
+        assert report.changed == 1
+        assert report.published is not None
+        assert report.published.operations == ("publish",)
+        head = store.get("sample")
+        assert head.seq == 2
+        assert head.stage == "inspect"
+        graph = head.load()
+        assert (
+            NamespaceDeclaration("inspection2", duration.namespace) in graph.namespaces
+        )
+        assert graph.layers[0].name == LayerName(
+            duration.namespace, "duration-reader@1"
+        )
+        assert graph.layers[0].facts == (
+            LayerFact(
+                DurableItemRef("payload"),
+                AttributeValue(duration, XsdType.DECIMAL, "2.5"),
+            ),
+        )
+        assert (
+            store.query(
+                tgdb.Query.all().blob_column(
+                    "duration", equals=Decimal("2.5"), source="inspected"
+                )
+            )[0].seq
+            == 2
+        )
+        assert store._connection.execute(
+            "SELECT source FROM blob_metadata WHERE column = 'duration'"
+        ).fetchone() == ("inspected",)
+        repeated = store.inspect(inspector="duration-reader")
+        repeated = tgdb.InspectReport(
+            repeated.results,
+            repeated.changed,
+            tgdb._publish_inspections(store, repeated.results),
+        )
+        assert repeated.changed == 0
+        assert repeated.published is None
+        assert store.get("sample").seq == 2
+        assert report.published.commit_seq is not None
+        undone = store.undo(report.published.commit_seq)
+        assert undone.operations == ("republish",)
+        assert store.get("sample").seq == 3
+
+
+def test_attached_graph_inspection_indexes_nested_facts_and_reindexes(
+    tmp_path: Path,
+) -> None:
+    """The built-in graph inspector indexes attached graphs only on request."""
+    attached = _indexed_graph("nested", 2)
+    document = dumps(attached).encode()
+    digest = hashlib.sha256(document).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(document))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(document, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        assert (
+            store._connection.execute(
+                "SELECT 1 FROM graph_facts WHERE digest = ?", (digest,)
+            ).fetchone()
+            is None
+        )
+        candidate = tgdb._InspectionCandidate(
+            digest, len(document), "application/vnd.tiergraph+json"
+        )
+        duplicate_results, _graphs = tgdb._run_inspections(
+            store,
+            [candidate, candidate],
+            (tgdb._TIERGRAPH_INSPECTOR,),
+            media_type=None,
+        )
+        assert len(duplicate_results) == 1
+
+        report = store.inspect(
+            media_type="application/vnd.tiergraph+json", digests=(digest,)
+        )
+        assert report.changed == 1
+        assert [fact.key for fact in report.results[0].facts] == [
+            "format-version",
+            "functional",
+            "identified",
+            "tier-count",
+            "blob-count",
+            "attachment-count",
+        ]
+        assert store._connection.execute(
+            "SELECT tier_count FROM graph_facts WHERE digest = ?", (digest,)
+        ).fetchone() == (1,)
+        assert store._connection.execute(
+            "SELECT item_count FROM graph_tiers WHERE digest = ?", (digest,)
+        ).fetchone() == (2,)
+        assert store.reindex().graphs == 2
+        assert store.reindex(rebuild=True).graphs == 2
+        assert store.inspections(digest)[0].inspector == "tiergraph-graph"
+
+
+def test_attached_graph_metadata_is_complete_and_rebuildable(tmp_path: Path) -> None:
+    """Inspected graph metadata stays complete across declarations and rebuilds."""
+    attached = _blob_column_graph()
+    document = dumps(attached).encode()
+    digest = hashlib.sha256(document).hexdigest()
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(document))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(document, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+
+        store.inspect(digests=(digest,))
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.DECIMAL.value
+            )
+            transaction.commit()
+        assert store._connection.execute(
+            "SELECT value_text FROM blob_metadata "
+            "WHERE graph_digest = ? AND column = 'duration'",
+            (digest,),
+        ).fetchone() == ("2.5",)
+        store.check()
+        assert store.reindex().graphs == 2
+        assert store.reindex(rebuild=True).graphs == 2
+        store.check()
+
+
+def test_inspected_graph_metadata_errors_use_store_refusal(tmp_path: Path) -> None:
+    """Attached graph metadata conflicts fail atomically as store refusals."""
+    attached = _blob_column_graph()
+    document = dumps(attached).encode()
+    digest = hashlib.sha256(document).hexdigest()
+    duration = QualifiedName("urn:tgdb:blob-test", "duration")
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(document))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(document, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.declare_column(
+                "duration", "audio/*", duration, XsdType.INTEGER.value
+            )
+            transaction.commit()
+
+        with pytest.raises(tgdb.TgdbError, match="cannot index blob metadata"):
+            store.inspect(digests=(digest,))
+        assert store.inspections(digest) == ()
+        assert (
+            store._connection.execute(
+                "SELECT 1 FROM graph_facts WHERE digest = ?", (digest,)
+            ).fetchone()
+            is None
+        )
+
+
+def test_attached_graph_inspection_is_bounded_and_atomic(tmp_path: Path) -> None:
+    """Nested graph depth and unknown selections refuse without stored results."""
+    leaf = dumps(_indexed_graph("leaf", 1)).encode()
+    middle = dumps(
+        _single_blob_graph(leaf, "application/vnd.tiergraph+json", durable_id="leaf")
+    ).encode()
+    outer = _single_blob_graph(
+        middle, "application/vnd.tiergraph+json", durable_id="middle"
+    )
+    middle_digest = hashlib.sha256(middle).hexdigest()
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(nesting_depth=0)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(leaf))
+            transaction.put_blob(io.BytesIO(middle))
+            transaction.create_instance(collection, "sample", outer)
+            transaction.commit()
+        with pytest.raises(tgdb.TgdbError, match="nesting exceeds limit"):
+            store.inspect(digests=(middle_digest,))
+        assert store._connection.execute(
+            "SELECT count(*) FROM inspections"
+        ).fetchone() == (0,)
+
+        missing = "f" * 64
+        with pytest.raises(tgdb.TgdbError, match="held, referenced payload"):
+            store.inspect(digests=(missing,))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_type", "message"),
+    (
+        ({"name": ""}, TypeError, "name"),
+        ({"version": ""}, TypeError, "version"),
+        ({"media_types": []}, TypeError, "media_types"),
+        ({"media_types": ("Audio/WAV",)}, ValueError, "canonical"),
+        ({"media_types": (1,)}, ValueError, "canonical"),
+        (
+            {"media_types": ("application/json", "application/json")},
+            ValueError,
+            "duplicates",
+        ),
+        ({"inspect": None}, TypeError, "callable"),
+    ),
+)
+def test_inspector_registration_validates_the_public_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Registration refuses incomplete, ambiguous, or malformed inspectors."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+
+    def inspect(
+        self: object, ref: BlobRef, source: BinaryIO
+    ) -> Iterator[tuple[str, AttributeValue]]:
+        del self, ref, source
+        yield from ()
+
+    values: dict[str, object] = {
+        "name": "protocol-probe",
+        "version": "1",
+        "media_types": ("application/json",),
+        "inspect": inspect,
+    }
+    values.update(overrides)
+    probe = type("ProtocolProbe", (), values)()
+    with pytest.raises(error_type, match=message):
+        tgdb.register_inspector(cast(tgdb.Inspector, probe))
+
+
+def test_inspect_validates_selection_and_skips_unsupported_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typed selection errors refuse while an unsupported default is a no-op."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    payload = b"payload"
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection, "sample", _single_blob_graph(payload)
+            )
+            transaction.commit()
+        assert store.inspect().to_data() == {
+            "inspected": 0,
+            "changed": 0,
+            "results": [],
+            "published": None,
+        }
+        assert tgdb._publish_inspections(store, ()) is None
+        with pytest.raises(TypeError, match="media_type"):
+            store.inspect(media_type=1)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="media_type"):
+            store.inspect(media_type="Audio/WAV")
+        with pytest.raises(ValueError, match="inspection digest"):
+            store.inspect(digests=("bad",))
+        with pytest.raises(tgdb.TgdbError, match="not registered"):
+            store.inspect(inspector="absent")
+        with pytest.raises(tgdb.TgdbError, match="no registered inspector"):
+            store.inspect(
+                media_type="application/octet-stream",
+                digests=(hashlib.sha256(payload).hexdigest(),),
+            )
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+                store.inspect()
+            transaction.discard()
+
+
+def test_named_inspector_filters_mixed_media(tmp_path: Path) -> None:
+    """A named inspector skips unrelated top-level and nested payload media."""
+    nested_binary = b"nested binary"
+    attached = dumps(_single_blob_graph(nested_binary)).encode()
+    binary = b"top-level binary"
+    attached_digest = hashlib.sha256(attached).hexdigest()
+    binary_digest = hashlib.sha256(binary).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(nested_binary))
+            transaction.put_blob(io.BytesIO(attached))
+            transaction.put_blob(io.BytesIO(binary))
+            transaction.create_instance(
+                collection,
+                "graph",
+                _single_blob_graph(attached, "application/vnd.tiergraph+json"),
+            )
+            transaction.create_instance(
+                collection, "binary", _single_blob_graph(binary)
+            )
+            transaction.commit()
+
+        report = store.inspect(inspector="tiergraph-graph")
+        assert [result.digest for result in report.results] == [attached_digest]
+        with pytest.raises(tgdb.TgdbError, match="no registered inspector"):
+            store.inspect(digests=(binary_digest,), inspector="tiergraph-graph")
+
+
+def test_inspector_failures_are_bounded_named_and_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed output, decoder failures, and unverified reads store nothing."""
+    payload = b"payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    value = AttributeValue(
+        QualifiedName("urn:tgdb:inspection-test", "value"), XsdType.STRING, "ok"
+    )
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection, "sample", _single_blob_graph(payload)
+            )
+            transaction.commit()
+
+        class ProbeInspector:
+            version = "1"
+            media_types: tuple[str, ...] = ("application/octet-stream",)
+
+            def __init__(self, name: str, mode: str) -> None:
+                self.name = name
+                self.mode = mode
+
+            def inspect(
+                self, ref: BlobRef, source: BinaryIO
+            ) -> Iterator[tuple[str, AttributeValue]]:
+                del ref
+                if self.mode == "raises":
+                    raise RuntimeError("decoder broke")
+                if self.mode == "seek":
+                    source.seek(0)
+                    yield from ()
+                    return
+                if self.mode == "shape":
+                    yield cast(tuple[str, AttributeValue], ("only-one",))
+                    return
+                if self.mode == "key":
+                    yield "", value
+                    return
+                if self.mode == "value":
+                    yield "value", cast(AttributeValue, object())
+                    return
+                yield "value", value
+
+        for mode, message in (
+            ("raises", "decoder broke"),
+            ("seek", "fully verified"),
+            ("shape", "output"),
+            ("key", "key"),
+            ("value", "AttributeValue"),
+        ):
+            probe = ProbeInspector(f"probe-{mode}", mode)
+            monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR, probe])
+            with pytest.raises(tgdb.TgdbError, match=message):
+                store.inspect(digests=(digest,), inspector=probe.name)
+        probe = ProbeInspector("probe-limit", "valid")
+        monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR, probe])
+        monkeypatch.setattr(tgdb, "_MAX_INSPECTION_FACTS", 0)
+        with pytest.raises(tgdb.TgdbError, match="exceeded"):
+            store.inspect(digests=(digest,), inspector=probe.name)
+        assert store._connection.execute(
+            "SELECT count(*) FROM inspections"
+        ).fetchone() == (0,)
+
+
+def test_graph_inspector_refuses_bad_bytes_and_missing_nested_graph(
+    tmp_path: Path,
+) -> None:
+    """Graph decoding, canonical spelling, and nested resolution fail closed."""
+    malformed = b"not json"
+    compact = json.dumps(
+        json.loads(dumps(_indexed_graph("compact", 1))), separators=(",", ":")
+    ).encode()
+    missing_graph = b"missing graph"
+    middle = dumps(
+        _single_blob_graph(
+            missing_graph,
+            "application/vnd.tiergraph+json",
+            durable_id="missing",
+        )
+    ).encode()
+    middle_binary = dumps(
+        _single_blob_graph(
+            b"missing binary", "application/octet-stream", durable_id="missing-binary"
+        )
+    ).encode()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            for payload in (malformed, compact, middle, middle_binary):
+                transaction.put_blob(io.BytesIO(payload))
+            for position, payload in enumerate(
+                (malformed, compact, middle, middle_binary)
+            ):
+                transaction.create_instance(
+                    collection,
+                    f"sample-{position}",
+                    _single_blob_graph(
+                        payload,
+                        "application/vnd.tiergraph+json",
+                        durable_id=f"payload-{position}",
+                    ),
+                )
+            transaction.commit()
+        malformed_digest = hashlib.sha256(malformed).hexdigest()
+        with pytest.raises(tgdb.TgdbError, match="failed"):
+            store.inspect(digests=(malformed_digest,))
+        compact_digest = hashlib.sha256(compact).hexdigest()
+        with pytest.raises(tgdb.TgdbError, match="noncanonical"):
+            store.inspect(digests=(compact_digest,))
+        middle_digest = hashlib.sha256(middle).hexdigest()
+        with pytest.raises(tgdb.TgdbError, match="nested payload is not stored"):
+            store.inspect(digests=(middle_digest,))
+        binary_digest = hashlib.sha256(middle_binary).hexdigest()
+        filtered = store.inspect(
+            digests=(binary_digest,), media_type="application/vnd.tiergraph+json"
+        )
+        assert len(filtered.results) == 1
+        unfiltered = store.inspect(digests=(binary_digest,))
+        assert len(unfiltered.results) == 1
+
+
+def test_inspection_candidate_deduplication_keeps_first_declared_use(
+    tmp_path: Path,
+) -> None:
+    """Repeated payload interpretations retain their first declared occurrence."""
+    graph, payloads = _blob_graph()
+    digest = hashlib.sha256(payloads["metadata"]).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payloads["metadata"]))
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        explicit = tgdb._inspection_candidates(store, (digest,))
+        default = tgdb._inspection_candidates(store, ())
+        assert [(item.digest, item.media_type) for item in explicit] == [
+            (digest, "application/json")
+        ]
+        assert [(item.digest, item.media_type) for item in default] == [
+            (digest, "application/json")
+        ]
+
+
+def test_inspection_rows_fail_closed_on_catalog_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspection reads, checks, and nested facts reject malformed catalog rows."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    payload = dumps(Graph((), (), ())).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(payload, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        store.inspect(digests=(digest,))
+        store._connection.execute(
+            "UPDATE inspections SET ordinal = 9 WHERE digest = ? AND ordinal = 5",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="noncontiguous"):
+            store.inspections(digest)
+        with pytest.raises(tgdb.StoreCorrupt, match="noncontiguous"):
+            store.check()
+        store._connection.execute(
+            "UPDATE inspections SET ordinal = 5 WHERE digest = ? AND ordinal = 9",
+            (digest,),
+        )
+        store._connection.execute(
+            "DELETE FROM inspections WHERE digest = ? AND ordinal > 0", (digest,)
+        )
+        store._connection.execute(
+            "UPDATE inspections SET ordinal = 1 WHERE digest = ? AND ordinal = 0",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="begin at ordinal zero"):
+            store.inspections(digest)
+        store._connection.execute(
+            "UPDATE inspections SET ordinal = 0 WHERE digest = ? AND ordinal = 1",
+            (digest,),
+        )
+        store._connection.execute("PRAGMA ignore_check_constraints = ON")
+        store._connection.execute(
+            "UPDATE inspections SET key = '' WHERE digest = ? AND ordinal = 0",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="invalid key"):
+            store.check()
+        store._connection.execute(
+            "UPDATE inspections SET key = 'format-version', media_type = 'Audio/WAV' "
+            "WHERE digest = ? AND ordinal = 0",
+            (digest,),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="invalid media type"):
+            store.check()
+        store._connection.execute(
+            "UPDATE inspections SET media_type = 'application/vnd.tiergraph+json' "
+            "WHERE digest = ? AND ordinal = 0",
+            (digest,),
+        )
+        store._connection.execute("PRAGMA ignore_check_constraints = OFF")
+
+
+@pytest.mark.parametrize(
+    ("value_type", "encoded"),
+    (
+        ("string", "[]"),
+        (
+            "string",
+            json.dumps({"name": "bad", "value_type": "string", "lexical": "value"}),
+        ),
+        (
+            "integer",
+            json.dumps(
+                {
+                    "name": {"namespace": "urn:test", "local_name": "value"},
+                    "value_type": "string",
+                    "lexical": "value",
+                }
+            ),
+        ),
+        (
+            "string",
+            json.dumps(
+                {
+                    "name": {"namespace": "urn:test"},
+                    "value_type": "string",
+                    "lexical": "value",
+                }
+            ),
+        ),
+    ),
+)
+def test_inspection_value_decoder_refuses_malformed_rows(
+    value_type: str, encoded: str
+) -> None:
+    """Every stored scalar envelope component is validated on read."""
+    with pytest.raises(tgdb.StoreCorrupt, match="malformed"):
+        tgdb._decode_inspection_value(value_type, encoded, "f" * 64)
+
+
+def test_inspection_catalog_and_publication_failures_are_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catalog failures roll back and incompatible declarations close writers."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    payload = dumps(Graph((), (), ())).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(payload, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        store.inspect(digests=(digest,))
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ? WHERE digest = ?",
+            ("f" * 64, digest),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="facts.*conflict"):
+            store.inspect(digests=(digest,))
+        store._connection.execute(
+            "UPDATE graph_facts SET functional = ? WHERE digest = ?",
+            (fingerprint(Graph((), (), ()), EquivalenceView.FUNCTIONAL), digest),
+        )
+
+        original = tgdb._index_inspected_graph
+
+        def broken_index(
+            store_value: tgdb.TgdbStore,
+            graph: Graph,
+            graph_digest: str,
+            document: bytes,
+        ) -> None:
+            del store_value, graph, graph_digest, document
+            raise RuntimeError("index broke")
+
+        monkeypatch.setattr(tgdb, "_index_inspected_graph", broken_index)
+        with pytest.raises(RuntimeError, match="index broke"):
+            store.inspect(digests=(digest,))
+        assert store._connection.in_transaction is False
+        monkeypatch.setattr(tgdb, "_index_inspected_graph", original)
+
+        store._connection.execute("DROP TABLE inspections")
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot read inspections"):
+            store.inspections(digest)
+
+
+def test_inspection_write_translates_busy_and_catalog_errors(
+    tmp_path: Path,
+) -> None:
+    """Inspection writes preserve the store refusal taxonomy under SQLite errors."""
+    payload = dumps(Graph((), (), ())).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / "store"
+    with tgdb.TgdbStore.create(
+        path, limits=tgdb.TgdbLimits(busy_timeout_ms=0)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(
+                collection,
+                "sample",
+                _single_blob_graph(payload, "application/vnd.tiergraph+json"),
+            )
+            transaction.commit()
+        with closing(
+            sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
+        ) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            with pytest.raises(tgdb.StoreBusy, match="while inspecting"):
+                store.inspect(digests=(digest,))
+            blocker.execute("ROLLBACK")
+        store._connection.execute("DROP TABLE inspections")
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot store inspections"):
+            store.inspect(digests=(digest,))
+
+
+def test_inspection_publish_refuses_conflicting_attribute_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publishing never changes an incompatible caller-owned declaration."""
+    monkeypatch.setattr(tgdb, "_INSPECTORS", [tgdb._TIERGRAPH_INSPECTOR])
+    payload = b"payload"
+    value_name = QualifiedName("urn:tgdb:inspection-test", "value")
+
+    class ConflictInspector:
+        name = "conflict-reader"
+        version = "1"
+        media_types: tuple[str, ...] = ("application/octet-stream",)
+
+        def inspect(
+            self, ref: BlobRef, source: BinaryIO
+        ) -> Iterator[tuple[str, AttributeValue]]:
+            del ref
+            source.read()
+            yield "value", AttributeValue(value_name, XsdType.STRING, "inspected")
+
+    tgdb.register_inspector(ConflictInspector())
+    graph = _single_blob_graph(payload).declare(
+        AttributeDeclaration(value_name, AttributeDomain.DOCUMENT, XsdType.STRING)
+    )
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.put_blob(io.BytesIO(payload))
+            transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        with pytest.raises(tgdb.TgdbError, match="conflicts"):
+            report = store.inspect(inspector="conflict-reader")
+            tgdb._publish_inspections(store, report.results)
+        assert store.get("sample").seq == 1
+        assert store._writer is None
+
+
 def test_blob_put_validation_and_repack_preserve_content_identity(
     tmp_path: Path,
 ) -> None:
@@ -5111,6 +5941,10 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "ColumnInfo",
         "CommitReceipt",
         "IndexInfo",
+        "InspectReport",
+        "InspectionFact",
+        "InspectionResult",
+        "Inspector",
         "InstanceInfo",
         "Query",
         "ReindexReport",
@@ -5129,6 +5963,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "VersionChange",
         "VersionHandle",
         "WriteTransaction",
+        "register_inspector",
     ]
 
 

@@ -38,7 +38,9 @@ from tiergraph import (
 from tiergraph.cli import _tgdb_index_value, build_parser, main
 
 
-def _cli_blob_graph(payload: bytes) -> Graph:
+def _cli_blob_graph(
+    payload: bytes, media_type: str = "application/octet-stream"
+) -> Graph:
     """Return one graph declaring a single external payload."""
     namespace = "urn:tgdb:cli-blob"
     blobs = QualifiedName(namespace, "resources")
@@ -64,7 +66,7 @@ def _cli_blob_graph(payload: bytes) -> Graph:
                     "sha256", XsdType.STRING, hashlib.sha256(payload).hexdigest()
                 ),
                 blob_value("size", XsdType.INTEGER, str(len(payload))),
-                blob_value("media-type", XsdType.STRING, "application/octet-stream"),
+                blob_value("media-type", XsdType.STRING, media_type),
                 blob_value("schema", XsdType.STRING, "urn:example:binary:v1"),
                 AttributeValue(duration, XsdType.DECIMAL, "2.5"),
             ),
@@ -97,7 +99,7 @@ def test_tgdb_init_and_info_plain_and_json(
 
     assert main(["tgdb", "info", str(path)]) == 0
     plain = capsys.readouterr().out
-    assert "schema_version: 8\n" in plain
+    assert "schema_version: 9\n" in plain
     assert "inline_threshold: 1234\n" in plain
     assert plain.endswith("mode: ro\n")
 
@@ -105,11 +107,11 @@ def test_tgdb_init_and_info_plain_and_json(
     report = json.loads(capsys.readouterr().out)
     assert report == {
         "fingerprint_domain": "tiergraph-equivalence/1",
-        "index_version": 5,
+        "index_version": 6,
         "inline_threshold": 1234,
         "layout_version": 1,
         "mode": "ro",
-        "schema_version": 8,
+        "schema_version": 9,
         "store_uid": report["store_uid"],
     }
     assert len(bytes.fromhex(report["store_uid"])) == 16
@@ -211,6 +213,88 @@ def test_tgdb_blob_commands_queries_and_repack(
         == 1
     )
     assert f"object {missing} is not stored" in capsys.readouterr().err
+
+
+def test_tgdb_inspect_reports_and_publishes_attached_graph_facts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The inspect command selects payloads and can publish one graph version."""
+    store = tmp_path / "corpus.tgdb"
+    payload_file = tmp_path / "nested.json"
+    graph_file = tmp_path / "graph.json"
+    binary_file = tmp_path / "audio.bin"
+    binary_graph_file = tmp_path / "audio-graph.json"
+    payload = dump_bytes(Graph((), (), ()))
+    binary = b"binary payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    payload_file.write_bytes(payload)
+    binary_file.write_bytes(binary)
+    graph_file.write_bytes(
+        dump_bytes(_cli_blob_graph(payload, "application/vnd.tiergraph+json"))
+    )
+    binary_graph_file.write_bytes(dump_bytes(_cli_blob_graph(binary)))
+    assert main(["tgdb", "init", str(store)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "collection", "create", str(store), "corpus"]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "blob", "put", str(store), str(payload_file)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "blob", "put", str(store), str(binary_file)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "add", str(store), "corpus", "sample", str(graph_file)]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "add",
+                str(store),
+                "corpus",
+                "binary",
+                str(binary_graph_file),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "inspect",
+                str(store),
+                digest,
+                "--media-type",
+                "application/vnd.tiergraph+json",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["inspected"] == 1
+    assert report["changed"] == 1
+    assert report["results"][0]["inspector"] == "tiergraph-graph"
+    assert report["published"] is None
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "inspect",
+                str(store),
+                "--inspector",
+                "tiergraph-graph",
+                "--publish",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "inspected 1 payloads, 6 facts, 0 changed, commit " in output
+    with tgdb.TgdbStore.open(store) as opened:
+        assert opened.get("sample").stage == "inspect"
 
 
 def test_tgdb_column_commands_and_find_filter(
@@ -1585,6 +1669,13 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     assert caught.value.code == 0
     help_text = capsys.readouterr().out
     assert "--threshold SIZE" in help_text
+    assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "inspect", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "No inspector runs during any other operation" in help_text
+    assert "--publish" in help_text
     assert "Exit codes:" in help_text
     with pytest.raises(SystemExit) as caught:
         parser.parse_args(["tgdb", "import", "--help"])
