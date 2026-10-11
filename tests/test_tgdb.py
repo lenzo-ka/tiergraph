@@ -21,23 +21,33 @@ import pytest
 
 import tiergraph.tgdb as tgdb
 from tiergraph import (
+    BLOB_NAMESPACE,
     AttributeDeclaration,
     AttributeDomain,
     AttributeValue,
+    BipartiteRelationDeclaration,
+    BlobRef,
+    DurableItemRef,
     EditAnnotations,
     EquivalenceView,
     Graph,
     Item,
+    ItemRef,
     Journal,
     JsonAttributeValue,
+    JsonType,
     NamespaceDeclaration,
     Patch,
     QualifiedName,
     Refusal,
     RefusalStage,
+    RelationInstance,
+    SimpleRelationDeclaration,
     Tier,
     TierDeclaration,
+    VerifiedReader,
     XsdType,
+    declare_blob_vocabulary,
     diff,
     dumps,
     fingerprint,
@@ -161,6 +171,131 @@ def _value_graph(values: tuple[str, ...], *, attribute_name: str = "score") -> G
     )
 
 
+def _blob_graph() -> tuple[Graph, dict[str, bytes]]:
+    """Return ordered binary, transcript, and key-value attachment chains."""
+    namespace = "urn:tgdb:blob-test"
+    words = QualifiedName(namespace, "words")
+    blobs = QualifiedName(namespace, "blobs")
+    word_type = QualifiedName(namespace, "word")
+    blob_type = QualifiedName(namespace, "blob")
+    word_members = QualifiedName(namespace, "word-members")
+    blob_members = QualifiedName(namespace, "blob-members")
+    resource = QualifiedName(namespace, "resource")
+    metadata = QualifiedName(namespace, "metadata")
+    key_path = QualifiedName(namespace, "key-path")
+    payloads = {
+        "audio": b"audio payload",
+        "metadata": b'{"speaker":"one"}',
+        "transcript": b'{"turns":["hello"]}',
+    }
+
+    def blob_value(local: str, value_type: XsdType, lexical: str) -> AttributeValue:
+        return AttributeValue(QualifiedName(BLOB_NAMESPACE, local), value_type, lexical)
+
+    def blob_item(
+        durable_id: str,
+        payload: bytes,
+        media_type: str,
+        schema: str,
+        *,
+        unit: str | None = None,
+    ) -> Item:
+        attributes = [
+            blob_value("sha256", XsdType.STRING, hashlib.sha256(payload).hexdigest()),
+            blob_value("size", XsdType.INTEGER, str(len(payload))),
+            blob_value("media-type", XsdType.STRING, media_type),
+            blob_value("schema", XsdType.STRING, schema),
+        ]
+        if unit is not None:
+            attributes.append(blob_value("unit", XsdType.STRING, unit))
+        return Item(durable_id, tuple(attributes))
+
+    editor = Graph((), (), ()).edit()
+    declare_blob_vocabulary(editor)
+    editor.declare(NamespaceDeclaration("test", namespace))
+    editor.declare(TierDeclaration(words, "Words"))
+    editor.declare(TierDeclaration(blobs, "Resources"))
+    editor.declare(SimpleRelationDeclaration(word_members, words, word_type))
+    editor.declare(SimpleRelationDeclaration(blob_members, blobs, blob_type))
+    editor.declare(BipartiteRelationDeclaration(resource, word_type, blob_type))
+    editor.declare(BipartiteRelationDeclaration(metadata, blob_type, blob_type))
+    editor.declare(
+        AttributeDeclaration(key_path, AttributeDomain.RELATION_INSTANCE, JsonType.JSON)
+    )
+    editor.insert_item(words, 0, Item("word-0"))
+    editor.insert_item(
+        blobs,
+        0,
+        blob_item(
+            "audio",
+            payloads["audio"],
+            "audio/x.example",
+            "urn:example:audio:v1",
+            unit="sample",
+        ),
+    )
+    for position, durable_id in ((1, "recording-metadata"), (2, "notes")):
+        editor.insert_item(
+            blobs,
+            position,
+            blob_item(
+                durable_id,
+                payloads["metadata"],
+                "application/json",
+                f"urn:example:{durable_id}:v1",
+            ),
+        )
+    editor.insert_item(
+        blobs,
+        3,
+        blob_item(
+            "transcript",
+            payloads["transcript"],
+            "application/vnd.example.transcript+json",
+            "urn:example:transcript:v1",
+            unit="character",
+        ),
+    )
+    editor.add_relation(
+        RelationInstance(
+            resource,
+            DurableItemRef("word-0"),
+            DurableItemRef("audio"),
+            "word-audio",
+            (
+                blob_value("offset", XsdType.INTEGER, "2"),
+                blob_value("length", XsdType.INTEGER, "4"),
+            ),
+        )
+    )
+    editor.add_relation(
+        RelationInstance(
+            metadata,
+            DurableItemRef("audio"),
+            DurableItemRef("recording-metadata"),
+            "audio-recording-metadata",
+        )
+    )
+    editor.add_relation(
+        RelationInstance(
+            metadata,
+            DurableItemRef("audio"),
+            DurableItemRef("notes"),
+            "audio-notes",
+        )
+    )
+    editor.add_relation(
+        RelationInstance(
+            resource,
+            ItemRef(words, 0),
+            DurableItemRef("transcript"),
+            "word-transcript",
+            (JsonAttributeValue(key_path, ["turns", 0]),),
+        )
+    )
+    return editor.freeze(), payloads
+
+
 def _commit_seq(receipt: tgdb.CommitReceipt) -> int:
     """Return the durable sequence from a receipt known to record a commit."""
     assert receipt.commit_seq is not None
@@ -192,9 +327,9 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert store.closed is False
     assert info.to_data() == {
         "store_uid": info.store_uid,
-        "schema_version": 6,
+        "schema_version": 7,
         "layout_version": 1,
-        "index_version": 3,
+        "index_version": 4,
         "inline_threshold": 1234,
         "fingerprint_domain": "tiergraph-equivalence/1",
         "mode": "rw",
@@ -202,7 +337,7 @@ def test_store_creation_records_identity_metadata_and_pragmas(tmp_path: Path) ->
     assert len(bytes.fromhex(info.store_uid)) == 16
     connection = store._connection
     assert connection.execute("PRAGMA application_id").fetchone() == (0x54474442,)
-    assert connection.execute("PRAGMA user_version").fetchone() == (6,)
+    assert connection.execute("PRAGMA user_version").fetchone() == (7,)
     assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert connection.execute("PRAGMA synchronous").fetchone() == (2,)
     assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
@@ -393,12 +528,12 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
 ) -> None:
     """Newer schemas refuse all opens and older schemas remain read-only."""
     path = _created(tmp_path)
-    _set_pragma(path, "user_version", 7)
+    _set_pragma(path, "user_version", 8)
     with pytest.raises(tgdb.StoreSchemaTooNew) as caught:
         tgdb.TgdbStore.open(path)
-    assert caught.value.found == 7
-    assert caught.value.supported == 6
-    assert "7" in str(caught.value) and "6" in str(caught.value)
+    assert caught.value.found == 8
+    assert caught.value.supported == 7
+    assert "8" in str(caught.value) and "7" in str(caught.value)
     with closing(
         sqlite3.connect(path / "catalog.sqlite3", autocommit=True)
     ) as connection:
@@ -415,7 +550,7 @@ def test_schema_versions_refuse_new_writes_without_implicit_migration(
     _set_pragma(path, "user_version", 3)
     with tgdb.TgdbStore.open(path) as store:
         assert store.info().schema_version == 3
-        with pytest.raises(tgdb.TgdbError, match="migration to version 6"):
+        with pytest.raises(tgdb.TgdbError, match="migration to version 7"):
             store.check()
     with pytest.raises(tgdb.TgdbError, match="explicit migration"):
         tgdb.TgdbStore.open(path, mode="rw")
@@ -1350,7 +1485,7 @@ def test_reindex_detects_repairs_and_versions_derived_rows(tmp_path: Path) -> No
         with pytest.raises(tgdb.StoreCorrupt, match="index version is stale"):
             store.reindex()
         store.reindex(rebuild=True)
-        assert store.info().index_version == 3
+        assert store.info().index_version == 4
 
     with tgdb.TgdbStore.open(tmp_path / "store") as readonly:
         with pytest.raises(tgdb.TgdbError, match="read-only"):
@@ -1964,18 +2099,39 @@ def test_query_and_reindex_internal_failures_keep_store_taxonomy(
     def changed(
         selected: tgdb.TgdbStore,
     ) -> tuple[
-        dict[str, tuple[str, str, str, str, str, int, int]],
+        dict[str, tuple[str, str, str, str, str, int, int, int, int]],
         tuple[tuple[str, int, str, int], ...],
+        tuple[tgdb._BlobItemRow, ...],
+        tuple[tgdb._AttachmentRow, ...],
         tuple[tgdb._ItemIndexCountRow, ...],
         tuple[tgdb._ItemIndexRow, ...],
     ]:
-        facts, tiers, counts, items = original_derive(selected)
-        return {"0" * 64: next(iter(facts.values()))}, tiers, counts, items
+        facts, tiers, blobs, attachments, counts, items = original_derive(selected)
+        return (
+            {"0" * 64: next(iter(facts.values()))},
+            tiers,
+            blobs,
+            attachments,
+            counts,
+            items,
+        )
 
     monkeypatch.setattr(tgdb, "_derive_indexes", changed)
     with pytest.raises(tgdb.StaleVersion, match="graph set changed"):
         store.reindex(rebuild=True)
     monkeypatch.setattr(tgdb, "_derive_indexes", original_derive)
+
+    original_blob_rows = tgdb._blob_index_rows
+
+    def invalid_blob_rows(
+        _graph: Graph, _digest: str
+    ) -> tuple[tuple[tgdb._BlobItemRow, ...], tuple[tgdb._AttachmentRow, ...]]:
+        raise ValueError("invalid blob facts")
+
+    monkeypatch.setattr(tgdb, "_blob_index_rows", invalid_blob_rows)
+    with pytest.raises(tgdb.StoreCorrupt, match="cannot reindex blob facts"):
+        store.reindex()
+    monkeypatch.setattr(tgdb, "_blob_index_rows", original_blob_rows)
 
     for error, expected in (
         (sqlite3.OperationalError("failed"), tgdb.StoreCorrupt),
@@ -2065,7 +2221,8 @@ def test_reindex_names_every_missing_unexpected_and_noncanonical_row(
         store._connection.execute(
             "INSERT INTO graph_facts("
             "digest, format_version, fp_domain, functional, identified, size, "
-            "tier_count) VALUES (?, '0.3.0', 'tiergraph-equivalence/1', ?, ?, 0, 0)",
+            "tier_count, blob_count, attachment_count) "
+            "VALUES (?, '0.3.0', 'tiergraph-equivalence/1', ?, ?, 0, 0, 0, 0)",
             (extra_digest, "e" * 64, "d" * 64),
         )
         with pytest.raises(tgdb.StoreCorrupt, match="graph_facts row .* unexpected"):
@@ -3298,7 +3455,7 @@ class _FailingConnection:
         self,
         wrapped: sqlite3.Connection,
         statement: str,
-        error: sqlite3.DatabaseError,
+        error: BaseException,
         *,
         transaction_state: bool | None = None,
     ) -> None:
@@ -3934,6 +4091,486 @@ def test_declared_index_publication_fault_keeps_prior_catalog(
         )
 
 
+def test_blob_seam_indexes_order_ids_spans_and_missing_payloads(
+    tmp_path: Path,
+) -> None:
+    """Blob facts preserve graph order while payload lookup stays digest-only."""
+    graph, payloads = _blob_graph()
+    audio_ref = BlobRef(
+        hashlib.sha256(payloads["audio"]).hexdigest(), len(payloads["audio"])
+    )
+    metadata_ref = BlobRef(
+        hashlib.sha256(payloads["metadata"]).hexdigest(), len(payloads["metadata"])
+    )
+    transcript_ref = BlobRef(
+        hashlib.sha256(payloads["transcript"]).hexdigest(),
+        len(payloads["transcript"]),
+    )
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", graph)
+            transaction.commit()
+        digest = store.get(uid).graph_digest
+        blob_rows = store._connection.execute(
+            "SELECT position, durable_id, sha256, media_type, schema "
+            "FROM blob_items WHERE graph_digest = ? ORDER BY tier, position",
+            (digest,),
+        ).fetchall()
+        assert [row[0] for row in blob_rows] == [0, 1, 2, 3]
+        assert [row[1] for row in blob_rows] == [
+            "audio",
+            "recording-metadata",
+            "notes",
+            "transcript",
+        ]
+        assert blob_rows[1][2] == blob_rows[2][2] == metadata_ref.sha256
+        assert blob_rows[1][1] != blob_rows[2][1]
+        assert blob_rows[0][3:] == (
+            "audio/x.example",
+            "urn:example:audio:v1",
+        )
+        attachment_rows = store._connection.execute(
+            "SELECT ordinal, durable_id, subject, blob_position, span_unit, "
+            "span_offset, span_length, span_path FROM attachments "
+            "WHERE graph_digest = ? ORDER BY ordinal",
+            (digest,),
+        ).fetchall()
+        assert [row[1] for row in attachment_rows] == [
+            "word-audio",
+            "audio-recording-metadata",
+            "audio-notes",
+            "word-transcript",
+        ]
+        assert json.loads(attachment_rows[0][2]) == {"durable_id": "word-0"}
+        assert attachment_rows[0][3:] == (0, "sample", 2, 4, None)
+        assert [row[3] for row in attachment_rows[1:3]] == [1, 2]
+        assert attachment_rows[3][4:7] == (None, None, None)
+        assert json.loads(attachment_rows[3][7]) == ["turns", 0]
+        assert [
+            row[1] for row in store._connection.execute("PRAGMA table_info(objects)")
+        ] == [
+            "digest",
+            "size",
+            "residency",
+            "data",
+        ]
+        assert store._connection.execute(
+            "SELECT blob_count, attachment_count FROM graph_facts WHERE digest = ?",
+            (digest,),
+        ).fetchone() == (4, 4)
+
+        assert store.query(tgdb.Query.all().uses_blob(audio_ref.sha256))
+        assert store.query(tgdb.Query.all().blob_media_type("application/json"))
+        assert store.query(tgdb.Query.all().missing_blob())
+        resolver = store.resolver()
+        assert resolver.open(audio_ref, "ignored") is None
+
+        with store.write() as transaction:
+            assert (
+                transaction.put_blob(io.BytesIO(payloads["audio"]), expected=audio_ref)
+                == audio_ref
+            )
+            transaction.commit()
+        reader = cast(VerifiedReader, resolver.open(audio_ref, "elsewhere"))
+        assert reader.read(1) == payloads["audio"][:1]
+        assert reader.verified is False
+        reader.close()
+        reader = cast(VerifiedReader, resolver.open(audio_ref, None))
+        assert reader.read() == payloads["audio"]
+        assert reader.verified is True
+        reader.close()
+        wrong_size = cast(
+            VerifiedReader,
+            resolver.open(BlobRef(audio_ref.sha256, audio_ref.size + 1), None),
+        )
+        with pytest.raises(ValueError, match="size"):
+            wrong_size.read()
+        wrong_size.close()
+
+        with store.write() as transaction:
+            with pytest.raises(tgdb.TgdbError, match="identity mismatch"):
+                transaction.put_blob(
+                    io.BytesIO(payloads["metadata"]), expected=audio_ref
+                )
+        store.sink().put(metadata_ref, io.BytesIO(payloads["metadata"]))
+        with store.write() as transaction:
+            transaction.put_blob(
+                io.BytesIO(payloads["transcript"]), expected=transcript_ref
+            )
+            transaction.commit()
+        assert store.query(tgdb.Query.all().missing_blob()) == []
+        assert store.reindex() == tgdb.ReindexReport(False, 1, len(graph.tiers))
+        stored_blob = store._connection.execute(
+            "SELECT graph_digest, tier, position, durable_id, sha256, size, "
+            "media_type, schema FROM blob_items WHERE graph_digest = ? "
+            "ORDER BY tier, position LIMIT 1",
+            (digest,),
+        ).fetchone()
+        assert stored_blob is not None
+        store._connection.execute(
+            "DELETE FROM blob_items WHERE graph_digest = ? AND tier = ? "
+            "AND position = ?",
+            stored_blob[:3],
+        )
+        for query in (
+            tgdb.Query.all().uses_blob(audio_ref.sha256),
+            tgdb.Query.all().blob_media_type("application/json"),
+            tgdb.Query.all().missing_blob(),
+        ):
+            with pytest.raises(
+                tgdb.StoreCorrupt, match="blob_items rows .* incomplete"
+            ):
+                store.query(query)
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_items rows .* incomplete"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_items row .* missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "UPDATE blob_items SET media_type = 'application/x-wrong' "
+            "WHERE graph_digest = ? AND tier = ? AND position = ?",
+            stored_blob[:3],
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_items row .* differs"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "INSERT INTO blob_items(graph_digest, tier, position, durable_id, "
+            "sha256, size, media_type, schema) VALUES (?, ?, 99, 'extra', ?, 0, "
+            "'application/octet-stream', NULL)",
+            (digest, stored_blob[1], "0" * 64),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="blob_items row .* unexpected"):
+            store.reindex()
+        store.reindex(rebuild=True)
+
+        stored_attachment = store._connection.execute(
+            "SELECT graph_digest, ordinal, declaration, durable_id, subject, "
+            "blob_tier, blob_position, span_unit, span_offset, span_length, "
+            "span_path FROM attachments WHERE graph_digest = ? ORDER BY ordinal "
+            "LIMIT 1",
+            (digest,),
+        ).fetchone()
+        assert stored_attachment is not None
+        store._connection.execute(
+            "DELETE FROM attachments WHERE graph_digest = ? AND ordinal = ?",
+            stored_attachment[:2],
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="attachments rows .* incomplete"):
+            store.query(tgdb.Query.all().missing_blob())
+        with pytest.raises(tgdb.StoreCorrupt, match="attachments rows .* incomplete"):
+            store.check()
+        with pytest.raises(tgdb.StoreCorrupt, match="attachments row .* missing"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "UPDATE attachments SET span_path = ? WHERE graph_digest = ? "
+            "AND ordinal = 3",
+            ('["wrong"]', digest),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="attachments row .* differs"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute(
+            "INSERT INTO attachments(graph_digest, ordinal, declaration, durable_id, "
+            "subject, blob_tier, blob_position, span_unit, span_offset, span_length, "
+            "span_path) VALUES (?, 99, ?, 'extra', ?, ?, ?, NULL, NULL, NULL, NULL)",
+            (
+                digest,
+                stored_attachment[2],
+                stored_attachment[4],
+                stored_attachment[5],
+                stored_attachment[6],
+            ),
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="attachments row .* unexpected"):
+            store.reindex()
+        store.reindex(rebuild=True)
+        store._connection.execute("DELETE FROM graph_facts WHERE digest = ?", (digest,))
+        with pytest.raises(tgdb.StoreCorrupt, match="has no graph facts"):
+            store.query(tgdb.Query.all().missing_blob())
+        store.reindex(rebuild=True)
+
+
+def test_blob_put_validation_and_repack_preserve_content_identity(
+    tmp_path: Path,
+) -> None:
+    """Public ingestion is typed and repacking changes residency alone."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        with store.write() as transaction:
+            with pytest.raises(TypeError, match="expected"):
+                transaction.put_blob(io.BytesIO(b"four"), expected=object())  # type: ignore[arg-type]
+            first = transaction.put_blob(io.BytesIO(b"four"))
+            second = transaction.put_blob(io.BytesIO(b"five!"))
+            receipt = transaction.commit()
+        assert receipt.kind == "blob"
+        assert receipt.operations == ("put_blob", "put_blob")
+        assert store._object_record(first.sha256)[1] == "inline"  # type: ignore[index]
+        assert store._object_record(second.sha256)[1] == "file"  # type: ignore[index]
+        assert _object_path(store.path, second.sha256).is_file()
+
+        report = store.repack(6)
+        assert report.to_data() == {
+            "commit_seq": report.commit_seq,
+            "previous_threshold": 4,
+            "threshold": 6,
+            "inline_objects": 1,
+            "file_objects": 0,
+            "moved_bytes": second.size,
+        }
+        assert report.commit_seq is not None
+        assert store.info().inline_threshold == 6
+        assert store._object_record(second.sha256)[1] == "inline"  # type: ignore[index]
+        assert not _object_path(store.path, second.sha256).exists()
+
+        report = store.repack(0)
+        assert report.inline_objects == 0
+        assert report.file_objects == 2
+        assert report.moved_bytes == first.size + second.size
+        for ref, payload in ((first, b"four"), (second, b"five!")):
+            reader = cast(VerifiedReader, store.resolver().open(ref, None))
+            assert reader.read() == payload
+            assert reader.verified
+            reader.close()
+        assert store.repack(0).commit_seq is None
+        with pytest.raises(TypeError, match="threshold"):
+            store.repack(False)
+        with pytest.raises(ValueError, match="nonnegative"):
+            store.repack(-1)
+        transaction = store.write()
+        with pytest.raises(tgdb.TgdbError, match="during a write transaction"):
+            store.repack(1)
+        transaction.discard()
+
+
+def test_repack_changes_no_graph_or_fingerprint(tmp_path: Path) -> None:
+    """Repacking changes residency without changing graph version identity."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "store", limits=tgdb.TgdbLimits(inline_threshold=1 << 20)
+    ) as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            uid = transaction.create_instance(collection, "sample", _version_graph())
+            transaction.commit()
+        before = store.get(uid)
+        store.repack(0)
+        after = store.get(uid)
+        assert (
+            after.seq,
+            after.graph_digest,
+            after.functional,
+            after.identified,
+        ) == (
+            before.seq,
+            before.graph_digest,
+            before.functional,
+            before.identified,
+        )
+        assert store.check(full=True).objects == 1
+
+
+def test_blob_query_builders_validate_typed_inputs() -> None:
+    """Blob filters reject values outside their public typed spellings."""
+    query = tgdb.Query.all()
+    with pytest.raises(ValueError, match="blob SHA-256"):
+        query.uses_blob("ABC")
+    with pytest.raises(TypeError, match="media_type"):
+        query.blob_media_type(1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="lowercase"):
+        query.blob_media_type("")
+    with pytest.raises(ValueError, match="lowercase"):
+        query.blob_media_type("Audio/WAV")
+    assert query.missing_blob()._clauses == (tgdb._MissingBlobClause(),)
+    name = QualifiedName("urn:tgdb:path", "path")
+    structured = tgdb._structured_span_path(
+        (
+            JsonAttributeValue(name, ["first"]),
+            JsonAttributeValue(name, ["second"]),
+        )
+    )
+    assert structured is not None
+    assert json.loads(structured) == [
+        {
+            "name": {"local_name": "path", "namespace": "urn:tgdb:path"},
+            "value": ["first"],
+            "value_type": "json",
+        },
+        {
+            "name": {"local_name": "path", "namespace": "urn:tgdb:path"},
+            "value": ["second"],
+            "value_type": "json",
+        },
+    ]
+    tier_name = QualifiedName("urn:tgdb:path", "items")
+    graph = Graph(
+        (NamespaceDeclaration("test", "urn:tgdb:path"),),
+        (Tier(TierDeclaration(tier_name, "Items"), (Item(),)),),
+        (),
+    )
+    assert json.loads(tgdb._subject_text(graph, ItemRef(tier_name, 0))) == {
+        "item": {
+            "index": 0,
+            "tier": {"local_name": "items", "namespace": "urn:tgdb:path"},
+        }
+    }
+
+
+def test_blob_seam_defensive_refusals_keep_store_taxonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adapter types, malformed profiles, and missing staged rows refuse clearly."""
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        resolver = store.resolver()
+        sink = store.sink()
+        with pytest.raises(TypeError, match="ref"):
+            resolver.open(cast(BlobRef, object()), None)
+        with pytest.raises(TypeError, match="ref"):
+            sink.put(cast(BlobRef, object()), io.BytesIO())
+        malformed = Graph((NamespaceDeclaration("wrong", BLOB_NAMESPACE),), (), ())
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            with pytest.raises(tgdb.TgdbError, match="blob profile is invalid"):
+                transaction.create_instance(collection, "bad", malformed)
+
+        with store.write() as transaction:
+            original = store._object_record
+            calls = 0
+
+            def missing_after_put(
+                digest: str,
+                *,
+                connection: sqlite3.Connection | None = None,
+            ) -> tuple[int, str, bytes | None] | None:
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    return None
+                return original(digest, connection=connection)
+
+            monkeypatch.setattr(store, "_object_record", missing_after_put)
+            with pytest.raises(tgdb.StoreCorrupt, match="staged object .* missing"):
+                transaction.put_blob(io.BytesIO(b"payload"))
+
+
+def test_blob_index_publication_reuses_and_refuses_conflicting_rows(
+    tmp_path: Path,
+) -> None:
+    """Equal graph rows deduplicate, while catalog drift blocks publication."""
+    graph, _payloads = _blob_graph()
+    with tgdb.TgdbStore.create(tmp_path / "store") as store:
+        with store.write() as transaction:
+            collection = transaction.create_collection("collection")
+            transaction.create_instance(collection, "first", graph)
+            transaction.commit()
+        with store.write() as transaction:
+            transaction.create_instance(collection, "second", graph)
+            transaction.commit()
+        assert store._connection.execute(
+            "SELECT count(*) FROM blob_items"
+        ).fetchone() == (4,)
+
+        with store.write() as transaction:
+            transaction.create_instance(collection, "third", graph)
+            store._connection.execute(
+                "UPDATE blob_items SET media_type = 'application/x-drift' "
+                "WHERE position = 0"
+            )
+            with pytest.raises(tgdb.StoreCorrupt, match="blob_items rows .* conflict"):
+                transaction.commit()
+
+
+def test_repack_failures_rollback_or_name_postcommit_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repack maps lock, catalog, and postcommit file failures precisely."""
+    with tgdb.TgdbStore.create(
+        tmp_path / "errors", limits=tgdb.TgdbLimits(inline_threshold=4)
+    ) as store:
+        wrapped = store._connection
+        for error, expected in (
+            (sqlite3.OperationalError("failed"), tgdb.StoreCorrupt),
+            (sqlite3.OperationalError("busy"), tgdb.StoreBusy),
+        ):
+            if expected is tgdb.StoreBusy:
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            store._connection = _FailingConnection(  # type: ignore[assignment]
+                wrapped, "BEGIN IMMEDIATE", error
+            )
+            with pytest.raises(expected):
+                store.repack(5)
+            store._connection = wrapped
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, "SELECT digest", sqlite3.OperationalError("read failed")
+        )
+        with pytest.raises(tgdb.StoreCorrupt, match="cannot repack"):
+            store.repack(5)
+        store._connection = wrapped
+        store._connection = _FailingConnection(  # type: ignore[assignment]
+            wrapped, "BEGIN IMMEDIATE", RuntimeError("begin fault")
+        )
+        with pytest.raises(RuntimeError, match="begin fault"):
+            store.repack(5)
+        store._connection = wrapped
+
+        with store.write() as transaction:
+            transaction.put_blob(io.BytesIO(b"four"))
+            transaction.commit()
+        original_validate = tgdb._validate_object_record
+
+        def fail_validation(*_arguments: object) -> None:
+            raise RuntimeError("validation fault")
+
+        monkeypatch.setattr(tgdb, "_validate_object_record", fail_validation)
+        with pytest.raises(RuntimeError, match="validation fault"):
+            store.repack(5)
+        assert store.info().inline_threshold == 4
+        monkeypatch.setattr(tgdb, "_validate_object_record", original_validate)
+
+    with tgdb.TgdbStore.create(
+        tmp_path / "cleanup", limits=tgdb.TgdbLimits(inline_threshold=0)
+    ) as store:
+        with store.write() as transaction:
+            ref = transaction.put_blob(io.BytesIO(b"payload"))
+            transaction.commit()
+        target = _object_path(store.path, ref.sha256)
+        original_unlink = Path.unlink
+
+        def fail_target_unlink(
+            path: Path, *arguments: object, **keywords: object
+        ) -> None:
+            if path == target:
+                raise OSError("cleanup fault")
+            original_unlink(path, *arguments, **keywords)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+        with pytest.raises(tgdb.TgdbError, match="could not remove obsolete") as caught:
+            store.repack(16)
+        assert not isinstance(caught.value, tgdb.StoreCorrupt)
+        assert store.info().inline_threshold == 16
+        assert store._connection.execute(
+            "SELECT residency FROM objects WHERE digest = ?", (ref.sha256,)
+        ).fetchone() == ("inline",)
+
+    with tgdb.TgdbStore.create(
+        tmp_path / "layout", limits=tgdb.TgdbLimits(inline_threshold=16)
+    ) as store:
+        with store.write() as transaction:
+            transaction.put_blob(io.BytesIO(b"payload"))
+            transaction.commit()
+        outside = tmp_path / "outside-staging"
+        outside.mkdir()
+        staging = store.path / "staging"
+        staging.rmdir()
+        staging.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(tgdb.StoreCorrupt, match="staging directory"):
+            store.repack(0)
+
+
 def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
     """Every planned store refusal is catchable through one staged base."""
     for error_type in (
@@ -3953,6 +4590,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "InstanceInfo",
         "Query",
         "ReindexReport",
+        "RepackReport",
         "Snapshot",
         "SqliteTooOld",
         "StaleJournalBase",

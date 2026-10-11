@@ -23,11 +23,20 @@ from types import TracebackType
 from typing import BinaryIO, Literal, Self, cast
 
 from tiergraph import predicate as _predicate
-from tiergraph.blob import BlobRef, VerifiedReader
+from tiergraph.blob import (
+    BLOB_NAMESPACE,
+    BlobProfile,
+    BlobRef,
+    BlobResolver,
+    BlobSink,
+    VerifiedReader,
+)
 from tiergraph.core import (
     Attribute,
     AttributeValue,
     Graph,
+    ItemRef,
+    JsonAttributeValue,
     QualifiedName,
     XsdType,
 )
@@ -41,9 +50,9 @@ from tiergraph.selection import Node, NodeKind, NodeSet
 from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 _LAYOUT_VERSION = 1
-_INDEX_VERSION = 3
+_INDEX_VERSION = 4
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -54,11 +63,18 @@ _STAGING_NAME = "staging"
 _OBJECT_CHUNK_SIZE = 1 << 20
 _DIGEST_HEX_LENGTH = 64
 _SHARD_NAME = re.compile(r"[0-9a-f]{2}")
+_MEDIA_TYPE = re.compile(
+    r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}/"
+    r"[a-z0-9][a-z0-9!#$&^_.+\-]{0,126}"
+)
 _STORE_UID_HEX_LENGTH = 32
 _UID_BYTES = 16
 _MAX_NAME_BYTES = 4_096
 _NUMERIC_OFFSET = MAX_DOCUMENT_BYTES + 1
 _NUMERIC_EXPONENT_WIDTH = len(str(2 * _NUMERIC_OFFSET))
+_BLOB_MEDIA_TYPE = QualifiedName(BLOB_NAMESPACE, "media-type")
+_BLOB_SCHEMA = QualifiedName(BLOB_NAMESPACE, "schema")
+_BLOB_UNIT = QualifiedName(BLOB_NAMESPACE, "unit")
 _META_KEYS = frozenset(
     {
         "store_uid",
@@ -377,7 +393,7 @@ class CheckReport:
 
 @dataclass(frozen=True, slots=True)
 class ReindexReport:
-    """Summarize checked or rebuilt graph, tier, and declared-item indexes."""
+    """Summarize a completed check or rebuild of all derived indexes."""
 
     rebuilt: bool
     graphs: int
@@ -389,6 +405,29 @@ class ReindexReport:
             "rebuilt": self.rebuilt,
             "graphs": self.graphs,
             "tiers": self.tiers,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RepackReport:
+    """Summarize one explicit object-residency threshold change."""
+
+    commit_seq: int | None
+    previous_threshold: int
+    threshold: int
+    inline_objects: int
+    file_objects: int
+    moved_bytes: int
+
+    def to_data(self) -> dict[str, int | None]:
+        """Return a JSON-compatible report in stable field order."""
+        return {
+            "commit_seq": self.commit_seq,
+            "previous_threshold": self.previous_threshold,
+            "threshold": self.threshold,
+            "inline_objects": self.inline_objects,
+            "file_objects": self.file_objects,
+            "moved_bytes": self.moved_bytes,
         }
 
 
@@ -437,6 +476,21 @@ class _ChangedSinceClause:
     view: EquivalenceView
 
 
+@dataclass(frozen=True, slots=True)
+class _UsesBlobClause:
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _BlobMediaTypeClause:
+    media_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MissingBlobClause:
+    pass
+
+
 type _QueryClause = (
     _IdsClause
     | _NamesClause
@@ -445,6 +499,9 @@ type _QueryClause = (
     | _IndexClause
     | _StageClause
     | _ChangedSinceClause
+    | _UsesBlobClause
+    | _BlobMediaTypeClause
+    | _MissingBlobClause
 )
 
 
@@ -593,6 +650,32 @@ class Query:
             ),
         )
 
+    def uses_blob(self, sha256: str) -> Query:
+        """Restrict results to graphs that declare one payload digest."""
+        _validate_query_digest(sha256, "blob SHA-256")
+        return replace(
+            self,
+            _clauses=(*self._clauses, _UsesBlobClause(sha256)),
+        )
+
+    def blob_media_type(self, media_type: str) -> Query:
+        """Restrict results to graphs declaring one exact lowercase media type."""
+        if not isinstance(media_type, str):
+            raise TypeError("media_type must be a string")
+        if _MEDIA_TYPE.fullmatch(media_type) is None:
+            raise ValueError("media_type must be a canonical lowercase type/subtype")
+        return replace(
+            self,
+            _clauses=(*self._clauses, _BlobMediaTypeClause(media_type)),
+        )
+
+    def missing_blob(self) -> Query:
+        """Restrict active head graphs to those with an unheld payload."""
+        return replace(
+            self,
+            _clauses=(*self._clauses, _MissingBlobClause()),
+        )
+
     def where(self, predicate: Predicate) -> Query:
         """Keep graphs where this predicate independently holds for an item.
 
@@ -638,6 +721,41 @@ class _VerifiedObjectReader(VerifiedReader):
             raise StoreCorrupt(
                 f"object {self._object_digest} failed verification: {error}"
             ) from error
+
+
+class _StoreResolver:
+    """Resolve held content by digest without interpreting an href."""
+
+    def __init__(self, store: TgdbStore) -> None:
+        """Retain the open store that owns the content pool."""
+        self._store = store
+
+    def open(self, ref: BlobRef, href: str | None) -> BinaryIO | None:
+        """Return a verified reader, or ``None`` when the digest is not held."""
+        del href
+        if not isinstance(ref, BlobRef):
+            raise TypeError("ref must be a BlobRef")
+        self._store._require_open()
+        if self._store._object_record(ref.sha256) is None:
+            return None
+        source = cast(BinaryIO, self._store._open_object(ref.sha256))
+        return cast(BinaryIO, VerifiedReader(source, ref))
+
+
+class _StoreSink:
+    """Publish verified payloads through one store transaction per call."""
+
+    def __init__(self, store: TgdbStore) -> None:
+        """Retain the writable store that owns the content pool."""
+        self._store = store
+
+    def put(self, ref: BlobRef, source: BinaryIO) -> None:
+        """Store one exactly matching payload without assigning an href."""
+        if not isinstance(ref, BlobRef):
+            raise TypeError("ref must be a BlobRef")
+        with self._store.write() as transaction:
+            transaction.put_blob(source, expected=ref)
+            transaction.commit()
 
 
 class TgdbStore:
@@ -933,6 +1051,16 @@ class TgdbStore:
             if self._connection.in_transaction:
                 self._connection.execute("ROLLBACK")
 
+    def resolver(self) -> BlobResolver:
+        """Return a digest-only resolver backed by this store's object pool."""
+        self._require_open()
+        return _StoreResolver(self)
+
+    def sink(self) -> BlobSink:
+        """Return a sink that verifies and stores one payload per call."""
+        self._require_writable()
+        return _StoreSink(self)
+
     def undo(
         self,
         commit_seq: int,
@@ -1007,6 +1135,7 @@ class TgdbStore:
                 raise StoreCorrupt(
                     f"graph_tiers rows for object {incomplete_tiers[0]} are incomplete"
                 )
+            _require_complete_blob_indexes(self._connection)
             _require_complete_item_indexes(self._connection)
             for fact in self._connection.execute(
                 "SELECT f.digest, f.functional, f.identified, f.size, o.size "
@@ -1070,9 +1199,14 @@ class TgdbStore:
             self._require_writable()
             if self._writer is not None:
                 raise TgdbError("cannot rebuild indexes during a write transaction")
-        expected_facts, expected_tiers, expected_item_counts, expected_items = (
-            _derive_indexes(self)
-        )
+        (
+            expected_facts,
+            expected_tiers,
+            expected_blobs,
+            expected_attachments,
+            expected_item_counts,
+            expected_items,
+        ) = _derive_indexes(self)
         if rebuild:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
@@ -1086,6 +1220,8 @@ class TgdbStore:
                     raise StaleVersion(
                         "stored graph set changed while derived indexes were rebuilt"
                     )
+                self._connection.execute("DELETE FROM attachments")
+                self._connection.execute("DELETE FROM blob_items")
                 self._connection.execute("DELETE FROM graph_tiers")
                 self._connection.execute("DELETE FROM item_index")
                 self._connection.execute("DELETE FROM item_index_counts")
@@ -1093,13 +1229,27 @@ class TgdbStore:
                 self._connection.executemany(
                     "INSERT INTO graph_facts("
                     "digest, format_version, fp_domain, functional, identified, size, "
-                    "tier_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "tier_count, blob_count, attachment_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     expected_facts.values(),
                 )
                 self._connection.executemany(
                     "INSERT INTO graph_tiers(digest, position, tier, item_count) "
                     "VALUES (?, ?, ?, ?)",
                     expected_tiers,
+                )
+                self._connection.executemany(
+                    "INSERT INTO blob_items("
+                    "graph_digest, tier, position, durable_id, sha256, size, "
+                    "media_type, schema) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    expected_blobs,
+                )
+                self._connection.executemany(
+                    "INSERT INTO attachments("
+                    "graph_digest, ordinal, declaration, durable_id, subject, "
+                    "blob_tier, blob_position, span_unit, span_offset, "
+                    "span_length, span_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    expected_attachments,
                 )
                 self._connection.executemany(
                     "INSERT INTO item_index_counts(graph_digest, index_name, row_count) "
@@ -1144,6 +1294,8 @@ class TgdbStore:
                 self._connection,
                 expected_facts,
                 expected_tiers,
+                expected_blobs,
+                expected_attachments,
                 expected_item_counts,
                 expected_items,
             )
@@ -1151,6 +1303,105 @@ class TgdbStore:
             rebuilt=rebuild,
             graphs=len(expected_facts),
             tiers=len(expected_tiers),
+        )
+
+    def repack(  # noqa: PLR0915 -- residency publication is one atomic contract
+        self, threshold: int
+    ) -> RepackReport:
+        """Move objects across the inline threshold in one catalog commit.
+
+        Content bytes, digests, graph versions, and graph fingerprints do not
+        change. File bytes are durably published before the SQLite commit;
+        superseded files are removed only after the catalog points at inline
+        bytes, so interruption cannot leave a row naming an absent file.
+        """
+        if isinstance(threshold, bool) or not isinstance(threshold, int):
+            raise TypeError("threshold must be an integer")
+        if threshold < 0:
+            raise ValueError("threshold must be nonnegative")
+        self._require_writable()
+        if self._writer is not None:
+            raise TgdbError("cannot repack during a write transaction")
+        previous = self._info.inline_threshold
+        if threshold == previous:
+            return RepackReport(None, previous, threshold, 0, 0, 0)
+        _require_pool_layout(self._path, writable=True)
+        inline_objects = 0
+        file_objects = 0
+        moved_bytes = 0
+        obsolete_files: list[Path] = []
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            cursor = self._connection.execute(
+                "INSERT INTO commits(kind, annotations) VALUES ('repack', NULL)"
+            )
+            rows = self._connection.execute(
+                "SELECT digest, size, residency, data FROM objects ORDER BY digest"
+            ).fetchall()
+            for digest, size, residency, data in rows:
+                _validate_object_record(digest, size, residency, data)
+                if residency == "inline" and size > threshold:
+                    staging = self._path / _STAGING_NAME / secrets.token_hex(16)
+                    try:
+                        with staging.open("xb") as destination:
+                            destination.write(cast(bytes, data))
+                            destination.flush()
+                            os.fsync(destination.fileno())
+                        _publish_object_file(self._path, staging, digest, size)
+                    finally:
+                        with suppress(OSError):
+                            staging.unlink()
+                    self._connection.execute(
+                        "UPDATE objects SET residency = 'file', data = NULL "
+                        "WHERE digest = ?",
+                        (digest,),
+                    )
+                    file_objects += 1
+                    moved_bytes += size
+                elif residency == "file" and size <= threshold:
+                    with self._open_object(digest) as source:
+                        payload = source.read()
+                    self._connection.execute(
+                        "UPDATE objects SET residency = 'inline', data = ? "
+                        "WHERE digest = ?",
+                        (payload, digest),
+                    )
+                    obsolete_files.append(_object_path(self._path, digest))
+                    inline_objects += 1
+                    moved_bytes += size
+            self._connection.execute(
+                "UPDATE store_meta SET value = ? WHERE key = 'inline_threshold'",
+                (str(threshold),),
+            )
+            self._connection.execute("COMMIT")
+        except sqlite3.OperationalError as error:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            if _sqlite_busy(error):
+                raise StoreBusy("tgdb catalog remained busy while repacking") from error
+            raise StoreCorrupt(f"cannot repack tgdb objects: {error}") from error
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
+            raise
+        commit_seq = cast(int, cursor.lastrowid)
+        self._info = replace(self._info, inline_threshold=threshold)
+        for path in obsolete_files:
+            try:
+                path.unlink()
+                _fsync_directory(path.parent)
+            except OSError as error:
+                raise TgdbError(
+                    f"repack commit {commit_seq} could not remove obsolete object "
+                    f"file {path.name}: {error}"
+                ) from error
+        return RepackReport(
+            commit_seq,
+            previous,
+            threshold,
+            inline_objects,
+            file_objects,
+            moved_bytes,
         )
 
     def _put_object(
@@ -1991,6 +2242,38 @@ class WriteTransaction:
         self._staged_objects.add(digest)
         return digest
 
+    def put_blob(
+        self,
+        source: BinaryIO,
+        *,
+        expected: BlobRef | None = None,
+    ) -> BlobRef:
+        """Stream one payload into the content pool and verify its identity.
+
+        Memory use is bounded by the store's inline threshold plus one read
+        chunk. A mismatching ``expected`` identity refuses the transaction.
+        Payload interpretation remains in graph blob items, never in the
+        shared object row.
+        """
+        self._require_active()
+        if expected is not None and not isinstance(expected, BlobRef):
+            raise TypeError("expected must be a BlobRef or None")
+        digest = self._put_object(source)
+        record = self._store._object_record(digest, connection=self._connection)
+        if record is None:
+            raise StoreCorrupt(f"staged object {digest} is missing")
+        ref = BlobRef(digest, record[0])
+        if expected is not None and ref != expected:
+            raise TgdbError(
+                "blob identity mismatch: expected "
+                f"{expected.sha256} ({expected.size} bytes), read "
+                f"{ref.sha256} ({ref.size} bytes)"
+            )
+        self._operations.append("put_blob")
+        if self._kind == "catalog":
+            self._kind = "blob"
+        return ref
+
     def rename_collection(self, collection: bytes | str, name: str) -> None:
         """Change a collection name without changing its identity or position."""
         self._require_active()
@@ -2253,10 +2536,15 @@ class WriteTransaction:
         digest = self._put_object(io.BytesIO(document))
         functional = fingerprint(graph, EquivalenceView.FUNCTIONAL)
         identified = fingerprint(graph, EquivalenceView.IDENTIFIED)
+        try:
+            blob_rows, attachment_rows = _blob_index_rows(graph, digest)
+        except ValueError as error:
+            raise TgdbError(f"graph blob profile is invalid: {error}") from error
         self._connection.execute(
             "INSERT OR IGNORE INTO graph_facts("
             "digest, format_version, fp_domain, functional, identified, size, "
-            "tier_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "tier_count, blob_count, attachment_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 digest,
                 FORMAT_VERSION,
@@ -2265,11 +2553,14 @@ class WriteTransaction:
                 identified,
                 len(document),
                 len(graph.tiers),
+                len(blob_rows),
+                len(attachment_rows),
             ),
         )
         recorded = self._connection.execute(
-            "SELECT format_version, fp_domain, functional, identified, size, tier_count "
-            "FROM graph_facts WHERE digest = ?",
+            "SELECT format_version, fp_domain, functional, identified, size, "
+            "tier_count, blob_count, attachment_count FROM graph_facts "
+            "WHERE digest = ?",
             (digest,),
         ).fetchone()
         expected = (
@@ -2279,6 +2570,8 @@ class WriteTransaction:
             identified,
             len(document),
             len(graph.tiers),
+            len(blob_rows),
+            len(attachment_rows),
         )
         if recorded != expected:
             raise StoreCorrupt(f"graph facts for object {digest} are inconsistent")
@@ -2300,9 +2593,37 @@ class WriteTransaction:
         )
         if recorded_tiers != tier_rows:
             raise StoreCorrupt(f"graph tiers for object {digest} are inconsistent")
+        self._index_blobs(digest, blob_rows, attachment_rows)
         self._index_graph(graph, digest)
         self._staged_graphs.add(digest)
         return digest
+
+    def _index_blobs(
+        self,
+        digest: str,
+        blob_rows: tuple[_BlobItemRow, ...],
+        attachment_rows: tuple[_AttachmentRow, ...],
+    ) -> None:
+        """Replace one graph's prevalidated blob-item and attachment facts."""
+        self._connection.execute(
+            "DELETE FROM attachments WHERE graph_digest = ?", (digest,)
+        )
+        self._connection.execute(
+            "DELETE FROM blob_items WHERE graph_digest = ?", (digest,)
+        )
+        self._connection.executemany(
+            "INSERT INTO blob_items("
+            "graph_digest, tier, position, durable_id, sha256, size, media_type, "
+            "schema) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            blob_rows,
+        )
+        self._connection.executemany(
+            "INSERT INTO attachments("
+            "graph_digest, ordinal, declaration, durable_id, subject, blob_tier, "
+            "blob_position, span_unit, span_offset, span_length, span_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            attachment_rows,
+        )
 
     def _index_graph(self, graph: Graph, digest: str) -> None:
         """Replace this graph's rows for every current declaration."""
@@ -2941,11 +3262,14 @@ def _publish_staged_catalog(
             "identified",
             "size",
             "tier_count",
+            "blob_count",
+            "attachment_count",
         ),
         "digest",
         graph_digests,
     )
     _copy_graph_tiers(staged, catalog, graph_digests)
+    _copy_blob_indexes(staged, catalog, graph_digests)
     if indexes_changed:
         _replace_declared_indexes(staged, catalog)
     else:
@@ -3057,6 +3381,69 @@ def _copy_graph_tiers(
                 "VALUES (?, ?, ?, ?)",
                 rows,
             )
+
+
+def _copy_blob_indexes(
+    staged: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    digests: set[str],
+) -> None:
+    """Copy ordered blob and attachment facts for selected graph objects."""
+    tables = (
+        (
+            "blob_items",
+            (
+                "graph_digest",
+                "tier",
+                "position",
+                "durable_id",
+                "sha256",
+                "size",
+                "media_type",
+                "schema",
+            ),
+            "tier, position",
+        ),
+        (
+            "attachments",
+            (
+                "graph_digest",
+                "ordinal",
+                "declaration",
+                "durable_id",
+                "subject",
+                "blob_tier",
+                "blob_position",
+                "span_unit",
+                "span_offset",
+                "span_length",
+                "span_path",
+            ),
+            "ordinal",
+        ),
+    )
+    for digest in sorted(digests):
+        for table, columns, order in tables:
+            names = ", ".join(columns)
+            rows = staged.execute(
+                f"SELECT {names} FROM {table} WHERE graph_digest = ? ORDER BY {order}",
+                (digest,),
+            ).fetchall()
+            existing = catalog.execute(
+                f"SELECT {names} FROM {table} WHERE graph_digest = ? ORDER BY {order}",
+                (digest,),
+            ).fetchall()
+            if existing and existing != rows:
+                raise StoreCorrupt(
+                    f"staged {table} rows for {digest!r} conflict with the catalog"
+                )
+            if not existing:
+                catalog.executemany(
+                    f"INSERT INTO {table}({names}) VALUES ("
+                    + ", ".join("?" for _column in columns)
+                    + ")",
+                    rows,
+                )
 
 
 def _copy_item_indexes(
@@ -3721,7 +4108,26 @@ def _query_sql(  # noqa: PLR0915 -- each typed clause stays visibly parameterize
             if clause.iteration is not None:
                 conditions.append("v.iteration = ?")
                 parameters.append(clause.iteration)
+        elif isinstance(clause, _UsesBlobClause):
+            conditions.append(
+                "EXISTS (SELECT 1 FROM blob_items AS bi "
+                "WHERE bi.graph_digest = v.graph_digest AND bi.sha256 = ?)"
+            )
+            parameters.append(clause.sha256)
+        elif isinstance(clause, _BlobMediaTypeClause):
+            conditions.append(
+                "EXISTS (SELECT 1 FROM blob_items AS bi "
+                "WHERE bi.graph_digest = v.graph_digest AND bi.media_type = ?)"
+            )
+            parameters.append(clause.media_type)
+        elif isinstance(clause, _MissingBlobClause):
+            conditions.append(
+                "EXISTS (SELECT 1 FROM blob_items AS bi "
+                "LEFT JOIN objects AS held ON held.digest = bi.sha256 "
+                "WHERE bi.graph_digest = v.graph_digest AND held.digest IS NULL)"
+            )
         else:
+            assert isinstance(clause, _ChangedSinceClause)
             current, historical = {
                 EquivalenceView.FUNCTIONAL: ("f.functional", "oldf.functional"),
                 EquivalenceView.IDENTIFIED: ("f.identified", "oldf.identified"),
@@ -3855,6 +4261,33 @@ def _require_complete_item_indexes(
         raise StoreCorrupt(f"item_index rows for {key!r} are unexpected")
 
 
+def _require_complete_blob_indexes(connection: sqlite3.Connection) -> None:
+    """Refuse incomplete blob-item or attachment derived rows."""
+    missing_fact = connection.execute(
+        "SELECT v.graph_digest FROM versions AS v "
+        "LEFT JOIN graph_facts AS f ON f.digest = v.graph_digest "
+        "WHERE f.digest IS NULL ORDER BY v.graph_digest LIMIT 1"
+    ).fetchone()
+    if missing_fact is not None:
+        raise StoreCorrupt(f"version object {missing_fact[0]} has no graph facts")
+    for table, count_column in (
+        ("blob_items", "blob_count"),
+        ("attachments", "attachment_count"),
+    ):
+        incomplete = connection.execute(
+            "SELECT f.digest FROM graph_facts AS f LEFT JOIN ("
+            f"SELECT graph_digest, count(*) AS row_count FROM {table} "
+            "GROUP BY graph_digest"
+            ") AS derived ON derived.graph_digest = f.digest "
+            f"WHERE coalesce(derived.row_count, 0) != f.{count_column} "
+            "ORDER BY f.digest LIMIT 1"
+        ).fetchone()
+        if incomplete is not None:
+            raise StoreCorrupt(
+                f"{table} rows for object {incomplete[0]} are incomplete"
+            )
+
+
 def _query_rows(
     store: TgdbStore,
     query: Query,
@@ -3911,6 +4344,11 @@ def _query_rows(
             raise StoreCorrupt(
                 f"graph_tiers rows for object {incomplete[0]} are incomplete"
             )
+    if any(
+        isinstance(clause, (_UsesBlobClause, _BlobMediaTypeClause, _MissingBlobClause))
+        for clause in query._clauses
+    ):
+        _require_complete_blob_indexes(store._connection)
     statement, parameters = _query_sql(query, order_by)
     cursor = store._connection.execute(statement, parameters)
     compiled = tuple(
@@ -3976,6 +4414,115 @@ def _query_rows(
 
 type _ItemIndexRow = tuple[str, str, int, int, str, str, str | None, str]
 type _ItemIndexCountRow = tuple[str, str, int]
+type _BlobItemRow = tuple[str, str, int, str, str, int, str, str | None]
+type _AttachmentRow = tuple[
+    str,
+    int,
+    str,
+    str,
+    str,
+    str,
+    int,
+    str | None,
+    int | None,
+    int | None,
+    str | None,
+]
+
+
+def _blob_index_rows(
+    graph: Graph,
+    digest: str,
+) -> tuple[tuple[_BlobItemRow, ...], tuple[_AttachmentRow, ...]]:
+    """Derive blob facts in graph order without opening any payload bytes."""
+    if not any(
+        declaration.namespace == BLOB_NAMESPACE for declaration in graph.namespaces
+    ):
+        return (), ()
+    profile = BlobProfile(graph)
+    tiers = {tier.declaration.name: tier for tier in graph.tiers}
+    blob_rows: list[_BlobItemRow] = []
+    attachment_rows: list[_AttachmentRow] = []
+    for blob_item_ref, blob_ref in profile.blobs():
+        item = tiers[blob_item_ref.tier].items[blob_item_ref.index]
+        values = {
+            attribute.name: attribute
+            for attribute in item.attributes
+            if isinstance(attribute, AttributeValue)
+        }
+        media_type = values[_BLOB_MEDIA_TYPE].lexical
+        schema_value = values.get(_BLOB_SCHEMA)
+        schema = None if schema_value is None else schema_value.lexical
+        unit_value = values.get(_BLOB_UNIT)
+        unit = None if unit_value is None else unit_value.lexical
+        blob_rows.append(
+            (
+                digest,
+                _qname_text(blob_item_ref.tier),
+                blob_item_ref.index,
+                cast(str, item.durable_id),
+                blob_ref.sha256,
+                blob_ref.size,
+                media_type,
+                schema,
+            )
+        )
+        for relation_ref, subject_ref, span in profile.attachments(blob_item_ref):
+            relation = graph.relations[relation_ref.index]
+            attachment_rows.append(
+                (
+                    digest,
+                    relation_ref.index,
+                    _qname_text(relation.declaration),
+                    cast(str, relation.durable_id),
+                    _subject_text(graph, subject_ref),
+                    _qname_text(blob_item_ref.tier),
+                    blob_item_ref.index,
+                    unit if span is not None else None,
+                    None if span is None else span.offset,
+                    None if span is None else span.length,
+                    _structured_span_path(relation.attributes)
+                    if span is None
+                    else None,
+                )
+            )
+    attachment_rows.sort(key=lambda row: row[1])
+    return tuple(blob_rows), tuple(attachment_rows)
+
+
+def _subject_text(graph: Graph, reference: ItemRef) -> str:
+    """Encode one attachment subject without losing a stable item id."""
+    tier = next(tier for tier in graph.tiers if tier.declaration.name == reference.tier)
+    durable_id = tier.items[reference.index].durable_id
+    value: dict[str, object]
+    if durable_id is None:
+        value = {"item": reference.to_data()}
+    else:
+        value = {"durable_id": durable_id}
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _structured_span_path(attributes: tuple[Attribute, ...]) -> str | None:
+    """Preserve schema-defined JSON coordinates without interpreting them."""
+    values = tuple(
+        attribute
+        for attribute in attributes
+        if isinstance(attribute, JsonAttributeValue)
+    )
+    if not values:
+        return None
+    data: object
+    if len(values) == 1:
+        data = values[0].to_value()
+    else:
+        data = [value.to_data() for value in values]
+    return json.dumps(
+        data,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _item_index_rows(
@@ -4035,12 +4582,14 @@ def _item_index_count_rows(
 def _derive_indexes(
     store: TgdbStore,
 ) -> tuple[
-    dict[str, tuple[str, str, str, str, str, int, int]],
+    dict[str, tuple[str, str, str, str, str, int, int, int, int]],
     tuple[tuple[str, int, str, int], ...],
+    tuple[_BlobItemRow, ...],
+    tuple[_AttachmentRow, ...],
     tuple[_ItemIndexCountRow, ...],
     tuple[_ItemIndexRow, ...],
 ]:
-    """Recompute graph facts, tiers, and declared items from stored documents."""
+    """Recompute graph, blob, tier, and declared-item derived rows."""
     try:
         digests = tuple(
             cast(str, row[0])
@@ -4050,8 +4599,10 @@ def _derive_indexes(
         )
     except sqlite3.DatabaseError as error:
         raise StoreCorrupt(f"cannot enumerate stored graphs: {error}") from error
-    facts: dict[str, tuple[str, str, str, str, str, int, int]] = {}
+    facts: dict[str, tuple[str, str, str, str, str, int, int, int, int]] = {}
     tiers: list[tuple[str, int, str, int]] = []
+    blobs: list[_BlobItemRow] = []
+    attachments: list[_AttachmentRow] = []
     item_counts: list[_ItemIndexCountRow] = []
     items: list[_ItemIndexRow] = []
     declarations = tuple(
@@ -4079,6 +4630,18 @@ def _derive_indexes(
             ) from error
         if dumps(graph).encode() != document:
             raise StoreCorrupt(f"graph object {digest} is not in canonical form")
+        tiers.extend(
+            (digest, position, _qname_text(tier.declaration.name), len(tier.items))
+            for position, tier in enumerate(graph.tiers)
+        )
+        try:
+            blob_rows, attachment_rows = _blob_index_rows(graph, digest)
+        except ValueError as error:
+            raise StoreCorrupt(
+                f"cannot reindex blob facts for graph object {digest}: {error}"
+            ) from error
+        blobs.extend(blob_rows)
+        attachments.extend(attachment_rows)
         facts[digest] = (
             digest,
             FORMAT_VERSION,
@@ -4087,10 +4650,8 @@ def _derive_indexes(
             fingerprint(graph, EquivalenceView.IDENTIFIED),
             len(document),
             len(graph.tiers),
-        )
-        tiers.extend(
-            (digest, position, _qname_text(tier.declaration.name), len(tier.items))
-            for position, tier in enumerate(graph.tiers)
+            len(blob_rows),
+            len(attachment_rows),
         )
         applicable = tuple(
             (name, tier, attribute)
@@ -4100,13 +4661,22 @@ def _derive_indexes(
         item_rows = _item_index_rows(graph, digest, applicable)
         item_counts.extend(_item_index_count_rows(digest, applicable, item_rows))
         items.extend(item_rows)
-    return facts, tuple(tiers), tuple(item_counts), tuple(items)
+    return (
+        facts,
+        tuple(tiers),
+        tuple(blobs),
+        tuple(attachments),
+        tuple(item_counts),
+        tuple(items),
+    )
 
 
-def _compare_derived_indexes(
+def _compare_derived_indexes(  # noqa: PLR0915 -- each derived table stays explicit
     connection: sqlite3.Connection,
-    expected_facts: dict[str, tuple[str, str, str, str, str, int, int]],
+    expected_facts: dict[str, tuple[str, str, str, str, str, int, int, int, int]],
     expected_tiers: tuple[tuple[str, int, str, int], ...],
+    expected_blobs: tuple[_BlobItemRow, ...],
+    expected_attachments: tuple[_AttachmentRow, ...],
     expected_item_counts: tuple[_ItemIndexCountRow, ...],
     expected_items: tuple[_ItemIndexRow, ...],
 ) -> None:
@@ -4122,10 +4692,10 @@ def _compare_derived_indexes(
     if metadata.get("fingerprint_domain") != _FINGERPRINT_DOMAIN:
         raise StoreCorrupt("derived fingerprint domain is stale; run reindex --rebuild")
     actual_facts = {
-        cast(str, row[0]): cast(tuple[str, str, str, str, str, int, int], row)
+        cast(str, row[0]): cast(tuple[str, str, str, str, str, int, int, int, int], row)
         for row in connection.execute(
             "SELECT digest, format_version, fp_domain, functional, identified, size, "
-            "tier_count "
+            "tier_count, blob_count, attachment_count "
             "FROM graph_facts ORDER BY digest"
         )
     }
@@ -4157,6 +4727,46 @@ def _compare_derived_indexes(
     if actual_tiers:
         tier_key = next(iter(actual_tiers))
         raise StoreCorrupt(f"graph_tiers row {tier_key!r} is unexpected")
+    actual_blobs = {
+        (cast(str, row[0]), cast(str, row[1]), cast(int, row[2])): cast(
+            _BlobItemRow, row
+        )
+        for row in connection.execute(
+            "SELECT graph_digest, tier, position, durable_id, sha256, size, "
+            "media_type, schema FROM blob_items "
+            "ORDER BY graph_digest, tier, position"
+        )
+    }
+    for blob_expected in expected_blobs:
+        blob_key = (blob_expected[0], blob_expected[1], blob_expected[2])
+        blob_actual = actual_blobs.pop(blob_key, None)
+        if blob_actual is None:
+            raise StoreCorrupt(f"blob_items row {blob_key!r} is missing")
+        if blob_actual != blob_expected:
+            raise StoreCorrupt(f"blob_items row {blob_key!r} differs from its document")
+    if actual_blobs:
+        blob_key = next(iter(actual_blobs))
+        raise StoreCorrupt(f"blob_items row {blob_key!r} is unexpected")
+    actual_attachments = {
+        (cast(str, row[0]), cast(int, row[1])): cast(_AttachmentRow, row)
+        for row in connection.execute(
+            "SELECT graph_digest, ordinal, declaration, durable_id, subject, "
+            "blob_tier, blob_position, span_unit, span_offset, span_length, "
+            "span_path FROM attachments ORDER BY graph_digest, ordinal"
+        )
+    }
+    for attachment_expected in expected_attachments:
+        attachment_key = (attachment_expected[0], attachment_expected[1])
+        attachment_actual = actual_attachments.pop(attachment_key, None)
+        if attachment_actual is None:
+            raise StoreCorrupt(f"attachments row {attachment_key!r} is missing")
+        if attachment_actual != attachment_expected:
+            raise StoreCorrupt(
+                f"attachments row {attachment_key!r} differs from its document"
+            )
+    if actual_attachments:
+        attachment_key = next(iter(actual_attachments))
+        raise StoreCorrupt(f"attachments row {attachment_key!r} is unexpected")
     actual_item_counts = {
         (cast(str, row[0]), cast(str, row[1])): cast(_ItemIndexCountRow, row)
         for row in connection.execute(
@@ -4699,7 +5309,9 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "identified TEXT NOT NULL "
             "CHECK(length(identified) = 64 AND identified NOT GLOB '*[^0-9a-f]*'), "
             "size INTEGER NOT NULL CHECK(size >= 0), "
-            "tier_count INTEGER NOT NULL CHECK(tier_count >= 0)"
+            "tier_count INTEGER NOT NULL CHECK(tier_count >= 0), "
+            "blob_count INTEGER NOT NULL CHECK(blob_count >= 0), "
+            "attachment_count INTEGER NOT NULL CHECK(attachment_count >= 0)"
             ") STRICT"
         )
         connection.execute(
@@ -4709,6 +5321,44 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "tier TEXT NOT NULL CHECK(length(tier) > 0), "
             "item_count INTEGER NOT NULL CHECK(item_count >= 0), "
             "PRIMARY KEY(digest, position)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE blob_items("
+            "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+            "ON DELETE CASCADE, "
+            "tier TEXT NOT NULL CHECK(length(tier) > 0), "
+            "position INTEGER NOT NULL CHECK(position >= 0), "
+            "durable_id TEXT NOT NULL CHECK(length(durable_id) > 0), "
+            "sha256 TEXT NOT NULL "
+            "CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'), "
+            "size INTEGER NOT NULL CHECK(size >= 0), "
+            "media_type TEXT NOT NULL CHECK(length(media_type) > 0), "
+            "schema TEXT, "
+            "PRIMARY KEY(graph_digest, tier, position)"
+            ") STRICT"
+        )
+        connection.execute(
+            "CREATE TABLE attachments("
+            "graph_digest TEXT NOT NULL, "
+            "ordinal INTEGER NOT NULL CHECK(ordinal >= 0), "
+            "declaration TEXT NOT NULL CHECK(length(declaration) > 0), "
+            "durable_id TEXT NOT NULL CHECK(length(durable_id) > 0), "
+            "subject TEXT NOT NULL CHECK(length(subject) > 0), "
+            "blob_tier TEXT NOT NULL CHECK(length(blob_tier) > 0), "
+            "blob_position INTEGER NOT NULL CHECK(blob_position >= 0), "
+            "span_unit TEXT, "
+            "span_offset INTEGER CHECK(span_offset >= 0), "
+            "span_length INTEGER CHECK(span_length >= 0), "
+            "span_path TEXT, "
+            "PRIMARY KEY(graph_digest, ordinal), "
+            "FOREIGN KEY(graph_digest, blob_tier, blob_position) "
+            "REFERENCES blob_items(graph_digest, tier, position) ON DELETE CASCADE, "
+            "CHECK((span_length IS NULL AND span_offset IS NULL "
+            "AND span_unit IS NULL) OR (span_length IS NOT NULL "
+            "AND span_unit IS NOT NULL AND span_path IS NULL)), "
+            "CHECK(span_path IS NULL OR (span_unit IS NULL "
+            "AND span_offset IS NULL AND span_length IS NULL))"
             ") STRICT"
         )
         connection.execute(
@@ -4772,6 +5422,10 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
         connection.execute(
             "CREATE INDEX graph_tiers_tier_count "
             "ON graph_tiers(tier, item_count, digest)"
+        )
+        connection.execute("CREATE INDEX blob_items_sha256 ON blob_items(sha256)")
+        connection.execute(
+            "CREATE INDEX blob_items_durable_id ON blob_items(durable_id)"
         )
         connection.execute(
             "CREATE INDEX item_index_value_digest "
@@ -5084,6 +5738,7 @@ __all__ = [
     "InstanceInfo",
     "Query",
     "ReindexReport",
+    "RepackReport",
     "Snapshot",
     "SqliteTooOld",
     "StaleJournalBase",

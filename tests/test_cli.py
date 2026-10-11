@@ -2049,6 +2049,15 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                 with store.write() as transaction:
                     transaction.retire_collection("recordings")
                     transaction.commit()
+            if command == "blob":
+                from tests.test_bundle import (  # noqa: PLC0415 -- help fixture only
+                    PAYLOAD_A,
+                )
+
+                (directory / "payload.bin").write_bytes(PAYLOAD_A)
+                with store.write() as transaction:
+                    transaction.put_blob(io.BytesIO(PAYLOAD_A))
+                    transaction.commit()
     source_graph = _path_graph(directory / "graph.json")
     tier_name = QualifiedName("urn:path", "tokens")
     item_type = QualifiedName("urn:path", "Token")
@@ -2243,7 +2252,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 118
+    assert len(examples) == 124
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

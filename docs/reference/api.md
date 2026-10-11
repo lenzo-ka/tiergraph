@@ -11928,6 +11928,36 @@ Query.changed_since(self, commit_seq: 'int', view: 'EquivalenceView' = <Equivale
 
 Keep heads that differ from the version current at a commit.
 
+#### `Query.uses_blob`
+
+Method.
+
+```text
+Query.uses_blob(self, sha256: 'str') -> 'Query'
+```
+
+Restrict results to graphs that declare one payload digest.
+
+#### `Query.blob_media_type`
+
+Method.
+
+```text
+Query.blob_media_type(self, media_type: 'str') -> 'Query'
+```
+
+Restrict results to graphs declaring one exact lowercase media type.
+
+#### `Query.missing_blob`
+
+Method.
+
+```text
+Query.missing_blob(self) -> 'Query'
+```
+
+Restrict active head graphs to those with an unheld payload.
+
 #### `Query.where`
 
 Method.
@@ -11957,7 +11987,7 @@ Include retired instances and collections in the result.
 ReindexReport(rebuilt: 'bool', graphs: 'int', tiers: 'int') -> None
 ```
 
-Summarize checked or rebuilt graph, tier, and declared-item indexes.
+Summarize a completed check or rebuild of all derived indexes.
 
 #### `ReindexReport.to_data`
 
@@ -11965,6 +11995,24 @@ Method.
 
 ```text
 ReindexReport.to_data(self) -> 'dict[str, bool | int]'
+```
+
+Return a JSON-compatible report in stable field order.
+
+### `RepackReport`
+
+```text
+RepackReport(commit_seq: 'int | None', previous_threshold: 'int', threshold: 'int', inline_objects: 'int', file_objects: 'int', moved_bytes: 'int') -> None
+```
+
+Summarize one explicit object-residency threshold change.
+
+#### `RepackReport.to_data`
+
+Method.
+
+```text
+RepackReport.to_data(self) -> 'dict[str, int | None]'
 ```
 
 Return a JSON-compatible report in stable field order.
@@ -12152,7 +12200,7 @@ Return a JSON-compatible description in stable field order.
 ### `StoreSchemaTooNew`
 
 ```text
-StoreSchemaTooNew(found: 'int', supported: 'int' = 6) -> 'None'
+StoreSchemaTooNew(found: 'int', supported: 'int' = 7) -> 'None'
 ```
 
 Refuse a catalog whose schema is newer than this build supports.
@@ -12338,6 +12386,26 @@ TgdbStore.query(self, query: 'Query', *, order_by: 'str | None' = None, batch_si
 
 Run one short query and return handles bound to this open store.
 
+#### `TgdbStore.resolver`
+
+Method.
+
+```text
+TgdbStore.resolver(self) -> 'BlobResolver'
+```
+
+Return a digest-only resolver backed by this store's object pool.
+
+#### `TgdbStore.sink`
+
+Method.
+
+```text
+TgdbStore.sink(self) -> 'BlobSink'
+```
+
+Return a sink that verifies and stores one payload per call.
+
 #### `TgdbStore.undo`
 
 Method.
@@ -12375,6 +12443,21 @@ Check or rebuild deterministic graph, tier, and declared-item rows.
 The check form works through a read-only handle and changes nothing.
 Rebuilding requires a writable handle, replaces only derived rows, and
 records the build's index and fingerprint-domain versions.
+
+#### `TgdbStore.repack`
+
+Method.
+
+```text
+TgdbStore.repack(self, threshold: 'int') -> 'RepackReport'
+```
+
+Move objects across the inline threshold in one catalog commit.
+
+Content bytes, digests, graph versions, and graph fingerprints do not
+change. File bytes are durably published before the SQLite commit;
+superseded files are removed only after the catalog points at inline
+bytes, so interruption cannot leave a row naming an absent file.
 
 ### `VersionChange`
 
@@ -12506,6 +12589,21 @@ WriteTransaction.revert(self, instance: 'bytes | str', *, to_seq: 'int', expecte
 ```
 
 Publish a new version containing one retained version's exact document.
+
+#### `WriteTransaction.put_blob`
+
+Method.
+
+```text
+WriteTransaction.put_blob(self, source: 'BinaryIO', *, expected: 'BlobRef | None' = None) -> 'BlobRef'
+```
+
+Stream one payload into the content pool and verify its identity.
+
+Memory use is bounded by the store's inline threshold plus one read
+chunk. A mismatching ``expected`` identity refuses the transaction.
+Payload interpretation remains in graph blob items, never in the
+shared object row.
 
 #### `WriteTransaction.rename_collection`
 

@@ -533,6 +533,25 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
         metavar="NAME",
         help="declared index with no value in the graph; repeatable",
     )
+    tgdb_find.add_argument(
+        "--uses-blob",
+        action="append",
+        type=_tgdb_sha256,
+        metavar="SHA256",
+        help="declared payload digest; repeatable",
+    )
+    tgdb_find.add_argument(
+        "--media-type",
+        action="append",
+        type=_media_type_argument,
+        metavar="TYPE",
+        help="declared blob media type; repeatable",
+    )
+    tgdb_find.add_argument(
+        "--missing-blob",
+        action="store_true",
+        help="require an active head with a declared payload absent from the store",
+    )
     tgdb_find.add_argument("--stage", metavar="NAME", help="version stage")
     tgdb_find.add_argument(
         "--iteration", type=int, metavar="N", help="iteration within --stage"
@@ -597,6 +616,96 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_reindex.add_argument("store", metavar="STORE", help="store directory")
     tgdb_reindex.add_argument(
         "--rebuild", action="store_true", help="replace every derived row"
+    )
+    tgdb_repack = _subcommand(
+        tgdb_subparsers,
+        "repack",
+        summary="change object residency",
+        description=(
+            "Move content objects across a new inline-size threshold without "
+            "changing their bytes, digests, graph versions, or fingerprints."
+        ),
+        examples=("tiergraph tgdb repack corpus.tgdb --threshold 131072",),
+    )
+    tgdb_repack.set_defaults(handler=_handle_tgdb)
+    tgdb_repack.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_repack.add_argument(
+        "--threshold",
+        required=True,
+        type=_nonnegative_byte_count,
+        metavar="SIZE",
+        help="new largest inline object size in bytes",
+    )
+    tgdb_blob = _subcommand(
+        tgdb_subparsers,
+        "blob",
+        summary="store and read payload bytes",
+        description=(
+            "Put, get, or verify content-addressed payload bytes in a tgdb store."
+        ),
+        examples=("tiergraph tgdb blob verify corpus.tgdb",),
+    )
+    tgdb_blob_commands = tgdb_blob.add_subparsers(
+        dest="tgdb_blob_command", required=True
+    )
+    tgdb_blob_put = _subcommand(
+        tgdb_blob_commands,
+        "put",
+        summary="store a payload",
+        description=(
+            "Stream one file into the object pool and report its SHA-256 identity."
+        ),
+        examples=("tiergraph tgdb blob put corpus.tgdb payload.bin",),
+    )
+    tgdb_blob_put.set_defaults(handler=_handle_tgdb)
+    tgdb_blob_put.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_blob_put.add_argument("file", metavar="FILE", help="payload file")
+    tgdb_blob_get = _subcommand(
+        tgdb_blob_commands,
+        "get",
+        summary="write a stored payload",
+        description="Write one payload after verifying its size and SHA-256 digest.",
+        examples=(
+            "tiergraph tgdb blob get corpus.tgdb "
+            "eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7 "
+            "-o payload.bin",
+        ),
+    )
+    tgdb_blob_get.set_defaults(handler=_handle_tgdb)
+    tgdb_blob_get.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_blob_get.add_argument(
+        "sha256", type=_tgdb_sha256, metavar="SHA256", help="payload digest"
+    )
+    tgdb_blob_get.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        type=_file_output_argument,
+        metavar="FILE",
+        help="output payload file outside the store",
+    )
+    tgdb_blob_verify = _subcommand(
+        tgdb_blob_commands,
+        "verify",
+        summary="verify stored payloads",
+        description=(
+            "Read and verify selected digests, or every stored content object when "
+            "none are named."
+        ),
+        examples=(
+            "tiergraph tgdb blob verify corpus.tgdb",
+            "tiergraph tgdb blob verify corpus.tgdb "
+            "eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7",
+        ),
+    )
+    tgdb_blob_verify.set_defaults(handler=_handle_tgdb)
+    tgdb_blob_verify.add_argument("store", metavar="STORE", help="store directory")
+    tgdb_blob_verify.add_argument(
+        "sha256",
+        nargs="*",
+        type=_tgdb_sha256,
+        metavar="SHA256",
+        help="payload digest; omission verifies every stored object",
     )
     tgdb_index = _subcommand(
         tgdb_subparsers,
@@ -2070,6 +2179,13 @@ def _tgdb_fingerprint(
     return view, digest
 
 
+def _tgdb_sha256(value: str) -> str:
+    """Parse one canonical lowercase SHA-256 digest."""
+    if _SHA256_TEXT.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("must be a lowercase SHA-256 digest")
+    return value
+
+
 def _tgdb_tier_filter(
     value: str,
 ) -> tuple[tiergraph.QualifiedName, int, int | None]:
@@ -2496,6 +2612,10 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
             and not (args.tgdb_command == "index" and args.tgdb_index_command == "list")
         )
         writable = writable or (args.tgdb_command == "reindex" and args.rebuild)
+        writable = writable or args.tgdb_command == "repack"
+        writable = writable or (
+            args.tgdb_command == "blob" and args.tgdb_blob_command == "put"
+        )
         with tgdb.TgdbStore.open(args.store, mode="rw" if writable else "ro") as store:
             if args.tgdb_command == "check":
                 report = store.check(full=args.full)
@@ -2513,6 +2633,83 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     f"{index_report.tiers} "
                     f"{'tier' if index_report.tiers == 1 else 'tiers'}\n"
                 )
+                return 0
+            if args.tgdb_command == "repack":
+                repack_report = store.repack(args.threshold)
+                if repack_report.commit_seq is None:
+                    _stdout_text(
+                        f"unchanged: threshold {repack_report.threshold} bytes\n"
+                    )
+                else:
+                    _stdout_text(
+                        f"committed {repack_report.commit_seq}: threshold "
+                        f"{repack_report.threshold} bytes, "
+                        f"{repack_report.inline_objects} inline, "
+                        f"{repack_report.file_objects} file\n"
+                    )
+                return 0
+            if args.tgdb_command == "blob":
+                command = args.tgdb_blob_command
+                if command == "put":
+                    with Path(args.file).open("rb") as payload_source:
+                        with store.write() as transaction:
+                            ref = transaction.put_blob(payload_source)
+                            transaction.commit()
+                    _stdout_text(f"{ref.sha256}\t{ref.size}\n")
+                    return 0
+                resolver = store.resolver()
+                if command == "get":
+                    record = store._object_record(args.sha256)
+                    if record is None:
+                        raise tgdb.TgdbError(f"object {args.sha256} is not stored")
+                    ref = tiergraph.BlobRef(args.sha256, record[0])
+                    reader = resolver.open(ref, None)
+                    if reader is None:
+                        raise tgdb.TgdbError(f"object {args.sha256} is not stored")
+                    _check_output_outside_store(Path(args.store), args.output)
+                    with reader:
+                        with _output_stream(args.store, args.output) as destination:
+                            _copy_binary(reader, destination)
+                            if not cast(tiergraph.VerifiedReader, reader).verified:
+                                raise tgdb.StoreCorrupt(
+                                    f"object {args.sha256} was not fully verified"
+                                )
+                    return 0
+                requested = tuple(args.sha256)
+                refs = (
+                    tuple(
+                        tiergraph.BlobRef(digest, size)
+                        for digest, size in store._connection.execute(
+                            "SELECT digest, size FROM objects ORDER BY rowid"
+                        )
+                    )
+                    if not requested
+                    else tuple(
+                        tiergraph.BlobRef(digest, record[0])
+                        for digest in requested
+                        if (record := store._object_record(digest)) is not None
+                    )
+                )
+                if requested and len(refs) != len(requested):
+                    missing = next(
+                        digest
+                        for digest in requested
+                        if store._object_record(digest) is None
+                    )
+                    raise tgdb.TgdbError(f"object {missing} is not stored")
+                for ref in refs:
+                    reader = resolver.open(ref, None)
+                    if reader is None:
+                        raise tgdb.StoreCorrupt(
+                            f"object {ref.sha256} disappeared during verification"
+                        )
+                    with reader:
+                        _copy_binary(reader, cast(BinaryIO, _NullWriter()))
+                        if not cast(tiergraph.VerifiedReader, reader).verified:
+                            raise tgdb.StoreCorrupt(
+                                f"object {ref.sha256} was not fully verified"
+                            )
+                _stdout_text("ok\n")
                 return 0
             if args.tgdb_command == "index":
                 command = args.tgdb_index_command
@@ -2883,6 +3080,12 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
                     )
                 for name in args.lacks_index or ():
                     query = query.indexed(name, present=False)
+                for digest in args.uses_blob or ():
+                    query = query.uses_blob(digest)
+                for media_type in args.media_type or ():
+                    query = query.blob_media_type(media_type)
+                if args.missing_blob:
+                    query = query.missing_blob()
                 if args.stage is not None:
                     query = query.stage(args.stage, iteration=args.iteration)
                 if args.changed_since is not None:

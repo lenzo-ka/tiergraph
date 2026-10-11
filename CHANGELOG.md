@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added tgdb payload ingestion, verified resolver and sink adapters, ordered
+  blob and attachment indexes, missing-payload queries, and explicit repacking.
 - Added ordered tgdb item-index declarations with typed equality, exact numeric
   ranges, head-only or retained-history scope, derived-row integrity checks,
   undo, rebuilding, and CLI queries.

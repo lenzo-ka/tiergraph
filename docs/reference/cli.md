@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,index,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,index,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -403,6 +403,8 @@ positional arguments:
     history             list stored graph versions
     find                find current graph versions
     reindex             check or rebuild derived indexes
+    repack              change object residency
+    blob                store and read payload bytes
     index               manage declared item indexes
     rename              rename an instance
     move                move an instance
@@ -796,10 +798,11 @@ Exit codes:
 usage: tiergraph tgdb find [-h] [--collection NAME] [--name NAME]
                            [--fingerprint VIEW:HEX] [--tier Q[:MIN[:MAX]]]
                            [--lacks-tier Q] [--index NAME[=VALUE|:MIN:MAX]]
-                           [--lacks-index NAME] [--stage NAME] [--iteration N]
-                           [--changed-since COMMIT] [--changed-view VIEW]
-                           [--where PREDICATE] [--order-by COLUMN] [--retired]
-                           [--count] [--json]
+                           [--lacks-index NAME] [--uses-blob SHA256]
+                           [--media-type TYPE] [--missing-blob] [--stage NAME]
+                           [--iteration N] [--changed-since COMMIT]
+                           [--changed-view VIEW] [--where PREDICATE]
+                           [--order-by COLUMN] [--retired] [--count] [--json]
                            STORE
 
 Query indexed head versions in declared order. Only --where opens matching graph documents, one at a time.
@@ -821,6 +824,10 @@ options:
                         required declared index, equality, or integer/decimal
                         range; repeatable
   --lacks-index NAME    declared index with no value in the graph; repeatable
+  --uses-blob SHA256    declared payload digest; repeatable
+  --media-type TYPE     declared blob media type; repeatable
+  --missing-blob        require an active head with a declared payload absent
+                        from the store
   --stage NAME          version stage
   --iteration N         iteration within --stage
   --changed-since COMMIT
@@ -865,6 +872,56 @@ options:
 Examples:
   $ tiergraph tgdb reindex corpus.tgdb
   $ tiergraph tgdb reindex corpus.tgdb --rebuild
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb repack`
+
+```text
+usage: tiergraph tgdb repack [-h] --threshold SIZE STORE
+
+Move content objects across a new inline-size threshold without changing their bytes, digests, graph versions, or fingerprints.
+
+positional arguments:
+  STORE             store directory
+
+options:
+  -h, --help        show this help message and exit
+  --threshold SIZE  new largest inline object size in bytes
+
+Examples:
+  $ tiergraph tgdb repack corpus.tgdb --threshold 131072
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb blob`
+
+```text
+usage: tiergraph tgdb blob [-h] {put,get,verify} ...
+
+Put, get, or verify content-addressed payload bytes in a tgdb store.
+
+positional arguments:
+  {put,get,verify}
+    put             store a payload
+    get             write a stored payload
+    verify          verify stored payloads
+
+options:
+  -h, --help        show this help message and exit
+
+Examples:
+  $ tiergraph tgdb blob verify corpus.tgdb
 
 Exit codes:
   0  success
