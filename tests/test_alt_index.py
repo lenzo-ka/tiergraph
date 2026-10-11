@@ -225,6 +225,28 @@ def test_index_unions_overlapping_atoms() -> None:
     assert indexed_spent <= scanned_spent
 
 
+def test_index_ignores_singleton_posting_outside_candidates() -> None:
+    """A true lookahead atom cannot restore a successor rejected at depth zero."""
+    overlap = AtomPattern(
+        Equals(
+            Cell(LABEL),
+            (Bare("right-0"), Bare("right-1")),
+        )
+    )
+    parts = tuple(
+        SeqPattern(
+            (
+                atom(f"left-{index}"),
+                overlap if index == 1 else atom(f"right-{index}"),
+            )
+        )
+        for index in range(32)
+    )
+    compiled = compile_pattern(AltPattern(parts))
+    assert isinstance(_gate(compiled, compiled.start), match_module._GateIndex)
+    assert compiled.count(graph(("left-0", "right-0")), TierOrder(TIER)) == 1
+
+
 def test_index_falls_back_for_opaque_or_dense_split() -> None:
     """Unsupported predicates and wide postings retain scan metadata."""
     opaque = AtomPattern(Has(Cell(LABEL), "label"))
