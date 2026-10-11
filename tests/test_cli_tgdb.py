@@ -1309,6 +1309,123 @@ def test_tgdb_catalog_syntax_refuses_as_usage(arguments: list[str]) -> None:
     assert caught.value.code == 2
 
 
+def test_tgdb_bundle_and_collection_commands_round_trip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """TG10 CLI commands move one graph or an ordered collection."""
+    source = tmp_path / "source.tgdb"
+    target = tmp_path / "target.tgdb"
+    collection_target = tmp_path / "collection-target.tgdb"
+    graph_path = tmp_path / "graph.json"
+    payload_path = tmp_path / "payload.bin"
+    bundle_path = tmp_path / "sample.tgb"
+    linked_bundle_path = tmp_path / "sample-linked.tgb"
+    export_path = tmp_path / "collection-export"
+    payload = b"bundle payload"
+    graph_path.write_bytes(dump_bytes(_cli_blob_graph(payload)))
+    payload_path.write_bytes(payload)
+
+    assert main(["tgdb", "init", str(source)]) == 0
+    assert main(["tgdb", "collection", "create", str(source), "corpus"]) == 0
+    assert main(["tgdb", "add", str(source), "corpus", "sample", str(graph_path)]) == 0
+    assert main(["tgdb", "blob", "put", str(source), str(payload_path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "export", str(source), "sample", "-o", str(bundle_path)]) == 0
+    assert "exported 'sample'" in capsys.readouterr().out
+
+    assert main(["tgdb", "init", str(target)]) == 0
+    assert main(["tgdb", "collection", "create", str(target), "corpus"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "import",
+                str(target),
+                str(bundle_path),
+                "--collection",
+                "corpus",
+                "--name",
+                "sample",
+            ]
+        )
+        == 0
+    )
+    assert "imported 'sample'" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "tgdb",
+                "export",
+                str(source),
+                "sample",
+                "--link",
+                hashlib.sha256(payload).hexdigest(),
+                "-o",
+                str(linked_bundle_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "import",
+                str(target),
+                str(linked_bundle_path),
+                "--collection",
+                "corpus",
+                "--name",
+                "sample",
+                "--on-conflict",
+                "new-version",
+            ]
+        )
+        == 0
+    )
+    assert "unchanged 'sample'" in capsys.readouterr().out
+
+    assert (
+        main(
+            [
+                "tgdb",
+                "collection",
+                "export",
+                str(source),
+                "corpus",
+                "-o",
+                str(export_path),
+            ]
+        )
+        == 0
+    )
+    assert "exported collection 'corpus'" in capsys.readouterr().out
+    assert main(["tgdb", "init", str(collection_target)]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "tgdb",
+                "collection",
+                "import",
+                str(collection_target),
+                str(export_path),
+            ]
+        )
+        == 0
+    )
+    assert "imported 1 instances" in capsys.readouterr().out
+
+    with tgdb.TgdbStore.open(target) as imported_store:
+        assert imported_store.get("sample", collection="corpus").load() == (
+            _cli_blob_graph(payload)
+        )
+    with tgdb.TgdbStore.open(collection_target) as imported_store:
+        assert [item.name for item in imported_store.instances("corpus")] == ["sample"]
+
+
 def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> None:
     """Every collection command supplies descriptions and option help."""
     parser = build_parser()
@@ -1357,3 +1474,21 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
     help_text = capsys.readouterr().out
     assert "--threshold SIZE" in help_text
     assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "import", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--allow-missing" in help_text
+    assert "--on-conflict {refuse,new-version}" in help_text
+    assert "Exit codes:" in help_text
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["tgdb", "export", "--help"])
+    assert caught.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--link SHA256" in help_text
+    assert "Exit codes:" in help_text
+    for command in ("export", "import"):
+        with pytest.raises(SystemExit) as caught:
+            parser.parse_args(["tgdb", "collection", command, "--help"])
+        assert caught.value.code == 0
+        assert "Exit codes:" in capsys.readouterr().out

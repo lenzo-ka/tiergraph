@@ -381,19 +381,21 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
     collection          manage ordered collections
     list                list instances
     add                 add a graph instance
+    import              import one bundle
+    export              export one bundle
     publish             publish a graph version
     batch               publish a graph batch
     apply               apply and publish a patch
@@ -505,14 +507,17 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb collection [-h]
-                                 {create,list,rename,move,retire,restore} ...
+                                 {create,list,export,import,rename,move,retire,restore}
+                                 ...
 
-Create, list, rename, move, retire, or restore collections.
+Create, list, import, export, rename, move, retire, or restore collections.
 
 positional arguments:
-  {create,list,rename,move,retire,restore}
+  {create,list,export,import,rename,move,retire,restore}
     create              create a collection
     list                list collections
+    export              export collection heads
+    import              import a collection atomically
     rename              rename a collection
     move                move a collection
     retire              retire a collection
@@ -578,6 +583,72 @@ options:
 
 Examples:
   $ tiergraph tgdb add corpus.tgdb recordings sample graph.json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb import`
+
+```text
+usage: tiergraph tgdb import [-h] --collection NAME --name NAME
+                             [--allow-missing]
+                             [--on-conflict {refuse,new-version}]
+                             STORE BUNDLE
+
+Validate one bundle and publish its graph and available payloads in a single commit.
+
+positional arguments:
+  STORE                 store directory
+  BUNDLE                bundle file
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     target collection
+  --name NAME           target instance name
+  --allow-missing       keep unresolved linked payloads as explicit missing
+                        content
+  --on-conflict {refuse,new-version}
+                        handling for an existing instance name (default:
+                        refuse)
+
+Examples:
+  $ tiergraph tgdb import corpus.tgdb sample.tgb --collection recordings --name sample
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb export`
+
+```text
+usage: tiergraph tgdb export [-h] [--collection NAME] [--seq N]
+                             [--link SHA256] -o BUNDLE
+                             STORE INSTANCE
+
+Write one stored graph version and its selected embedded payloads as a deterministic bundle.
+
+positional arguments:
+  STORE                 store directory
+  INSTANCE              instance name or id
+
+options:
+  -h, --help            show this help message and exit
+  --collection NAME     instance collection
+  --seq N               stored version sequence (default: head)
+  --link SHA256         leave this payload linked; repeatable
+  -o BUNDLE, --output BUNDLE
+                        output bundle outside the store
+
+Examples:
+  $ tiergraph tgdb export corpus.tgdb sample -o sample.tgb
+  $ tiergraph tgdb export corpus.tgdb sample --link eb4e7e48106279b6d5823a05900c397c60724d32288c3d0ea99de22d6cf410d7 -o sample.tgb
 
 Exit codes:
   0  success

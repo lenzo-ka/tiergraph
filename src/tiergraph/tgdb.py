@@ -12,8 +12,10 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
-from collections.abc import Iterator
+import tempfile
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -29,7 +31,10 @@ from tiergraph.blob import (
     BlobRef,
     BlobResolver,
     BlobSink,
+    Bundle,
     VerifiedReader,
+    open_bundle,
+    write_bundle,
 )
 from tiergraph.core import (
     Attribute,
@@ -70,6 +75,10 @@ _MEDIA_TYPE = re.compile(
 _STORE_UID_HEX_LENGTH = 32
 _UID_BYTES = 16
 _MAX_NAME_BYTES = 4_096
+_TGDB_EXPORT_VERSION = "1"
+_COLLECTION_INDEX_NAME = "collection.json"
+_COLLECTION_BUNDLE_SUFFIX = ".tgb"
+_MAX_COLLECTION_INDEX_BYTES = 16 << 20
 _NUMERIC_OFFSET = MAX_DOCUMENT_BYTES + 1
 _NUMERIC_EXPONENT_WIDTH = len(str(2 * _NUMERIC_OFFSET))
 _BLOB_MEDIA_TYPE = QualifiedName(BLOB_NAMESPACE, "media-type")
@@ -1061,6 +1070,120 @@ class TgdbStore:
         self._require_writable()
         return _StoreSink(self)
 
+    def export_bundle(
+        self,
+        instance: bytes | str,
+        destination: BinaryIO,
+        *,
+        collection: bytes | str | None = None,
+        seq: int | Literal["head"] = "head",
+        embed: Callable[[BlobRef], bool] | bool = True,
+        hrefs: Mapping[BlobRef, str] | None = None,
+    ) -> None:
+        """Write one stored version as an external-resource bundle.
+
+        The stored graph document is required to have the canonical public
+        spelling before export. Payload choices affect only bundle residency;
+        graph bytes, graph identity, asset ids, and declared order stay fixed.
+        """
+        handle = self.get(instance, collection=collection, seq=seq)
+        with self._open_object(handle.graph_digest) as source:
+            document = source.read()
+        try:
+            graph = loads(document)
+        except Refusal as error:
+            raise StoreCorrupt(
+                f"stored graph {handle.graph_digest} cannot be exported: {error}"
+            ) from error
+        if _graph_document(graph) != document:
+            raise StoreCorrupt(
+                f"stored graph {handle.graph_digest} is not canonically encoded"
+            )
+        try:
+            write_bundle(
+                graph,
+                destination,
+                self.resolver(),
+                embed=embed,
+                hrefs=hrefs,
+            )
+        except ValueError as error:
+            raise TgdbError(f"cannot export bundle: {error}") from error
+
+    def export_collection(
+        self,
+        collection: bytes | str,
+        directory: str | PathLike[str],
+        *,
+        embed: Callable[[BlobRef], bool] | bool = True,
+    ) -> None:
+        """Export active instance heads and their declared order to a directory.
+
+        The target is created without replacing an existing path. Every bundle
+        is made durable before the closed ``collection.json`` index is linked
+        last, so an incomplete export cannot look complete. Full history is
+        intentionally outside this interchange format.
+        """
+        self._require_open()
+        self._require_current_schema()
+        collection_row = _resolve_collection(
+            self._connection, collection, include_retired=False
+        )
+        target = Path(directory)
+        if target.exists() or target.is_symlink():
+            raise TgdbError(f"collection export path {str(target)!r} already exists")
+        parent = target.parent
+        if parent.is_symlink() or not parent.is_dir():
+            raise TgdbError(
+                f"collection export parent {str(parent)!r} is not a plain directory"
+            )
+        instances = self.instances(collection_row[1])
+        staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=parent))
+        try:
+            rows: list[dict[str, object]] = []
+            bundle_names: list[str] = []
+            for position, instance in enumerate(instances):
+                handle = self.get(instance.uid)
+                bundle_name = instance.uid.hex() + _COLLECTION_BUNDLE_SUFFIX
+                bundle_names.append(bundle_name)
+                bundle_path = staging / bundle_name
+                with bundle_path.open("xb") as destination:
+                    self.export_bundle(instance.uid, destination, embed=embed)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                rows.append(
+                    {
+                        "uid": instance.uid.hex(),
+                        "name": instance.name,
+                        "position": position,
+                        "head_digest": handle.graph_digest,
+                        "functional": handle.functional,
+                    }
+                )
+            manifest = {
+                "tgdb_export": _TGDB_EXPORT_VERSION,
+                "collection": {
+                    "uid": collection_row[1].hex(),
+                    "name": collection_row[2],
+                    "position": 0,
+                },
+                "instances": rows,
+            }
+            encoded = _collection_index_bytes(manifest)
+            with (staging / _COLLECTION_INDEX_NAME).open("xb") as destination:
+                destination.write(encoded)
+                destination.flush()
+                os.fsync(destination.fileno())
+            _fsync_directory(staging)
+            _publish_collection_directory(
+                staging, target, (*bundle_names, _COLLECTION_INDEX_NAME)
+            )
+            _fsync_directory(parent)
+        except OSError as error:
+            raise TgdbError(f"cannot export collection: {error}") from error
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
     def undo(
         self,
         commit_seq: int,
@@ -1872,6 +1995,28 @@ class WriteTransaction:
         annotations: EditAnnotations | None = None,
     ) -> bytes:
         """Create an ordered instance whose first version is a complete graph."""
+        return self._create_instance(
+            collection,
+            name,
+            graph,
+            uid=uid,
+            position=position,
+            annotations=annotations,
+            document=None,
+        )
+
+    def _create_instance(
+        self,
+        collection: bytes | str,
+        name: str,
+        graph: Graph,
+        *,
+        uid: bytes | None,
+        position: int | None,
+        annotations: EditAnnotations | None,
+        document: bytes | None,
+    ) -> bytes:
+        """Implement creation with optional already verified canonical bytes."""
         self._require_active()
         _validate_name(name)
         _validate_graph(graph)
@@ -1905,7 +2050,11 @@ class WriteTransaction:
         )
         target = count if position is None else position
         _validate_position(target, count, allow_end=True)
-        digest = self._store_graph(graph)
+        digest = (
+            self._store_graph(graph)
+            if document is None
+            else self._store_graph_document(graph, document)
+        )
         if target != count:
             rows = self._connection.execute(
                 "SELECT uid, position FROM instances WHERE collection_id = ? "
@@ -2062,6 +2211,7 @@ class WriteTransaction:
         patch: Patch | None = None,
         skip_if_equivalent: EquivalenceView | None = None,
         annotations: EditAnnotations | None = None,
+        document: bytes | None = None,
     ) -> None:
         """Implement all public version-producing operations in one order."""
         self._require_active()
@@ -2078,7 +2228,7 @@ class WriteTransaction:
         _require_active_instance(self._connection, row)
         head = self._checked_head(row, expected)
         head_seq = head[0]
-        document = _graph_document(graph)
+        document = _graph_document(graph) if document is None else document
         digest = hashlib.sha256(document).hexdigest()
         if digest == head[2]:
             self._versions.append(
@@ -2273,6 +2423,279 @@ class WriteTransaction:
         if self._kind == "catalog":
             self._kind = "blob"
         return ref
+
+    def import_bundle(
+        self,
+        source: BinaryIO,
+        *,
+        collection: bytes | str,
+        name: str,
+        resolver: BlobResolver | None = None,
+        allow_missing: bool = False,
+        on_conflict: Literal["refuse", "new-version"] = "refuse",
+    ) -> bytes:
+        """Stage one validated bundle and return its stable instance id.
+
+        Embedded payloads and explicitly resolved links enter the shared object
+        pool. Unresolved links refuse by default; ``allow_missing=True`` keeps
+        them discoverable through :meth:`Query.missing_blob`. A conflicting
+        name is never changed unless ``on_conflict="new-version"`` is explicit.
+        """
+        return self._import_bundle(
+            source,
+            collection=collection,
+            name=name,
+            resolver=resolver,
+            allow_missing=allow_missing,
+            on_conflict=on_conflict,
+            uid=None,
+            position=None,
+            expected_digest=None,
+            expected_functional=None,
+        )
+
+    def import_collection(
+        self,
+        directory: str | PathLike[str],
+        *,
+        resolver: BlobResolver | None = None,
+        allow_missing: bool = False,
+    ) -> tuple[bytes, ...]:
+        """Stage every head in a collection export in one transaction.
+
+        The closed collection index supplies stable collection and instance
+        ids. Its instance array is the declared order, and each bundle must
+        match the recorded head digest and functional fingerprint.
+        """
+        self._require_active()
+        if not isinstance(allow_missing, bool):
+            raise TypeError("allow_missing must be a boolean")
+        root = Path(directory)
+        if root.is_symlink() or not root.is_dir():
+            raise TgdbError(
+                f"collection import path {str(root)!r} is not a plain directory"
+            )
+        collection_data, instance_data = _read_collection_index(
+            root / _COLLECTION_INDEX_NAME
+        )
+        expected_names = {
+            _COLLECTION_INDEX_NAME,
+            *(uid.hex() + _COLLECTION_BUNDLE_SUFFIX for uid, *_rest in instance_data),
+        }
+        try:
+            actual_names = {entry.name for entry in root.iterdir()}
+        except OSError as error:
+            raise TgdbError(
+                f"cannot list collection import directory: {error}"
+            ) from error
+        if actual_names != expected_names:
+            unexpected = sorted(actual_names - expected_names)
+            missing = sorted(expected_names - actual_names)
+            detail = (
+                f"unexpected entries {unexpected!r}"
+                if unexpected
+                else f"missing entries {missing!r}"
+            )
+            raise TgdbError(f"collection import directory has {detail}")
+        collection_uid, collection_name, collection_position = collection_data
+        created_collection = self.create_collection(
+            collection_name,
+            uid=collection_uid,
+            position=collection_position,
+        )
+        imported: list[bytes] = []
+        for uid, name, position, head_digest, functional in instance_data:
+            bundle_path = root / (uid.hex() + _COLLECTION_BUNDLE_SUFFIX)
+            if bundle_path.is_symlink() or not bundle_path.is_file():
+                raise TgdbError(
+                    f"collection bundle {bundle_path.name!r} is not a plain file"
+                )
+            try:
+                with bundle_path.open("rb") as source:
+                    imported.append(
+                        self._import_bundle(
+                            source,
+                            collection=created_collection,
+                            name=name,
+                            resolver=resolver,
+                            allow_missing=allow_missing,
+                            on_conflict="refuse",
+                            uid=uid,
+                            position=position,
+                            expected_digest=head_digest,
+                            expected_functional=functional,
+                        )
+                    )
+            except OSError as error:
+                raise TgdbError(
+                    f"cannot read collection bundle {bundle_path.name!r}: {error}"
+                ) from error
+        return tuple(imported)
+
+    def _import_bundle(
+        self,
+        source: BinaryIO,
+        *,
+        collection: bytes | str,
+        name: str,
+        resolver: BlobResolver | None,
+        allow_missing: bool,
+        on_conflict: Literal["refuse", "new-version"],
+        uid: bytes | None,
+        position: int | None,
+        expected_digest: str | None,
+        expected_functional: str | None,
+    ) -> bytes:
+        """Implement single and collection imports through one staged path."""
+        self._require_active()
+        _validate_name(name)
+        if not isinstance(allow_missing, bool):
+            raise TypeError("allow_missing must be a boolean")
+        if on_conflict not in ("refuse", "new-version"):
+            raise ValueError("on_conflict must be 'refuse' or 'new-version'")
+        collection_row = _resolve_collection(
+            self._connection, collection, include_retired=False
+        )
+        existing = self._connection.execute(
+            "SELECT uid FROM instances WHERE collection_id = ? AND name = ?",
+            (collection_row[0], name),
+        ).fetchone()
+        if existing is not None and on_conflict == "refuse":
+            raise TgdbError(f"instance name {name!r} already exists in its collection")
+        try:
+            with open_bundle(source) as bundle:
+                document = _bundle_graph_document(bundle)
+                canonical = _graph_document(bundle.graph)
+                if document != canonical:
+                    label = _bundle_source_label(source)
+                    raise TgdbError(
+                        f"bundle {label} graph.json is not canonically encoded"
+                    )
+                digest = hashlib.sha256(document).hexdigest()
+                functional = fingerprint(bundle.graph, EquivalenceView.FUNCTIONAL)
+                if expected_digest is not None and digest != expected_digest:
+                    raise TgdbError(
+                        f"collection bundle for {name!r} has graph digest {digest}, "
+                        f"not recorded digest {expected_digest}"
+                    )
+                if (
+                    expected_functional is not None
+                    and functional != expected_functional
+                ):
+                    raise TgdbError(
+                        f"collection bundle for {name!r} has functional fingerprint "
+                        f"{functional}, not recorded fingerprint {expected_functional}"
+                    )
+                if existing is None:
+                    self._import_bundle_payloads(
+                        bundle,
+                        resolver=resolver,
+                        allow_missing=allow_missing,
+                    )
+                    return self._create_instance(
+                        collection_row[1],
+                        name,
+                        bundle.graph,
+                        uid=uid,
+                        position=position,
+                        annotations=None,
+                        document=document,
+                    )
+                instance_uid = cast(bytes, existing[0])
+                row = _resolve_instance(
+                    self._connection,
+                    instance_uid,
+                    collection=collection_row[1],
+                )
+                _require_active_instance(self._connection, row)
+                head = _version_row(
+                    self._connection,
+                    row[0],
+                    head_version=row[7],
+                    seq=None,
+                )
+                if head is None:
+                    raise StoreCorrupt(f"instance {name!r} has no stored head version")
+                if digest == head[2]:
+                    self._import_bundle_payloads(
+                        bundle,
+                        resolver=resolver,
+                        allow_missing=allow_missing,
+                        stage=False,
+                    )
+                    self._publish(
+                        "publish",
+                        instance_uid,
+                        bundle.graph,
+                        expected=head[0],
+                        collection=collection_row[1],
+                        document=document,
+                    )
+                    return instance_uid
+                self._import_bundle_payloads(
+                    bundle,
+                    resolver=resolver,
+                    allow_missing=allow_missing,
+                )
+                self._publish(
+                    "publish",
+                    instance_uid,
+                    bundle.graph,
+                    expected=head[0],
+                    collection=collection_row[1],
+                    document=document,
+                )
+                return instance_uid
+        except TgdbError:
+            raise
+        except (OSError, ValueError) as error:
+            raise TgdbError(f"cannot import bundle: {error}") from error
+
+    def _import_bundle_payloads(
+        self,
+        bundle: Bundle,
+        *,
+        resolver: BlobResolver | None,
+        allow_missing: bool,
+        stage: bool = True,
+    ) -> None:
+        """Validate and optionally stage payloads in first declared asset order."""
+        seen: set[BlobRef] = set()
+        for asset in bundle.assets():
+            if asset.ref in seen:
+                continue
+            seen.add(asset.ref)
+            if asset.mode == "embedded":
+                with bundle.open_blob(asset.ref) as payload:
+                    if stage:
+                        self.put_blob(cast(BinaryIO, payload), expected=asset.ref)
+                    else:
+                        _verify_payload(payload)
+                continue
+            staged = self._store._object_record(
+                asset.ref.sha256, connection=self._connection
+            )
+            held = (
+                staged is not None
+                or self._store._object_record(asset.ref.sha256) is not None
+            )
+            if held:
+                continue
+            linked_source = (
+                None if resolver is None else resolver.open(asset.ref, asset.href)
+            )
+            if linked_source is None:
+                if allow_missing:
+                    continue
+                raise TgdbError(
+                    f"linked blob {asset.ref.sha256} was not found by the resolver"
+                )
+            with linked_source:
+                if stage:
+                    self.put_blob(linked_source, expected=asset.ref)
+                else:
+                    with VerifiedReader(linked_source, asset.ref) as payload:
+                        _verify_payload(payload)
 
     def rename_collection(self, collection: bytes | str, name: str) -> None:
         """Change a collection name without changing its identity or position."""
@@ -3761,6 +4184,206 @@ def _graph_document(graph: Graph) -> bytes:
             f"{MAX_DOCUMENT_BYTES}"
         )
     return document
+
+
+def _bundle_graph_document(bundle: Bundle) -> bytes:
+    """Return the already validated graph entry bytes from an open bundle."""
+    try:
+        document = bundle._archive.read("graph.json")
+    except (KeyError, OSError, RuntimeError, ValueError) as error:
+        raise ValueError(f"cannot reread validated graph.json: {error}") from error
+    if not isinstance(document, bytes):
+        raise TypeError("bundle graph reader did not return bytes")
+    return document
+
+
+def _bundle_source_label(source: BinaryIO) -> str:
+    """Return a factual input label without inventing a filesystem location."""
+    name = getattr(source, "name", None)
+    return repr(name) if isinstance(name, str) else "input"
+
+
+def _collection_index_bytes(manifest: Mapping[str, object]) -> bytes:
+    """Encode one deterministic, bounded collection interchange index."""
+    encoded = json.dumps(
+        manifest,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > _MAX_COLLECTION_INDEX_BYTES:
+        raise TgdbError(
+            f"collection index size {len(encoded)} bytes exceeds limit "
+            f"{_MAX_COLLECTION_INDEX_BYTES}"
+        )
+    return encoded
+
+
+def _publish_collection_directory(
+    staging: Path, target: Path, names: tuple[str, ...]
+) -> None:
+    """Publish staged files without replacing an existing path or entry."""
+    try:
+        target.mkdir()
+    except FileExistsError as error:
+        raise TgdbError(
+            f"collection export path {str(target)!r} already exists"
+        ) from error
+    published: list[Path] = []
+    try:
+        for name in names:
+            destination = target / name
+            os.link(staging / name, destination)
+            published.append(destination)
+        _fsync_directory(target)
+    except OSError:
+        for path in reversed(published):
+            with suppress(OSError):
+                path.unlink()
+        with suppress(OSError):
+            target.rmdir()
+        raise
+
+
+def _read_collection_index(
+    path: Path,
+) -> tuple[
+    tuple[bytes, str, int],
+    tuple[tuple[bytes, str, int, str, str], ...],
+]:
+    """Read and validate the closed collection interchange index."""
+    if path.is_symlink() or not path.is_file():
+        raise TgdbError(f"collection index {path.name!r} is not a plain file")
+    try:
+        size = path.stat().st_size
+        if size > _MAX_COLLECTION_INDEX_BYTES:
+            raise TgdbError(
+                f"collection index size {size} bytes exceeds limit "
+                f"{_MAX_COLLECTION_INDEX_BYTES}"
+            )
+        encoded = path.read_bytes()
+        text = encoded.decode("utf-8")
+        value = json.loads(
+            text,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except TgdbError:
+        raise
+    except (OSError, UnicodeError, ValueError) as error:
+        raise TgdbError(f"collection index is invalid: {error}") from error
+    if not isinstance(value, dict) or set(value) != {
+        "tgdb_export",
+        "collection",
+        "instances",
+    }:
+        raise TgdbError("collection index must be a closed export object")
+    if value["tgdb_export"] != _TGDB_EXPORT_VERSION:
+        raise TgdbError(
+            f"collection export version {value['tgdb_export']!r} is not supported"
+        )
+    raw_collection = value["collection"]
+    if not isinstance(raw_collection, dict) or set(raw_collection) != {
+        "uid",
+        "name",
+        "position",
+    }:
+        raise TgdbError("collection index collection must be a closed object")
+    collection_uid = _import_uid(raw_collection["uid"], "collection")
+    collection_name = _import_name(raw_collection["name"], "collection")
+    collection_position = _import_position(raw_collection["position"], "collection")
+    raw_instances = value["instances"]
+    if not isinstance(raw_instances, list):
+        raise TgdbError("collection index instances must be an array")
+    instances: list[tuple[bytes, str, int, str, str]] = []
+    seen_uids: set[bytes] = set()
+    seen_names: set[str] = set()
+    for ordinal, raw in enumerate(raw_instances):
+        if not isinstance(raw, dict) or set(raw) != {
+            "uid",
+            "name",
+            "position",
+            "head_digest",
+            "functional",
+        }:
+            raise TgdbError(f"collection instance {ordinal} must be a closed object")
+        uid = _import_uid(raw["uid"], f"instance {ordinal}")
+        name = _import_name(raw["name"], f"instance {ordinal}")
+        position = _import_position(raw["position"], f"instance {ordinal}")
+        if position != ordinal:
+            raise TgdbError(
+                f"collection instance {ordinal} has position {position}; "
+                "positions must be dense and declared"
+            )
+        digest = _import_sha256(raw["head_digest"], f"instance {ordinal} digest")
+        functional = _import_sha256(
+            raw["functional"], f"instance {ordinal} functional fingerprint"
+        )
+        if uid in seen_uids:
+            raise TgdbError(f"collection instance {ordinal} repeats uid {uid.hex()}")
+        if name in seen_names:
+            raise TgdbError(f"collection instance {ordinal} repeats name {name!r}")
+        seen_uids.add(uid)
+        seen_names.add(name)
+        instances.append((uid, name, position, digest, functional))
+    return (
+        (collection_uid, collection_name, collection_position),
+        tuple(instances),
+    )
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build one JSON object while refusing duplicate member names."""
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate member {name!r}")
+        result[name] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> object:
+    """Refuse non-JSON numeric constants accepted by the standard parser."""
+    raise ValueError(f"invalid JSON constant {value!r}")
+
+
+def _import_uid(value: object, subject: str) -> bytes:
+    """Decode one canonical exported 128-bit identity."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _UID_BYTES * 2
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise TgdbError(f"{subject} uid must be 32 lowercase hexadecimal characters")
+    return bytes.fromhex(value)
+
+
+def _import_name(value: object, subject: str) -> str:
+    """Validate one exported catalog name with contextual wording."""
+    try:
+        _validate_name(value)
+    except (TypeError, ValueError) as error:
+        raise TgdbError(f"{subject} name is invalid: {error}") from error
+    return cast(str, value)
+
+
+def _import_position(value: object, subject: str) -> int:
+    """Validate one exported nonnegative declared position."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TgdbError(f"{subject} position must be a nonnegative integer")
+    return value
+
+
+def _import_sha256(value: object, subject: str) -> str:
+    """Validate one exported lowercase SHA-256 spelling."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _DIGEST_HEX_LENGTH
+        or not value.isascii()
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise TgdbError(f"{subject} must be 64 lowercase hexadecimal characters")
+    return value
 
 
 def _encode_annotations(annotations: EditAnnotations | None) -> str | None:
@@ -5525,6 +6148,14 @@ def _read_binary(source: BinaryIO, size: int) -> bytes:
     if len(chunk) > size:
         raise TypeError("object source read() returned more bytes than requested")
     return chunk
+
+
+def _verify_payload(source: VerifiedReader) -> None:
+    """Consume one payload with bounded memory and require its full identity."""
+    while _read_binary(cast(BinaryIO, source), _OBJECT_CHUNK_SIZE):
+        pass
+    if not source.verified:
+        raise ValueError("payload reader did not verify a complete read")
 
 
 def _read_prefix(source: BinaryIO, limit: int) -> tuple[bytes, bool]:

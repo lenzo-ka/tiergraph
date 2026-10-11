@@ -12406,6 +12406,35 @@ TgdbStore.sink(self) -> 'BlobSink'
 
 Return a sink that verifies and stores one payload per call.
 
+#### `TgdbStore.export_bundle`
+
+Method.
+
+```text
+TgdbStore.export_bundle(self, instance: 'bytes | str', destination: 'BinaryIO', *, collection: 'bytes | str | None' = None, seq: "int | Literal['head']" = 'head', embed: 'Callable[[BlobRef], bool] | bool' = True, hrefs: 'Mapping[BlobRef, str] | None' = None) -> 'None'
+```
+
+Write one stored version as an external-resource bundle.
+
+The stored graph document is required to have the canonical public
+spelling before export. Payload choices affect only bundle residency;
+graph bytes, graph identity, asset ids, and declared order stay fixed.
+
+#### `TgdbStore.export_collection`
+
+Method.
+
+```text
+TgdbStore.export_collection(self, collection: 'bytes | str', directory: 'str | PathLike[str]', *, embed: 'Callable[[BlobRef], bool] | bool' = True) -> 'None'
+```
+
+Export active instance heads and their declared order to a directory.
+
+The target is created without replacing an existing path. Every bundle
+is made durable before the closed ``collection.json`` index is linked
+last, so an incomplete export cannot look complete. Full history is
+intentionally outside this interchange format.
+
 #### `TgdbStore.undo`
 
 Method.
@@ -12604,6 +12633,35 @@ Memory use is bounded by the store's inline threshold plus one read
 chunk. A mismatching ``expected`` identity refuses the transaction.
 Payload interpretation remains in graph blob items, never in the
 shared object row.
+
+#### `WriteTransaction.import_bundle`
+
+Method.
+
+```text
+WriteTransaction.import_bundle(self, source: 'BinaryIO', *, collection: 'bytes | str', name: 'str', resolver: 'BlobResolver | None' = None, allow_missing: 'bool' = False, on_conflict: "Literal['refuse', 'new-version']" = 'refuse') -> 'bytes'
+```
+
+Stage one validated bundle and return its stable instance id.
+
+Embedded payloads and explicitly resolved links enter the shared object
+pool. Unresolved links refuse by default; ``allow_missing=True`` keeps
+them discoverable through :meth:`Query.missing_blob`. A conflicting
+name is never changed unless ``on_conflict="new-version"`` is explicit.
+
+#### `WriteTransaction.import_collection`
+
+Method.
+
+```text
+WriteTransaction.import_collection(self, directory: 'str | PathLike[str]', *, resolver: 'BlobResolver | None' = None, allow_missing: 'bool' = False) -> 'tuple[bytes, ...]'
+```
+
+Stage every head in a collection export in one transaction.
+
+The closed collection index supplies stable collection and instance
+ids. Its instance array is the declared order, and each bundle must
+match the recorded head digest and functional fingerprint.
 
 #### `WriteTransaction.rename_collection`
 
