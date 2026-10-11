@@ -1934,6 +1934,7 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
             command = arguments[1]
             collection_command = arguments[2] if command == "collection" else None
             index_command = arguments[2] if command == "index" else None
+            column_command = arguments[2] if command == "column" else None
             needs_collection = command in {
                 "add",
                 "apply",
@@ -1967,6 +1968,15 @@ def _prepare_help_example(directory: Path, arguments: list[str]) -> None:
                         "score",
                         QualifiedName("urn:example", "tokens"),
                         QualifiedName("urn:example", "score"),
+                    )
+                    transaction.commit()
+            if command == "column" and column_command == "drop":
+                with store.write() as transaction:
+                    transaction.declare_column(
+                        "duration",
+                        "audio/*",
+                        QualifiedName("urn:example:audio", "duration"),
+                        "decimal",
                     )
                     transaction.commit()
             if command in {
@@ -2264,7 +2274,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 129
+    assert len(examples) == 134
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]

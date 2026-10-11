@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added ordered, typed tgdb blob metadata columns with declared and inspected
+  provenance, content-checked payload-free equality and range queries, undo,
+  rebuilding, and command-line management.
 - Added byte-preserving tgdb bundle import and export, including ordered,
   single-commit collection interchange and explicit missing-payload handling.
 - Added regression coverage for complete clock-replacement reports, audit-mode

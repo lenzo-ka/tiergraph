@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,reindex,repack,blob,index,column,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -408,6 +408,7 @@ positional arguments:
     repack              change object residency
     blob                store and read payload bytes
     index               manage declared item indexes
+    column              manage declared blob metadata columns
     rename              rename an instance
     move                move an instance
     retire              retire an instance
@@ -870,10 +871,12 @@ usage: tiergraph tgdb find [-h] [--collection NAME] [--name NAME]
                            [--fingerprint VIEW:HEX] [--tier Q[:MIN[:MAX]]]
                            [--lacks-tier Q] [--index NAME[=VALUE|:MIN:MAX]]
                            [--lacks-index NAME] [--uses-blob SHA256]
-                           [--media-type TYPE] [--missing-blob] [--stage NAME]
-                           [--iteration N] [--changed-since COMMIT]
-                           [--changed-view VIEW] [--where PREDICATE]
-                           [--order-by COLUMN] [--retired] [--count] [--json]
+                           [--media-type TYPE]
+                           [--column NAME[=VALUE|:MIN:MAX]] [--missing-blob]
+                           [--stage NAME] [--iteration N]
+                           [--changed-since COMMIT] [--changed-view VIEW]
+                           [--where PREDICATE] [--order-by COLUMN] [--retired]
+                           [--count] [--json]
                            STORE
 
 Query indexed head versions in declared order. Only --where opens matching graph documents, one at a time.
@@ -897,6 +900,9 @@ options:
   --lacks-index NAME    declared index with no value in the graph; repeatable
   --uses-blob SHA256    declared payload digest; repeatable
   --media-type TYPE     declared blob media type; repeatable
+  --column NAME[=VALUE|:MIN:MAX]
+                        required blob column, equality, or numeric range;
+                        repeatable
   --missing-blob        require an active head with a declared payload absent
                         from the store
   --stage NAME          version stage
@@ -1019,6 +1025,32 @@ options:
 
 Examples:
   $ tiergraph tgdb index list corpus.tgdb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb column`
+
+```text
+usage: tiergraph tgdb column [-h] {declare,drop,list} ...
+
+Declare, list, or drop ordered typed columns derived from blob-item attributes in stored graph documents.
+
+positional arguments:
+  {declare,drop,list}
+    declare            declare a blob metadata column
+    drop               drop a blob metadata column
+    list               list blob metadata columns
+
+options:
+  -h, --help           show this help message and exit
+
+Examples:
+  $ tiergraph tgdb column list corpus.tgdb
 
 Exit codes:
   0  success
