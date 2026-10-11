@@ -11990,6 +11990,24 @@ InstanceInfo.to_data(self) -> 'dict[str, str | int | bool | None]'
 
 Return a JSON-compatible description in stable field order.
 
+### `MigrationReport`
+
+```text
+MigrationReport(previous_version: 'int', schema_version: 'int', migrated_versions: 'tuple[int, ...]', backup: 'Path | None', reindex_required: 'bool') -> None
+```
+
+Summarize one explicit ordered catalog migration.
+
+#### `MigrationReport.to_data`
+
+Method.
+
+```text
+MigrationReport.to_data(self) -> 'dict[str, int | str | bool | None | list[int]]'
+```
+
+Return a JSON-compatible migration report in stable field order.
+
 ### `OrphanFile`
 
 ```text
@@ -12875,6 +12893,38 @@ Content bytes, digests, graph versions, and graph fingerprints do not
 change. File bytes are durably published before the SQLite commit;
 superseded files are removed only after the catalog points at inline
 bytes, so interruption cannot leave a row naming an absent file.
+
+#### `TgdbStore.backup`
+
+Method.
+
+```text
+TgdbStore.backup(self, destination: 'str | PathLike[str]') -> 'None'
+```
+
+Copy one consistent store to a new directory.
+
+The SQLite backup API includes committed catalog changes that still
+reside in the write-ahead log. File-resident objects are copied from
+their digest-derived paths and verified before the catalog is
+published; the destination receives an empty staging directory and no
+live SQLite sidecar files.
+
+#### `TgdbStore.migrate`
+
+Method.
+
+```text
+TgdbStore.migrate(self) -> 'MigrationReport'
+```
+
+Migrate an older catalog explicitly after retaining a catalog backup.
+
+Every required migration runs in version order in one SQLite
+transaction. The backup is named ``catalog.pre-N.sqlite3`` for the
+original schema version and is never replaced. Documents, payloads,
+and object-pool files are not rewritten. The open handle keeps its
+original access mode; reopen a migrated read-only store for writing.
 
 ### `VersionChange`
 

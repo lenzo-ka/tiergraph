@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,blob,index,column,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,blob,index,column,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,blob,index,column,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,blob,index,column,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -410,6 +410,8 @@ positional arguments:
     prune               prune retained history explicitly
     purge-retired       purge retired instances explicitly
     gc                  report or delete unreachable objects
+    backup              back up a store
+    migrate             migrate an older catalog
     blob                store and read payload bytes
     index               manage declared item indexes
     column              manage declared blob metadata columns
@@ -1101,6 +1103,54 @@ options:
 Examples:
   $ tiergraph tgdb gc corpus.tgdb
   $ tiergraph tgdb gc corpus.tgdb --delete --json
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb backup`
+
+```text
+usage: tiergraph tgdb backup [-h] STORE DEST
+
+Copy a consistent catalog and every referenced file object to a new store directory. Committed write-ahead-log state is included.
+
+positional arguments:
+  STORE       source store directory
+  DEST        new backup store directory
+
+options:
+  -h, --help  show this help message and exit
+
+Examples:
+  $ tiergraph tgdb backup corpus.tgdb corpus-backup.tgdb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb migrate`
+
+```text
+usage: tiergraph tgdb migrate [-h] [--json] STORE
+
+Retain a pre-migration catalog backup, then apply every required schema migration in order in one transaction. Stored documents and payload objects are not rewritten.
+
+positional arguments:
+  STORE       store directory
+
+options:
+  -h, --help  show this help message and exit
+  --json      emit the structured migration report
+
+Examples:
+  $ tiergraph tgdb migrate corpus.tgdb
 
 Exit codes:
   0  success

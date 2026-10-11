@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added explicit ordered tgdb catalog migrations with retained pre-migration
+  backups and consistent whole-store backups that include committed WAL state.
 - Added explicit tgdb history pruning, retired-instance purging, reversible
   payload pins, and inspection-aware reachability-based garbage collection with
   dry-run reports.

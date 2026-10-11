@@ -117,6 +117,68 @@ def test_tgdb_init_and_info_plain_and_json(
     assert len(bytes.fromhex(report["store_uid"])) == 16
 
 
+def test_tgdb_backup_and_migrate_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Maintenance commands copy stores and report explicit schema movement."""
+    path = tmp_path / "corpus.tgdb"
+    destination = tmp_path / "backup.tgdb"
+    assert main(["tgdb", "init", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["tgdb", "backup", str(path), str(destination)]) == 0
+    assert capsys.readouterr().out == f"backed up {path} to {destination}\n"
+    with tgdb.TgdbStore.open(destination) as backup:
+        assert backup.info().schema_version == 10
+
+    assert main(["tgdb", "migrate", str(path)]) == 0
+    assert capsys.readouterr().out == "already at schema version 10\n"
+    with sqlite3.connect(path / "catalog.sqlite3", autocommit=True) as connection:
+        connection.execute(
+            "UPDATE store_meta SET value = '5' WHERE key = 'index_version'"
+        )
+    assert main(["tgdb", "migrate", str(path)]) == 0
+    assert capsys.readouterr().out == (
+        "already at schema version 10; rebuild derived indexes\n"
+    )
+    with sqlite3.connect(path / "catalog.sqlite3", autocommit=True) as connection:
+        connection.execute("PRAGMA user_version = 9")
+        connection.execute(
+            "UPDATE store_meta SET value = '6' WHERE key = 'index_version'"
+        )
+    assert main(["tgdb", "migrate", str(path)]) == 0
+    assert capsys.readouterr().out == (
+        "migrated schema 9 to 10; backup catalog.pre-9.sqlite3\n"
+    )
+
+    (path / "catalog.pre-9.sqlite3").unlink()
+    with sqlite3.connect(path / "catalog.sqlite3", autocommit=True) as connection:
+        connection.execute("PRAGMA user_version = 9")
+        connection.execute(
+            "UPDATE store_meta SET value = '5' WHERE key = 'index_version'"
+        )
+    assert main(["tgdb", "migrate", str(path)]) == 0
+    assert capsys.readouterr().out == (
+        "migrated schema 9 to 10; backup catalog.pre-9.sqlite3; "
+        "rebuild derived indexes\n"
+    )
+
+    (path / "catalog.pre-9.sqlite3").unlink()
+    with sqlite3.connect(path / "catalog.sqlite3", autocommit=True) as connection:
+        connection.execute("PRAGMA user_version = 9")
+        connection.execute(
+            "UPDATE store_meta SET value = '6' WHERE key = 'index_version'"
+        )
+    assert main(["tgdb", "migrate", str(path), "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report == {
+        "backup": str(path / "catalog.pre-9.sqlite3"),
+        "migrated_versions": [10],
+        "previous_version": 9,
+        "reindex_required": False,
+        "schema_version": 10,
+    }
+
+
 def test_tgdb_check_reports_structural_and_full_success(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1809,6 +1871,8 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
         ("prune", "--before-commit COMMIT"),
         ("purge-retired", "--delete"),
         ("gc", "--delete"),
+        ("backup", "DEST"),
+        ("migrate", "--json"),
     ):
         with pytest.raises(SystemExit) as caught:
             parser.parse_args(["tgdb", command, "--help"])

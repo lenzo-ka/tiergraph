@@ -64,9 +64,11 @@ from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
 
 _APPLICATION_ID = 0x54474442
 _SCHEMA_VERSION = 10
+_OBJECT_SCHEMA_VERSION = 2
 _LAYOUT_VERSION = 1
 _INDEX_VERSION = 6
 _FINGERPRINT_DOMAIN = "tiergraph-equivalence/1"
+_REINDEX_MIGRATIONS = frozenset({3, 4, 5, 6, 7})
 _MINIMUM_SQLITE = (3, 37, 0)
 _WAL_AUTOCHECKPOINT_PAGES = 1_000
 _CATALOG_NAME = "catalog.sqlite3"
@@ -657,6 +659,27 @@ class RepackReport:
             "inline_objects": self.inline_objects,
             "file_objects": self.file_objects,
             "moved_bytes": self.moved_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationReport:
+    """Summarize one explicit ordered catalog migration."""
+
+    previous_version: int
+    schema_version: int
+    migrated_versions: tuple[int, ...]
+    backup: Path | None
+    reindex_required: bool
+
+    def to_data(self) -> dict[str, int | str | bool | None | list[int]]:
+        """Return a JSON-compatible migration report in stable field order."""
+        return {
+            "previous_version": self.previous_version,
+            "schema_version": self.schema_version,
+            "migrated_versions": list(self.migrated_versions),
+            "backup": None if self.backup is None else str(self.backup),
+            "reindex_required": self.reindex_required,
         }
 
 
@@ -2359,6 +2382,140 @@ class TgdbStore:
             inline_objects,
             file_objects,
             moved_bytes,
+        )
+
+    def backup(self, destination: str | PathLike[str]) -> None:
+        """Copy one consistent store to a new directory.
+
+        The SQLite backup API includes committed catalog changes that still
+        reside in the write-ahead log. File-resident objects are copied from
+        their digest-derived paths and verified before the catalog is
+        published; the destination receives an empty staging directory and no
+        live SQLite sidecar files.
+        """
+        self._require_open()
+        if self._writer is not None:
+            raise TgdbError("cannot back up during a write transaction")
+        target = Path(destination)
+        if target.exists() or target.is_symlink():
+            raise TgdbError(f"backup path {str(target)!r} already exists")
+        parent = target.parent
+        if parent.is_symlink() or not parent.is_dir():
+            raise TgdbError(f"backup parent {str(parent)!r} is not a plain directory")
+        if target.resolve().is_relative_to(self._path.resolve()):
+            raise TgdbError("backup destination must be outside the source store")
+        try:
+            target.mkdir()
+        except FileExistsError as error:
+            raise TgdbError(f"backup path {str(target)!r} already exists") from error
+        complete = False
+        try:
+            _initialize_layout(target)
+            staged_catalog = target / f".{_CATALOG_NAME}.{secrets.token_hex(8)}.tmp"
+            _backup_catalog(self._connection, staged_catalog)
+            if self._info.schema_version >= _OBJECT_SCHEMA_VERSION:
+                with sqlite3.connect(staged_catalog, autocommit=True) as copied_catalog:
+                    file_objects = copied_catalog.execute(
+                        "SELECT digest, size FROM objects "
+                        "WHERE residency = 'file' ORDER BY rowid"
+                    )
+                    for digest, size in file_objects:
+                        _copy_object_file(self._path, target, digest, size)
+            os.link(staged_catalog, target / _CATALOG_NAME)
+            staged_catalog.unlink()
+            _fsync_directory(target)
+            _fsync_directory(parent)
+            complete = True
+        except (OSError, sqlite3.DatabaseError) as error:
+            raise TgdbError(f"cannot back up tgdb store: {error}") from error
+        finally:
+            if not complete:
+                shutil.rmtree(target, ignore_errors=True)
+
+    def migrate(self) -> MigrationReport:
+        """Migrate an older catalog explicitly after retaining a catalog backup.
+
+        Every required migration runs in version order in one SQLite
+        transaction. The backup is named ``catalog.pre-N.sqlite3`` for the
+        original schema version and is never replaced. Documents, payloads,
+        and object-pool files are not rewritten. The open handle keeps its
+        original access mode; reopen a migrated read-only store for writing.
+        """
+        self._require_open()
+        if self._writer is not None:
+            raise TgdbError("cannot migrate during a write transaction")
+        previous = self._info.schema_version
+        stale_indexes = (
+            self._info.index_version != _INDEX_VERSION
+            or self._info.fingerprint_domain != _FINGERPRINT_DOMAIN
+        )
+        if previous == _SCHEMA_VERSION:
+            return MigrationReport(
+                previous,
+                previous,
+                (),
+                None,
+                stale_indexes,
+            )
+        if previous not in _MIGRATIONS:
+            raise TgdbError(
+                f"store schema version {previous} has no migration path to "
+                f"version {_SCHEMA_VERSION}"
+            )
+        backup = self._path / f"catalog.pre-{previous}.sqlite3"
+        if backup.exists() or backup.is_symlink():
+            raise TgdbError(f"migration backup {backup.name!r} already exists")
+        _backup_catalog(self._connection, backup)
+        try:
+            migration_connection = _connect(
+                self._path / _CATALOG_NAME, "rw", self._limits
+            )
+        except sqlite3.DatabaseError as error:
+            if isinstance(error, sqlite3.OperationalError) and _sqlite_busy(error):
+                raise StoreBusy("tgdb catalog remained busy while migrating") from error
+            raise StoreCorrupt(f"cannot migrate tgdb catalog: {error}") from error
+        try:
+            _configure_writable(migration_connection)
+            migration_connection.execute("PRAGMA foreign_keys = OFF")
+            migration_connection.execute("BEGIN IMMEDIATE")
+            version = previous
+            while version < _SCHEMA_VERSION:
+                _MIGRATIONS[version](migration_connection)
+                version += 1
+                migration_connection.execute(f"PRAGMA user_version = {version}")
+            violation = migration_connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchone()
+            if violation is not None:
+                raise StoreCorrupt(
+                    f"catalog migration produced a foreign-key violation in "
+                    f"table {violation[0]!r}"
+                )
+            migration_connection.execute("COMMIT")
+            migration_connection.execute("PRAGMA foreign_keys = ON")
+        except sqlite3.DatabaseError as error:
+            if migration_connection.in_transaction:
+                migration_connection.execute("ROLLBACK")
+            if isinstance(error, sqlite3.OperationalError) and _sqlite_busy(error):
+                raise StoreBusy("tgdb catalog remained busy while migrating") from error
+            raise StoreCorrupt(f"cannot migrate tgdb catalog: {error}") from error
+        except Exception:
+            if migration_connection.in_transaction:
+                migration_connection.execute("ROLLBACK")
+            raise
+        finally:
+            migration_connection.close()
+        self._info = replace(self._info, schema_version=_SCHEMA_VERSION)
+        return MigrationReport(
+            previous,
+            _SCHEMA_VERSION,
+            tuple(range(previous + 1, _SCHEMA_VERSION + 1)),
+            backup,
+            stale_indexes
+            or any(
+                version in _REINDEX_MIGRATIONS
+                for version in range(previous, _SCHEMA_VERSION)
+            ),
         )
 
     def _put_object(
@@ -8513,9 +8670,10 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
             "identified TEXT NOT NULL "
             "CHECK(length(identified) = 64 AND identified NOT GLOB '*[^0-9a-f]*'), "
             "size INTEGER NOT NULL CHECK(size >= 0), "
-            "tier_count INTEGER NOT NULL CHECK(tier_count >= 0), "
-            "blob_count INTEGER NOT NULL CHECK(blob_count >= 0), "
-            "attachment_count INTEGER NOT NULL CHECK(attachment_count >= 0)"
+            "tier_count INTEGER NOT NULL DEFAULT 0 CHECK(tier_count >= 0), "
+            "blob_count INTEGER NOT NULL DEFAULT 0 CHECK(blob_count >= 0), "
+            "attachment_count INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(attachment_count >= 0)"
             ") STRICT"
         )
         connection.execute(
@@ -8687,6 +8845,323 @@ def _initialize(connection: sqlite3.Connection, limits: TgdbLimits) -> None:
     except Exception:
         connection.execute("ROLLBACK")
         raise
+
+
+def _migration_1_to_2(connection: sqlite3.Connection) -> None:
+    """Add the content-addressed object catalog."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS objects("
+        "digest TEXT PRIMARY KEY "
+        "CHECK(length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'), "
+        "size INTEGER NOT NULL CHECK(size >= 0), "
+        "residency TEXT NOT NULL CHECK(residency IN ('inline', 'file')), "
+        "data BLOB, "
+        "CHECK((residency = 'inline' AND data IS NOT NULL) OR "
+        "(residency = 'file' AND data IS NULL))"
+        ") STRICT"
+    )
+
+
+def _migration_2_to_3(connection: sqlite3.Connection) -> None:
+    """Add ordered catalog identities and reversible commit records."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS commits("
+        "seq INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK(length(kind) > 0), "
+        "annotations TEXT) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS commit_ops("
+        "commit_seq INTEGER NOT NULL REFERENCES commits(seq), "
+        "ordinal INTEGER NOT NULL CHECK(ordinal >= 0), "
+        "op TEXT NOT NULL CHECK(length(op) > 0), forward TEXT NOT NULL, "
+        "inverse TEXT NOT NULL, PRIMARY KEY(commit_seq, ordinal)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS collections("
+        "id INTEGER PRIMARY KEY, uid BLOB NOT NULL UNIQUE CHECK(length(uid) = 16), "
+        "name TEXT NOT NULL UNIQUE CHECK(length(name) > 0), "
+        "position INTEGER NOT NULL UNIQUE CHECK(position >= 0), "
+        "retired_commit INTEGER REFERENCES commits(seq)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS instances("
+        "id INTEGER PRIMARY KEY, uid BLOB NOT NULL UNIQUE CHECK(length(uid) = 16), "
+        "collection_id INTEGER NOT NULL REFERENCES collections(id), "
+        "name TEXT NOT NULL CHECK(length(name) > 0), "
+        "position INTEGER NOT NULL CHECK(position >= 0), "
+        "head_version INTEGER, "
+        "generation INTEGER NOT NULL CHECK(generation >= 0), "
+        "retired_commit INTEGER REFERENCES commits(seq), "
+        "UNIQUE(collection_id, name), UNIQUE(collection_id, position)) STRICT"
+    )
+
+
+def _migration_3_to_4(connection: sqlite3.Connection) -> None:
+    """Add complete graph versions and their stable fingerprints."""
+    foreign_keys = {
+        (row[2], row[3], row[4])
+        for row in connection.execute("PRAGMA foreign_key_list(instances)")
+    }
+    if ("versions", "head_version", "id") not in foreign_keys:
+        connection.execute("ALTER TABLE instances RENAME TO instances_v3")
+        connection.execute(
+            "CREATE TABLE instances("
+            "id INTEGER PRIMARY KEY, "
+            "uid BLOB NOT NULL UNIQUE CHECK(length(uid) = 16), "
+            "collection_id INTEGER NOT NULL REFERENCES collections(id), "
+            "name TEXT NOT NULL CHECK(length(name) > 0), "
+            "position INTEGER NOT NULL CHECK(position >= 0), "
+            "head_version INTEGER REFERENCES versions(id), "
+            "generation INTEGER NOT NULL CHECK(generation >= 0), "
+            "retired_commit INTEGER REFERENCES commits(seq), "
+            "UNIQUE(collection_id, name), UNIQUE(collection_id, position)) STRICT"
+        )
+        connection.execute(
+            "INSERT INTO instances(id, uid, collection_id, name, position, "
+            "head_version, generation, retired_commit) "
+            "SELECT id, uid, collection_id, name, position, head_version, "
+            "generation, retired_commit FROM instances_v3"
+        )
+        connection.execute("DROP TABLE instances_v3")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS graph_facts("
+        "digest TEXT PRIMARY KEY REFERENCES objects(digest), "
+        "format_version TEXT NOT NULL, fp_domain TEXT NOT NULL, "
+        "functional TEXT NOT NULL "
+        "CHECK(length(functional) = 64 AND functional NOT GLOB '*[^0-9a-f]*'), "
+        "identified TEXT NOT NULL "
+        "CHECK(length(identified) = 64 AND identified NOT GLOB '*[^0-9a-f]*'), "
+        "size INTEGER NOT NULL CHECK(size >= 0)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS versions("
+        "id INTEGER PRIMARY KEY, "
+        "instance_id INTEGER NOT NULL REFERENCES instances(id), "
+        "seq INTEGER NOT NULL CHECK(seq > 0), "
+        "parent_id INTEGER REFERENCES versions(id), "
+        "commit_seq INTEGER NOT NULL REFERENCES commits(seq), "
+        "graph_digest TEXT NOT NULL REFERENCES objects(digest), "
+        "patch_digest TEXT REFERENCES objects(digest), "
+        "transition TEXT NOT NULL "
+        "CHECK(transition IN ('initial', 'patch', 'snapshot')), "
+        "reason TEXT, stage TEXT, iteration INTEGER, annotations TEXT, "
+        "UNIQUE(instance_id, seq), "
+        "CHECK((transition = 'initial' AND seq = 1 AND parent_id IS NULL "
+        "AND patch_digest IS NULL) OR transition != 'initial'), "
+        "CHECK((transition = 'initial' AND patch_digest IS NULL "
+        "AND reason IS NULL) OR (transition = 'patch' "
+        "AND patch_digest IS NOT NULL AND reason IS NULL) OR "
+        "(transition = 'snapshot' AND patch_digest IS NULL "
+        "AND reason IS NOT NULL))) STRICT"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS graph_facts_functional ON graph_facts(functional)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS graph_facts_identified ON graph_facts(identified)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS versions_instance_commit "
+        "ON versions(instance_id, commit_seq)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS versions_stage_iteration "
+        "ON versions(stage, iteration)"
+    )
+
+
+def _add_count_column(
+    connection: sqlite3.Connection,
+    name: Literal["tier_count", "blob_count", "attachment_count"],
+) -> None:
+    """Add one later graph-fact count when an older table lacks it."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(graph_facts)")}
+    if name not in columns:
+        connection.execute(
+            f"ALTER TABLE graph_facts ADD COLUMN {name} "
+            "INTEGER NOT NULL DEFAULT 0 CHECK(" + name + " >= 0)"
+        )
+
+
+def _migration_4_to_5(connection: sqlite3.Connection) -> None:
+    """Add declared tier summaries for every retained graph."""
+    _add_count_column(connection, "tier_count")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS graph_tiers("
+        "digest TEXT NOT NULL REFERENCES graph_facts(digest) ON DELETE CASCADE, "
+        "position INTEGER NOT NULL CHECK(position >= 0), "
+        "tier TEXT NOT NULL CHECK(length(tier) > 0), "
+        "item_count INTEGER NOT NULL CHECK(item_count >= 0), "
+        "PRIMARY KEY(digest, position)) STRICT"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS graph_tiers_tier_count "
+        "ON graph_tiers(tier, item_count, digest)"
+    )
+
+
+def _migration_5_to_6(connection: sqlite3.Connection) -> None:
+    """Add ordered declared item indexes and their rebuild checks."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS declared_indexes("
+        "name TEXT PRIMARY KEY CHECK(length(name) > 0), "
+        "position INTEGER NOT NULL UNIQUE CHECK(position >= 0), "
+        "tier TEXT NOT NULL CHECK(length(tier) > 0), "
+        "attribute TEXT NOT NULL CHECK(length(attribute) > 0), "
+        "history INTEGER NOT NULL CHECK(history IN (0, 1))) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS item_index_counts("
+        "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+        "ON DELETE CASCADE, "
+        "index_name TEXT NOT NULL REFERENCES declared_indexes(name) "
+        "ON DELETE CASCADE, row_count INTEGER NOT NULL CHECK(row_count >= 0), "
+        "PRIMARY KEY(graph_digest, index_name)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS item_index("
+        "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+        "ON DELETE CASCADE, "
+        "index_name TEXT NOT NULL REFERENCES declared_indexes(name) "
+        "ON DELETE CASCADE, "
+        "tier_position INTEGER NOT NULL CHECK(tier_position >= 0), "
+        "item_position INTEGER NOT NULL CHECK(item_position >= 0), "
+        "value_type TEXT NOT NULL CHECK(length(value_type) > 0), "
+        "value_text TEXT NOT NULL, value_num TEXT, "
+        "value_digest TEXT NOT NULL CHECK(length(value_digest) = 64 AND "
+        "value_digest NOT GLOB '*[^0-9a-f]*'), "
+        "PRIMARY KEY(graph_digest, index_name, item_position)) STRICT"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS item_index_value_digest "
+        "ON item_index(index_name, value_digest)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS item_index_value_num "
+        "ON item_index(index_name, value_num)"
+    )
+
+
+def _migration_6_to_7(connection: sqlite3.Connection) -> None:
+    """Add ordered external-resource and attachment indexes."""
+    _add_count_column(connection, "blob_count")
+    _add_count_column(connection, "attachment_count")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS blob_items("
+        "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+        "ON DELETE CASCADE, tier TEXT NOT NULL CHECK(length(tier) > 0), "
+        "position INTEGER NOT NULL CHECK(position >= 0), "
+        "durable_id TEXT NOT NULL CHECK(length(durable_id) > 0), "
+        "sha256 TEXT NOT NULL CHECK(length(sha256) = 64 AND "
+        "sha256 NOT GLOB '*[^0-9a-f]*'), size INTEGER NOT NULL CHECK(size >= 0), "
+        "media_type TEXT NOT NULL CHECK(length(media_type) > 0), schema TEXT, "
+        "PRIMARY KEY(graph_digest, tier, position)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS attachments("
+        "graph_digest TEXT NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal >= 0), "
+        "declaration TEXT NOT NULL CHECK(length(declaration) > 0), "
+        "durable_id TEXT NOT NULL CHECK(length(durable_id) > 0), "
+        "subject TEXT NOT NULL CHECK(length(subject) > 0), "
+        "blob_tier TEXT NOT NULL CHECK(length(blob_tier) > 0), "
+        "blob_position INTEGER NOT NULL CHECK(blob_position >= 0), "
+        "span_unit TEXT, span_offset INTEGER CHECK(span_offset >= 0), "
+        "span_length INTEGER CHECK(span_length >= 0), span_path TEXT, "
+        "PRIMARY KEY(graph_digest, ordinal), "
+        "FOREIGN KEY(graph_digest, blob_tier, blob_position) "
+        "REFERENCES blob_items(graph_digest, tier, position) ON DELETE CASCADE, "
+        "CHECK((span_length IS NULL AND span_offset IS NULL "
+        "AND span_unit IS NULL) OR (span_length IS NOT NULL "
+        "AND span_unit IS NOT NULL AND span_path IS NULL)), "
+        "CHECK(span_path IS NULL OR (span_unit IS NULL "
+        "AND span_offset IS NULL AND span_length IS NULL))) STRICT"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS blob_items_sha256 ON blob_items(sha256)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS blob_items_durable_id ON blob_items(durable_id)"
+    )
+
+
+def _migration_7_to_8(connection: sqlite3.Connection) -> None:
+    """Add ordered typed metadata columns and their derived values."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS declared_columns("
+        "name TEXT PRIMARY KEY CHECK(length(name) > 0), "
+        "position INTEGER NOT NULL UNIQUE CHECK(position >= 0), "
+        "media_type TEXT NOT NULL CHECK(length(media_type) > 0), "
+        "attribute TEXT NOT NULL CHECK(length(attribute) > 0), "
+        "value_type TEXT NOT NULL CHECK(length(value_type) > 0)) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS blob_metadata("
+        "graph_digest TEXT NOT NULL, tier TEXT NOT NULL, "
+        "position INTEGER NOT NULL CHECK(position >= 0), "
+        "column TEXT NOT NULL REFERENCES declared_columns(name) ON DELETE CASCADE, "
+        "value_text TEXT NOT NULL, value_num TEXT, "
+        "source TEXT NOT NULL CHECK(source IN ('declared', 'inspected')), "
+        "PRIMARY KEY(graph_digest, tier, position, column), "
+        "FOREIGN KEY(graph_digest, tier, position) "
+        "REFERENCES blob_items(graph_digest, tier, position) ON DELETE CASCADE) STRICT"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS blob_metadata_counts("
+        "graph_digest TEXT NOT NULL REFERENCES graph_facts(digest) "
+        "ON DELETE CASCADE, "
+        "column TEXT NOT NULL REFERENCES declared_columns(name) ON DELETE CASCADE, "
+        "row_count INTEGER NOT NULL CHECK(row_count >= 0), "
+        "row_digest TEXT NOT NULL CHECK(length(row_digest) = 64 AND "
+        "row_digest NOT GLOB '*[^0-9a-f]*'), "
+        "PRIMARY KEY(graph_digest, column)) STRICT"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS blob_metadata_value_text "
+        "ON blob_metadata(column, value_text)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS blob_metadata_value_num "
+        "ON blob_metadata(column, value_num)"
+    )
+
+
+def _migration_8_to_9(connection: sqlite3.Connection) -> None:
+    """Add explicit ordered content-inspection results."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS inspections("
+        "digest TEXT NOT NULL REFERENCES objects(digest) ON DELETE CASCADE, "
+        "media_type TEXT NOT NULL CHECK(length(media_type) > 0), "
+        "inspector TEXT NOT NULL CHECK(length(inspector) > 0), "
+        "inspector_version TEXT NOT NULL CHECK(length(inspector_version) > 0), "
+        "ordinal INTEGER NOT NULL CHECK(ordinal >= 0), "
+        "key TEXT NOT NULL CHECK(length(key) > 0), "
+        "value_type TEXT NOT NULL CHECK(length(value_type) > 0), value TEXT NOT NULL, "
+        "PRIMARY KEY(digest, inspector, inspector_version, ordinal)) STRICT"
+    )
+
+
+def _migration_9_to_10(connection: sqlite3.Connection) -> None:
+    """Add explicit object-retention pins."""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS pins("
+        "digest TEXT PRIMARY KEY CHECK(length(digest) = 64 AND "
+        "digest NOT GLOB '*[^0-9a-f]*'), "
+        "reason TEXT NOT NULL CHECK(length(reason) > 0), "
+        "commit_seq INTEGER NOT NULL REFERENCES commits(seq)) STRICT"
+    )
+
+
+_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    1: _migration_1_to_2,
+    2: _migration_2_to_3,
+    3: _migration_3_to_4,
+    4: _migration_4_to_5,
+    5: _migration_5_to_6,
+    6: _migration_6_to_7,
+    7: _migration_7_to_8,
+    8: _migration_8_to_9,
+    9: _migration_9_to_10,
+}
 
 
 def _read_info(
@@ -8897,6 +9372,72 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_file(path: Path) -> None:
+    """Persist one completed ordinary file."""
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _backup_catalog(source: sqlite3.Connection, destination: Path) -> None:
+    """Write and durably publish one SQLite backup without replacing a file."""
+    staging = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
+    target: sqlite3.Connection | None = None
+    try:
+        target = sqlite3.connect(staging, autocommit=True)
+        source.backup(target)
+        target.execute("PRAGMA journal_mode = DELETE")
+        _fsync_file(staging)
+        os.link(staging, destination)
+        _fsync_directory(destination.parent)
+    except sqlite3.OperationalError as error:
+        if _sqlite_busy(error):
+            raise StoreBusy("tgdb catalog remained busy while backing up") from error
+        raise TgdbError(f"cannot write tgdb catalog backup: {error}") from error
+    except (OSError, sqlite3.Error) as error:
+        raise TgdbError(f"cannot write tgdb catalog backup: {error}") from error
+    finally:
+        if target is not None:
+            target.close()
+        with suppress(OSError):
+            staging.unlink()
+
+
+def _copy_object_file(
+    source_root: Path, target_root: Path, digest: str, size: int
+) -> None:
+    """Copy and verify one file-resident object into a new store layout."""
+    _validate_digest(digest)
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise StoreCorrupt(f"object {digest} has malformed recorded size")
+    source_path = _object_path(source_root, digest)
+    _check_object_file(source_path, digest, size, full=False)
+    staging = target_root / _STAGING_NAME / secrets.token_hex(16)
+    source_descriptor = os.open(source_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    digest_hash = hashlib.sha256()
+    copied = 0
+    try:
+        with io.FileIO(source_descriptor, mode="rb", closefd=True) as source:
+            with staging.open("xb") as destination:
+                while True:
+                    chunk = _read_binary(source, _OBJECT_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    destination.write(chunk)
+                    digest_hash.update(chunk)
+                    copied += len(chunk)
+                destination.flush()
+                os.fsync(destination.fileno())
+        if copied != size or digest_hash.hexdigest() != digest:
+            raise StoreCorrupt(f"object {digest} changed while it was backed up")
+        _publish_object_file(target_root, staging, digest, size)
+    finally:
+        with suppress(OSError):
+            staging.unlink()
+
+
 def _publish_object_file(root: Path, staging: Path, digest: str, size: int) -> None:
     """Publish a staged file once at its digest-derived location."""
     parent = _ensure_object_parent(root, digest)
@@ -8989,6 +9530,7 @@ __all__ = [
     "InspectionResult",
     "Inspector",
     "InstanceInfo",
+    "MigrationReport",
     "OrphanFile",
     "PinInfo",
     "PruneReport",
