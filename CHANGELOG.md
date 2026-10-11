@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added byte-preserving tgdb bundle import and export, including ordered,
   single-commit collection interchange and explicit missing-payload handling.
+- Added regression coverage for complete clock-replacement reports, audit-mode
+  parity, reversible journal patches, and preserved binding template targets.
 - Added tgdb payload ingestion, verified resolver and sink adapters, ordered
   blob and attachment indexes, missing-payload queries, and explicit repacking.
 - Added ordered tgdb item-index declarations with typed equality, exact numeric
