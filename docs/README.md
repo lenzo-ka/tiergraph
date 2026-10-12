@@ -30,6 +30,8 @@ tools.
 - **Attach physical times to boundaries?** See [Timing](guide/timing.md).
 - **Attach typed external resources without putting bytes in the graph?** See
   [External resources](guide/external-resources.md).
+- **Store ordered graphs, atomic passes, and retained history?** See
+  [Corpus storage](guide/corpus-storage.md).
 - **Turn segmentation into text, HTML, JSON, or JSON Lines?** See
   [Span views](guide/span-views.md).
 - **Write JSON or render DOT?** Go to [Serialization](guide/serialization.md).
@@ -50,6 +52,7 @@ tools.
 - [Work budgets](guide/work-budgets.md)
 - [Timing](guide/timing.md)
 - [External resources](guide/external-resources.md)
+- [Corpus storage](guide/corpus-storage.md)
 - [Interchange with annotation formats](guide/annotation-formats.md)
 - [Span views](guide/span-views.md)
 - [Profiles](guide/profiles.md)

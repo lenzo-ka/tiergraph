@@ -542,6 +542,10 @@
       "console",
       "console"
     ],
+    "docs/guide/corpus-storage.md": [
+      "python",
+      "text"
+    ],
     "docs/guide/serialization.md": [
       "python",
       "text",
@@ -610,6 +614,7 @@
     "docs/guide/recognize-and-act.md",
     "docs/guide/timing.md",
     "docs/guide/external-resources.md",
+    "docs/guide/corpus-storage.md",
     "docs/guide/serialization.md",
     "docs/guide/profiles.md",
     "docs/guide/annotation-formats.md",
