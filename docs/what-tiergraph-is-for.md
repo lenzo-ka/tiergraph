@@ -92,7 +92,10 @@ composing large transducers, OpenFst and Pynini are the tools to use.
 The model is informed by Sue Hertz's Delta representation, which represented
 speech as synchronized streams of tokens, and by the Heterogeneous Relation
 Graphs of the Festival Speech Synthesis System, which hold an utterance as items
-in several relations at once. tiergraph keeps their emphasis on explicit tiered
+in several relations at once. The interchange format also owes something in
+spirit to Apple's QuickTime, a general time-based media format whose typed
+tracks share one timeline, so the container stays general while every resource
+brings its own schema. tiergraph keeps their emphasis on explicit tiered
 structure and adds a typed, immutable model with a versioned interchange format.
 
 ## What it does not try to do

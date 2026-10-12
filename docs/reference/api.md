@@ -6830,7 +6830,7 @@ Canonical complete-boundary grammar value. Current value: `AttributeValue(name=Q
 
 ### `__version__`
 
-Installed distribution version. Current value: `0.8.0`.
+Installed distribution version. Current value: `0.9.0`.
 
 ## Paths
 
@@ -8782,7 +8782,7 @@ Return strict-JSON traversal data in canonical node order.
 
 ### `tiergraph.blob`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `BLOB_NAMESPACE`
 
@@ -9252,7 +9252,7 @@ failed write never leaves a usable-looking bundle.
 
 ### `tiergraph.build`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 Builder notation errors raise the directly importable `tiergraph.build.BuilderError`, a `ValueError` subclass. It is not part of the module's star-exported surface.
 
@@ -9422,7 +9422,7 @@ Describe an item with values to lower through declared attribute types.
 
 ### `tiergraph.diff`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 The top-level `tiergraph.diff` name is the `diff()` function. Import names from the module, for example `from tiergraph.diff import diff`.
 
@@ -9451,7 +9451,7 @@ changes.
 
 ### `tiergraph.distance`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 The top-level `tiergraph.distance` name is the `distance()` function. Import names from the module, for example `from tiergraph.distance import CostTable`.
 
@@ -10997,7 +10997,7 @@ check the laws at values rather than read this tuple.
 
 ### `tiergraph.schema`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `Refusal`
 
@@ -11844,7 +11844,7 @@ Return strict JSON data for one predicate AST.
 
 ### `tiergraph.cli`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `build_parser`
 
@@ -11864,7 +11864,7 @@ Run the command line. Returns the process exit status.
 
 ### `tiergraph.spanview`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `SPANVIEW_FORMAT_VERSION`
 
@@ -11984,7 +11984,7 @@ Return a deterministic ruler and aligned plain-text span table.
 
 ### `tiergraph.textgrid`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `TextGridReadResult`
 
@@ -12022,7 +12022,7 @@ Render declared span and point tiers as a long-form TextGrid document.
 
 ### `tiergraph.tgdb`
 
-This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+This module is importable and usable, but carries no API-stability promise at version 0.9.0.
 
 ### `CheckReport`
 
