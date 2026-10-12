@@ -101,9 +101,10 @@ later release is not supported.
 
 ## Program and patch JSON Lines
 
-Construction programs use canonical JSON Lines. Version 2 adds seal, layer,
-and fact construction records while retaining every version 1 spelling; the
-reader continues to accept version 1 with exactly its original opcode set.
+Construction programs use canonical JSON Lines. The first record is an object
+whose only member is `machine_version` with the string value `"2"`; the reader
+refuses every other version. Version 2 includes seal, layer, and fact
+construction records.
 `Program` always starts from the empty graph and refuses removal operations.
 `graph_to_program()` emits a construction-only version 2 program that replays
 to exact graph equality, including orphan facts and explicit zero-length seal

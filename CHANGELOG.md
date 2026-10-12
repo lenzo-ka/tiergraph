@@ -133,8 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history portable without embedding complete graph snapshots per operation.
 - Added `graph_to_program()` exact graph replay, including wire-loaded orphan
   facts and zero-length seal records. Machine format version 2 adds the needed
-  construction opcodes while retaining version 1 reads unchanged, and
-  construction `Program` values refuse removal opcodes.
+  construction opcodes, and construction `Program` values refuse removal
+  opcodes.
 - Added deterministic `diff()` patches. Compatible schemas align each ordered
   tier under unit edit costs, turn reusable delete/insert pairs into moves, and
   rebuild references in dependency order; incompatible schemas use a guarded
@@ -233,14 +233,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FoldDeclaration` now refuses repeated declared roots at construction, and
   `Equals` requires its literal collection to be an actual tuple.
 - Predicate binding now resolves a `Spans` predicate's other tier before
-  evaluation. Malformed offset-profile JSON that supplies both or neither of
-  `extent` and `end` is now a staged shape refusal naming the profile path.
-- Bring documentation current with the editing API and path-result serialization.
+  evaluation.
+- Offset-profile JSON refuses both or neither of `extent` and `end` as a staged
+  shape error.
+- Construction programs use `machine_version` `"2"` and refuse every other
+  version.
+- Brought documentation current with the editing API and path-result serialization.
 - Removed the finite projection-witness admission types, helper, and
   `graph_distance(..., projections=...)` parameter. General graph distance now
-  uses only the built-in atom-multiset lower bound. `DistanceInterval` adds the
-  serialized `lower_bound_method` field for nonexact results and requires a
-  nonempty lower-bound method when constructed with `exact=False`.
+  uses only the built-in atom-multiset lower bound.
+- `DistanceInterval.lower_bound_method` is required when `exact=False`.
 - Item and relation removal now refuses locally, before changing an editor, when
   a relation endpoint, durable boundary anchor, stored boundary value, seal, or
   live layer fact still depends on the removed content. Some item removals that
@@ -252,6 +254,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Kept default import time and memory within 5% of 0.8.0 by loading opt-in
   public surfaces on first use.
+- Restored lazy package-attribute access for noncolliding secondary modules.
 - Rebased every clock-aware replacement report to source relation coordinates.
 - Included withdrawn clock-binding facts in public replacement detachment reports.
 - Kept merges that require relation, attribute, layer, or seam drops as one
@@ -324,6 +327,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Documented `tiergraph.diff` and `tiergraph.distance` as shadowed secondary
+  modules with explicit import forms.
 - Added a tested tgdb corpus-loop guide covering atomic automatic passes,
   replay-checked manual correction, fixpoint detection, and indexed work queues.
 - Documented and demonstrated that `Spans`, like `span_pairs`, excludes an item

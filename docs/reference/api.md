@@ -9420,6 +9420,294 @@ item(durable_id: 'str | None' = None, /, *, attrs: 'Mapping[Name, object] | None
 
 Describe an item with values to lower through declared attribute types.
 
+### `tiergraph.diff`
+
+This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+
+The top-level `tiergraph.diff` name is the `diff()` function. Import names from the module, for example `from tiergraph.diff import diff`.
+
+### `diff`
+
+```text
+diff(source: 'Graph', target: 'Graph', view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'Patch'
+```
+
+Return a deterministic executable patch from ``source`` toward ``target``.
+
+One exact containment shift, split, or merge remains its semantic
+operation. Other compatible schemas use a per-tier unit-cost alignment.
+Reused equal items become moves, unmatched items become replacements,
+insertions, or removals, and references are torn down and rebuilt in
+dependency order. Incompatible declarations use one guarded rebuild delta.
+Applying the result always produces a graph equivalent to ``target`` under
+``view``; an already equivalent pair produces an empty patch guarded to
+``source``. When such a pair differs under the identified view, that no-op
+patch is not an exact transition to ``target`` and does not compose as one.
+
+This graph-level operation validates graph structure only. It does not
+preserve or report a clock profile's rebinding policy; construct edits
+through :meth:`ClockProfile.edit` when that policy must govern structural
+changes.
+
+### `tiergraph.distance`
+
+This module is importable and usable, but carries no API-stability promise at version 0.8.0.
+
+The top-level `tiergraph.distance` name is the `distance()` function. Import names from the module, for example `from tiergraph.distance import CostTable`.
+
+### `PRIMITIVE_KINDS`
+
+Graph operation names accepted by declared edit-cost tables. Current value: `frozenset({'add_layer', 'add_relation', 'declare', 'demote_boundary', 'demote_item', 'demote_relation', 'drop_seal', 'insert_item', 'merge_containers', 'move_item', 'promote_boundary', 'promote_item', 'promote_relation', 'put_fact', 'remove_attribute', 'remove_fact', 'remove_item', 'remove_layer', 'remove_relation', 'replace_item', 'seal', 'set_attribute', 'set_endpoints', 'split_container', 'swap_items', 'undeclare', 'unseal'})`.
+
+### `UNIT_COSTS`
+
+Default symmetric graph-edit costs with reorder shortcuts priced as two edits. Current value: `CostTable(operations=mappingproxy({'add_layer': Decimal('1'), 'add_relation': Decimal('1'), 'declare': Decimal('1'), 'demote_boundary': Decimal('1'), 'demote_item': Decimal('1'), 'demote_relation': Decimal('1'), 'drop_seal': Decimal('1'), 'insert_item': Decimal('1'), 'merge_containers': Decimal('3'), 'move_item': Decimal('2'), 'promote_boundary': Decimal('1'), 'promote_item': Decimal('1'), 'promote_relation': Decimal('1'), 'put_fact': Decimal('1'), 'remove_attribute': Decimal('1'), 'remove_fact': Decimal('1'), 'remove_item': Decimal('1'), 'remove_layer': Decimal('1'), 'remove_relation': Decimal('1'), 'replace_item': Decimal('1'), 'seal': Decimal('1'), 'set_attribute': Decimal('1'), 'set_endpoints': Decimal('1'), 'split_container': Decimal('3'), 'swap_items': Decimal('2'), 'undeclare': Decimal('1'), 'unseal': Decimal('1')}), declarations=mappingproxy({}))`.
+
+### `CostTable`
+
+```text
+CostTable(operations: 'Mapping[str, CostLike]' = <factory>, declarations: 'Mapping[QualifiedName, Mapping[str, CostLike]]' = <factory>, value_substitution: 'ValueSubstitution' = <factory>, boundary_displacement: 'BoundaryDisplacement' = <factory>) -> None
+```
+
+Declare graph-operation costs and domain-specific value costs.
+
+Operation costs are global unless ``declarations`` overrides one operation
+for a qualified declaration. Names must belong to :data:`PRIMITIVE_KINDS`,
+and inverse pairs must have equal costs. Zero is accepted for callers that
+intentionally treat some graph changes as free, but an exact result is a
+metric only when every operation visible in its equivalence view has
+positive cost.
+
+The two callbacks remain Python-only because a data file cannot safely name
+executable code. :meth:`from_data` therefore reads numeric operation and
+declaration costs while retaining the default callbacks.
+
+#### `CostTable.operation`
+
+Method.
+
+```text
+CostTable.operation(self, kind: 'str', declaration: 'QualifiedName | None' = None) -> 'Decimal'
+```
+
+Return the declared cost for one operation and optional declaration.
+
+#### `CostTable.minimum_operation`
+
+Method.
+
+```text
+CostTable.minimum_operation(self, kind: 'str') -> 'Decimal'
+```
+
+Return the least declared cost for an operation in any scope.
+
+#### `CostTable.substitute_value`
+
+Method.
+
+```text
+CostTable.substitute_value(self, before: 'Attribute', after: 'Attribute') -> 'Decimal'
+```
+
+Return the checked domain-specific cost of replacing one value.
+
+#### `CostTable.displace_boundary`
+
+Method.
+
+```text
+CostTable.displace_boundary(self, before: 'int', after: 'int') -> 'Decimal'
+```
+
+Return the checked domain-specific cost of moving one boundary.
+
+#### `CostTable.metric_violations`
+
+Method.
+
+```text
+CostTable.metric_violations(self) -> 'tuple[str, ...]'
+```
+
+Name declared graph operations whose zero cost prevents a metric.
+
+#### `CostTable.to_data`
+
+Method.
+
+```text
+CostTable.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return the declarative numeric part as JSON-compatible data.
+
+#### `CostTable.from_data`
+
+Class method.
+
+```text
+CostTable.from_data(cls, value: 'object') -> 'CostTable'
+```
+
+Decode strict numeric cost-table data for command-line use.
+
+### `DistanceInterval`
+
+```text
+DistanceInterval(lower: 'Decimal', upper: 'Decimal', exact: 'bool', method: 'str', lower_bound_method: 'str | None' = None) -> None
+```
+
+Hold an exact distance or named lower and realized upper bounds.
+
+#### `DistanceInterval.value`
+
+Property.
+
+```text
+DistanceInterval.value(self) -> 'Decimal | None'
+```
+
+Return the exact value, or ``None`` while the interval is open.
+
+#### `DistanceInterval.to_data`
+
+Method.
+
+```text
+DistanceInterval.to_data(self) -> 'dict[str, JsonValue]'
+```
+
+Return a JSON-compatible exact value or interval report.
+
+### `OrderedTree`
+
+```text
+OrderedTree(value: 'object', children: 'tuple[OrderedTree, ...]' = ()) -> None
+```
+
+Hold one labeled node and its ordered children for tree distance.
+
+### `SequenceProjection`
+
+```text
+SequenceProjection(name: 'str', project: 'GraphProjection', insert: 'SequenceCost[object]' = 1, delete: 'SequenceCost[object]' = 1, substitute: 'SubstitutionCost[object]' = 1) -> None
+```
+
+Project a graph to a sequence with its own weighted edit model.
+
+#### `SequenceProjection.distance`
+
+Method.
+
+```text
+SequenceProjection.distance(self, source: 'Graph', target: 'Graph') -> 'Decimal'
+```
+
+Return this projection's exact sequence distance.
+
+### `contiguous_segmentation_distance`
+
+```text
+contiguous_segmentation_distance(source: 'Sequence[int]', target: 'Sequence[int]', *, split: 'CostLike' = 1, merge: 'CostLike' = 1, displace: 'SubstitutionCost[int]' = 1) -> 'Decimal'
+```
+
+Return exact edit distance between two contiguous segmentations.
+
+Each sequence gives positive segment widths over the same number of base
+units. Removing an internal boundary is one merge, adding one is a split,
+and matching unequal boundary positions uses the declared displacement
+cost. Pass :meth:`CostTable.displace_boundary` to use a table's callback.
+
+### `distance`
+
+```text
+distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'DistanceInterval'
+```
+
+Return graph-edit distance as a synonym for :func:`graph_distance`.
+
+### `format_control_insensitive_projection`
+
+```text
+format_control_insensitive_projection(pieces: 'TextPieces', *, join: 'TextJoin') -> 'SequenceProjection'
+```
+
+Build a character projection that gives Unicode Cf controls zero cost.
+
+### `graph_distance`
+
+```text
+graph_distance(source: 'Graph', target: 'Graph', costs: 'CostTable | None' = None, *, view: 'EquivalenceView | str' = <EquivalenceView.FUNCTIONAL: 'functional'>) -> 'DistanceInterval'
+```
+
+Return exact distance where proved, otherwise named graph-edit bounds.
+
+Independent ordered tiers use exact weighted sequence distance when move and
+swap shortcuts cannot undercut insertion plus deletion. General graphs use
+the incidence-free atom-multiset relaxation as a lower bound and the cost
+of an executable diff as an upper bound. If the diff contains a residual
+data delta, a conservative dependency-ordered rebuild supplies the upper
+bound. Overlapping and non-nesting relations therefore receive an interval
+rather than an unsupported exact graph-edit claim.
+
+### `ordered_tree_distance`
+
+```text
+ordered_tree_distance(source: 'OrderedTree', target: 'OrderedTree', *, insert: 'SequenceCost[object]' = 1, delete: 'SequenceCost[object]' = 1, substitute: 'SubstitutionCost[object]' = 1) -> 'Decimal'
+```
+
+Return exact ordered-tree edit distance with node promotion on deletion.
+
+This is the Zhang-Shasha operation model: deleting a node promotes its
+children into the ordered forest, and insertion is the inverse. The result
+is exact for that model and does not claim exactness for overlapping graph
+relations or cheaper graph-level move and reparent operations.
+
+### `price_patch`
+
+```text
+price_patch(patch: 'Patch', costs: 'CostTable', source: 'Graph | None' = None) -> 'Decimal'
+```
+
+Return the cost of a realized patch containing only declared operations.
+
+Residual document changes and multi-call native edits are not one declared
+primitive and are refused. Supplying ``source`` first replays the complete
+patch, establishing that the priced operations are a realized script, and
+resolves declaration-specific costs for structural and durable references.
+
+### `text_projection`
+
+```text
+text_projection(name: 'str', pieces: 'TextPieces', *, join: 'TextJoin', transform: 'TextTransform | None' = None) -> 'SequenceProjection'
+```
+
+Build a character projection with caller-declared joining policy.
+
+``pieces`` extracts ordered text fragments. ``join`` decides what, if
+anything, lies between them. ``transform`` can implement a presentation
+view; no language- or locale-specific joining rule is built in.
+
+### `weighted_sequence_distance`
+
+```text
+weighted_sequence_distance(source: 'Sequence[T]', target: 'Sequence[T]', *, insert: 'SequenceCost[T]' = 1, delete: 'SequenceCost[T]' = 1, substitute: 'SubstitutionCost[T]' = 1) -> 'Decimal'
+```
+
+Return exact weighted insertion, deletion, and substitution distance.
+
+The dynamic program uses ``O(len(source) * len(target))`` time and two rows
+of storage. Costs may be constants or value-sensitive callables.
+
+### `whitespace_insensitive_projection`
+
+```text
+whitespace_insensitive_projection(pieces: 'TextPieces', *, join: 'TextJoin') -> 'SequenceProjection'
+```
+
+Build a character projection that removes ``str.isspace()`` characters.
+
 ### `tiergraph.semiring`
 
 This module is a supported secondary API.

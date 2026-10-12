@@ -653,6 +653,26 @@
       "document",
       "item"
     ],
+    "tiergraph.diff": [
+      "diff"
+    ],
+    "tiergraph.distance": [
+      "PRIMITIVE_KINDS",
+      "UNIT_COSTS",
+      "CostTable",
+      "DistanceInterval",
+      "OrderedTree",
+      "SequenceProjection",
+      "contiguous_segmentation_distance",
+      "distance",
+      "format_control_insensitive_projection",
+      "graph_distance",
+      "ordered_tree_distance",
+      "price_patch",
+      "text_projection",
+      "weighted_sequence_distance",
+      "whitespace_insensitive_projection"
+    ],
     "tiergraph.semiring": [
       "ARCTIC",
       "BOOLEAN",

@@ -8,10 +8,8 @@ from typing import BinaryIO
 
 from tiergraph.core import JsonValue
 from tiergraph.machine import (
-    LEGACY_MACHINE_VERSION,
     MACHINE_VERSION,
     Program,
-    Repeat,
     _decode_object,
     _decode_opcode,
 )
@@ -129,7 +127,7 @@ def load_program(stream: BinaryIO) -> Program:
             RefusalStage.DISCRIMINATOR, "header is missing field 'machine_version'"
         )
     version = header["machine_version"]
-    if version != LEGACY_MACHINE_VERSION and version != MACHINE_VERSION:
+    if version != MACHINE_VERSION:
         raise Refusal(
             RefusalStage.DISCRIMINATOR,
             f"header machine_version must be {MACHINE_VERSION!r}",
@@ -140,8 +138,6 @@ def load_program(stream: BinaryIO) -> Program:
             _decode_opcode(record, f"line {number}")
             for number, record in enumerate(records[1:], 2)
         )
-        if version == LEGACY_MACHINE_VERSION:
-            _refuse_v2_opcodes(decoded)
         return Program(decoded)
     except TypeError as error:
         raise Refusal(RefusalStage.CONSTRUCTION, str(error)) from error
@@ -247,34 +243,6 @@ def program_dumps(program: Program) -> str:
             + "\n"
         )
     return "".join(lines)
-
-
-def _refuse_v2_opcodes(opcodes: tuple[object, ...]) -> None:
-    """Keep version 1's accepted opcode vocabulary unchanged."""
-    legacy = {
-        "declare_namespace",
-        "declare_tier",
-        "declare_relation",
-        "declare_attribute",
-        "add_item",
-        "promote_item",
-        "promote_position",
-        "relate",
-        "attach_value",
-        "repeat",
-    }
-    for opcode in opcodes:
-        data = opcode.to_data()  # type: ignore[attr-defined]
-        name = data["opcode"]
-        if name not in legacy:
-            raise Refusal(
-                RefusalStage.DISCRIMINATOR,
-                f"machine version {LEGACY_MACHINE_VERSION!r} does not define "
-                f"opcode {name!r}",
-            )
-        if isinstance(opcode, Repeat):
-            body = opcode.body
-            _refuse_v2_opcodes(body)
 
 
 def _check_jsonl_depth(line: bytes, number: int) -> None:

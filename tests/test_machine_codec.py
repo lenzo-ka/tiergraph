@@ -63,11 +63,11 @@ def test_program_codec_round_trip_is_canonical() -> None:
             f"header machine_version must be {tiergraph.MACHINE_VERSION!r}",
         ),
         (
-            b'{"machine_version":"1"}\n{"opcode":"unknown"}',
+            b'{"machine_version":"2"}\n{"opcode":"unknown"}',
             "line 2.opcode 'unknown' is unknown",
         ),
         (
-            b'{"machine_version":"1"}\n{',
+            b'{"machine_version":"2"}\n{',
             "JSONL line 2:",
         ),
     ],
@@ -77,6 +77,16 @@ def test_program_loads_normalizes_malformed_records(
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(message)):
         program_loads(source)
+
+
+def test_program_loads_refuses_a_legacy_machine_header() -> None:
+    """Every noncurrent construction-program version is a typed refusal."""
+    with pytest.raises(Refusal) as caught:
+        program_loads(b'{"machine_version":"1"}\n')
+    assert caught.value.stage is RefusalStage.DISCRIMINATOR
+    assert str(caught.value) == (
+        f"header machine_version must be {tiergraph.MACHINE_VERSION!r}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,7 +129,7 @@ def test_attribute_value_decoder_rejects_non_string_members(
 def test_program_loads_preserves_all_limit_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    header = b'{"machine_version":"1"}\n'
+    header = b'{"machine_version":"2"}\n'
 
     monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", len(header))
     with pytest.raises(
@@ -228,7 +238,7 @@ def test_load_program_never_holds_a_line_longer_than_its_own_bound() -> None:
 
 
 SURROGATE_PROGRAM = (
-    '{"machine_version":"1"}\n'
+    '{"machine_version":"2"}\n'
     '{"opcode":"declare_namespace",'
     '"declaration":{"namespace":"urn:\\ud800","prefix":"p"}}\n'
 )
@@ -323,13 +333,13 @@ def test_a_text_program_is_measured_before_it_is_encoded(
     """
     monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 1)
     with pytest.raises(Refusal) as sized:
-        program_loads('{"machine_version":"1"}\n"\ud800"\n')
+        program_loads('{"machine_version":"2"}\n"\ud800"\n')
     assert sized.value.stage is RefusalStage.ENVELOPE
     assert str(sized.value) == "JSONL program exceeds 1 bytes"
 
     monkeypatch.setattr(machine_codec, "MAX_DOCUMENT_BYTES", 1024)
     with pytest.raises(Refusal) as encoded:
-        program_loads('{"machine_version":"1"}\n"\ud800"\n')
+        program_loads('{"machine_version":"2"}\n"\ud800"\n')
     assert encoded.value.stage is RefusalStage.ENCODING
     assert str(encoded.value) == (
         "JSONL line 2: encode UTF-8 failed: surrogates not allowed"

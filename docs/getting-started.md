@@ -278,7 +278,7 @@ selected nodes as JSON, and `tiergraph fold` runs a fold declared by its flags;
 canonicalizes the document and renders it as Graphviz DOT.
 
 Construction programs use JSON Lines rather than the graph document format: the
-first line is `{"machine_version":"1"}`, followed by one public opcode
+first line is `{"machine_version":"2"}`, followed by one public opcode
 `to_data()` object per line. Run one with `tiergraph run program.jsonl --to json`.
 
 ## Where to go next

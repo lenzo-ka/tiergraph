@@ -6,6 +6,7 @@ import importlib
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -14,6 +15,8 @@ import tiergraph
 
 DECLARED_LAZY_MODULES = (
     "tiergraph.blob",
+    "tiergraph.build",
+    "tiergraph.cli",
     "tiergraph.container_edit",
     "tiergraph.diff",
     "tiergraph.distance",
@@ -26,6 +29,17 @@ DECLARED_LAZY_MODULES = (
     "tiergraph.replacement",
     "tiergraph.selected",
     "tiergraph.textgrid",
+    "tiergraph.tgdb",
+)
+DOCUMENTED_SECONDARY_MODULES = tuple(
+    json.loads(
+        (Path(__file__).resolve().parent.parent / "docs" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )["secondary"]
+)
+SECONDARY_MODULES_TO_CHECK = tuple(
+    sorted(set(DECLARED_LAZY_MODULES) | set(DOCUMENTED_SECONDARY_MODULES))
 )
 
 
@@ -66,7 +80,48 @@ print(json.dumps({{
 
 def test_lazy_module_gate_matches_the_declaration() -> None:
     """The fresh-process gate covers every module in the lazy export table."""
-    assert set(DECLARED_LAZY_MODULES) == set(tiergraph._LAZY_EXPORTS)
+    assert set(DECLARED_LAZY_MODULES) == set(tiergraph._LAZY_EXPORTS) | {
+        "tiergraph.build",
+        "tiergraph.cli",
+        "tiergraph.tgdb",
+    }
+    assert set(tiergraph._SUBMODULES) == (
+        set(DECLARED_LAZY_MODULES) | set(DOCUMENTED_SECONDARY_MODULES)
+    )
+
+
+def test_declared_submodule_resolves_in_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared noncolliding submodule is cached on first attribute access."""
+    build_module = tiergraph.build
+    monkeypatch.delitem(vars(tiergraph), "build", raising=False)
+
+    assert tiergraph.build is build_module
+    assert vars(tiergraph)["build"] is build_module
+
+
+def test_every_documented_and_lazy_submodule_resolves_in_a_fresh_process() -> None:
+    """Package attributes resolve modules except where top-level functions collide."""
+    script = f"""
+import importlib
+from types import ModuleType
+
+import tiergraph
+
+module_names = {SECONDARY_MODULES_TO_CHECK!r}
+collisions = {{"tiergraph.diff", "tiergraph.distance"}}
+for module_name in module_names:
+    short_name = module_name.rpartition(".")[2]
+    package_value = getattr(tiergraph, short_name)
+    module = importlib.import_module(module_name)
+    if module_name in collisions:
+        assert package_value is getattr(module, short_name)
+        assert not isinstance(package_value, ModuleType)
+    else:
+        assert package_value is module
+"""
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def test_every_public_name_resolves() -> None:
