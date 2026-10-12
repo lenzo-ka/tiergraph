@@ -144,6 +144,7 @@ _STDLIB_IMPORTS = {
     "pathlib",
     "random",
     "re",
+    "resource",
     "secrets",
     "shutil",
     "signal",

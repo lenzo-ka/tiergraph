@@ -179,6 +179,79 @@ def test_tgdb_backup_and_migrate_commands(
     }
 
 
+def test_tgdb_measure_corpus_plain_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The corpus measurement command reports every required resource measure."""
+    json_path = tmp_path / "json.tgdb"
+    assert (
+        main(
+            [
+                "tgdb",
+                "measure-corpus",
+                str(json_path),
+                "--instances",
+                "1",
+                "--items-per-instance",
+                "2",
+                "--change-passes",
+                "1",
+                "--inline-threshold",
+                "128",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["instance_count"] == 1
+    assert report["items_per_instance"] == 2
+    assert report["change_passes"] == 1
+    assert report["inline_threshold"] == 128
+    assert [measurement["name"] for measurement in report["passes"]] == [
+        "seed",
+        "pass-1",
+        "fixpoint",
+    ]
+    assert report["passes"][1]["replay_verification_seconds"] > 0
+    assert (
+        report["passes"][1]["compact_document_bytes"]
+        < report["passes"][1]["document_bytes"]
+    )
+    assert report["fixpoint_changed_instances"] == 0
+
+    plain_path = tmp_path / "plain.tgdb"
+    assert (
+        main(
+            [
+                "tgdb",
+                "measure-corpus",
+                str(plain_path),
+                "--instances",
+                "1",
+                "--items-per-instance",
+                "1",
+                "--change-passes",
+                "1",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert output.startswith(
+        "pass\tseconds\treplay_seconds\tpeak_rss_bytes\twal_growth_bytes\t"
+        "object_growth_bytes\tobject_bytes\tdocument_bytes\t"
+        "compact_document_bytes\tpatch_bytes\tinline_object_bytes\t"
+        "file_object_bytes\t"
+        "history_versions\tversions_written\tpatch_versions\t"
+        "snapshot_versions\n"
+    )
+    assert "seed\t" in output
+    assert "pass-1\t" in output
+    assert "fixpoint\t" in output
+    assert output.splitlines()[-1].startswith("fixpoint changed: 0; query seconds: ")
+
+
 def test_tgdb_check_reports_structural_and_full_success(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1873,6 +1946,7 @@ def test_tgdb_nested_help_is_complete(capsys: pytest.CaptureFixture[str]) -> Non
         ("gc", "--delete"),
         ("backup", "DEST"),
         ("migrate", "--json"),
+        ("measure-corpus", "--items-per-instance N"),
     ):
         with pytest.raises(SystemExit) as caught:
             parser.parse_args(["tgdb", command, "--help"])

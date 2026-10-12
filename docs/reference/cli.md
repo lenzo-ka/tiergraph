@@ -381,13 +381,13 @@ Exit codes:
 
 ```text
 usage: tiergraph tgdb [-h]
-                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,blob,index,column,rename,move,retire,restore,undo}
+                      {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,measure-corpus,blob,index,column,rename,move,retire,restore,undo}
                       ...
 
 Create, inspect, check, or edit a local versioned tiergraph store.
 
 positional arguments:
-  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,blob,index,column,rename,move,retire,restore,undo}
+  {init,info,check,collection,list,add,import,export,publish,batch,apply,diff,revert,get,history,find,inspect,reindex,repack,prune,purge-retired,gc,backup,migrate,measure-corpus,blob,index,column,rename,move,retire,restore,undo}
     init                initialize a store
     info                inspect store metadata
     check               check store integrity
@@ -412,6 +412,7 @@ positional arguments:
     gc                  report or delete unreachable objects
     backup              back up a store
     migrate             migrate an older catalog
+    measure-corpus      measure a synthetic corpus loop
     blob                store and read payload bytes
     index               manage declared item indexes
     column              manage declared blob metadata columns
@@ -1151,6 +1152,42 @@ options:
 
 Examples:
   $ tiergraph tgdb migrate corpus.tgdb
+
+Exit codes:
+  0  success
+  1  invalid input or refused operation
+  2  command-line usage error
+  3  I/O failure or undecodable input
+```
+
+### `tiergraph tgdb measure-corpus`
+
+```text
+usage: tiergraph tgdb measure-corpus [-h] [--instances N]
+                                     [--items-per-instance N]
+                                     [--change-passes N]
+                                     [--inline-threshold SIZE] [--json]
+                                     STORE
+
+Create a new synthetic corpus store, run atomic change passes over ordered graphs, then measure a byte-identical fixpoint pass. The report includes per-pass time, peak RSS, WAL growth, retained object bytes, canonical and compact-comparison document bytes, patch bytes, history size, and replay-verification time. The completed store remains available for inspection. Peak RSS is the process-wide high-water mark. Automatic WAL checkpoints are disabled while the measurement runs, so WAL growth remains observable and elapsed time excludes automatic checkpoint work.
+
+positional arguments:
+  STORE                 new measurement store
+
+options:
+  -h, --help            show this help message and exit
+  --instances N         number of distinct graphs (default: 100)
+  --items-per-instance N
+                        ordered items in each graph (default: 1000)
+  --change-passes N     passes that change every graph (default: 3)
+  --inline-threshold SIZE
+                        largest inline object size in bytes (default: 65536)
+  --json                emit the structured measurement report
+
+STORE must not exist. Defaults model 100 distinct graphs with 1,000 items each and three change passes. A failed measurement retains its partial store; remove it or use a new path before retrying.
+
+Examples:
+  $ tiergraph tgdb measure-corpus measurement.tgdb --instances 1 --items-per-instance 1 --change-passes 1 --json
 
 Exit codes:
   0  success
