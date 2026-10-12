@@ -11789,6 +11789,45 @@ CommitReceipt.to_data(self) -> 'dict[str, int | str | None | list[str] | list[di
 
 Return a JSON-compatible receipt in stable field order.
 
+### `CorpusLoopMeasurement`
+
+```text
+CorpusLoopMeasurement(instance_count: 'int', items_per_instance: 'int', change_passes: 'int', inline_threshold: 'int', passes: 'tuple[CorpusPassMeasurement, ...]', fixpoint_changed_instances: 'int', fixpoint_query_seconds: 'float', replay_verification_seconds: 'float', peak_rss_bytes: 'int') -> None
+```
+
+Summarize an end-to-end synthetic corpus loop.
+
+#### `CorpusLoopMeasurement.to_data`
+
+Method.
+
+```text
+CorpusLoopMeasurement.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible corpus measurement in pass order.
+
+### `CorpusPassMeasurement`
+
+```text
+CorpusPassMeasurement(name: 'str', iteration: 'int', versions_written: 'int', patch_versions: 'int', snapshot_versions: 'int', commit_seq: 'int | None', elapsed_seconds: 'float', replay_verification_seconds: 'float', peak_rss_bytes: 'int', wal_growth_bytes: 'int', object_growth_bytes: 'int', object_bytes: 'int', document_bytes: 'int', compact_document_bytes: 'int', patch_bytes: 'int', inline_object_bytes: 'int', file_object_bytes: 'int', history_versions: 'int') -> None
+```
+
+Report one synthetic-corpus pass and its retained storage.
+
+``peak_rss_bytes`` is the process-wide, monotonic high-water mark sampled
+after the pass, not memory attributable only to that pass.
+
+#### `CorpusPassMeasurement.to_data`
+
+Method.
+
+```text
+CorpusPassMeasurement.to_data(self) -> 'dict[str, object]'
+```
+
+Return a JSON-compatible measurement in stable field order.
+
 ### `GarbageObject`
 
 ```text
@@ -13268,6 +13307,32 @@ WriteTransaction.discard(self) -> 'None'
 ```
 
 Roll back every change; repeated calls have no effect.
+
+### `measure_corpus_loop`
+
+```text
+measure_corpus_loop(path: 'str | PathLike[str]', *, instance_count: 'int' = 100, items_per_instance: 'int' = 1000, change_passes: 'int' = 3, limits: 'TgdbLimits' = TgdbLimits(inline_threshold=65536, busy_timeout_ms=5000, batch_size=256, nesting_depth=8)) -> 'CorpusLoopMeasurement'
+```
+
+Measure a synthetic corpus loop in a new store.
+
+Each instance is a distinct ordered graph with ``items_per_instance`` items.
+Every change pass loads, journals, and publishes one graph at a time in one
+atomic batch. A final byte-identical pass and one indexed fixpoint query
+verify that convergence writes no versions. The returned per-pass records
+include elapsed time, the operating-system process-wide peak RSS high-water
+mark, WAL growth, retained object bytes, canonical and compact-comparison
+document bytes, patch bytes, residency totals, history size, and the
+replay-verification time observed inside publication. Automatic WAL
+checkpointing is disabled while the measurement store is open so that
+cumulative per-pass WAL growth remains observable; elapsed time therefore
+excludes automatic checkpoint work. The connection closes before return,
+so the store is not left with that connection setting.
+
+``path`` must not exist. The completed store is retained for inspection.
+If measurement fails after creating it, the partially built store is also
+retained and must be removed or replaced with a new path before retrying.
+The defaults model 100 graphs of 1,000 items each and three change passes.
 
 ### `register_inspector`
 

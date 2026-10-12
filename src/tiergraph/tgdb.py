@@ -14,7 +14,9 @@ import re
 import secrets
 import shutil
 import sqlite3
+import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -43,6 +45,7 @@ from tiergraph.core import (
     AttributeValue,
     DurableItemRef,
     Graph,
+    Item,
     ItemRef,
     JsonAttributeValue,
     JsonType,
@@ -51,16 +54,24 @@ from tiergraph.core import (
     LayerName,
     NamespaceDeclaration,
     QualifiedName,
+    Tier,
+    TierDeclaration,
     XsdType,
 )
 from tiergraph.diff import diff as graph_diff
-from tiergraph.edit import EditAnnotations
+from tiergraph.edit import EditAnnotations, Journal
 from tiergraph.equivalence import EquivalenceView, equivalent, fingerprint
 from tiergraph.patch import Patch, invert_patch, patch_dumps, patch_loads
 from tiergraph.predicate import Predicate
 from tiergraph.schema import Refusal, RefusalStage
 from tiergraph.selection import Node, NodeKind, NodeSet
-from tiergraph.wire import FORMAT_VERSION, MAX_DOCUMENT_BYTES, dumps, loads
+from tiergraph.wire import (
+    FORMAT_VERSION,
+    MAX_DOCUMENT_BYTES,
+    dump_compact,
+    dumps,
+    loads,
+)
 
 _APPLICATION_ID = 0x54474442
 _SCHEMA_VERSION = 10
@@ -100,6 +111,9 @@ _TIERGRAPH_INSPECTOR_VERSION = "1"
 _GRAPH_FACT_NAMESPACE = "urn:tiergraph:tgdb:graph-facts"
 _MAX_INSPECTION_FACTS = 4_096
 _INSPECTION_PAIR_SIZE = 2
+_MEASUREMENT_NAMESPACE = "urn:tiergraph:tgdb:measurement"
+_MEASUREMENT_TIER = QualifiedName(_MEASUREMENT_NAMESPACE, "units")
+_MEASUREMENT_STATE = QualifiedName(_MEASUREMENT_NAMESPACE, "state")
 _META_KEYS = frozenset(
     {
         "store_uid",
@@ -619,6 +633,86 @@ class CheckReport:
             "inline_objects": self.inline_objects,
             "file_objects": self.file_objects,
             "object_bytes": self.object_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusPassMeasurement:
+    """Report one synthetic-corpus pass and its retained storage.
+
+    ``peak_rss_bytes`` is the process-wide, monotonic high-water mark sampled
+    after the pass, not memory attributable only to that pass.
+    """
+
+    name: str
+    iteration: int
+    versions_written: int
+    patch_versions: int
+    snapshot_versions: int
+    commit_seq: int | None
+    elapsed_seconds: float
+    replay_verification_seconds: float
+    peak_rss_bytes: int
+    wal_growth_bytes: int
+    object_growth_bytes: int
+    object_bytes: int
+    document_bytes: int
+    compact_document_bytes: int
+    patch_bytes: int
+    inline_object_bytes: int
+    file_object_bytes: int
+    history_versions: int
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible measurement in stable field order."""
+        return {
+            "name": self.name,
+            "iteration": self.iteration,
+            "versions_written": self.versions_written,
+            "patch_versions": self.patch_versions,
+            "snapshot_versions": self.snapshot_versions,
+            "commit_seq": self.commit_seq,
+            "elapsed_seconds": self.elapsed_seconds,
+            "replay_verification_seconds": self.replay_verification_seconds,
+            "peak_rss_bytes": self.peak_rss_bytes,
+            "wal_growth_bytes": self.wal_growth_bytes,
+            "object_growth_bytes": self.object_growth_bytes,
+            "object_bytes": self.object_bytes,
+            "document_bytes": self.document_bytes,
+            "compact_document_bytes": self.compact_document_bytes,
+            "patch_bytes": self.patch_bytes,
+            "inline_object_bytes": self.inline_object_bytes,
+            "file_object_bytes": self.file_object_bytes,
+            "history_versions": self.history_versions,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusLoopMeasurement:
+    """Summarize an end-to-end synthetic corpus loop."""
+
+    instance_count: int
+    items_per_instance: int
+    change_passes: int
+    inline_threshold: int
+    passes: tuple[CorpusPassMeasurement, ...]
+    fixpoint_changed_instances: int
+    fixpoint_query_seconds: float
+    replay_verification_seconds: float
+    peak_rss_bytes: int
+
+    def to_data(self) -> dict[str, object]:
+        """Return a JSON-compatible corpus measurement in pass order."""
+        return {
+            "instance_count": self.instance_count,
+            "items_per_instance": self.items_per_instance,
+            "change_passes": self.change_passes,
+            "inline_threshold": self.inline_threshold,
+            "passes": [measurement.to_data() for measurement in self.passes],
+            "fixpoint_changed_instances": self.fixpoint_changed_instances,
+            "fixpoint_query_seconds": self.fixpoint_query_seconds,
+            "replay_verification_seconds": self.replay_verification_seconds,
+            "peak_rss_bytes": self.peak_rss_bytes,
         }
 
 
@@ -2862,6 +2956,7 @@ class WriteTransaction:
         self._staged_graphs: set[str] = set()
         self._indexes_changed = False
         self._kind = "catalog"
+        self._replay_verification_ns: int | None = None
         encoded = _encode_annotations(annotations)
         connection: sqlite3.Connection | None = None
         try:
@@ -3256,12 +3351,21 @@ class WriteTransaction:
                 f"patch base for instance {row[3]!r} differs from stored head "
                 f"version {head_seq}; publish without the patch"
             )
+        replay_started = (
+            time.perf_counter_ns() if self._replay_verification_ns is not None else None
+        )
         try:
             replayed = transition_patch.apply(head_graph)
         except Refusal as error:
             raise TgdbError(
                 f"patch for instance {row[3]!r} did not replay: {error}"
             ) from error
+        finally:
+            if replay_started is not None:
+                measured = time.perf_counter_ns() - replay_started
+                self._replay_verification_ns = (
+                    cast(int, self._replay_verification_ns) + measured
+                )
         if replayed != graph:
             raise TgdbError(
                 f"patch for instance {row[3]!r} did not reproduce the published graph"
@@ -9517,11 +9621,323 @@ def _check_recorded_object(
         _check_object_file(_object_path(root, digest), digest, size, full=full)
 
 
+def _measurement_graph(instance_position: int, items_per_instance: int) -> Graph:
+    """Build one deterministic, distinct synthetic utterance-sized graph."""
+    items = tuple(
+        Item(
+            f"instance-{instance_position:08d}-unit-{position:04d}",
+            (AttributeValue(_MEASUREMENT_STATE, XsdType.INTEGER, "0"),),
+        )
+        for position in range(items_per_instance)
+    )
+    return Graph(
+        (NamespaceDeclaration("measure", _MEASUREMENT_NAMESPACE),),
+        (Tier(TierDeclaration(_MEASUREMENT_TIER, "Units"), items),),
+        (),
+        attribute_declarations=(
+            AttributeDeclaration(
+                _MEASUREMENT_STATE, AttributeDomain.ITEM, XsdType.INTEGER
+            ),
+        ),
+    )
+
+
+def _measurement_edit(graph: Graph, iteration: int) -> tuple[Graph, Patch]:
+    """Change one synthetic item and return its journal patch."""
+    annotations = EditAnnotations(stage="pass", iteration=iteration)
+    journal = Journal(annotations)
+    editor = graph.edit(journal)
+    item_count = len(graph.tiers[0].items)
+    editor.set_attribute(
+        ItemRef(_MEASUREMENT_TIER, (iteration - 1) % item_count),
+        AttributeValue(_MEASUREMENT_STATE, XsdType.INTEGER, str(iteration)),
+    )
+    target = editor.freeze()
+    return target, journal.to_patch()
+
+
+def _measurement_rss_bytes() -> int:
+    """Return this process's operating-system peak resident set in bytes."""
+    try:
+        import resource  # noqa: PLC0415 -- unavailable on some Python platforms
+    except ImportError as error:  # pragma: no cover - platform capability
+        raise TgdbError("corpus measurement requires peak-RSS support") from error
+    resident = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return resident if sys.platform == "darwin" else resident * 1024
+
+
+def _measurement_wal_bytes(path: Path) -> int:
+    """Return the current WAL length, treating an absent sidecar as empty."""
+    try:
+        return (path / f"{_CATALOG_NAME}-wal").stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _measurement_storage(store: TgdbStore) -> tuple[int, int, int, int, int, int]:
+    """Return retained object and version byte totals without reading content."""
+    object_row = store._connection.execute(
+        "SELECT COALESCE(sum(size), 0), "
+        "COALESCE(sum(CASE WHEN residency = 'inline' THEN size ELSE 0 END), 0), "
+        "COALESCE(sum(CASE WHEN residency = 'file' THEN size ELSE 0 END), 0) "
+        "FROM objects"
+    ).fetchone()
+    document_bytes = store._connection.execute(
+        "SELECT COALESCE(sum(size), 0) FROM objects WHERE digest IN "
+        "(SELECT graph_digest FROM versions)"
+    ).fetchone()[0]
+    patch_bytes = store._connection.execute(
+        "SELECT COALESCE(sum(size), 0) FROM objects WHERE digest IN "
+        "(SELECT patch_digest FROM versions WHERE patch_digest IS NOT NULL)"
+    ).fetchone()[0]
+    history_versions = store._connection.execute(
+        "SELECT count(*) FROM versions"
+    ).fetchone()[0]
+    return cast(
+        tuple[int, int, int, int, int, int],
+        (*object_row, document_bytes, patch_bytes, history_versions),
+    )
+
+
+def _measurement_record(
+    store: TgdbStore,
+    *,
+    name: str,
+    iteration: int,
+    receipt: CommitReceipt,
+    elapsed_seconds: float,
+    replay_verification_ns: int,
+    previous_wal_bytes: int,
+    previous_object_bytes: int,
+    compact_document_bytes: int,
+) -> CorpusPassMeasurement:
+    """Record one completed pass from indexed catalog facts and file sizes."""
+    (
+        object_bytes,
+        inline_object_bytes,
+        file_object_bytes,
+        document_bytes,
+        patch_bytes,
+        history_versions,
+    ) = _measurement_storage(store)
+    written = tuple(
+        version
+        for version in receipt.versions
+        if version.status in {"created", "published"}
+    )
+    wal_bytes = _measurement_wal_bytes(store.path)
+    return CorpusPassMeasurement(
+        name=name,
+        iteration=iteration,
+        versions_written=len(written),
+        patch_versions=sum(version.transition == "patch" for version in written),
+        snapshot_versions=sum(version.transition == "snapshot" for version in written),
+        commit_seq=receipt.commit_seq,
+        elapsed_seconds=elapsed_seconds,
+        replay_verification_seconds=replay_verification_ns / 1_000_000_000,
+        peak_rss_bytes=_measurement_rss_bytes(),
+        wal_growth_bytes=wal_bytes - previous_wal_bytes,
+        object_growth_bytes=object_bytes - previous_object_bytes,
+        object_bytes=object_bytes,
+        document_bytes=document_bytes,
+        compact_document_bytes=compact_document_bytes,
+        patch_bytes=patch_bytes,
+        inline_object_bytes=inline_object_bytes,
+        file_object_bytes=file_object_bytes,
+        history_versions=history_versions,
+    )
+
+
+def _validate_measurement_count(value: int, name: str) -> None:
+    """Require one positive non-boolean measurement dimension."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+
+
+def _measurement_compact_growth(store: TgdbStore, receipt: CommitReceipt) -> int:
+    """Return compact spelling bytes for versions written by one pass."""
+    return sum(
+        len(
+            dump_compact(
+                store.get(version.instance_uid, seq=version.seq).load()
+            ).encode("utf-8")
+        )
+        for version in receipt.versions
+        if version.status in {"created", "published"}
+    )
+
+
+def measure_corpus_loop(  # noqa: PLR0915 -- the ordered loop is one measurement
+    path: str | PathLike[str],
+    *,
+    instance_count: int = 100,
+    items_per_instance: int = 1_000,
+    change_passes: int = 3,
+    limits: TgdbLimits = TgdbLimits(),  # noqa: B008 -- immutable public default
+) -> CorpusLoopMeasurement:
+    """Measure a synthetic corpus loop in a new store.
+
+    Each instance is a distinct ordered graph with ``items_per_instance`` items.
+    Every change pass loads, journals, and publishes one graph at a time in one
+    atomic batch. A final byte-identical pass and one indexed fixpoint query
+    verify that convergence writes no versions. The returned per-pass records
+    include elapsed time, the operating-system process-wide peak RSS high-water
+    mark, WAL growth, retained object bytes, canonical and compact-comparison
+    document bytes, patch bytes, residency totals, history size, and the
+    replay-verification time observed inside publication. Automatic WAL
+    checkpointing is disabled while the measurement store is open so that
+    cumulative per-pass WAL growth remains observable; elapsed time therefore
+    excludes automatic checkpoint work. The connection closes before return,
+    so the store is not left with that connection setting.
+
+    ``path`` must not exist. The completed store is retained for inspection.
+    If measurement fails after creating it, the partially built store is also
+    retained and must be removed or replaced with a new path before retrying.
+    The defaults model 100 graphs of 1,000 items each and three change passes.
+    """
+    _validate_measurement_count(instance_count, "instance_count")
+    _validate_measurement_count(items_per_instance, "items_per_instance")
+    _validate_measurement_count(change_passes, "change_passes")
+    if not isinstance(limits, TgdbLimits):
+        raise TypeError("limits must be TgdbLimits")
+    _measurement_rss_bytes()
+    measurements: list[CorpusPassMeasurement] = []
+    root = Path(path)
+    with TgdbStore.create(root, limits=limits) as store:
+        store._connection.execute("PRAGMA wal_autocheckpoint = 0")
+        previous_wal_bytes = _measurement_wal_bytes(root)
+        previous_object_bytes = 0
+        compact_document_bytes = 0
+        started = time.perf_counter_ns()
+        with store.write(
+            annotations=EditAnnotations(stage="seed", iteration=0)
+        ) as transaction:
+            collection = transaction.create_collection(
+                "corpus", uid=b"\0" * (_UID_BYTES - 1) + b"\1"
+            )
+            instance_uids: list[bytes] = []
+            for position in range(instance_count):
+                uid = hashlib.sha256(
+                    f"tiergraph-tgdb-measurement:{position}".encode("ascii")
+                ).digest()[:_UID_BYTES]
+                instance_uids.append(
+                    transaction.create_instance(
+                        collection,
+                        f"instance-{position:08d}",
+                        _measurement_graph(position, items_per_instance),
+                        uid=uid,
+                        annotations=EditAnnotations(stage="seed", iteration=0),
+                    )
+                )
+            receipt = transaction.commit()
+        elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
+        compact_document_bytes += _measurement_compact_growth(store, receipt)
+        measurement = _measurement_record(
+            store,
+            name="seed",
+            iteration=0,
+            receipt=receipt,
+            elapsed_seconds=elapsed,
+            replay_verification_ns=0,
+            previous_wal_bytes=previous_wal_bytes,
+            previous_object_bytes=previous_object_bytes,
+            compact_document_bytes=compact_document_bytes,
+        )
+        measurements.append(measurement)
+        previous_wal_bytes += measurement.wal_growth_bytes
+        previous_object_bytes = measurement.object_bytes
+
+        last_commit = receipt.commit_seq
+        for iteration in range(1, change_passes + 1):
+            annotations = EditAnnotations(stage="pass", iteration=iteration)
+            started = time.perf_counter_ns()
+            with store.write(annotations=annotations) as transaction:
+                transaction._replay_verification_ns = 0
+                for uid in instance_uids:
+                    handle = store.get(uid)
+                    target, patch = _measurement_edit(handle.load(), iteration)
+                    transaction.publish(
+                        uid,
+                        target,
+                        expected=handle.seq,
+                        patch=patch,
+                        annotations=annotations,
+                    )
+                replay_ns = transaction._replay_verification_ns
+                receipt = transaction.commit()
+            elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
+            compact_document_bytes += _measurement_compact_growth(store, receipt)
+            measurement = _measurement_record(
+                store,
+                name=f"pass-{iteration}",
+                iteration=iteration,
+                receipt=receipt,
+                elapsed_seconds=elapsed,
+                replay_verification_ns=replay_ns,
+                previous_wal_bytes=previous_wal_bytes,
+                previous_object_bytes=previous_object_bytes,
+                compact_document_bytes=compact_document_bytes,
+            )
+            measurements.append(measurement)
+            previous_wal_bytes += measurement.wal_growth_bytes
+            previous_object_bytes = measurement.object_bytes
+            last_commit = receipt.commit_seq
+
+        if last_commit is None:  # pragma: no cover - every change pass writes
+            raise StoreCorrupt("corpus measurement produced no change commit")
+        started = time.perf_counter_ns()
+        with store.write(
+            annotations=EditAnnotations(stage="fixpoint", iteration=change_passes)
+        ) as transaction:
+            for uid in instance_uids:
+                handle = store.get(uid)
+                transaction.publish(uid, handle.load(), expected=handle.seq)
+            receipt = transaction.commit()
+        elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
+        measurement = _measurement_record(
+            store,
+            name="fixpoint",
+            iteration=change_passes,
+            receipt=receipt,
+            elapsed_seconds=elapsed,
+            replay_verification_ns=0,
+            previous_wal_bytes=previous_wal_bytes,
+            previous_object_bytes=previous_object_bytes,
+            compact_document_bytes=compact_document_bytes,
+        )
+        measurements.append(measurement)
+
+        query_started = time.perf_counter_ns()
+        with store.snapshot() as snapshot:
+            fixpoint_changed = snapshot.count(
+                Query.all("corpus").changed_since(last_commit)
+            )
+        query_seconds = (time.perf_counter_ns() - query_started) / 1_000_000_000
+
+    return CorpusLoopMeasurement(
+        instance_count=instance_count,
+        items_per_instance=items_per_instance,
+        change_passes=change_passes,
+        inline_threshold=limits.inline_threshold,
+        passes=tuple(measurements),
+        fixpoint_changed_instances=fixpoint_changed,
+        fixpoint_query_seconds=query_seconds,
+        replay_verification_seconds=sum(
+            measurement.replay_verification_seconds for measurement in measurements
+        ),
+        peak_rss_bytes=max(measurement.peak_rss_bytes for measurement in measurements),
+    )
+
+
 __all__ = [
     "CheckReport",
     "CollectionInfo",
     "ColumnInfo",
     "CommitReceipt",
+    "CorpusLoopMeasurement",
+    "CorpusPassMeasurement",
     "GarbageObject",
     "GcReport",
     "IndexInfo",
@@ -9554,5 +9970,6 @@ __all__ = [
     "VersionChange",
     "VersionHandle",
     "WriteTransaction",
+    "measure_corpus_loop",
     "register_inspector",
 ]

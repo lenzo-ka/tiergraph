@@ -920,6 +920,63 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- parser vocabu
     tgdb_migrate.add_argument(
         "--json", action="store_true", help="emit the structured migration report"
     )
+    tgdb_measure = _subcommand(
+        tgdb_subparsers,
+        "measure-corpus",
+        summary="measure a synthetic corpus loop",
+        description=(
+            "Create a new synthetic corpus store, run atomic change passes over "
+            "ordered graphs, then measure a byte-identical fixpoint pass. The "
+            "report includes per-pass time, peak RSS, WAL growth, retained object "
+            "bytes, canonical and compact-comparison document bytes, patch bytes, "
+            "history size, and replay-verification time. The completed store "
+            "remains available for inspection. Peak RSS is the process-wide "
+            "high-water mark. Automatic WAL checkpoints are disabled while the "
+            "measurement runs, so WAL growth remains observable and elapsed time "
+            "excludes automatic checkpoint work."
+        ),
+        details=(
+            "STORE must not exist. Defaults model 100 distinct graphs with 1,000 "
+            "items each and three change passes. A failed measurement retains its "
+            "partial store; remove it or use a new path before retrying.\n\n"
+        ),
+        examples=(
+            "tiergraph tgdb measure-corpus measurement.tgdb --instances 1 "
+            "--items-per-instance 1 --change-passes 1 --json",
+        ),
+    )
+    tgdb_measure.set_defaults(handler=_handle_tgdb)
+    tgdb_measure.add_argument("store", metavar="STORE", help="new measurement store")
+    tgdb_measure.add_argument(
+        "--instances",
+        type=_positive_integer,
+        default=100,
+        metavar="N",
+        help="number of distinct graphs (default: 100)",
+    )
+    tgdb_measure.add_argument(
+        "--items-per-instance",
+        type=_positive_integer,
+        default=1_000,
+        metavar="N",
+        help="ordered items in each graph (default: 1000)",
+    )
+    tgdb_measure.add_argument(
+        "--change-passes",
+        type=_positive_integer,
+        default=3,
+        metavar="N",
+        help="passes that change every graph (default: 3)",
+    )
+    tgdb_measure.add_argument(
+        "--inline-threshold",
+        type=_nonnegative_byte_count,
+        metavar="SIZE",
+        help="largest inline object size in bytes (default: 65536)",
+    )
+    tgdb_measure.add_argument(
+        "--json", action="store_true", help="emit the structured measurement report"
+    )
     tgdb_blob = _subcommand(
         tgdb_subparsers,
         "blob",
@@ -2988,6 +3045,53 @@ def _handle_tgdb(args: argparse.Namespace) -> int:  # noqa: PLR0915
     from tiergraph import tgdb  # noqa: PLC0415 -- tgdb and sqlite3 stay lazy
 
     try:
+        if args.tgdb_command == "measure-corpus":
+            limits = (
+                tgdb.TgdbLimits()
+                if args.inline_threshold is None
+                else tgdb.TgdbLimits(inline_threshold=args.inline_threshold)
+            )
+            measurement = tgdb.measure_corpus_loop(
+                args.store,
+                instance_count=args.instances,
+                items_per_instance=args.items_per_instance,
+                change_passes=args.change_passes,
+                limits=limits,
+            )
+            if args.json:
+                _stdout_text(_json_bytes(measurement.to_data()).decode("utf-8"))
+            else:
+                _stdout_text(
+                    "pass\tseconds\treplay_seconds\tpeak_rss_bytes\t"
+                    "wal_growth_bytes\tobject_growth_bytes\tobject_bytes\t"
+                    "document_bytes\tcompact_document_bytes\tpatch_bytes\t"
+                    "inline_object_bytes\tfile_object_bytes\thistory_versions\t"
+                    "versions_written\tpatch_versions\tsnapshot_versions\n"
+                )
+                for measured_pass in measurement.passes:
+                    _stdout_text(
+                        f"{measured_pass.name}\t"
+                        f"{measured_pass.elapsed_seconds:.6f}\t"
+                        f"{measured_pass.replay_verification_seconds:.6f}\t"
+                        f"{measured_pass.peak_rss_bytes}\t"
+                        f"{measured_pass.wal_growth_bytes}\t"
+                        f"{measured_pass.object_growth_bytes}\t"
+                        f"{measured_pass.object_bytes}\t"
+                        f"{measured_pass.document_bytes}\t"
+                        f"{measured_pass.compact_document_bytes}\t"
+                        f"{measured_pass.patch_bytes}\t"
+                        f"{measured_pass.inline_object_bytes}\t"
+                        f"{measured_pass.file_object_bytes}\t"
+                        f"{measured_pass.history_versions}\t"
+                        f"{measured_pass.versions_written}\t"
+                        f"{measured_pass.patch_versions}\t"
+                        f"{measured_pass.snapshot_versions}\n"
+                    )
+                _stdout_text(
+                    f"fixpoint changed: {measurement.fixpoint_changed_instances}; "
+                    f"query seconds: {measurement.fixpoint_query_seconds:.6f}\n"
+                )
+            return 0
         if args.tgdb_command == "init":
             limits = (
                 tgdb.TgdbLimits()

@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import resource
 import secrets
 import sqlite3
 import subprocess
@@ -16,6 +17,7 @@ from contextlib import closing
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, Literal, cast
 
 import pytest
@@ -121,6 +123,150 @@ def _version_graph(name: str | None = None) -> Graph:
     """Return a small canonical graph whose optional namespace changes its bytes."""
     namespaces = () if name is None else (NamespaceDeclaration("n", f"urn:{name}"),)
     return Graph(namespaces, (), ())
+
+
+def test_corpus_loop_measurement_reports_storage_replay_and_fixpoint(
+    tmp_path: Path,
+) -> None:
+    """A measured loop writes once per change and retains inspectable history."""
+    path = tmp_path / "measurement.tgdb"
+    report = tgdb.measure_corpus_loop(
+        path,
+        instance_count=2,
+        items_per_instance=8,
+        change_passes=2,
+        limits=tgdb.TgdbLimits(inline_threshold=512),
+    )
+
+    assert report.instance_count == 2
+    assert report.items_per_instance == 8
+    assert report.change_passes == 2
+    assert report.inline_threshold == 512
+    assert [measurement.name for measurement in report.passes] == [
+        "seed",
+        "pass-1",
+        "pass-2",
+        "fixpoint",
+    ]
+    assert [measurement.versions_written for measurement in report.passes] == [
+        2,
+        2,
+        2,
+        0,
+    ]
+    assert [measurement.patch_versions for measurement in report.passes] == [
+        0,
+        2,
+        2,
+        0,
+    ]
+    assert all(measurement.snapshot_versions == 0 for measurement in report.passes)
+    assert [measurement.commit_seq for measurement in report.passes] == [1, 2, 3, None]
+    assert [measurement.history_versions for measurement in report.passes] == [
+        2,
+        4,
+        6,
+        6,
+    ]
+    assert all(measurement.elapsed_seconds > 0 for measurement in report.passes)
+    assert all(measurement.peak_rss_bytes > 0 for measurement in report.passes)
+    assert all(measurement.wal_growth_bytes >= 0 for measurement in report.passes)
+    assert report.passes[0].object_growth_bytes > 0
+    assert report.passes[1].object_growth_bytes > 0
+    assert report.passes[2].object_growth_bytes > 0
+    assert report.passes[3].object_growth_bytes == 0
+    assert report.passes[-1].object_bytes == (
+        report.passes[-1].inline_object_bytes + report.passes[-1].file_object_bytes
+    )
+    assert report.passes[-1].document_bytes > report.passes[-1].patch_bytes > 0
+    assert (
+        0 < report.passes[-1].compact_document_bytes < report.passes[-1].document_bytes
+    )
+    assert report.replay_verification_seconds > 0
+    assert report.replay_verification_seconds == sum(
+        measurement.replay_verification_seconds for measurement in report.passes
+    )
+    assert report.peak_rss_bytes == max(
+        measurement.peak_rss_bytes for measurement in report.passes
+    )
+    assert report.fixpoint_changed_instances == 0
+    assert report.fixpoint_query_seconds > 0
+    data = report.to_data()
+    assert data["passes"] == [measurement.to_data() for measurement in report.passes]
+    assert data["fixpoint_changed_instances"] == 0
+
+    with tgdb.TgdbStore.open(path) as store:
+        assert [len(store.history(instance.uid)) for instance in store.instances()] == [
+            3,
+            3,
+        ]
+        assert store.check(full=True).objects == len(
+            {
+                handle.graph_digest
+                for instance in store.instances()
+                for handle in store.history(instance.uid)
+            }
+        ) + len(
+            {
+                handle.patch_digest
+                for instance in store.instances()
+                for handle in store.history(instance.uid)
+                if handle.patch_digest is not None
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "error", "message"),
+    [
+        ("instance_count", True, TypeError, "instance_count must be an integer"),
+        ("instance_count", 0, ValueError, "instance_count must be positive"),
+        (
+            "items_per_instance",
+            "one",
+            TypeError,
+            "items_per_instance must be an integer",
+        ),
+        (
+            "items_per_instance",
+            -1,
+            ValueError,
+            "items_per_instance must be positive",
+        ),
+        ("change_passes", 0, ValueError, "change_passes must be positive"),
+    ],
+)
+def test_corpus_loop_measurement_validates_dimensions_before_writing(
+    tmp_path: Path,
+    keyword: str,
+    value: object,
+    error: type[Exception],
+    message: str,
+) -> None:
+    """Invalid measurement dimensions refuse without creating a store."""
+    path = tmp_path / keyword
+    with pytest.raises(error, match=message):
+        tgdb.measure_corpus_loop(path, **{keyword: value})  # type: ignore[arg-type]
+    assert not path.exists()
+
+
+def test_corpus_loop_measurement_requires_limits_and_normalizes_rss_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public runner checks limits and reports RSS bytes on both unit forms."""
+    with pytest.raises(TypeError, match="limits must be TgdbLimits"):
+        tgdb.measure_corpus_loop(tmp_path / "store", limits=object())  # type: ignore[arg-type]
+    assert tgdb._measurement_wal_bytes(tmp_path) == 0
+
+    monkeypatch.setattr(
+        resource,
+        "getrusage",
+        lambda _who: SimpleNamespace(ru_maxrss=7),
+    )
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert tgdb._measurement_rss_bytes() == 7
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert tgdb._measurement_rss_bytes() == 7 * 1024
 
 
 def _indexed_graph(
@@ -7014,6 +7160,8 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "CollectionInfo",
         "ColumnInfo",
         "CommitReceipt",
+        "CorpusLoopMeasurement",
+        "CorpusPassMeasurement",
         "GarbageObject",
         "GcReport",
         "IndexInfo",
@@ -7046,6 +7194,7 @@ def test_refusal_taxonomy_is_public_staged_and_specific() -> None:
         "VersionChange",
         "VersionHandle",
         "WriteTransaction",
+        "measure_corpus_loop",
         "register_inspector",
     ]
 

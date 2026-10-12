@@ -776,6 +776,8 @@
       "CollectionInfo",
       "ColumnInfo",
       "CommitReceipt",
+      "CorpusLoopMeasurement",
+      "CorpusPassMeasurement",
       "GarbageObject",
       "GcReport",
       "IndexInfo",
@@ -808,6 +810,7 @@
       "VersionChange",
       "VersionHandle",
       "WriteTransaction",
+      "measure_corpus_loop",
       "register_inspector"
     ]
   }

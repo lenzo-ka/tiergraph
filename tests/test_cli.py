@@ -2278,7 +2278,7 @@ def test_every_help_epilog_example_runs(
 ) -> None:
     """Every example printed by every help screen is an exit-zero invocation."""
     examples = _documented_help_examples()
-    assert len(examples) == 146
+    assert len(examples) == 147
     for index, (path, example) in enumerate(examples):
         words = [
             word[1:-1]
