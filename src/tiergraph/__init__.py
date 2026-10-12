@@ -1,7 +1,9 @@
 """tiergraph: ordered tiers, declared relations, and typed values."""
 
 import importlib
-from typing import TYPE_CHECKING, cast
+import sys as _sys
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
 from tiergraph.action import (
     ActionDeclaration,
@@ -11,28 +13,6 @@ from tiergraph.action import (
     ReactMode,
     Semimodule,
     YieldNormalization,
-)
-from tiergraph.blob import (
-    BLOB_NAMESPACE,
-    BUNDLE_VERSION,
-    BlobProfile,
-    BlobRef,
-    BlobResolver,
-    BlobSink,
-    BlobSpan,
-    Bundle,
-    BundleAsset,
-    BundleLimits,
-    ChainResolver,
-    MappingResolver,
-    VerifiedReader,
-    bundle_json_schema,
-    declare_blob_vocabulary,
-    embed_links,
-    hash_blob,
-    open_bundle,
-    relink,
-    write_bundle,
 )
 from tiergraph.budget import BudgetExhausted, Exhaustion, WorkBudget, WorkMeter
 from tiergraph.clock import (
@@ -106,43 +86,6 @@ from tiergraph.core import (
     XsdType,
     undeclare_with_contents,
 )
-from tiergraph.diff import diff
-from tiergraph.distance import (
-    PRIMITIVE_KINDS,
-    UNIT_COSTS,
-    CostTable,
-    DistanceInterval,
-    OrderedTree,
-    SequenceProjection,
-    contiguous_segmentation_distance,
-    distance,
-    format_control_insensitive_projection,
-    graph_distance,
-    ordered_tree_distance,
-    price_patch,
-    text_projection,
-    weighted_sequence_distance,
-    whitespace_insensitive_projection,
-)
-from tiergraph.edit import (
-    ClockJournalEditor,
-    EditAnnotations,
-    EditInverse,
-    EditReport,
-    Journal,
-    JournalEditor,
-    JournalHorizon,
-    JournalRecord,
-    PrunedFact,
-    RelationTouch,
-)
-from tiergraph.equivalence import (
-    EquivalenceView,
-    abstract_form,
-    equivalent,
-    fingerprint,
-    first_difference,
-)
 from tiergraph.fold import (
     AttributeValuation,
     ChildCombination,
@@ -209,17 +152,6 @@ from tiergraph.machine import (
     steps,
 )
 from tiergraph.machine_codec import load_program, program_dumps, program_loads
-from tiergraph.patch import (
-    PATCH_VERSION,
-    Patch,
-    PatchOperation,
-    apply_patch,
-    compose_patches,
-    invert_patch,
-    load_patch,
-    patch_dumps,
-    patch_loads,
-)
 from tiergraph.path import (
     AlternativeRef,
     BoundaryBinding,
@@ -240,6 +172,82 @@ from tiergraph.path import (
 from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPosteriors
 
 if TYPE_CHECKING:
+    from tiergraph.blob import (
+        BLOB_NAMESPACE,
+        BUNDLE_VERSION,
+        BlobProfile,
+        BlobRef,
+        BlobResolver,
+        BlobSink,
+        BlobSpan,
+        Bundle,
+        BundleAsset,
+        BundleLimits,
+        ChainResolver,
+        MappingResolver,
+        VerifiedReader,
+        bundle_json_schema,
+        declare_blob_vocabulary,
+        embed_links,
+        hash_blob,
+        open_bundle,
+        relink,
+        write_bundle,
+    )
+    from tiergraph.container_edit import (
+        RegroupPolicies,
+        RegroupRestoration,
+        merge_containers,
+        split_container,
+    )
+    from tiergraph.diff import diff
+    from tiergraph.distance import (
+        PRIMITIVE_KINDS,
+        UNIT_COSTS,
+        CostTable,
+        DistanceInterval,
+        OrderedTree,
+        SequenceProjection,
+        contiguous_segmentation_distance,
+        distance,
+        format_control_insensitive_projection,
+        graph_distance,
+        ordered_tree_distance,
+        price_patch,
+        text_projection,
+        weighted_sequence_distance,
+        whitespace_insensitive_projection,
+    )
+    from tiergraph.edit import (
+        ClockJournalEditor,
+        EditAnnotations,
+        EditInverse,
+        EditReport,
+        Journal,
+        JournalEditor,
+        JournalHorizon,
+        JournalRecord,
+        PrunedFact,
+        RelationTouch,
+    )
+    from tiergraph.equivalence import (
+        EquivalenceView,
+        abstract_form,
+        equivalent,
+        fingerprint,
+        first_difference,
+    )
+    from tiergraph.patch import (
+        PATCH_VERSION,
+        Patch,
+        PatchOperation,
+        apply_patch,
+        compose_patches,
+        invert_patch,
+        load_patch,
+        patch_dumps,
+        patch_loads,
+    )
     from tiergraph.pathoutput import (
         AmbiguityPolicy,
         Determinize,
@@ -251,41 +259,38 @@ if TYPE_CHECKING:
         Unambiguous,
         match_lattice,
     )
-from tiergraph.container_edit import (
-    RegroupPolicies,
-    RegroupRestoration,
-    merge_containers,
-    split_container,
-)
-from tiergraph.profile import (
-    PROFILES,
-    GraphProfile,
-    ProfileOutcome,
-    ProfileRegistrationRefusal,
-    ProfileRegistry,
-    ProfileReport,
-    RoleBinding,
-    RoleValue,
-)
-from tiergraph.reconcile import (
-    ContainmentRule,
-    PathChoice,
-    PathStep,
-    commit_path,
-    contain_by_time,
-    retime,
-)
-from tiergraph.replacement import (
-    DetachedDependency,
-    DetachmentReport,
-    EditResult,
-    ReplacementAction,
-    ReplacementPolicies,
-    Subtree,
-    SubtreeCorrespondence,
-    replace_subtree,
-    swap_subtrees,
-)
+    from tiergraph.profile import (
+        PROFILES,
+        GraphProfile,
+        ProfileOutcome,
+        ProfileRegistrationRefusal,
+        ProfileRegistry,
+        ProfileReport,
+        RoleBinding,
+        RoleValue,
+    )
+    from tiergraph.reconcile import (
+        ContainmentRule,
+        PathChoice,
+        PathStep,
+        commit_path,
+        contain_by_time,
+        retime,
+    )
+    from tiergraph.replacement import (
+        DetachedDependency,
+        DetachmentReport,
+        EditResult,
+        ReplacementAction,
+        ReplacementPolicies,
+        Subtree,
+        SubtreeCorrespondence,
+        replace_subtree,
+        swap_subtrees,
+    )
+    from tiergraph.selected import apply_selected
+    from tiergraph.textgrid import TextGridReadResult, from_textgrid, to_textgrid
+
 from tiergraph.rewrite import (
     EffectRefusal,
     RewriteCertificate,
@@ -294,7 +299,6 @@ from tiergraph.rewrite import (
     RewriteEffect,
 )
 from tiergraph.root import OrderedRootsProfile, PersistedChoiceProfile
-from tiergraph.selected import apply_selected
 from tiergraph.selection import (
     AttributeSelector,
     BoundariesSelector,
@@ -338,7 +342,6 @@ from tiergraph.spanview import (
     to_jsonl,
     to_text,
 )
-from tiergraph.textgrid import TextGridReadResult, from_textgrid, to_textgrid
 from tiergraph.traversal import (
     NodeSequence,
     OrderedContainment,
@@ -363,27 +366,187 @@ from tiergraph.wire import (
 
 __version__ = "0.8.0"
 
-_PATHOUTPUT_EXPORTS = frozenset(
-    {
-        "AmbiguityPolicy",
-        "Determinize",
-        "Emissions",
-        "LatticeMatch",
-        "OutputItemMarginals",
-        "OutputMasses",
-        "OutputPlan",
-        "Unambiguous",
-        "match_lattice",
-    }
+_LAZY_EXPORTS = {
+    "tiergraph.blob": frozenset(
+        {
+            "BLOB_NAMESPACE",
+            "BUNDLE_VERSION",
+            "BlobProfile",
+            "BlobRef",
+            "BlobResolver",
+            "BlobSink",
+            "BlobSpan",
+            "Bundle",
+            "BundleAsset",
+            "BundleLimits",
+            "ChainResolver",
+            "MappingResolver",
+            "VerifiedReader",
+            "bundle_json_schema",
+            "declare_blob_vocabulary",
+            "embed_links",
+            "hash_blob",
+            "open_bundle",
+            "relink",
+            "write_bundle",
+        }
+    ),
+    "tiergraph.container_edit": frozenset(
+        {
+            "RegroupPolicies",
+            "RegroupRestoration",
+            "merge_containers",
+            "split_container",
+        }
+    ),
+    "tiergraph.diff": frozenset({"diff"}),
+    "tiergraph.distance": frozenset(
+        {
+            "PRIMITIVE_KINDS",
+            "UNIT_COSTS",
+            "CostTable",
+            "DistanceInterval",
+            "OrderedTree",
+            "SequenceProjection",
+            "contiguous_segmentation_distance",
+            "distance",
+            "format_control_insensitive_projection",
+            "graph_distance",
+            "ordered_tree_distance",
+            "price_patch",
+            "text_projection",
+            "weighted_sequence_distance",
+            "whitespace_insensitive_projection",
+        }
+    ),
+    "tiergraph.edit": frozenset(
+        {
+            "ClockJournalEditor",
+            "EditAnnotations",
+            "EditInverse",
+            "EditReport",
+            "Journal",
+            "JournalEditor",
+            "JournalHorizon",
+            "JournalRecord",
+            "PrunedFact",
+            "RelationTouch",
+        }
+    ),
+    "tiergraph.equivalence": frozenset(
+        {
+            "EquivalenceView",
+            "abstract_form",
+            "equivalent",
+            "fingerprint",
+            "first_difference",
+        }
+    ),
+    "tiergraph.patch": frozenset(
+        {
+            "PATCH_VERSION",
+            "Patch",
+            "PatchOperation",
+            "apply_patch",
+            "compose_patches",
+            "invert_patch",
+            "load_patch",
+            "patch_dumps",
+            "patch_loads",
+        }
+    ),
+    "tiergraph.pathoutput": frozenset(
+        {
+            "AmbiguityPolicy",
+            "Determinize",
+            "Emissions",
+            "LatticeMatch",
+            "OutputItemMarginals",
+            "OutputMasses",
+            "OutputPlan",
+            "Unambiguous",
+            "match_lattice",
+        }
+    ),
+    "tiergraph.profile": frozenset(
+        {
+            "PROFILES",
+            "GraphProfile",
+            "ProfileOutcome",
+            "ProfileRegistrationRefusal",
+            "ProfileRegistry",
+            "ProfileReport",
+            "RoleBinding",
+            "RoleValue",
+        }
+    ),
+    "tiergraph.reconcile": frozenset(
+        {
+            "ContainmentRule",
+            "PathChoice",
+            "PathStep",
+            "commit_path",
+            "contain_by_time",
+            "retime",
+        }
+    ),
+    "tiergraph.replacement": frozenset(
+        {
+            "DetachedDependency",
+            "DetachmentReport",
+            "EditResult",
+            "ReplacementAction",
+            "ReplacementPolicies",
+            "Subtree",
+            "SubtreeCorrespondence",
+            "replace_subtree",
+            "swap_subtrees",
+        }
+    ),
+    "tiergraph.selected": frozenset({"apply_selected"}),
+    "tiergraph.textgrid": frozenset(
+        {"TextGridReadResult", "from_textgrid", "to_textgrid"}
+    ),
+}
+_COLLIDING_EXPORTS = frozenset(
+    module_name.rpartition(".")[2]
+    for module_name, exports in _LAZY_EXPORTS.items()
+    if module_name.rpartition(".")[2] in exports
 )
 
 
 def __getattr__(name: str) -> object:
-    """Load path-output composition only when its public names are requested."""
-    if name in _PATHOUTPUT_EXPORTS:
-        pathoutput = importlib.import_module("tiergraph.pathoutput")
-        return cast(object, getattr(pathoutput, name))
+    """Load an opt-in public surface only when one of its names is requested."""
+    for module_name, exports in _LAZY_EXPORTS.items():
+        if name in exports:
+            importlib.import_module(module_name)
+            for loaded_name, loaded_exports in _LAZY_EXPORTS.items():
+                if (module := _sys.modules.get(loaded_name)) is not None:
+                    module_vars = vars(module)
+                    globals().update(
+                        (export, module_vars[export])
+                        for export in loaded_exports
+                        if export in module_vars
+                    )
+            return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """List eager and lazy public names without importing opt-in modules."""
+    return sorted(set(globals()) | set(__all__))
+
+
+class _TiergraphModule(_ModuleType):
+    """Preserve public functions that share names with lazy submodules."""
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Keep a colliding public function when import publishes its module."""
+        if name in _COLLIDING_EXPORTS and isinstance(value, _ModuleType):
+            if name not in vars(value):
+                return
+            value = vars(value)[name]
+        super().__setattr__(name, value)
 
 
 __all__ = [
@@ -711,3 +874,5 @@ __all__ = [
     "whitespace_insensitive_projection",
     "write_bundle",
 ]
+
+_sys.modules[__name__].__class__ = _TiergraphModule
