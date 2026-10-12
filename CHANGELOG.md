@@ -248,6 +248,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kept default import time and memory within 5% of 0.8.0 by loading opt-in
+  public surfaces on first use.
 - Rebased every clock-aware replacement report to source relation coordinates.
 - Included withdrawn clock-binding facts in public replacement detachment reports.
 - Kept merges that require relation, attribute, layer, or seam drops as one
