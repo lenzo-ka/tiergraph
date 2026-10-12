@@ -2802,8 +2802,8 @@ def test_run_header_only_edges_and_all_outputs(
     targets = tuple(target_choice.choices or ())
     assert targets == ("json", "json-compact", "bytes", "dot")
     for suffix, content in (
-        ("nonewline", b'{"machine_version":"1"}'),
-        ("crlf", b'{"machine_version":"1"}\r\n'),
+        ("nonewline", b'{"machine_version":"2"}'),
+        ("crlf", b'{"machine_version":"2"}\r\n'),
     ):
         source = tmp_path / suffix
         source.write_bytes(content)
@@ -2815,7 +2815,7 @@ def test_run_header_only_edges_and_all_outputs(
             assert main(args) == 0
             assert output.read_bytes()
     bad = tmp_path / "blank"
-    bad.write_bytes(b'{"machine_version":"1"}\n \t\n')
+    bad.write_bytes(b'{"machine_version":"2"}\n \t\n')
     assert main(["run", str(bad), "--to", "json"]) == 1
     assert "whitespace-only" in capsys.readouterr().err
 
@@ -2851,7 +2851,7 @@ def test_run_repeat_depth_boundary(
 ) -> None:
     prefix = b'{"opcode":"repeat","count":1,"body":['
     source = tmp_path / "deep.jsonl"
-    header = b'{"machine_version":"1"}\n'
+    header = b'{"machine_version":"2"}\n'
     source.write_bytes(header + prefix * repeat_depth + b"]}" * repeat_depth)
 
     assert main(["run", str(source), "--to", "json"]) == 1
@@ -3065,9 +3065,9 @@ def test_step_mode_contracts_and_repl_validation(
         b"not-json",
         b"[]",
         b'{"machine_version":"bad"}',
-        b'{"machine_version":"1","extra":true}',
-        b'{"machine_version":"1"}\n{}',
-        b'{"machine_version":"1"}\n{"opcode":"unknown"}',
+        b'{"machine_version":"2","extra":true}',
+        b'{"machine_version":"2"}\n{}',
+        b'{"machine_version":"2"}\n{"opcode":"unknown"}',
     ],
 )
 def test_run_bad_envelopes(
@@ -3693,12 +3693,12 @@ def test_stdin_stdout_limits_and_type_normalization(
     assert main(["convert", "-", "--to", "bytes"]) == 0
     assert capsysbinary.readouterr().out == graph_bytes
 
-    program = io.TextIOWrapper(io.BytesIO(b'{"machine_version":"1"}'))
+    program = io.TextIOWrapper(io.BytesIO(b'{"machine_version":"2"}'))
     monkeypatch.setattr(sys, "stdin", program)
     assert main(["run", "-", "--to", "bytes", "-o", str(tmp_path / "out")]) == 0
 
     source = tmp_path / "large"
-    source.write_bytes(b'{"machine_version":"1"}\n{}')
+    source.write_bytes(b'{"machine_version":"2"}\n{}')
     monkeypatch.setattr(machine_codec, "_JSONL_LINE_BYTES", 2)
     assert main(["run", str(source), "--to", "json"]) == 1
     monkeypatch.setattr(machine_codec, "_JSONL_LINE_BYTES", 1024)
@@ -3707,7 +3707,7 @@ def test_stdin_stdout_limits_and_type_normalization(
 
     typed = tmp_path / "typed"
     typed.write_bytes(
-        b'{"machine_version":"1"}\n'
+        b'{"machine_version":"2"}\n'
         b'{"opcode":"add_item","tier":{"namespace":1,"local_name":"x"},'
         b'"item":{"durable_id":null,"attributes":[]}}'
     )
@@ -3749,7 +3749,7 @@ def test_secondary_cleanup_and_decoder_type_normalization(
         cli._write_output("-", str(output), b"new")
 
     program = tmp_path / "program"
-    program.write_bytes(b'{"machine_version":"1"}\n{"opcode":"anything"}')
+    program.write_bytes(b'{"machine_version":"2"}\n{"opcode":"anything"}')
     monkeypatch.setattr(
         machine_codec,
         "_decode_opcode",
@@ -3763,7 +3763,7 @@ def test_jsonl_recursion_error_is_clean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     program = tmp_path / "program"
-    program.write_bytes(b'{"machine_version":"1"}')
+    program.write_bytes(b'{"machine_version":"2"}')
     monkeypatch.setattr(
         cli,
         "_read_program",
@@ -3777,7 +3777,7 @@ def test_jsonl_depth_fallback_and_scanner_escape_branches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     program = tmp_path / "program"
-    program.write_bytes(b'{"machine_version":"1"}')
+    program.write_bytes(b'{"machine_version":"2"}')
     # The stub names `object_pairs_hook` rather than absorbing it into
     # `**kwargs` so that it stops accepting the call if the reader ever stops
     # passing the duplicate-key hook.  A stub permissive about its keywords

@@ -305,6 +305,17 @@ def api_bytes(manifest: Mapping[str, Any]) -> bytes:
             f"API-stability promise at version {tiergraph.__version__}."
         )
         parts.extend((f"### `{module_name}`", "", stability, ""))
+        if module_name in {"tiergraph.diff", "tiergraph.distance"}:
+            short_name = module_name.rpartition(".")[2]
+            example_name = "diff" if short_name == "diff" else "CostTable"
+            parts.extend(
+                (
+                    f"The top-level `tiergraph.{short_name}` name is the "
+                    f"`{short_name}()` function. Import names from the module, "
+                    f"for example `from {module_name} import {example_name}`.",
+                    "",
+                )
+            )
         # BuilderError is intentionally importable but absent from build.__all__, so
         # it cannot join the manifest's exact inventory of declared exports.
         if module_name == "tiergraph.build":

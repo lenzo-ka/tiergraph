@@ -551,28 +551,6 @@ def test_program_refuses_patch_removal_opcode() -> None:
         program_loads(source)
 
 
-def test_version_one_programs_still_read_but_keep_their_vocabulary() -> None:
-    source = (
-        '{"machine_version":"1"}\n'
-        '{"opcode":"declare_namespace","declaration":'
-        '{"prefix":"v","namespace":"urn:v1"}}\n'
-    )
-    assert program_loads(source).unroll().graph.namespaces == (
-        NamespaceDeclaration("v", "urn:v1"),
-    )
-    with pytest.raises(Refusal, match="does not define opcode 'add_layer'"):
-        program_loads(
-            source + '{"opcode":"add_layer","name":'
-            '{"vocabulary":"urn:v1","source":"legacy"}}\n'
-        )
-    with pytest.raises(Refusal, match="does not define opcode 'add_layer'"):
-        program_loads(
-            source + '{"opcode":"repeat","count":1,"body":['
-            '{"opcode":"add_layer","name":'
-            '{"vocabulary":"urn:v1","source":"legacy"}}]}\n'
-        )
-
-
 @pytest.mark.parametrize(
     ("source", "message"),
     [

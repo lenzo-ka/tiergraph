@@ -509,6 +509,18 @@ _LAZY_EXPORTS = {
         {"TextGridReadResult", "from_textgrid", "to_textgrid"}
     ),
 }
+_SUBMODULES = frozenset(_LAZY_EXPORTS) | frozenset(
+    {
+        "tiergraph.build",
+        "tiergraph.cli",
+        "tiergraph.match",
+        "tiergraph.predicate",
+        "tiergraph.schema",
+        "tiergraph.semiring",
+        "tiergraph.spanview",
+        "tiergraph.tgdb",
+    }
+)
 _COLLIDING_EXPORTS = frozenset(
     module_name.rpartition(".")[2]
     for module_name, exports in _LAZY_EXPORTS.items()
@@ -517,7 +529,7 @@ _COLLIDING_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> object:
-    """Load an opt-in public surface only when one of its names is requested."""
+    """Load an opt-in public name or declared submodule only when requested."""
     for module_name, exports in _LAZY_EXPORTS.items():
         if name in exports:
             importlib.import_module(module_name)
@@ -530,6 +542,11 @@ def __getattr__(name: str) -> object:
                         if export in module_vars
                     )
             return globals()[name]
+    module_name = f"{__name__}.{name}"
+    if module_name in _SUBMODULES:
+        module = importlib.import_module(module_name)
+        globals()[name] = module
+        return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

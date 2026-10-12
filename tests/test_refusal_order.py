@@ -221,7 +221,7 @@ def test_a_program_line_that_is_not_text_is_an_encoding_condition() -> None:
     offending line follows the header so the reported number is shown to be
     the line the bytes are on rather than a constant.
     """
-    refusal = refuse(program_loads, b'{"machine_version":"1"}\n\xff\n')
+    refusal = refuse(program_loads, b'{"machine_version":"2"}\n\xff\n')
     assert refusal.stage is RefusalStage.ENCODING
     assert str(refusal) == "JSONL line 2: parse UTF-8 failed: invalid start byte"
     assert refusal.also == ()
@@ -273,13 +273,13 @@ def test_a_program_line_with_a_repeated_key_is_a_syntax_condition() -> None:
     made of the record, which is a later stage judging a text that was never
     settled.
     """
-    header = refuse(program_loads, b'{"machine_version":"1","machine_version":"1"}\n')
+    header = refuse(program_loads, b'{"machine_version":"2","machine_version":"2"}\n')
     assert header.stage is RefusalStage.SYNTAX
     assert str(header) == (
         "JSONL line 1: parse JSON failed: duplicate object key 'machine_version'"
     )
 
-    opcode = refuse(program_loads, b'{"machine_version":"1"}\n{"a":1,"a":2}\n')
+    opcode = refuse(program_loads, b'{"machine_version":"2"}\n{"a":1,"a":2}\n')
     assert opcode.stage is RefusalStage.SYNTAX
     assert str(opcode) == "JSONL line 2: parse JSON failed: duplicate object key 'a'"
 
@@ -405,7 +405,7 @@ READER_STAGES: dict[str, dict[RefusalStage, str | bytes]] = {
         RefusalStage.SYNTAX: "{",
         RefusalStage.CONSTRUCTION: b"[]\n",
         RefusalStage.DISCRIMINATOR: b"{}\n",
-        RefusalStage.SHAPE: b'{"machine_version":"1","extra":true}\n',
+        RefusalStage.SHAPE: b'{"machine_version":"2","extra":true}\n',
         RefusalStage.VALUE: PROGRAM_HEADER
         + b'{"opcode":"repeat","count":-1,"body":[]}\n',
         RefusalStage.SEMANTICS: PROGRAM_HEADER + b'{"opcode":"declare_namespace",'

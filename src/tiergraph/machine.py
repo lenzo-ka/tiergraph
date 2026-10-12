@@ -88,7 +88,6 @@ from tiergraph.wire import (
 )
 
 MACHINE_VERSION = "2"
-LEGACY_MACHINE_VERSION = "1"
 MAX_REPEAT_COUNT = 10_000
 # Owner-tunable policy: bound eager traces while leaving ample room for real builds.
 MAX_TOTAL_OPCODES = 2_000_000

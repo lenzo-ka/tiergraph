@@ -528,7 +528,7 @@ def one_opcode(record: dict[str, object]) -> str:
     a whole program meets the first condition it contains, and against an
     unguarded decoder that is somebody else's condition several lines later.
     """
-    return f'{{"machine_version":"1"}}\n{json.dumps(record)}\n'
+    return f'{{"machine_version":"2"}}\n{json.dumps(record)}\n'
 
 
 @pytest.mark.parametrize(
@@ -752,7 +752,7 @@ def test_run_refuses_the_program_it_used_to_execute_into_an_unreadable_graph(
     """`run` settles the question `validate` settles, before it writes."""
     program = tmp_path / "program.jsonl"
     program.write_text(
-        '{"machine_version":"1"}\n'
+        '{"machine_version":"2"}\n'
         '{"opcode":"declare_namespace",'
         '"declaration":{"prefix":"x","namespace":"urn:x"}}\n'
         '{"opcode":"declare_tier","declaration":'
@@ -847,7 +847,7 @@ def test_an_integer_literal_too_long_to_convert_is_refused_as_the_document_reade
     literal past its digit limit with a bare ValueError, which the document
     reader already stages as a refusal; the program reader let it escape.
     """
-    text = '{"machine_version":"1"}\n{"opcode":"repeat","count":' + "9" * 5000 + "}\n"
+    text = '{"machine_version":"2"}\n{"opcode":"repeat","count":' + "9" * 5000 + "}\n"
     with pytest.raises(Refusal) as refused:
         program_loads(text)
     assert refused.value.stage is RefusalStage.VALUE
