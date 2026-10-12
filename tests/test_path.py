@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import cast
 
@@ -30,8 +31,10 @@ from tiergraph import (
     StructuralPathProfile,
     Tier,
     TierDeclaration,
+    parse_path_index_segment,
     resolve_path,
 )
+from tiergraph.path import parse_path_index_segment as path_module_index_parser
 
 NS = "urn:path"
 TIER = QualifiedName(NS, "tokens")
@@ -49,6 +52,165 @@ def graph_with(*items: Item) -> Graph:
 
 
 GRAPH = graph_with(Item("alpha"), Item("beta"))
+
+
+def test_path_index_parser_has_one_public_identity() -> None:
+    """The submodule and package exports publish the same implementation."""
+    assert parse_path_index_segment is path_module_index_parser
+
+
+@pytest.mark.parametrize(
+    ("segment", "expected"),
+    [("0", 0), ("7", 7), ("123456789", 123456789)],
+)
+def test_path_index_parser_accepts_canonical_ascii_decimals(
+    segment: str, expected: int
+) -> None:
+    """Zero and positive single- and multi-digit indices retain their value."""
+    path = CanonicalPath(("prefix", segment, "suffix"))
+    assert parse_path_index_segment(segment) == expected
+    assert parse_path_index_segment(segment, path=path, segment_index=1) == expected
+
+
+@pytest.mark.parametrize("contextual", (False, True), ids=("standalone", "contextual"))
+@pytest.mark.parametrize(
+    ("segment", "code"),
+    [
+        ("00", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("01", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("+0", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("+12", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("+01", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("١٢", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("१२", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("１２", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("1٢", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("१2", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("+١٢", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("", PathRefusalCode.INVALID_SEGMENT),
+        ("+", PathRefusalCode.INVALID_SEGMENT),
+        ("-", PathRefusalCode.INVALID_SEGMENT),
+        ("-1", PathRefusalCode.INVALID_SEGMENT),
+        ("++1", PathRefusalCode.INVALID_SEGMENT),
+        ("--1", PathRefusalCode.INVALID_SEGMENT),
+        ("＋1", PathRefusalCode.INVALID_SEGMENT),
+        ("－1", PathRefusalCode.INVALID_SEGMENT),
+        (" 1", PathRefusalCode.INVALID_SEGMENT),
+        ("1 ", PathRefusalCode.INVALID_SEGMENT),
+        ("\t1", PathRefusalCode.INVALID_SEGMENT),
+        ("1\n", PathRefusalCode.INVALID_SEGMENT),
+        ("\x001", PathRefusalCode.INVALID_SEGMENT),
+        ("one", PathRefusalCode.INVALID_SEGMENT),
+        ("1.0", PathRefusalCode.INVALID_SEGMENT),
+        ("²", PathRefusalCode.INVALID_SEGMENT),
+    ],
+)
+def test_path_index_parser_classifies_every_lexical_family(
+    segment: str, code: PathRefusalCode, contextual: bool
+) -> None:
+    """Alias-like decimal forms and invalid forms have exact refusal data."""
+    if contextual:
+        path = CanonicalPath(("prefix", segment, "suffix"))
+        offender = PathOffender(
+            text=str(path), path=path, segment_index=1, segment=segment
+        )
+        with pytest.raises(PathRefusal) as caught:
+            parse_path_index_segment(segment, path=path, segment_index=1)
+    else:
+        offender = PathOffender(text="", path=None, segment_index=None, segment=segment)
+        with pytest.raises(PathRefusal) as caught:
+            parse_path_index_segment(segment)
+    assert caught.value.code is code
+    assert caught.value.offender == offender
+    assert caught.value.cause is None
+    assert caught.value.__cause__ is None
+
+
+def test_path_index_parser_requires_complete_consistent_context() -> None:
+    """Context is paired and identifies the supplied segment in the path."""
+    path = CanonicalPath(("7",))
+    with pytest.raises(TypeError, match="provided together"):
+        parse_path_index_segment("7", path=path)
+    with pytest.raises(TypeError, match="provided together"):
+        parse_path_index_segment("7", segment_index=0)
+    with pytest.raises(ValueError, match="does not match"):
+        parse_path_index_segment("8", path=path, segment_index=0)
+    with pytest.raises(ValueError, match="does not match"):
+        parse_path_index_segment("7", path=path, segment_index=1)
+
+
+def test_path_index_parser_refuses_past_the_active_integer_string_limit() -> None:
+    """An over-limit decimal is typed before direct or structural conversion."""
+    original_limit = sys.get_int_max_str_digits()
+    try:
+        test_limit = sys.int_info.str_digits_check_threshold
+        sys.set_int_max_str_digits(test_limit)
+        assert parse_path_index_segment("1" * test_limit) > 0
+        segment = "1" * (test_limit + 1)
+        path = CanonicalPath(("items", "structural", NS, "tokens", segment))
+
+        with pytest.raises(PathRefusal) as standalone:
+            parse_path_index_segment(segment)
+        with pytest.raises(PathRefusal) as contextual:
+            parse_path_index_segment(segment, path=path, segment_index=4)
+        with pytest.raises(PathRefusal) as resolved:
+            resolve_path(GRAPH, PROFILE, str(path))
+
+        assert standalone.value.code is PathRefusalCode.INVALID_SEGMENT
+        assert standalone.value.offender == PathOffender(text="", segment=segment)
+        assert contextual.value.code is PathRefusalCode.INVALID_SEGMENT
+        assert (
+            contextual.value.offender
+            == resolved.value.offender
+            == PathOffender(text=str(path), path=path, segment_index=4, segment=segment)
+        )
+        assert standalone.value.cause is None
+        assert contextual.value.cause is None
+        assert resolved.value.cause is None
+    finally:
+        sys.set_int_max_str_digits(original_limit)
+
+
+@pytest.mark.parametrize(
+    ("template", "segment_index"),
+    [
+        ("/items/structural/urn:path/tokens/{segment}", 4),
+        ("/positions/structural/urn:path/tokens/{segment}", 4),
+    ],
+    ids=("item", "boundary"),
+)
+@pytest.mark.parametrize(
+    ("segment", "code"),
+    [
+        ("+1", PathRefusalCode.NONCANONICAL_SEGMENT),
+        ("one", PathRefusalCode.INVALID_SEGMENT),
+    ],
+)
+def test_structural_slots_match_direct_index_refusals(
+    template: str,
+    segment_index: int,
+    segment: str,
+    code: PathRefusalCode,
+) -> None:
+    """Structural item and boundary slots preserve direct parser refusals."""
+    text = template.format(segment=segment)
+    path = CanonicalPath.parse(text)
+    with pytest.raises(PathRefusal) as direct:
+        parse_path_index_segment(segment, path=path, segment_index=segment_index)
+    with pytest.raises(PathRefusal) as resolved:
+        resolve_path(GRAPH, PROFILE, text)
+    assert direct.value.code is resolved.value.code is code
+    assert (
+        direct.value.offender
+        == resolved.value.offender
+        == PathOffender(
+            text=text,
+            path=path,
+            segment_index=segment_index,
+            segment=segment,
+        )
+    )
+    assert direct.value.cause is resolved.value.cause is None
 
 
 @pytest.mark.parametrize(

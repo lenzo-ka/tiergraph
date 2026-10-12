@@ -257,6 +257,7 @@
       "ResolvedBoundary",
       "ResolvedItem",
       "StructuralPathProfile",
+      "parse_path_index_segment",
       "resolve_path"
     ],
     "profiles": [

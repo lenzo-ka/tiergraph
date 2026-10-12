@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -171,6 +172,67 @@ class PathRefusal(ValueError):
         super().__init__(f"{code.value}: {offender!r}")
 
 
+def parse_path_index_segment(
+    segment: str,
+    *,
+    path: CanonicalPath | None = None,
+    segment_index: int | None = None,
+) -> int:
+    """Parse one canonical nonnegative path index.
+
+    Accepted spellings are ``0`` or an ASCII digit from ``1`` through ``9``
+    followed by zero or more ASCII digits. The returned integer is not checked
+    against any graph or collection bounds. A canonical spelling longer than
+    the interpreter's active integer-string limit is refused with
+    :attr:`PathRefusalCode.INVALID_SEGMENT` before conversion.
+
+    ``path`` and ``segment_index`` must be passed together, and the indexed path
+    segment must equal ``segment``. Incomplete context raises :class:`TypeError`;
+    inconsistent context raises :class:`ValueError`. A contextual refusal uses
+    ``PathOffender(text=str(path), path=path, segment_index=segment_index,
+    segment=segment)``. Without context it uses ``PathOffender(text="",
+    path=None, segment_index=None, segment=segment)``.
+
+    Unsigned Unicode-decimal spellings that are not canonical, including a
+    single leading ASCII plus sign, refuse with
+    :attr:`PathRefusalCode.NONCANONICAL_SEGMENT`. Other spellings refuse with
+    :attr:`PathRefusalCode.INVALID_SEGMENT`. Every other offender field is
+    ``None``, and these refusals have no cause.
+    """
+    if (path is None) != (segment_index is None):
+        raise TypeError("path and segment_index must be provided together")
+    if path is not None and segment_index is not None:
+        try:
+            contextual_segment = path.segments[segment_index]
+        except IndexError:
+            contextual_segment = None
+        if contextual_segment != segment:
+            raise ValueError("segment does not match path at segment_index")
+
+    if _INDEX.fullmatch(segment):
+        digit_limit = sys.get_int_max_str_digits()
+        if digit_limit == 0 or len(segment) <= digit_limit:
+            return int(segment)
+        code = PathRefusalCode.INVALID_SEGMENT
+    else:
+        body = segment[1:] if segment.startswith("+") else segment
+        code = (
+            PathRefusalCode.NONCANONICAL_SEGMENT
+            if body != "" and body.isdecimal()
+            else PathRefusalCode.INVALID_SEGMENT
+        )
+    if path is not None and segment_index is not None:
+        offender = PathOffender(
+            text=str(path),
+            path=path,
+            segment_index=segment_index,
+            segment=segment,
+        )
+    else:
+        offender = PathOffender(text="", segment=segment)
+    raise PathRefusal(code, offender)
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedItem:
     """Pair the parsed path with its current structural item coordinate."""
@@ -288,7 +350,7 @@ class StructuralPathProfile:
             return ItemBinding(
                 ItemRef(
                     _tier(segments[2], segments[3], path),
-                    _index(segments[4], 4, path),
+                    parse_path_index_segment(segments[4], path=path, segment_index=4),
                 )
             )
         if len(segments) == durable_item_segment_count and segments[:2] == (
@@ -303,7 +365,7 @@ class StructuralPathProfile:
             return BoundaryBinding(
                 BoundaryRef(
                     _tier(segments[2], segments[3], path),
-                    _index(segments[4], 4, path),
+                    parse_path_index_segment(segments[4], path=path, segment_index=4),
                 )
             )
         if len(segments) == structural_item_segment_count and segments[:3] == (
@@ -402,24 +464,6 @@ def _nonempty(value: str, index: int, path: CanonicalPath) -> str:
             PathOffender(text=str(path), path=path, segment_index=index, segment=value),
         )
     return value
-
-
-def _index(value: str, index: int, path: CanonicalPath) -> int:
-    if _INDEX.fullmatch(value):
-        return int(value)
-    # A non-negative integer written non-canonically (leading zero, leading "+",
-    # or non-ASCII decimal digits) is a NONCANONICAL alias; anything outside the
-    # unsigned-integer lexical domain (a sign-only "-1", "one") is INVALID.
-    body = value[1:] if value.startswith("+") else value
-    code = (
-        PathRefusalCode.NONCANONICAL_SEGMENT
-        if body != "" and body.isdecimal()
-        else PathRefusalCode.INVALID_SEGMENT
-    )
-    raise PathRefusal(
-        code,
-        PathOffender(text=str(path), path=path, segment_index=index, segment=value),
-    )
 
 
 def _side(value: str, index: int, path: CanonicalPath) -> BoundarySide:

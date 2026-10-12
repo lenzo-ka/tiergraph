@@ -40,11 +40,13 @@ import tiergraph
 lazy_modules = {DECLARED_LAZY_MODULES!r}
 loaded_before_dir = sorted(set(lazy_modules) & set(sys.modules))
 public_names = dir(tiergraph)
+parsed_index = tiergraph.parse_path_index_segment("12")
 loaded_after_dir = sorted(set(lazy_modules) & set(sys.modules))
 print(json.dumps({{
     "loaded_before_dir": loaded_before_dir,
     "loaded_after_dir": loaded_after_dir,
     "missing_from_dir": sorted(set(tiergraph.__all__) - set(public_names)),
+    "parsed_index": parsed_index,
 }}))
 """
     completed = subprocess.run(
@@ -58,6 +60,7 @@ print(json.dumps({{
         "loaded_before_dir": [],
         "loaded_after_dir": [],
         "missing_from_dir": [],
+        "parsed_index": 12,
     }
 
 

@@ -18,6 +18,7 @@ from tiergraph import (
     ItemRef,
     PathBinding,
     PathKind,
+    PathOffender,
     PathRefusal,
     PathRefusalCode,
     QualifiedName,
@@ -27,6 +28,7 @@ from tiergraph import (
     best,
     count,
     lower_grammar,
+    parse_path_index_segment,
     recognize,
     resolve_path,
 )
@@ -256,6 +258,7 @@ def test_chart_profile_refuses_outside_its_declared_snapshot_and_vocabulary() ->
     cases = (
         ("/other", PathRefusalCode.UNKNOWN_FORM),
         (f"/chart/{S}/01/3/alternatives/0", PathRefusalCode.NONCANONICAL_SEGMENT),
+        (f"/chart/{S}/+0/3/alternatives/0", PathRefusalCode.NONCANONICAL_SEGMENT),
         (f"/chart/{S}/zero/3/alternatives/0", PathRefusalCode.INVALID_SEGMENT),
         (f"/chart/{S}/0/4/alternatives/0", PathRefusalCode.PROFILE_REFUSED),
     )
@@ -285,6 +288,49 @@ def test_chart_profile_refuses_outside_its_declared_snapshot_and_vocabulary() ->
     with pytest.raises(PathRefusal) as relation_refusal:
         profile.alternatives(forest.root, wrong_relation, forest.graph)
     assert relation_refusal.value.offender.profile_reason == "unsupported_relation"
+
+
+@pytest.mark.parametrize(
+    ("segment_index", "segment"),
+    [(2, "+0"), (3, "+3"), (5, "+0"), (2, "zero"), (3, "three"), (5, "one")],
+    ids=(
+        "start-noncanonical",
+        "end-noncanonical",
+        "alternative-noncanonical",
+        "start-invalid",
+        "end-invalid",
+        "alternative-invalid",
+    ),
+)
+def test_chart_numeric_slots_match_direct_index_refusals(
+    segment_index: int, segment: str
+) -> None:
+    """Chart start, end, and alternative slots share exact parser refusals."""
+    forest = recognize(lower_grammar(ambiguous_grammar("1", "9")), ("x", "x", "x"))
+    profile = GrammarChartProfile(forest.graph, forest.root)
+    segments = ["chart", str(S), "0", "3", "alternatives", "0"]
+    segments[segment_index] = segment
+    path = CanonicalPath(tuple(segments))
+
+    with pytest.raises(PathRefusal) as direct:
+        parse_path_index_segment(segment, path=path, segment_index=segment_index)
+    with pytest.raises(PathRefusal) as resolved:
+        resolve_path(forest.graph, profile, str(path))
+
+    expected_code = (
+        PathRefusalCode.NONCANONICAL_SEGMENT
+        if segment.startswith("+")
+        else PathRefusalCode.INVALID_SEGMENT
+    )
+    expected_offender = PathOffender(
+        text=str(path),
+        path=path,
+        segment_index=segment_index,
+        segment=segment,
+    )
+    assert direct.value.code is resolved.value.code is expected_code
+    assert direct.value.offender == resolved.value.offender == expected_offender
+    assert direct.value.cause is resolved.value.cause is None
 
 
 def test_generic_alternative_owner_failure_negative_bound_and_structural_guard() -> (

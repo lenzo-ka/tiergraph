@@ -8,7 +8,6 @@ snapshot-owned profile.
 
 from __future__ import annotations
 
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +45,7 @@ from tiergraph import (
     Tier,
     TierDeclaration,
     XsdType,
+    parse_path_index_segment,
     resolve_path,
 )
 from tiergraph.core import _scalar_attribute
@@ -67,8 +67,6 @@ CHANNEL = QualifiedName(MIDI_NAMESPACE, "channel")
 TEMPO = QualifiedName(MIDI_NAMESPACE, "tempo")
 DIVISION = QualifiedName(MIDI_NAMESPACE, "division")
 TITLE = "Tropic of Capricorn"
-
-_CANONICAL_INDEX = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 
 
 def build_graph() -> Graph:
@@ -273,14 +271,21 @@ class MixPathProfile:
             return ItemBinding(
                 ItemRef(
                     QualifiedName(namespace, segments[2]),
-                    _index(segments[3], 3, path),
+                    parse_path_index_segment(segments[3], path=path, segment_index=3),
                 )
             )
         if len(segments) == 3 and segments[:2] == ("mix", "clock"):
-            return BoundaryBinding(BoundaryRef(CLOCK, _index(segments[2], 2, path)))
+            return BoundaryBinding(
+                BoundaryRef(
+                    CLOCK,
+                    parse_path_index_segment(segments[2], path=path, segment_index=2),
+                )
+            )
         if len(segments) == 3 and segments[:2] == ("mix", "arrangement"):
             return AlternativeRef(
-                ItemRef(BUS, 0), ARRANGEMENT, _index(segments[2], 2, path)
+                ItemRef(BUS, 0),
+                ARRANGEMENT,
+                parse_path_index_segment(segments[2], path=path, segment_index=2),
             )
         raise PathRefusal(
             PathRefusalCode.UNKNOWN_FORM, PathOffender(text=str(path), path=path)
@@ -342,26 +347,6 @@ class MixPathProfile:
             )
             for stem in sorted(stems, key=lambda reference: reference.index)
         )
-
-
-def _index(value: str, segment_index: int, path: CanonicalPath) -> int:
-    if _CANONICAL_INDEX.fullmatch(value):
-        return int(value)
-    body = value[1:] if value.startswith("+") else value
-    code = (
-        PathRefusalCode.NONCANONICAL_SEGMENT
-        if body and body.isdecimal()
-        else PathRefusalCode.INVALID_SEGMENT
-    )
-    raise PathRefusal(
-        code,
-        PathOffender(
-            text=str(path),
-            path=path,
-            segment_index=segment_index,
-            segment=value,
-        ),
-    )
 
 
 def _attribute_int(graph: Graph, reference: ItemRef, name: QualifiedName) -> int:

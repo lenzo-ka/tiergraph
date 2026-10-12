@@ -2802,6 +2802,9 @@ def test_clock_replacement_reports_source_coordinates_in_both_audit_modes() -> N
     ) = _clock_crossing_replacement()
     reports = []
     dependencies = []
+    expected_dependencies = (
+        DetachedDependency("layer", 1, layer=layer, subject=containment_fact.subject),
+    )
     for check_links in (False, True):
         plain = profile.edit("keep-earlier", check_links=check_links)
         plain.replace_subtree(
@@ -2823,6 +2826,7 @@ def test_clock_replacement_reports_source_coordinates_in_both_audit_modes() -> N
         assert (
             plain_report.dependencies == journal.records[0].report.detached_dependencies
         )
+        assert plain_report.dependencies == expected_dependencies
         reports.append(plain_report)
         dependencies.append(journal.records[0].report.detached_dependencies)
     assert reports[0] == reports[1]
