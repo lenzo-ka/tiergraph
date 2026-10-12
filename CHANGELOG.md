@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the public `parse_path_index_segment()` path-index parser.
 - Added a synthetic tgdb corpus-loop measurement with per-pass time,
   process-wide peak RSS, WAL growth with automatic checkpoints disabled,
   retained object bytes, history size, and replay-verification cost.
@@ -208,6 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Grammar-chart paths now refuse leading-plus digit segments as noncanonical.
 - `GrammarChartProfile` now exposes its graph and root directly.
 - Capped the general atom-multiset distance lower bound at the cheapest
   container regrouping operation because one split or merge can change several

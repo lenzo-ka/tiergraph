@@ -167,6 +167,7 @@ from tiergraph.path import (
     ResolvedBoundary,
     ResolvedItem,
     StructuralPathProfile,
+    parse_path_index_segment,
     resolve_path,
 )
 from tiergraph.pathplan import AlgebraOrder, PathMarginals, PathPlan, PathPosteriors
@@ -846,6 +847,7 @@ __all__ = [
     "merge_containers",
     "open_bundle",
     "ordered_tree_distance",
+    "parse_path_index_segment",
     "patch_dumps",
     "patch_loads",
     "price_patch",

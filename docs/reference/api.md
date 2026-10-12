@@ -1,7 +1,7 @@
 # API reference
 
 This page is generated from the shipped objects and the documentation manifest.
-It covers 323 top-level `tiergraph` exports exactly once.
+It covers 324 top-level `tiergraph` exports exactly once.
 
 ## Action
 
@@ -4829,7 +4829,9 @@ The profile vocabulary is
 ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
 independent of rule weights, but intentionally are not stable across graph
 snapshots whose sets of alternatives differ. The root is the serialized chart
-anchor and supplies the vocabulary namespace; it must belong to the graph.
+anchor and supplies the vocabulary namespace; it must belong to the graph. Each
+numeric slot uses canonical nonnegative ASCII decimal path-index syntax. A
+leading plus sign is noncanonical.
 
 #### `GrammarChartProfile.to_data`
 
@@ -7041,6 +7043,33 @@ StructuralPathProfile.alternatives(self, owner: 'ItemRef', relation: 'QualifiedN
 ```
 
 Return no alternatives because this vocabulary declares none.
+
+### `parse_path_index_segment`
+
+```text
+parse_path_index_segment(segment: 'str', *, path: 'CanonicalPath | None' = None, segment_index: 'int | None' = None) -> 'int'
+```
+
+Parse one canonical nonnegative path index.
+
+Accepted spellings are ``0`` or an ASCII digit from ``1`` through ``9``
+followed by zero or more ASCII digits. The returned integer is not checked
+against any graph or collection bounds. A canonical spelling longer than
+the interpreter's active integer-string limit is refused with
+:attr:`PathRefusalCode.INVALID_SEGMENT` before conversion.
+
+``path`` and ``segment_index`` must be passed together, and the indexed path
+segment must equal ``segment``. Incomplete context raises :class:`TypeError`;
+inconsistent context raises :class:`ValueError`. A contextual refusal uses
+``PathOffender(text=str(path), path=path, segment_index=segment_index,
+segment=segment)``. Without context it uses ``PathOffender(text="",
+path=None, segment_index=None, segment=segment)``.
+
+Unsigned Unicode-decimal spellings that are not canonical, including a
+single leading ASCII plus sign, refuse with
+:attr:`PathRefusalCode.NONCANONICAL_SEGMENT`. Other spellings refuse with
+:attr:`PathRefusalCode.INVALID_SEGMENT`. Every other offender field is
+``None``, and these refusals have no cause.
 
 ### `resolve_path`
 

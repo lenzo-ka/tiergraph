@@ -73,6 +73,7 @@ from tiergraph.path import (
     PathOffender,
     PathRefusal,
     PathRefusalCode,
+    parse_path_index_segment,
 )
 from tiergraph.predicate import OffsetProfile, _offset_spans, _validate_offset_profile
 from tiergraph.selection import Selector, evaluate_selection
@@ -1392,7 +1393,9 @@ class GrammarChartProfile:
     ``/chart/NONTERMINAL/START/END/alternatives/INDEX``. Alternative indices are
     independent of rule weights, but intentionally are not stable across graph
     snapshots whose sets of alternatives differ. The root is the serialized chart
-    anchor and supplies the vocabulary namespace; it must belong to the graph.
+    anchor and supplies the vocabulary namespace; it must belong to the graph. Each
+    numeric slot uses canonical nonnegative ASCII decimal path-index syntax. A
+    leading plus sign is noncanonical.
     """
 
     graph: Graph
@@ -1437,9 +1440,9 @@ class GrammarChartProfile:
                 PathRefusalCode.UNKNOWN_FORM,
                 PathOffender(text=str(path), path=path),
             )
-        start = _chart_path_index(segments[2], 2, path)
-        end = _chart_path_index(segments[3], 3, path)
-        index = _chart_path_index(segments[5], 5, path)
+        start = parse_path_index_segment(segments[2], path=path, segment_index=2)
+        end = parse_path_index_segment(segments[3], path=path, segment_index=3)
+        index = parse_path_index_segment(segments[5], path=path, segment_index=5)
         names = _forest_names(self)
         owner = next(
             (
@@ -2331,22 +2334,6 @@ def _forest_names(
             "rule-index",
         )
     }
-
-
-def _chart_path_index(value: str, index: int, path: CanonicalPath) -> int:
-    if value == "0" or (
-        value.isascii() and value.isdecimal() and not value.startswith("0")
-    ):
-        return int(value)
-    code = (
-        PathRefusalCode.NONCANONICAL_SEGMENT
-        if value.isdecimal() and value != ""
-        else PathRefusalCode.INVALID_SEGMENT
-    )
-    raise PathRefusal(
-        code,
-        PathOffender(text=str(path), path=path, segment_index=index, segment=value),
-    )
 
 
 def _item_attribute(graph: Graph, reference: ItemRef, local: str) -> AttributeValue:
