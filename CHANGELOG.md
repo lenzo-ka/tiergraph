@@ -7,337 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-12
+
 ### Added
 
 - Added the public `parse_path_index_segment()` path-index parser.
-- Added a synthetic tgdb corpus-loop measurement with per-pass time,
-  process-wide peak RSS, WAL growth with automatic checkpoints disabled,
-  retained object bytes, history size, and replay-verification cost.
-- Added explicit ordered tgdb catalog migrations with retained pre-migration
-  backups and consistent whole-store backups that include committed WAL state.
-- Added explicit tgdb history pruning, retired-instance purging, reversible
-  payload pins, and inspection-aware reachability-based garbage collection with
-  dry-run reports.
-- Added explicit tgdb payload inspectors with ordered content-keyed facts,
-  optional publication as typed layer metadata, and bounded nested graph indexing.
-- Added ordered, typed tgdb blob metadata columns with declared and inspected
-  provenance, content-checked payload-free equality and range queries, undo,
-  rebuilding, and command-line management.
-- Added byte-preserving tgdb bundle import and export, including ordered,
-  single-commit collection interchange and explicit missing-payload handling.
-- Added regression coverage for complete clock-replacement reports, audit-mode
-  parity, reversible journal patches, and preserved binding template targets.
-- Added tgdb payload ingestion, verified resolver and sink adapters, ordered
-  blob and attachment indexes, missing-payload queries, and explicit repacking.
-- Added ordered tgdb item-index declarations with typed equality, exact numeric
-  ranges, head-only or retained-history scope, derived-row integrity checks,
-  undo, rebuilding, and CLI queries.
-- Added tgdb per-graph tier indexes, typed head queries, bounded predicate
-  filtering, fixpoint checks, and deterministic index checking and rebuilding.
-- Added atomic multi-instance tgdb batches with content staging, stable reader
-  snapshots, stale-base checks, fault-safe publication, and explicit contention.
-- Added exact replay-checked tgdb patches, patch application and version diffs,
-  explicit snapshot fallback, retained-version reverts, and additive publish undo.
-- Added exact split and merge operations for nested ordered-containment
-  containers, including document-order-preserving semantic inverses and
-  operation-specific split and clock policy validation.
-- Added tgdb graph versions with canonical document storage, functional and
-  identified fingerprints, optimistic publication, unchanged no-ops, history,
-  and verified lazy loading.
-- Added ordered tgdb collections and instances with stable ids, explicit
-  lifecycle commits, recorded inverses, collision-safe catalog undo, escaped
-  text listings, and strict commit-operation integrity checks.
-- Added the tgdb content-addressed object pool with threshold-based inline or
-  file residency, durable staging, verified reads, deduplication, and checks.
-- Added the lazy `tiergraph.tgdb` storage skeleton with versioned SQLite catalog
-  creation, read-only or writable opening, metadata inspection, and CLI commands.
-- Added an opt-in per-edit link ledger that verifies carried, re-pointed, and
-  reported links for plain and journaled graph editors.
-- Extended checked link accounting to shifts, clock editors, and path commitment;
-  clock-aware shifts now report their exact binding endpoint changes.
-- Tightened checked shift, per-operation displacement, and clock endpoint accounting.
-- Made checked clock re-pointing require exact reported durable targets.
-- Added held item-run moves, unequal run swaps, and identity-preserving shifts
-  of edge children across adjacent ordered-containment sisters, with journal,
-  patch, diff, clock-policy, cost, and command-line support.
-- Added `EditResult` and ordered detachment reports for subtree replacement,
-  subtree swapping, and path commitment. Reports retain withdrawn items,
-  relation instances, facts, and individual boundary values with their original
-  references and complete typed values, including durable identifiers where
-  present. Graph convenience methods continue to return `Graph`.
-- Added an opt-in blob vocabulary and profile for ordered, durably identified
-  typed external resources and their ordinary graph attachments.
-- Added streaming blob hashing, verified readers, digest-keyed in-memory
-  resolution, ordered resolver chains, and resolver and sink protocols.
-- Added strict, bounded, lazy reading for versioned store-only ZIP bundles,
-  including a published bundle-index schema and verified payload streams.
-- Added deterministic per-asset bundle writing and streaming moves between
-  embedded payloads and explicit links.
-- Added opt-in exact clock-agreement checks for linear blob attachment spans.
-- Added an opt-in blob-span guard to clock edit sessions, checked at freeze
-  after clock and attachment-span changes have been staged together.
-- Added blob and bundle commands for ordered inspection, verified directory
-  storage, mixed-residency bundle moves, and opt-in blob-profile validation.
-- Added an external-resource guide and a runnable domain profile that restricts
-  blob descriptors to a closed media-type set.
-- Added lossless strict-JSON round trips for path marginals, posteriors, and costs.
-- Added a tested `DotPresentation` guide example.
-- Added tested editing recipes for view-specific text cost tables and
-  framework-side unit-ID-and-source-span timing import.
-- Added a hand-authored exact `dumps_spans()` DOT golden.
-- Added an editing guide covering primitive transactions, refusal and
-  displacement, journals and provenance, clock-aware editing, patches and
-  differences, subtree and bulk operations, reconciliation, distance, explicit
-  cleanup, and the corresponding command-line workflow.
-- Added public `EquivalenceView` graph comparison views.
-- Added public `abstract_form()` canonical graph forms.
-- Added public `equivalent()` graph comparison.
-- Added public `fingerprint()` deterministic graph fingerprints.
-- Added public `first_difference()` stable graph difference diagnostics.
-- Added `SpanViewProfile.to_data()` so imported TextGrid profiles can be saved
-  for `tiergraph span render --profile`.
-- Added positional relation insertion and in-place endpoint replacement.
-- Added reversible item-run removal, item-value replacement, durable identity
-  promotion and demotion, seal-record editing, and layer/fact editing to frozen
-  graphs and mutable editors.
-- Added profile-aware clock editing with explicit `keep-earlier` and
-  `drop-to-provisional` rebinding policies, atomic bound-tier removal, and
-  structured reports for every timed-tier policy outcome. Provisional spans are
-  durably marked under either policy, while untimed-tier edits retain the plain
-  editor's cost model.
-- Added positional declaration insertion and strict declaration removal to
-  frozen graphs and mutable editors. Removal reports all current dependents
-  before writing, and `undeclare_with_contents()` provides an atomic derived
-  cascade composed from editing primitives, including mutually dependent
-  declaration components. Its inverse is available when the operation runs
-  through an edit journal, not from the function itself. The graph-level cascade
-  explicitly
-  bypasses clock rebinding like `Graph.edit()`; the clock-session form requires
-  a named policy before timing is removed and records binding withdrawals.
-- Added opt-in `Journal` editing through `graph.edit(journal=...)` and clock
-  sessions. Reversible graph structure records its inverse operation and only
-  its change-sized arguments; value edits and declaration cascades retain
-  positional deltas within changed tuple and dataclass fields. Typed caller
-  annotations, detached references, touched-coordinate runs, and per-operation
-  displacement remain available, while public reports expand lazily instead of
-  being retained per record. Journals provide undo, redo, inverse-based dry
-  runs, provenance-layer stamping on durably addressable subjects, and
-  protected-layer preflight. Plain editors keep their existing state shape and
-  build none of this recording state.
 - Added `Displacement.to_data()` for deterministic JSON-compatible edit reports.
-- Added versioned, fingerprint-guarded `Patch` values with canonical JSON Lines
-  serialization, per-operation annotations, executable edit calls, guarded
-  residual deltas, and recorded inverse opcodes. Patches check each identified
-  transition before and after execution, invert and compose, and refuse any base
-  whose identified fingerprint differs. `Journal.to_patch()` makes applied
-  history portable without embedding complete graph snapshots per operation.
-- Added `graph_to_program()` exact graph replay, including wire-loaded orphan
-  facts and zero-length seal records. Machine format version 2 adds the needed
-  construction opcodes, and construction `Program` values refuse removal
-  opcodes.
-- Added deterministic `diff()` patches. Compatible schemas align each ordered
-  tier under unit edit costs, turn reusable delete/insert pairs into moves, and
-  rebuild references in dependency order; incompatible schemas use a guarded
-  rebuild. Applying a diff reaches the requested equivalence view. This
-  graph-level operation does not apply a clock rebinding policy.
-- Added guarded containment-subtree replacement with abandon-by-default and
-  opt-in per-tier correspondence. Replacements preserve the root, copy the new
-  subtree's items, internal relations, boundary values, and layer facts, and
-  carry binary and ordered-polyadic crossing relations through correspondence.
-  Missing or ambiguous crossing endpoints refuse unless `drop` or polyadic
-  `trim` is named; reports snapshot only dropped relations, endpoints, attached
-  facts, and donor-side crossings. Journal edits undo and redo replacements
-  exactly, record functional versus identity correspondence, and expose
-  detached dependencies in their reports. Subtree swaps compose replacements,
-  report lost boundary values, and refuse nested roots.
-  Boundary-subject facts follow the same exact one-to-one correspondence as
-  boundary values and retain the existing refusal reports for ambiguous maps.
-  Clock-aware replacement requires a named rebinding policy, creates
-  provisional bindings for unmatched boundaries, and carries unambiguous
-  corresponding timings under `keep-earlier`.
-- Completed path-commit loss reports for positional facts whose equal content
-  shifts into the departing coordinate.
-- Added atomic `apply_selected()` bulk editing for selectors, materialized node
-  sets, and exhaustive match spans. Selections are evaluated once, overlapping
-  spans are deduplicated, every target follows preceding displacement, and one
-  optional work budget covers selection and callback application. This
-  graph-level operation records no journal and does not apply a clock rebinding
-  policy.
-- Added scriptable graph editing commands for checked item, relation, feature,
-  declaration, identity, seal, layer, subtree, and bulk edits. Mutating commands
-  support dry-run reports, recorded forward and inverse patches, typed caller
-  annotations, deterministic work limits (including one step per applied patch
-  operation), explicit output files, and validated atomic in-place replacement.
-  Commands only build recording state and patch data when an output requires
-  them, and in-place replacement preserves the input file's permissions.
-  Added patch application, inspection, inversion, and composition commands,
-  deterministic graph diff output, and exact graph-to-program export.
-- Added declared graph-edit cost tables, exact weighted sequence and ordered-tree
-  engines, exact contiguous-segmentation distance, and graph distance results
-  that distinguish exact values from named intervals. General graphs use an
-  incidence-free atom-multiset lower bound and a realized diff or
-  dependency-ordered rebuild as their upper bound. The atom relaxation retains
-  complete payloads while erasing order, relation endpoints, boundary
-  addresses, and fact subjects. Small unmatched atom sets use minimum-cost
-  assignment over direct one-atom transitions and delete-then-insert paths;
-  large sets use a linear count bound at the least declared transition cost.
-  Partial cost tables and opaque custom value-substitution callbacks relax the
-  affected general-graph bound to zero when the complete transition basis is
-  unavailable; exact ordered tiers continue to use relevant declared costs and
-  callbacks directly. The distance surface also includes caller-defined text
-  joining and presentation transforms,
-  whitespace-insensitive and Unicode format-control projections, and the
-  `tiergraph distance` command. Value substitution and boundary displacement
-  accept caller callbacks, while numeric cost-table files remain declarative.
-- Added `commit_path()` for collapsing a prepared finite path lattice while
-  retaining the chosen alternatives' containment substructure, source values,
-  and provenance facts. Added exact `retime()` clock-boundary rebinding and
-  `contain_by_time()` reconstruction for binary and ordered polyadic
-  parent-child relations. Optional journals record all three derived edits as
-  expanded primitives, so patches retain no request-scoped lattice or alignment
-  object. Timing comparisons use exact integral clock positions; tolerance
-  remains a distance concern.
-- Added explicit journal checkpoints and optional count- or byte-bounded undo
-  horizons. Checkpoints and automatic horizon trimming advance the retained
-  patch base while releasing older inverses; undo refuses at that retained
-  history boundary.
-- Added undoable `prune_orphans()` and `compact()` graph edits. Both report every
-  orphaned layer fact they remove; compaction also shares equal immutable
-  values across the live graph and retained history. Durable identifiers remain
-  reusable caller vocabulary, while identified patch fingerprints prevent a
-  patch from silently retargeting a reused identifier.
+- Added functional, identified, and exact graph equivalence, diagnostics, and fingerprints.
+- Added checked primitive graph edits with displacement and local dependency refusals.
+- Added clock-aware editing under explicit `keep-earlier` and `drop-to-provisional` policies.
+- Added positional declaration editing and atomic `undeclare_with_contents()` cascades.
+- Added opt-in journals with reports, annotations, dry runs, undo, redo, and bounded history.
+- Added guarded, invertible, composable JSON Lines patches with exact replay checks.
+- Added deterministic graph differences and exact graph-to-program construction replay.
+- Added construction programs with `machine_version` `"2"`; every other version is refused.
+- Added guarded subtree replacement and swapping with explicit correspondence policies.
+- Added displacement-aware selected bulk editing with shared work budgets.
+- Added graph-editing commands for primitives, patches, differences, bulk edits, and cleanup.
+- Added declared edit costs, exact sequence, tree, and segmentation distances, and bounded graph distance.
+- Added path commitment, exact retiming, and containment reconstruction from timing.
+- Added undoable orphan pruning and immutable-value compaction.
+- Added held item-run moves, unequal run swaps, and identity-preserving ordered-tier shifts.
+- Added exact split and merge operations for nested ordered-containment containers.
+- Added checked link accounting for plain, journaled, clock-aware, and derived edits.
+- Added complete ordered detachment reports for replacements, swaps, path commitment, and clock changes.
+- Added `SpanViewProfile.to_data()` for saving imported TextGrid profiles.
+- Added lossless strict-JSON path marginal, posterior, and cost serialization.
+- Added an opt-in typed blob vocabulary with ordered graph attachments.
+- Added streaming blob hashing, verified readers, resolver chains, and sink protocols.
+- Added strict lazy reading and deterministic writing of versioned blob bundles.
+- Added exact clock checks and clock-edit guards for blob attachment spans.
+- Added blob and bundle commands for inspection, storage, movement, and verification.
+- Added a lazy `tiergraph.tgdb` SQLite store with explicit read-only and writable modes.
+- Added content-addressed tgdb object storage with inline and file-backed residency.
+- Added ordered tgdb collections, instances, commits, lifecycle operations, and undo.
+- Added complete tgdb graph versions with fingerprints, history, and verified lazy loading.
+- Added replay-checked tgdb patches, version differences, reverts, and publication undo.
+- Added atomic multi-instance tgdb batches and stable reader snapshots.
+- Added tgdb tier indexes, typed queries, bounded predicates, and fixpoint checks.
+- Added declared tgdb item indexes with typed equality and exact numeric ranges.
+- Added tgdb payload ingestion, blob indexes, resolver and sink adapters, and repacking.
+- Added byte-preserving tgdb bundle import and export with explicit missing-payload handling.
+- Added typed tgdb blob metadata columns and content-checked queries.
+- Added explicit tgdb payload inspectors with bounded nested graph indexing.
+- Added tgdb history pruning, retired-instance purging, payload pins, and safe garbage collection.
+- Added ordered tgdb schema migrations and consistent atomic backups.
+- Added synthetic tgdb corpus-loop measurement of time, memory, storage, history, and replay.
 
 ### Changed
 
-- Grammar-chart paths now refuse leading-plus digit segments as noncanonical.
-- `GrammarChartProfile` now exposes its graph and root directly.
-- Capped the general atom-multiset distance lower bound at the cheapest
-  container regrouping operation because one split or merge can change several
-  retained atoms.
-- Reduced span-matching work for large bounded repeats. Budgeted span matching
-  may return a longer `cut-at-budget` prefix, while the public pattern automaton
-  and lattice matching behavior remain unchanged.
-- Indexed sparse exact-equality branches in large pattern alternations while
-  preserving scan fallback for unsupported and dense branches. Span matching
-  charges each distinct indexed candidate and may return a longer
-  `cut-at-budget` prefix without changing completed results.
-- Shifts now require containers to have the same parent in every applicable
-  ordered-containment relation, or to be adjacent root containers, and to meet
-  at a contiguous child-tier seam. The explicit `across_parent=True` form
-  permits a shift between containers under adjacent differing parent chains,
-  reports every changed ancestor yield, and rebinds each timed container and
-  ancestor boundary to the new child seam. Clock-aware shifts refuse when an
-  affected tier is timed but the child seam is untimed. Run and item swaps are
-  now atomic, dropped sister-boundary values appear in detachment reports, and
-  graph diff recognizes shifts that name either rebinding policy.
-- `FoldDeclaration` now refuses repeated declared roots at construction, and
-  `Equals` requires its literal collection to be an actual tuple.
-- Predicate binding now resolves a `Spans` predicate's other tier before
-  evaluation.
-- Offset-profile JSON refuses both or neither of `extent` and `end` as a staged
-  shape error.
-- Construction programs use `machine_version` `"2"` and refuse every other
-  version.
-- Brought documentation current with the editing API and path-result serialization.
-- Removed the finite projection-witness admission types, helper, and
-  `graph_distance(..., projections=...)` parameter. General graph distance now
-  uses only the built-in atom-multiset lower bound.
-- `DistanceInterval.lower_bound_method` is required when `exact=False`.
-- Item and relation removal now refuses locally, before changing an editor, when
-  a relation endpoint, durable boundary anchor, stored boundary value, seal, or
-  live layer fact still depends on the removed content. Some item removals that
-  previously returned from the editor and failed only at `freeze()` now refuse
-  at `remove_item()` or `remove_items()`; removals that previously converted a
-  live layer fact into an orphan now also refuse at the removal call.
+- Made grammar-chart paths refuse leading-plus digit segments as noncanonical.
+- Indexed sparse exact-equality pattern alternatives while preserving declared order and scan fallback.
+- Reduced span-matching work for large bounded repeats without changing completed results.
+- Made shifts enforce common containment ancestry and contiguous child seams by default.
+- Made item and relation removal refuse live dependencies before changing an editor.
+- Replaced projection-witness graph-distance admission with the built-in atom-multiset lower bound.
+- Made `DistanceInterval.lower_bound_method` required for nonexact results.
+- Capped general graph-distance lower bounds at the cheapest container regrouping operation.
+- Made `GrammarChartProfile` expose its graph and root directly.
+- Made `FoldDeclaration` refuse repeated roots and `Equals` require tuple literals.
+- Made `Spans` predicate binding resolve the other tier before evaluation.
+- Made offset-profile JSON refuse both or neither of `extent` and `end` as a staged shape error.
 
 ### Fixed
 
-- Kept default import time and memory within 5% of 0.8.0 by loading opt-in
-  public surfaces on first use.
+- Kept default package imports within 5% of 0.8.0 by loading opt-in public surfaces on first use.
 - Restored lazy package-attribute access for noncolliding secondary modules.
-- Rebased every clock-aware replacement report to source relation coordinates.
-- Included withdrawn clock-binding facts in public replacement detachment reports.
-- Kept merges that require relation, attribute, layer, or seam drops as one
-  semantic diff operation and one regrouping distance edit, including when
-  carried content changes the surviving container.
-- Made container regrouping preserve cross-tier targets, refuse endpoint
-  collapse, enforce contiguous clock-consistent seams, and remain one semantic
-  diff operation without searching unrelated item pairs.
-- Captured complete clock-replacement detachments and reported exact durable clock-target changes.
-- Strengthened generated distance-path coverage to require an applied shift and
-  covered typed ancestor-boundary content through plain and journaled editors.
-- Required every ordered-containment parent to agree for default shifts and applied boundary policy reporting to all moved ancestor seams.
-- Made identified subtree correspondence preserve the source durable ID on the graph
-  and refuse donor ID conflicts, including unsupported identity policies on subtree
-  swaps.
-- Fixed checked editors to refuse unreported link withdrawals while accepting
-  reported polyadic endpoint trims.
-- Required identity correspondence to be linear: every identified source names
-  exactly one target, and two sources cannot claim the same target. Splits and
-  merges remain available as functional correspondence.
-- Preserved each surviving subtree-swap boundary value exactly once at its
-  displaced boundary and reported only values whose adjacency genuinely left.
-  A swap now refuses with both durable anchors when their boundary values would
-  converge on one coordinate.
-- Reported binary donor relations that cross a supplied replacement subtree
-  edge as `donor_relations` dependencies instead of silently omitting them.
-  Such relations remain uncopied when no external endpoint mapping exists.
-- Separated donor relation and fact snapshots from source-graph snapshots so
-  colliding coordinates remain unambiguous in detachment reports.
-- Made carried polyadic crossings refuse with the relation and endpoint when
-  flattening or trimming would violate local declaration invariants.
-- Kept automatic and caller-declared functional correspondence from being
-  reported as retained identity merely because a crossing relation carries.
-- Removed superseded private replacement helpers and their unreachable tests.
-- Refused CLI annotations on direct edits and patch application when no patch,
-  report, or dry-run output can carry them.
-- Removed false open-stream pending watermarks for start-anchored patterns in
-  open-left scopes.
-- Kept the release runbook's source quotation aligned with the makefile.
-- Installed Graphviz in CI so DOT parser checks run end to end.
+- Selected Praat TextGrid long or short syntax from the body independently of the header spelling.
 - Made capped walks report truncation only when a fresh node is omitted.
-- Kept provenance from attaching facts to bare item, boundary, or relation
-  coordinates that later structural edits can move or remove. Provenance now
-  stamps only the moved, inserted, replaced, or otherwise directly acted-on
-  subject rather than every position shifted by an edit. Journal provenance
-  facts travel with their durable subjects and are retired as part of the same
-  undoable edit when that subject is removed or demoted, without weakening the
-  ordinary kernel rules for other facts in the provenance layer. The journal
-  record remains the provenance source when acted-on content has no durable
-  graph subject.
-- Preserved relation-subject layer facts while clock editing temporarily removes
-  and rebuilds binding relations, and made equal-valued item reports use the
-  edit's exact positional mapping.
-- Checked protected layers against the final candidate including provenance
-  writes, while allowing unchanged protected content and facts to follow valid
-  coordinate remaps.
-- Kept undo and redo records on their original stacks until restoration
-  succeeds. Dry-run rollback failures now restore both history stacks and chain
-  both the operation and rollback failures, including after a successful body.
-- Reconstruct JSON attribute and layer-fact edits atomically when dataclass
-  storage field names are not constructor parameters.
-- Reported only references whose subjects actually departed, without
-  misclassifying value replacement, explicit fact removal, or newly supplied
-  orphan facts as detachment.
-
-- Made layer reads resolve coordinate and durable references to the same live
-  subject consistently in `layer_values()`, `consensus()` and `disagreements()`.
-- Select Praat TextGrid long or short syntax from its body, independently of the
-  supported header spelling.
+- Removed false pending watermarks for start-anchored patterns in open-left scopes.
+- Refused CLI annotations when no output can retain them.
+- Kept journal provenance on durable acted-on subjects and retired it with those subjects.
+- Preserved relation-subject facts while clock editors rebuild binding relations.
+- Checked protected layers against final candidates, including provenance writes.
+- Preserved undo and redo stacks when restoration or dry-run rollback fails.
+- Reconstructed JSON attribute and layer-fact edits atomically.
+- Reported only references whose subjects departed an edit.
+- Reported donor-side crossing relations and facts without coordinate ambiguity.
+- Preserved surviving subtree-swap boundary values and reported only actual losses.
+- Required linear identified subtree correspondence and preserved the source durable ID.
+- Made carried polyadic crossings refuse invalid flattening or trimming.
+- Made checked editors refuse unreported link withdrawal and accept reported endpoint trimming.
+- Applied shift ancestry and boundary reporting to every affected containment seam.
+- Made container regrouping preserve cross-tier targets and exact semantic inverses.
+- Recognized lossy container merges and changed-survivor merges as one semantic difference.
+- Reported complete clock replacements in source coordinates with exact durable targets.
+- Made layer reads resolve coordinate and durable references consistently.
 
 ### Documentation
 
-- Documented `tiergraph.diff` and `tiergraph.distance` as shadowed secondary
-  modules with explicit import forms.
-- Added a tested tgdb corpus-loop guide covering atomic automatic passes,
-  replay-checked manual correction, fixpoint detection, and indexed work queues.
-- Documented and demonstrated that `Spans`, like `span_pairs`, excludes an item
-  from relating to itself.
-- Described the equivalence views as fixed, graph-wide observational
-  projections and clarified that declared order remains content under every
-  view.
-- Named Apple's QuickTime as a spiritual ancestor of tiergraph's general,
-  typed interchange format.
+- Restructured the guides around task-oriented construction, querying, editing, and interchange.
+- Documented every command-line option and JSON input form.
+- Added a complete editing guide and tested timing-import and text-cost recipes.
+- Added an external-resource guide and a runnable closed-media profile.
+- Added a tested versioned-corpus guide for atomic passes, correction, fixpoints, and work queues.
+- Clarified that equivalence views are fixed graph-wide projections and declared order remains content.
+- Added QuickTime to the project lineage for general typed time-based interchange.
+- Added a tested `DotPresentation` guide example.
+- Documented `tiergraph.diff` and `tiergraph.distance` as shadowed secondary modules with explicit import forms.
 
 ## [0.8.0] - 2026-10-06
 
@@ -1491,7 +1258,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TG-PATH canonical addressing for structural and durable items and boundaries, profile-owned alternatives, kind checks, and typed refusals with offender details.
 - Canonical selection, bounded bipartite walks, ordered polyadic traversal, and ordered containment queries that preserve declared incidence and child order where applicable.
 
-[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/lenzo-ka/tiergraph/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lenzo-ka/tiergraph/compare/v0.5.0...v0.6.0

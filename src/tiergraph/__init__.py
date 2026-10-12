@@ -365,7 +365,7 @@ from tiergraph.wire import (
     to_data,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 _LAZY_EXPORTS = {
     "tiergraph.blob": frozenset(
