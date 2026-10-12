@@ -320,6 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Added a tested tgdb corpus-loop guide covering atomic automatic passes,
+  replay-checked manual correction, fixpoint detection, and indexed work queues.
 - Documented and demonstrated that `Spans`, like `span_pairs`, excludes an item
   from relating to itself.
 - Described the equivalence views as fixed, graph-wide observational

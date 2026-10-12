@@ -111,6 +111,12 @@ attach any number of resources to graph items or other resources, while strict
 bundles choose embedded or linked storage per payload. See
 [external resources](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/external-resources.md).
 
+**Store a versioned corpus.** The explicitly imported `tiergraph.tgdb` module
+keeps ordered collections of complete graphs, atomic multi-graph passes,
+replay-checked history, content-addressed payloads, and bounded indexed queries
+in one local store. See
+[corpus storage](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/corpus-storage.md).
+
 Queries that come from someone else can carry a
 [work budget](https://github.com/lenzo-ka/tiergraph/blob/main/docs/guide/work-budgets.md).
 
